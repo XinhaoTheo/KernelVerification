@@ -1,0 +1,16 @@
+{
+  "name": "kb_level1_21_sigmoid",
+  "passed": true,
+  "source": "kernelagent",
+  "raw": {
+    "success": true,
+    "kernel_code": "import triton\nimport triton.language as tl\nimport torch\n\n# Fused operation: Single-pass sigmoid activation\n# sigmoid(x) = 1 / (1 + exp(-x))\n# This kernel loads input values, computes sigmoid in-place using Triton math ops,\n# and stores the result. No separate passes needed \u2014 fully fused single kernel.\n\n@triton.jit\ndef _sigmoid_kernel(\n    x_ptr,\n    out_ptr,\n    n_elements,\n    BLOCK_SIZE: tl.constexpr,\n):\n    \"\"\"\n    Triton kernel for element-wise sigmoid activation.\n    \n    Computes: out = 1 / (1 + exp(-x))\n    \n    Each program instance handles a contiguous block of BLOCK_SIZE elements.\n    \"\"\"\n    pid = tl.program_id(axis=0)\n    block_start = pid * BLOCK_SIZE\n    offsets = block_start + tl.arange(0, BLOCK_SIZE)\n    mask = offsets < n_elements\n\n    # Load input values\n    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)\n\n    # Compute sigmoid in float32 for numerical stability\n    x_f32 = x.to(tl.float32)\n    \n    # sigmoid(x) = 1 / (1 + exp(-x))\n    neg_x = -x_f32\n    exp_neg_x = tl.exp(neg_x)\n    sigmoid_val = 1.0 / (1.0 + exp_neg_x)\n\n    # Cast back to original dtype and store\n    out = sigmoid_val.to(x.dtype)\n    tl.store(out_ptr + offsets, out, mask=mask)\n\n\ndef kernel_function(x: torch.Tensor) -> torch.Tensor:\n    \"\"\"\n    Wrapper for Triton sigmoid kernel.\n    \n    Fused stages (single kernel pass):\n      1. Load input element\n      2. Compute sigmoid: 1 / (1 + exp(-x))  [in fp32 for stability]\n      3. Cast result back to input dtype (bfloat16)\n      4. Store output\n    \n    Args:\n        x: Input tensor of any shape, dtype bfloat16 (or float32)\n    \n    Returns:\n        Output tensor of same shape and dtype as input, with sigmoid applied.\n    \"\"\"\n    # Validate input\n    assert x.is_cuda, \"Input tensor must be on CUDA device\"\n    \n    # Allocate output tensor\n    out = torch.empty_like(x)\n    \n    # Flatten to 1D for simple indexing\n    n_elements = x.numel()\n    \n    # Choose block size: 1024 is a good default for elementwise ops\n    BLOCK_SIZE = 1024\n    \n    # Grid: one program per block of BLOCK_SIZE elements\n    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)\n    \n    # Launch Triton kernel\n    _sigmoid_kernel[grid](\n        x,\n        out,\n        n_elements,\n        BLOCK_SIZE=BLOCK_SIZE,\n    )\n    \n    return out",
+    "worker_id": 0,
+    "rounds": 1,
+    "session_dir": "/home/zhuominc/xinhaota/kernel_verification/triton_kernel_logs/session_20260519_045934_524475"
+  },
+  "status": "passed",
+  "rounds": 1,
+  "error_stderr_len": 0,
+  "error_stdout_len": 0
+}

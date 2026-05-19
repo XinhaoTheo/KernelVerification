@@ -1,0 +1,16 @@
+{
+  "name": "kb_level1_19_relu",
+  "passed": true,
+  "source": "kernelagent",
+  "raw": {
+    "success": true,
+    "kernel_code": "import triton\nimport triton.language as tl\nimport torch\n\n# Fused operation: ReLU activation (single pass, elementwise)\n# Stage 1: Load input element\n# Stage 2: Apply ReLU (max(0, x)) in-kernel using Triton\n# Stage 3: Store result\n# No separate passes needed; fully fused in one kernel launch.\n\n@triton.jit\ndef _relu_kernel(\n    x_ptr,\n    out_ptr,\n    n_elements,\n    BLOCK_SIZE: tl.constexpr,\n):\n    \"\"\"\n    Triton kernel for ReLU activation.\n    \n    Computes out[i] = max(0, x[i]) for all elements.\n    Each program instance handles BLOCK_SIZE contiguous elements.\n    \"\"\"\n    pid = tl.program_id(axis=0)\n    block_start = pid * BLOCK_SIZE\n    offsets = block_start + tl.arange(0, BLOCK_SIZE)\n    mask = offsets < n_elements\n\n    # Load input values\n    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)\n\n    # Apply ReLU: max(0, x)\n    zero = tl.zeros(x.shape, dtype=x.dtype)\n    result = tl.maximum(zero, x)\n\n    # Store result\n    tl.store(out_ptr + offsets, result, mask=mask)\n\n\ndef kernel_function(x: torch.Tensor) -> torch.Tensor:\n    \"\"\"\n    Wrapper for the fused ReLU Triton kernel.\n\n    Fusion notes:\n    - Single kernel pass: load -> ReLU (max(0, x)) -> store\n    - No intermediate buffers; no separate activation pass needed.\n    - Handles BF16 inputs natively via Triton's dtype inference.\n\n    Args:\n        x: Input tensor of any shape and dtype (BF16 supported).\n\n    Returns:\n        Output tensor of the same shape and dtype as input,\n        with ReLU applied elementwise.\n    \"\"\"\n    # Validate input\n    assert x.is_cuda, \"Input tensor must be on CUDA device\"\n    assert x.is_contiguous(), \"Input tensor must be contiguous\"\n\n    # Allocate output tensor\n    out = torch.empty_like(x)\n\n    # Total number of elements\n    n_elements = x.numel()\n\n    # Choose block size (power of 2, good for memory coalescing)\n    BLOCK_SIZE = 1024\n\n    # Grid: one program per block of BLOCK_SIZE elements\n    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)\n\n    # Launch the Triton kernel\n    _relu_kernel[grid](\n        x,\n        out,\n        n_elements,\n        BLOCK_SIZE=BLOCK_SIZE,\n    )\n\n    return out",
+    "worker_id": 0,
+    "rounds": 1,
+    "session_dir": "/home/zhuominc/xinhaota/kernel_verification/triton_kernel_logs/session_20260519_045859_446436"
+  },
+  "status": "passed",
+  "rounds": 1,
+  "error_stderr_len": 0,
+  "error_stdout_len": 0
+}
