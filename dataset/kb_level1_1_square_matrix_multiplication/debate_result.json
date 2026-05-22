@@ -1,0 +1,97 @@
+{
+  "entry": "kb_level1_1_square_matrix_multiplication",
+  "recheck_status": "passed",
+  "verdict": {
+    "verdict": "trust",
+    "confidence": 0.92,
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "claim_notes": {
+      "c1": "Empirically rebutted: the modular wrap does not produce wrong output for M=1000, N=1000, K=64",
+      "c2": "Empirically rebutted: kernel produces correct results for non-square shape (2048×512)×(512×3000) with N=3000 not a multiple of block size, max diff 0.000000"
+    },
+    "reason": "Both concrete adversarial claims (c1, c2) were empirically tested and refuted by the verifier. The boundary-wrap concern about offs_am % M causing incorrect loads for non-aligned shapes did not manifest in practice. No remaining open or confirmed claims exist. The kernel passes both the generator's square-shape test and the verifier's non-square stress tests."
+  },
+  "claims": [
+    {
+      "id": "c1",
+      "type": "boundary_wrap_bug",
+      "statement": "For A=torch.randn(1000, 64, dtype=torch.bfloat16, device='cuda') and B=torch.randn(64, 1000, dtype=torch.bfloat16, device='cuda'), the offs_am % M modular wrap in the kernel causes boundary tiles to load rows 0-23 of A instead of zero-padding, producing wrong output compared to torch.matmul(A, B).",
+      "raised_by": "skeptic",
+      "round": 0,
+      "status": "rebutted",
+      "evidence": [
+        {
+          "by": "verifier",
+          "verdict_line": "REFUTED: kernel handles this input correctly",
+          "probe_code": "import torch\n\ntry:\n    from kernel import kernel_function\n\n    M, K, N = 1000, 64, 1000\n    A = torch.randn(M, K, dtype=torch.bfloat16, device='cuda')\n    B = torch.randn(K, N, dtype=torch.bfloat16, device='cuda')\n\n    # Kernel output\n    C_kernel = kernel_function(A, B)\n\n    # Reference\n    C_ref = torch.matmul(A, B)\n\n    max_diff = (C_kernel.float() - C_ref.float()).abs().max().item()\n    mean_diff = (C_kernel.float() - C_ref.float()).abs().mean().item()\n\n    print(f\"C_kernel shape: {C_kernel.shape}, dtype: {C_kernel.dtype}\")\n    print(f\"C_ref shape: {C_ref.shape}, dtype: {C_ref.dtype}\")\n    print(f\"Max abs diff: {max_diff:.6f}\")\n    print(f\"Mean abs diff: {mean_diff:.6f}\")\n\n    # For bfloat16 matmul, tolerance should be relatively small\n    # If the modular wrap causes wrong rows to be loaded, differences will be large\n    threshold = 1.0  # large threshold to detect systematic errors\n    if max_diff > threshold:\n        print(f\"CONFIRMED: kernel produces wrong output (max diff {max_diff:.4f} > {threshold})\")\n    else:\n        # Check a tighter threshold typical for bf16 matmul\n        tight_threshold = 5.0\n        # Since M=1000, BLOCK_SIZE_M=64 or 128 will have boundary tiles\n        # 1000 / 64 -> last tile covers rows 960-1023 but only 960-999 valid\n        # 1000 / 128 -> last tile covers rows 896-1023 but only 896-999 valid\n        # The modular wrap would map rows 1000-1023 -> rows 0-23 of A\n        # This would cause errors only in those boundary rows of C\n        # Let's check specific rows that should be affected\n        # With BLOCK_SIZE_M=128: last tile rows 896..1023, valid 896..999, wrapped 0..23\n        # With BLOCK_SIZE_M=64:  last tile rows 960..1023, valid 960..999, wrapped 0..23\n        \n        print(f\"Max diff {max_diff:.6f} is within threshold {threshold}\")\n        print(\"REFUTED: kernel handles this input correctly\")\n\nexcept Exception as e:\n    print(f\"CONFIRMED: kernel raised {type(e).__name__}: {e}\")\n\nif __name__ == \"__main__\":\n    pass",
+          "probe_stdout": "C_kernel shape: torch.Size([1000, 1000]), dtype: torch.bfloat16\nC_ref shape: torch.Size([1000, 1000]), dtype: torch.bfloat16\nMax abs diff: 0.000000\nMean abs diff: 0.000000\nMax diff 0.000000 is within threshold 1.0\nREFUTED: kernel handles this input correctly",
+          "probe_stderr": ""
+        }
+      ]
+    },
+    {
+      "id": "c2",
+      "type": "non_square_shape_not_tested",
+      "statement": "For A=torch.randn(2048, 512, dtype=torch.bfloat16, device='cuda') and B=torch.randn(512, 3000, dtype=torch.bfloat16, device='cuda'), the kernel's modular offset clamping on N=3000 (not a multiple of BLOCK_SIZE_N=64 or 128) produces incorrect results compared to torch.matmul(A, B).",
+      "raised_by": "skeptic",
+      "round": 0,
+      "status": "rebutted",
+      "evidence": [
+        {
+          "by": "verifier",
+          "verdict_line": "REFUTED: kernel handles N=3000 correctly, max diff 0.000000",
+          "probe_code": "import torch\n\ntry:\n    from kernel import kernel_function\n\n    # Construct the exact input named in the claim\n    torch.manual_seed(42)\n    A = torch.randn(2048, 512, dtype=torch.bfloat16, device='cuda')\n    B = torch.randn(512, 3000, dtype=torch.bfloat16, device='cuda')\n\n    # Compute reference\n    ref = torch.matmul(A, B)\n\n    # Compute kernel output\n    out = kernel_function(A, B)\n\n    # Compare\n    max_abs_diff = (out.float() - ref.float()).abs().max().item()\n    mean_abs_diff = (out.float() - ref.float()).abs().mean().item()\n\n    print(f\"Output shape: {out.shape}, dtype: {out.dtype}\")\n    print(f\"Reference shape: {ref.shape}, dtype: {ref.dtype}\")\n    print(f\"Max absolute difference: {max_abs_diff}\")\n    print(f\"Mean absolute difference: {mean_abs_diff}\")\n\n    # Use a reasonable tolerance for bfloat16\n    # bfloat16 has limited precision, so we allow some slack\n    # but the claim is about *incorrect* results due to index clamping\n    # which would cause large errors, not just floating point noise\n    threshold = 1.0  # Large errors indicate incorrect indexing\n\n    if max_abs_diff > threshold:\n        print(f\"CONFIRMED: kernel produces incorrect results with max diff {max_abs_diff:.4f} > {threshold}\")\n    else:\n        # Also check if results are bitwise close enough for bfloat16 matmul\n        # torch.allclose with bfloat16 typical tolerance\n        if torch.allclose(out.float(), ref.float(), atol=1.0, rtol=1e-2):\n            print(f\"REFUTED: kernel handles N=3000 correctly, max diff {max_abs_diff:.6f}\")\n        else:\n            print(f\"CONFIRMED: kernel produces incorrect results with max diff {max_abs_diff:.4f}\")\n\nexcept Exception as e:\n    print(f\"CONFIRMED: kernel raised {type(e).__name__}: {e}\")\n\nif __name__ == \"__main__\":\n    pass",
+          "probe_stdout": "Output shape: torch.Size([2048, 3000]), dtype: torch.bfloat16\nReference shape: torch.Size([2048, 3000]), dtype: torch.bfloat16\nMax absolute difference: 0.0\nMean absolute difference: 0.0\nREFUTED: kernel handles N=3000 correctly, max diff 0.000000",
+          "probe_stderr": ""
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "by": "author",
+      "round": 0,
+      "text": "NO_NEW_OBSERVATIONS.\n\nThe final kernel is byte-for-byte identical to seed_0.py — there was only one seed and no changes were made between the seed and the final kernel. All structural details (tile indexing, K-loop, masking, accumulator dtype, store) have already been fully described and there are no skeptic questions to answer."
+    },
+    {
+      "by": "skeptic",
+      "round": 0,
+      "text": "Looking at the kernel and test code, I have several concrete concerns:\n\n**1. Test only covers square, power-of-2-aligned shapes**\nThe test uses `N = 4096` (2048*2), a perfect square. The kernel uses `offs_am % M` and `offs_bn % N` modular clamping — if M or N isn't a multiple of BLOCK_SIZE_M/BLOCK_SIZE_N, this modular wrap-around could cause tiles to silently re-read rows/columns from the beginning of the matrix instead of zero-padding, producing wrong results for non-aligned shapes.\n\n**2. Modular offset clamping is semantically wrong for boundary tiles**\nLines `offs_am = tl.max_contiguous(tl.multiple_of(offs_am % M, BLOCK_SIZE_M), BLOCK_SIZE_M)` and similarly for `offs_bn` — the `% M` / `% N` wrap is used to clamp offsets, but then the *output* uses fresh unmodded offsets with a proper mask. So tiles load from wrapped (wrong) A/B addresses but store to correct C addresses. For a non-square matrix like A=(1000, 64), B=(64, 1000), tiles at the boundary would load garbage rows from A (wrapping back to row 0) while correctly masking the output store — yielding silently wrong output.\n\n**3. Non-square matrices not tested at all**\nThe test only exercises square matmul. A concrete adversarial case: `A = torch.randn(1000, 64, dtype=torch.bfloat16, device='cuda')`, `B = torch.randn(64, 1000, dtype=torch.bfloat16, device='cuda')`. With BLOCK_SIZE_M=128, the last M-tile covers rows 896–1023 but only 104 are valid. The `% M` mod maps offsets 1000–1023 back to 0–23, loading rows 0–23 again into the accumulator instead of zeros.\n\n**4. Non-contiguous input not handled before contiguous() call**\n`C` is allocated *before* `A = A.contiguous()` — so if A/B are non-contiguous, strides passed to the kernel are already correct (from the original tensor), but the `.contiguous()` creates a new tensor whose pointer differs. Wait — actually `A.contiguous()` rebinds the local variable but the kernel receives `A` (the new contiguous copy) correctly. This is fine. Withdrawing this concern.\n\n```json\n{\"claims\": [\n  {\"type\": \"boundary_wrap_bug\",\n   \"statement\": \"For A=torch.randn(1000, 64, dtype=torch.bfloat16, device='cuda') and B=torch.randn(64, 1000, dtype=torch.bfloat16, device='cuda'), the offs_am % M modular wrap in the kernel causes boundary tiles to load rows 0-23 of A instead of zero-padding, producing wrong output compared to torch.matmul(A, B).\"},\n  {\"type\": \"non_square_shape_not_tested\",\n   \"statement\": \"For A=torch.randn(2048, 512, dtype=torch.bfloat16, device='cuda') and B=torch.randn(512, 3000, dtype=torch.bfloat16, device='cuda'), the kernel's modular offset clamping on N=3000 (not a multiple of BLOCK_SIZE_N=64 or 128) produces incorrect results compared to torch.matmul(A, B).\"}\n]}\n```",
+      "claims": [
+        {
+          "type": "boundary_wrap_bug",
+          "statement": "For A=torch.randn(1000, 64, dtype=torch.bfloat16, device='cuda') and B=torch.randn(64, 1000, dtype=torch.bfloat16, device='cuda'), the offs_am % M modular wrap in the kernel causes boundary tiles to load rows 0-23 of A instead of zero-padding, producing wrong output compared to torch.matmul(A, B)."
+        },
+        {
+          "type": "non_square_shape_not_tested",
+          "statement": "For A=torch.randn(2048, 512, dtype=torch.bfloat16, device='cuda') and B=torch.randn(512, 3000, dtype=torch.bfloat16, device='cuda'), the kernel's modular offset clamping on N=3000 (not a multiple of BLOCK_SIZE_N=64 or 128) produces incorrect results compared to torch.matmul(A, B)."
+        }
+      ]
+    },
+    {
+      "by": "verifier",
+      "round": 0,
+      "text": "I ran a targeted probe for each open claim:\n[c1] REBUTTED: REFUTED: kernel handles this input correctly\n[c2] REBUTTED: REFUTED: kernel handles N=3000 correctly, max diff 0.000000"
+    },
+    {
+      "by": "author",
+      "round": 1,
+      "text": "NO_NEW_OBSERVATIONS.\n\nThe verifier has empirically refuted both boundary-wrap claims (c1 and c2) by running the specific adversarial shapes. The skeptic's structural concern about `offs_am % M` causing wrong loads at boundary tiles was not confirmed by execution. No new skeptic questions have been raised, and I have no new line-level observations to add beyond what was already covered."
+    },
+    {
+      "by": "skeptic",
+      "round": 1,
+      "text": "Looking at the verifier results, the boundary-wrap concern was empirically refuted for non-square shapes. Let me look for remaining untested concerns.\n\n**Test only covers one dtype (bfloat16)**\nThe kernel asserts `A.dtype == B.dtype` but makes no assertion about *which* dtype. The store uses `accumulator.to(c_ptr.dtype.element_ty)` which should generalize, but `tl.dot` with float16 inputs uses lower-precision accumulation by default in some Triton versions. The test never exercises float16 or float32 inputs.\n\n**Non-contiguous inputs: C allocated before A.contiguous()**\nLooking again carefully at `kernel_function`: `C = torch.empty(...)` is allocated first, then `A = A.contiguous()` and `B = B.contiguous()`. The kernel is launched with the *new* contiguous `A` and `B` pointers — this is correct. But if A is already contiguous, `.contiguous()` is a no-op and returns the same tensor. So strides and pointers are consistent. No bug here.\n\n**K not a multiple of BLOCK_SIZE_K with non-trivial shapes**\nFor `A=(128, 100)`, `B=(100, 128)` with `BLOCK_SIZE_K=32` or `64`: K=100 is not a multiple of either. The kernel uses `mask_k = offs_k < k_remaining` to handle this. The verifier already confirmed this works for K=64 cases. Let me construct a harder case: K=100 with BLOCK_SIZE_K=64 means last iteration has k_remaining=36, mask_k zeros out elements 36-63. This seems handled correctly.\n\nGiven the verifier has refuted the two main structural concerns with concrete execution, and I cannot identify a new mechanically distinct failure mode that hasn't been addressed:\n\nNO_NEW_CONCERNS.\n\nBoth boundary-wrap claims were empirically refuted by the verifier running the exact adversarial shapes I specified. No remaining untested structural concern can be constructed that differs mechanically from those already checked.\n\n```json\n{\"claims\": []}\n```",
+      "claims": []
+    },
+    {
+      "by": "verifier",
+      "round": 1,
+      "text": "No open claims to verify this round."
+    }
+  ],
+  "rounds": 2
+}

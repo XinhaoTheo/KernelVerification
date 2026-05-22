@@ -1,4 +1,4 @@
-from . import author, judge, skeptic
+from . import author, judge, skeptic, verifier
 from .types import Claim, Turn
 
-__all__ = ["author", "skeptic", "judge", "Turn", "Claim"]
+__all__ = ["author", "skeptic", "verifier", "judge", "Turn", "Claim"]

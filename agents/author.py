@@ -36,6 +36,18 @@ Structure your response (~400 words max):
   1. What this kernel does (line-cited walkthrough)
   2. Notable changes from seeds to final
   3. Direct answers to skeptic questions (if any in prior turns)
+
+CONVERGENCE SIGNAL: If you have nothing new to add — i.e., you would only
+restate prior observations, re-cite lines you already cited, or repeat the
+same answers to skeptic questions — START your response with the exact
+sentinel:
+
+    NO_NEW_OBSERVATIONS.
+
+Then in 1-2 sentences explain why (e.g., "All concerns have been confirmed
+with line citations in prior rounds and no new skeptic question was raised.").
+Do NOT include sections 1-3 in this case. The judge uses this sentinel to
+detect convergence and terminate the loop.
 """
 
 

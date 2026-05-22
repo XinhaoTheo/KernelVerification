@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from verifier import llm_client
 
+from . import parsing
 from .types import Turn
 
 SYSTEM = """You are the SKEPTIC in a structured review of a Triton GPU kernel.
@@ -31,13 +32,47 @@ Ground rules:
   ("you said seed_2 had a bug at line 8 — show me the exact change in final_kernel.py").
 - If you cannot find a real concern, say so plainly. Manufactured doubt destroys credibility.
 - Keep responses under ~300 words.
+
+CONVERGENCE SIGNAL: If you have no new concern or new question this round
+— i.e., every concern is already on the record, every question already asked,
+and you would only restate or summarize — START your response with the exact
+sentinel:
+
+    NO_NEW_CONCERNS.
+
+Then in 1-2 sentences explain why (e.g., "All identified issues have been
+confirmed by the author with line citations; no further adversarial input
+remains untested in artifacts."). Do NOT add a fresh concern just to keep the
+debate going — manufactured doubt destroys credibility. The judge uses this
+sentinel to detect convergence and terminate the loop.
+
+STRUCTURED OUTPUT: After your prose, emit a fenced ```json block listing the
+NEW, empirically-testable concerns you are raising THIS round as claims:
+
+```json
+{"claims": [
+  {"type": "non_contiguous_bug",
+   "statement": "For x = torch.randn(2048)[::2] (stride-2, shape 1024), the kernel reads consecutive memory instead of strided elements and returns wrong values."}
+]}
+```
+
+Rules for the JSON:
+- Only include claims that a verifier could test by RUNNING the kernel on a
+  concrete input. A claim's `statement` must name the exact adversarial input.
+- Do NOT re-raise a claim already in the transcript. If you have no new testable
+  claim this round, emit `{"claims": []}` (and use the NO_NEW_CONCERNS sentinel
+  in your prose).
+- Pure meta-observations ("test coverage is narrow") can go in prose but should
+  NOT be claims unless you can phrase them as a concrete runnable test.
 """
 
 
 def respond(history: list[Turn], artifact: dict, tools=None) -> Turn:
     text = llm_client.call(system=SYSTEM, artifact=artifact, history=history)
     round_idx = _next_round(history, "skeptic")
-    return Turn(by="skeptic", round=round_idx, text=text)
+    parsed = parsing.extract_json(text) or {}
+    claims = parsed.get("claims") or []
+    return Turn(by="skeptic", round=round_idx, text=text, claims=claims)
 
 
 def _next_round(history: list[Turn], role: str) -> int:

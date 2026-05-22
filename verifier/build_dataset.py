@@ -225,7 +225,7 @@ def main() -> int:
     finally:
         agent.cleanup()
 
-    print("\n=== SUMMARY ===")
+    print("\n=== SUMMARY (generation status) ===")
     total = sum(summary.values())
     for status, count in sorted(summary.items()):
         print(f"  {status:<25s} {count}")
