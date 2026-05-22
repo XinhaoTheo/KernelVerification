@@ -39,34 +39,55 @@ DEFAULT_RTOL = 1e-2
 DEFAULT_ATOL = 2e-2
 
 TEST_GEN_SYSTEM = """You write a single standalone Python correctness test for a
-Triton GPU kernel. The test is an INDEPENDENT second opinion — be faithful to
-the reference, do not rubber-stamp.
+Triton GPU kernel. It is an INDEPENDENT second opinion — be faithful to the
+reference, do not rubber-stamp.
 
 You are given:
   1. PROBLEM SPEC: a PyTorch reference (Model + get_inputs + get_init_inputs).
   2. KERNEL CODE: a module exporting `kernel_function`.
 
-Write a test that:
+Setup (shared by all cases):
   - `from kernel import kernel_function`
   - `from kverify_compare import compare_outputs`  (provided helper, always available)
-  - Reconstructs the reference Model from the spec and computes the reference
-    output by running it (Model(*get_init_inputs())(*get_inputs())).
-  - Calls `kernel_function` with the correct arguments. INFER the call signature
-    from the KERNEL CODE you are given (e.g. some kernels take (x), some (a, b),
+  - Reconstruct the reference Model from the spec.
+  - INFER the call signature from the KERNEL CODE (some take (x), some (a, b),
     some (x, dim)). Match it exactly.
-  - Casts inputs to the dtype the kernel expects. If the kernel asserts a dtype
-    (e.g. `assert x.dtype == torch.bfloat16`), build inputs in that dtype and
-    compute the reference in that same dtype, so you test algorithmic
-    correctness, not a dtype guard.
-  - Decides correctness with `matches, max_diff, detail = compare_outputs(result, reference)`.
-    DO NOT invent your own tolerance — compare_outputs handles dtype-aware
-    tolerance and matching NaN/inf. On mismatch print `detail` plus the first
-    few mismatched values; on success print a short PASS line.
-  - Defines `def test_kernel() -> bool` (returns `matches`), and a
-    `if __name__ == "__main__":` block that calls it and `sys.exit(0 if ok else 1)`.
+  - Use the dtype the kernel expects. If the kernel asserts a dtype, build
+    inputs AND compute the reference in that dtype (test the algorithm, not the
+    guard).
+  - Decide each case with `matches, max_diff, detail = compare_outputs(out, ref)`.
+    NEVER invent your own tolerance — compare_outputs handles it.
 
-Output ONLY the Python code for the test, in a single ```python fenced block.
-No prose before or after.
+You MUST run this FIXED battery of cases and print ONE line per case, exactly:
+    CASE <name>: PASS
+    CASE <name>: FAIL <short detail>
+    CASE <name>: SKIP <why>     # only if the transform cannot apply to this kernel
+
+The fixed case names (run them all, in this order):
+  1. standard          — the spec's get_inputs() exactly. THE core correctness case.
+  2. noncontig_stride2 — make a tensor input non-contiguous: allocate 2x the size
+                         and slice [::2] (1D) or [:, ::2] (2D+), keeping the SAME
+                         logical values; reference computed on the same values.
+  3. noncontig_transpose — for a 2D+ input, pass a transposed (.t()/.mT) view
+                         (SKIP if input is 1D).
+  4. odd_size          — re-run standard but with the main size +1 (non-aligned),
+                         if the spec exposes a size you can bump (else SKIP).
+  5. empty             — a zero-element input of the right rank/dtype
+                         (SKIP if shape is fixed by the spec and cannot be empty).
+
+Rules:
+  - Wrap EACH case in its own try/except; an exception in one case prints
+    `CASE <name>: FAIL raised <ExcType>` and must NOT abort the others.
+  - If the kernel deliberately ASSERTS a precondition a case violates (e.g.
+    asserts contiguity), that is a defensive guard for that case:
+    print `CASE <name>: SKIP kernel asserts <precondition>`.
+  - For `standard`, an exception or mismatch is a real FAIL (not skippable).
+  - End with `if __name__ == "__main__":` that runs all cases, then
+    `sys.exit(0 if standard_passed else 1)` — exit code reflects ONLY the
+    standard case (core correctness); adversarial results are reported via the
+    CASE lines, they do NOT change the exit code.
+
+Output ONLY the Python code in a single ```python fenced block. No prose.
 """
 
 
@@ -138,9 +159,22 @@ def recheck_entry(
 
     test_code = generate_test(problem, kernel_code, rtol=rtol, atol=atol)
     passed, stdout, stderr = run_test(kernel_code, test_code)
+    cases = _parse_cases(stdout)
+
+    # status reflects ONLY the standard case (core correctness). If the test
+    # didn't emit a parseable `standard` line, fall back to the exit code.
+    std = cases.get("standard")
+    if std is not None:
+        status = "passed" if std == "pass" else "failed"
+    else:
+        status = "passed" if passed else "failed"
+
+    # robustness = the adversarial cases (everything except `standard`).
+    robustness = {k: v for k, v in cases.items() if k != "standard"}
 
     result = {
-        "status": "passed" if passed else "failed",
+        "status": status,
+        "robustness": robustness,
         "rtol": rtol,
         "atol": atol,
         "model": llm_client._DEFAULT_MODEL,
@@ -149,6 +183,17 @@ def recheck_entry(
     }
     _write_recheck(base, meta, result, test_code=test_code, stdout=stdout, stderr=stderr)
     return result
+
+
+_CASE_RE = re.compile(r"^CASE\s+(\w+):\s*(PASS|FAIL|SKIP)", re.MULTILINE)
+
+
+def _parse_cases(stdout: str) -> dict[str, str]:
+    """Parse `CASE <name>: PASS|FAIL|SKIP` lines into {name: pass|fail|skip}."""
+    out: dict[str, str] = {}
+    for name, status in _CASE_RE.findall(stdout):
+        out[name] = status.lower()
+    return out
 
 
 def get_recheck(
@@ -179,6 +224,7 @@ def get_recheck(
     rc = meta.get("recheck", {})
     return {
         "status": rc.get("status", "unknown"),
+        "robustness": rc.get("robustness", {}),
         "rtol": rc.get("rtol"),
         "atol": rc.get("atol"),
         "test_code": _read(base / "recheck_test.py"),

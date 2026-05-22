@@ -78,7 +78,13 @@ def main() -> int:
     # Self-contained verification: our own test, not the generator's.
     print("\n=== Recheck (our independent allclose test) ===")
     rc = recheck.get_recheck(args.entry, force=args.force_recheck)
-    print(f"  recheck status = {rc['status']}  (rtol={rc['rtol']}, atol={rc['atol']})")
+    print(f"  recheck status = {rc['status']}  (core correctness, rtol={rc['rtol']}, atol={rc['atol']})")
+    rob = rc.get("robustness") or {}
+    if rob:
+        fails = [k for k, v in rob.items() if v == "fail"]
+        print(f"  robustness     = {rob}")
+        if fails:
+            print(f"  ⚠ robustness gaps (not auto-reject): {fails}")
 
     if args.verbose:
         bar = "─" * 72
