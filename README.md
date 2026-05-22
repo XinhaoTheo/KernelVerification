@@ -1,299 +1,333 @@
 # Kernel Verification via Debate
 
-给 LLM 生成的 Triton kernel 做**可信度验证**的系统:不轻信生成器自己的测试,而是
-独立复测正确性 + 多 agent 辩论,重点抓那些"通过了自己测试但其实是错的/作弊的" kernel。
+A system that **judges the trustworthiness** of LLM-generated Triton kernels. It does
+not trust the generator's own test; instead it independently re-checks correctness and
+runs a multi-agent debate, with a focus on catching kernels that "pass their own test
+but are actually wrong or gamed."
 
 ---
 
-## 1. 为什么要做这个
+## 1. Why this exists
 
-像 meta 的 KernelAgent 这种工具能自动生成 Triton kernel,但它**既出题又答题**——
-同一个 LLM 写 kernel,也写测试,还经常把 fp32 偷偷降成 bf16 放宽容差、只测一个 shape。
-结果是 kernel "通过了它自己的测试",但其实可能:
+Tools like meta's KernelAgent auto-generate Triton kernels, but they **set the exam and
+sit it at the same time** — the same LLM writes the kernel, writes the test, and often
+silently downcasts fp32 to bf16 to loosen tolerance and tests only a single shape. The
+result is a kernel that "passes its own test" but may still:
 
-- **非连续输入读错内存**(没调 `.contiguous()`)
-- **大输入截断**(BLOCK_SIZE 写死,行太长就丢数据)
-- **数值不稳**(softmax 不减 max、reduction 累加顺序漂移)
-- **作弊**(硬编码 test 的 shape、假装 Triton 实际调 torch、lazy eval 骗过 allclose)
+- **Read the wrong memory on non-contiguous inputs** (no `.contiguous()` call)
+- **Truncate large inputs** (hard-coded `BLOCK_SIZE`, drops data when a row is too long)
+- **Be numerically unstable** (softmax without max-subtraction, drifting reduction order)
+- **Cheat** (hard-code the test's shape, fake Triton while calling torch, lazy-eval to fool `allclose`)
 
-本系统就是那个**不信任生成器、独立审查**的环节。它接收任意来源的 kernel(KernelAgent
-只是当前的生成器,可替换),输出一个带证据的可信度判断。
+This system is the **distrustful, independent reviewer**. It accepts a kernel from any
+source (KernelAgent is just the current generator, and is replaceable) and outputs an
+evidence-backed trust judgment.
 
 ---
 
-## 2. 两阶段架构
+## 2. Two-phase architecture
 
 ```
 ┌─────────────────────────┐         ┌──────────────────────────────┐
-│  离线:生成数据集         │         │  在线:验证                    │
-│  (可替换的上游)          │         │  (我们的核心,自给自足)        │
-│                          │         │                              │
-│  kv-build                │  写入   │  kv-run <entry>              │
-│  KernelAgent 生成 kernel │ ──────► │  recheck → debate → verdict  │
-│                          │ dataset/│                              │
+│  Offline: build dataset  │         │  Online: verify               │
+│  (replaceable upstream)  │         │  (our core, self-contained)   │
+│                          │  writes │                              │
+│  kv-build                │ ──────► │  kv-run <entry>              │
+│  KernelAgent gen kernel  │ dataset/│  recheck → debate → verdict  │
 └─────────────────────────┘         └──────────────────────────────┘
 ```
 
-- **离线(`kv-build`)**:跑 KernelAgent 把 problem 变成 kernel,存进 `dataset/`。烧钱、慢、要 GPU。跑一次,数据沉淀下来。
-- **在线(`kv-run`)**:从 `dataset/` 读 kernel,做我们自己的验证。便宜,可反复迭代 agent prompt 不用重新生成 kernel。
+- **Offline (`kv-build`)**: run KernelAgent to turn a problem into a kernel, store it in
+  `dataset/`. Expensive, slow, needs a GPU. Run once; the data persists.
+- **Online (`kv-run`)**: read a kernel from `dataset/` and run our own verification. Cheap,
+  so you can iterate on agent prompts without regenerating kernels.
 
-关键设计:**验证完全不依赖生成器有没有给测试**。换个只吐 `kernel.py` 的生成器,
-`kv-run` 照样能验证——因为它自己造测试。
+Key design point: **verification does not depend on the generator providing a test**. Swap
+in a generator that emits only `kernel.py` and `kv-run` still works — because it writes its
+own test.
 
 ---
 
-## 3. 完整流程图
+## 3. End-to-end flow
 
 ```
-══════════════════════ 离线: kv-build ══════════════════════
+══════════════════════ Offline: kv-build ══════════════════════
 
- problem (PyTorch 参考实现: Model + get_inputs + get_init_inputs)
+ problem (PyTorch reference: Model + get_inputs + get_init_inputs)
    │
    ▼
- verifier/generator.py  ── 包装 KernelAgent.TritonKernelAgent
-   │   ① LLM 写一份测试
-   │   ② LLM 生成 N 个 kernel seed
-   │   ③ N 个 worker 并行: 写kernel→subprocess跑测试→喂错误给LLM改, 最多 max_rounds 轮
-   │   ④ 任一 worker 通过即成功; 失败也回收"最像样的尝试"+错误
+ verifier/generator.py  ── wraps KernelAgent.TritonKernelAgent
+   │   ① LLM writes a test
+   │   ② LLM generates N kernel seeds
+   │   ③ N workers in parallel: write kernel → subprocess-run test →
+   │      feed errors back to the LLM to fix, up to max_rounds
+   │   ④ any worker passing = success; on failure also recover the
+   │      "best attempt" + its error
    ▼
  verifier/dataset.py : save_entry()
-   │   把 kernel/test/seed/problem 拷进自包含目录
+   │   copy kernel/test/seed/problem into a self-contained dir
    ▼
  dataset/<name>/
-   ├── problem.txt        原始 problem
-   ├── kernel.py          最终 kernel(失败时是最佳尝试)
-   ├── test.py            KernelAgent 自带测试(仅参考, 不可信)
-   ├── seed_*.py          初始 seed
+   ├── problem.txt        original problem
+   ├── kernel.py          final kernel (best attempt if it failed)
+   ├── test.py            KernelAgent's own test (reference only, not trusted)
+   ├── seed_*.py          initial seeds
    ├── meta.json          { passed, status, rounds, ... }
-   └── error.txt          失败时的 stderr/stdout
+   └── error.txt          stderr/stdout on failure
 
 
-══════════════════════ 在线: kv-run <entry> ══════════════════════
+══════════════════════ Online: kv-run <entry> ══════════════════════
 
  dataset/<entry>/  ──load_entry()──►  artifact { kernel_code, ... }
    │
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 步骤 1: RECHECK  (verifier/recheck.py — 我们独立的正确性复测)  │
+│ STEP 1: RECHECK  (verifier/recheck.py — our independent test) │
 │                                                               │
-│  get_recheck(entry)  (有缓存则复用, --force-recheck 强制重跑)  │
+│  get_recheck(entry)  (reuses cache; --force-recheck to redo)  │
 │    │                                                          │
-│    ├─ generate_test():  LLM 看 problem+kernel 写一份测试,      │
-│    │     里面含一组【写死的刁难输入清单(battery)】:           │
-│    │       • standard          (spec 正常输入 → 核心正确性)    │
-│    │       • noncontig_stride2 (非连续 [::2] / [:,::2])        │
-│    │       • noncontig_transpose (转置 .t())                  │
-│    │       • odd_size          (size ±1, 非对齐)              │
-│    │       • empty             (空张量)                       │
-│    │     每个 case 用固定的 compare_outputs() 判, 打印         │
-│    │       "CASE <名>: PASS/FAIL/SKIP"                        │
+│    ├─ generate_test():  LLM reads problem+kernel, writes a    │
+│    │     test containing a FIXED adversarial battery:         │
+│    │       • standard          (spec inputs → core correctness)│
+│    │       • noncontig_stride2 (non-contiguous [::2] / [:,::2])│
+│    │       • noncontig_transpose (transposed .t())            │
+│    │       • odd_size          (size ±1, non-aligned)         │
+│    │       • empty             (zero-element tensor)           │
+│    │     each case is judged by the fixed compare_outputs()   │
+│    │     and prints  "CASE <name>: PASS/FAIL/SKIP"            │
 │    │                                                          │
-│    ├─ run_test():  临时目录里放 kernel.py + kverify_compare.py │
-│    │     + 测试, subprocess 跑, 退出码只反映 standard          │
+│    ├─ run_test():  temp dir holds kernel.py + kverify_compare │
+│    │     .py + test; subprocess runs it; exit code reflects   │
+│    │     ONLY the standard case                               │
 │    │                                                          │
-│    └─ 解析 CASE 行 →  status   = standard 的结果(核心对错)    │
-│                       robustness = 其余刁难 case 的结果        │
+│    └─ parse CASE lines →  status     = standard's result      │
+│                           robustness = the other cases        │
 │                                                               │
-│  分两档(关键设计):                                            │
-│    • standard FAIL  → status=failed → 真 bug                  │
-│    • 刁难 FAIL       → 只记 robustness, 不自动判死              │
+│  Two tiers (key design):                                      │
+│    • standard FAIL  → status=failed → a real bug              │
+│    • adversarial FAIL → recorded in robustness, NOT auto-reject│
 └─────────────────────────────────────────────────────────────┘
-   │  把 recheck 结果折进 artifact (passed/status/test_code/error)
+   │  fold recheck result into artifact (passed/status/test_code/error)
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 步骤 2: DEBATE  (verifier/debate.py — 开放式语义审查)          │
+│ STEP 2: DEBATE  (verifier/debate.py — open-ended review)      │
 │                                                               │
-│  每轮 (最多 DEBATE_MAX_ROUNDS):                                │
+│  each round (up to DEBATE_MAX_ROUNDS):                         │
 │                                                               │
-│    author    ── 证人, 描述 kernel 在做什么 + 怎么演化的        │
-│       │         (只描述, 不评好坏; 读 seed_*.py)               │
+│    author    ── witness: describes what the kernel does +     │
+│       │         how it evolved (describe only, no judgment;   │
+│       │         reads seed_*.py)                              │
 │       ▼                                                       │
-│    skeptic   ── 质疑者, 立结构化 claim(可测的具体断言)        │
-│       │         例: {"type":"non_contig", "statement":         │
-│       │              "对 x[::2] kernel 会读错"}               │
-│       │  ──► 登记进 claims 台账, 状态 open                    │
+│    skeptic   ── challenger: files structured claims (concrete │
+│       │         testable assertions), e.g. {"type":"non_contig│
+│       │         ","statement":"for x[::2] the kernel misreads"}│
+│       │  ──► registered into the claims ledger, status=open   │
 │       ▼                                                       │
-│    verifier  ── 执行者, 逐条 open claim 写探针真跑 GPU,        │
-│                 用 compare_outputs() 判, 回填 claim:          │
-│                   confirmed (真错) / rebutted (没事) /        │
-│                   inconclusive (测不了)                       │
+│    verifier  ── executor: for each open claim, writes a probe │
+│                 that runs on GPU, judges via compare_outputs, │
+│                 sets the claim to confirmed / rebutted /      │
+│                 inconclusive                                  │
 │                                                               │
-│    收敛: skeptic 这轮没立新 claim → 停                        │
+│    converge: skeptic files no new claim this round → stop    │
 │       ▼                                                       │
-│    judge     ── 裁判, 读整张 claims 台账出最终 verdict:        │
+│    judge     ── renders the final verdict over the ledger:    │
 │                   trust / reject / needs_more_evidence        │
-│                 + decisive_claims (哪几条定的罪)             │
-│                 + 可推翻 verifier 的初判(如认定是预期舍入)    │
+│                 + decisive_claims (which claims drove it)    │
+│                 + may override verifier (e.g. deems a diff    │
+│                   to be expected rounding, not a bug)        │
 └─────────────────────────────────────────────────────────────┘
    │
    ▼
  dataset/<entry>/debate_result.json
-   { recheck_status, verdict, claims(台账), history(全发言) }
+   { recheck_status, verdict, claims(ledger), history(all turns) }
 ```
 
 ---
 
-## 4. 逐环节详解
+## 4. Component deep dive
 
-### 4.1 `verifier/generator.py` — 包装 KernelAgent
+### 4.1 `verifier/generator.py` — wraps KernelAgent
 
-把 `KernelAgent.TritonKernelAgent.generate_kernel()` 的返回归一化成统一 artifact:
-`{kernel_code, test_code, passed, status, rounds, error, session_dir, raw}`。
+Normalizes `KernelAgent.TritonKernelAgent.generate_kernel()` into a uniform artifact:
+`{kernel_code, test_code, passed, status, rounds, error, session_dir, raw}`.
 
-成功时 `kernel_code` 是最终 kernel;失败时是"打得最久的 worker 的最佳尝试"+ 错误信息
-(KernelAgent 上游被我们 patch 过,原本失败什么都不留,见 [roadmap.md](roadmap.md))。
+On success `kernel_code` is the final kernel; on failure it is the "best attempt from the
+worker that fought the longest" plus error info (upstream KernelAgent is patched — it
+originally left nothing on failure, see [roadmap.md](roadmap.md)).
 
-### 4.2 `verifier/dataset.py` — 自包含数据集
+### 4.2 `verifier/dataset.py` — self-contained dataset
 
-`save_entry()` 把每次生成的产物**拷贝**进 `dataset/<name>/`(不是记路径),所以删掉
-KernelAgent 的运行目录也不影响数据集,能 git commit、能搬机器、能手写注入。
-`load_entry()` 读回成 artifact;`session_dir` 指向 entry 目录本身,author 读 seed 就从这里读。
+`save_entry()` **copies** each generation's artifacts into `dataset/<name>/` (rather than
+recording a path), so deleting KernelAgent's run directory does not break the dataset — it
+can be committed, moved between machines, or hand-authored for injection. `load_entry()`
+reads it back into an artifact; `session_dir` points at the entry dir itself, which is where
+the author reads `seed_*.py` from.
 
-### 4.3 `verifier/recheck.py` — 独立正确性复测(我们的 ground truth)
+### 4.3 `verifier/recheck.py` — independent correctness re-check (our ground truth)
 
-这是**不信任生成器**的核心。`get_recheck()`:
+This is the heart of **distrusting the generator**. `get_recheck()`:
 
-1. **`generate_test()`**:让 LLM 看 `problem.txt` + `kernel.py`,写一份测试。LLM 看得到
-   kernel 源码,所以知道怎么调它(解决了"每个 kernel 调用方式不同"的问题)。prompt 强制
-   它跑一组**写死的刁难输入清单(battery)**,每个打印 `CASE <名>: PASS/FAIL/SKIP`。
-2. **`run_test()`**:临时目录里放 `kernel.py` + `kverify_compare.py`(固定比对器)+ 测试,
-   subprocess 跑。全新进程,规避 CUDA fork 陷阱。
-3. **解析 `CASE` 行**,分两档存进 `meta.json["recheck"]`:
-   - `status`:只看 `standard`(spec 正常输入)→ 核心对错,这个才驱动"是不是真 bug"
-   - `robustness`:其余刁难 case → 只记录,**不自动判死**
+1. **`generate_test()`**: ask the LLM to read `problem.txt` + `kernel.py` and write a test.
+   Since the LLM sees the kernel source, it knows how to call it (this sidesteps the "every
+   kernel has a different call signature" problem). The prompt forces it to run a **fixed
+   adversarial battery**, each case printing `CASE <name>: PASS/FAIL/SKIP`.
+2. **`run_test()`**: a temp dir holds `kernel.py` + `kverify_compare.py` (the fixed
+   comparator) + the test; run it in a subprocess. A fresh process, avoiding the CUDA fork
+   trap.
+3. **Parse the `CASE` lines** into two tiers stored in `meta.json["recheck"]`:
+   - `status`: from `standard` (spec inputs) only → core correctness, this is what drives
+     "is it a real bug"
+   - `robustness`: the other adversarial cases → recorded only, **not auto-reject**
 
-**为什么要 battery**:之前只靠 debate 的 skeptic 临场想刁难输入,非确定——同一个有
-非连续 bug 的 kernel,这轮想到了就抓到、那轮没想到就漏。battery 写死清单,每次必跑,
-机械 bug(非连续/奇怪 size/空)不再漏。
+**Why the battery**: previously only the debate skeptic probed adversarial inputs ad hoc,
+which is non-deterministic — the same kernel with a non-contiguous bug would be caught one
+run (skeptic thought of it) and missed the next (it didn't). The battery hard-codes the list
+and runs it every time, so mechanical bugs (non-contiguous / odd size / empty) are no longer
+missed.
 
-**两档的意义**(scope 契约):kernel 在 spec 正常输入下错 = 铁板钉钉的 bug(reject);
-只在非连续这种刁钻输入下错 = 健壮性问题,记一笔但不武断判死(因为这些输入可能超出
-kernel 的设计范围)。
+**What the two tiers mean (the scope contract)**: a kernel that fails on the spec's normal
+inputs is an unambiguous bug (reject); one that only fails on adversarial inputs like
+non-contiguous is a robustness gap — recorded but not condemned, because such inputs may be
+outside the kernel's intended scope.
 
-### 4.4 `verifier/compare.py` — 统一比对器(单一真相源)
+### 4.4 `verifier/compare.py` — the single source of truth for comparison
 
-`compare_outputs(out, ref) → (matches, max_diff, detail)`。recheck 测试和 verifier 探针
-**都 import 它**(运行时拷进临时目录叫 `kverify_compare.py`),所以"对不对"的判定
-逻辑只有一处、固定:
+`compare_outputs(out, ref) → (matches, max_diff, detail)`. Both the recheck test and the
+verifier probe **import it** (copied into the temp dir as `kverify_compare.py` at run time),
+so the "is it correct" decision lives in exactly one place and is fixed:
 
-- **容差按 dtype 定**:fp32 用 1e-3,fp16/bf16 用 1e-2/2e-2(不让 LLM 自己拍 `1e-4` 这种死数)
-- **`equal_nan=True`**:kernel 和 reference 同位置都 NaN 算匹配(softmax 喂全 inf,PyTorch 自己也吐 NaN,不能算 kernel 的错)
-- **判 bug 的标准是"偏离 reference"**,不是"出现了 NaN/大数"
+- **Tolerance by dtype**: fp32 uses 1e-3, fp16/bf16 uses 1e-2/2e-2 (the LLM is not allowed to
+  invent its own threshold like `1e-4`)
+- **`equal_nan=True`**: kernel and reference both NaN at the same position counts as a match
+  (softmax of all-inf yields NaN in PyTorch too — that is not the kernel's fault)
+- **A bug means "diverges from the reference"**, never "produced a NaN/large value" in isolation
 
-> 这个文件是踩坑后加的:早期让 LLM 在每个探针里自己写比对,它容差乱拍、NaN 不对称处理,
-> 造出假阳性。抽出固定比对器后,recheck 和 verifier 用同一把尺。
+> This file was added after a bug: early on the LLM wrote the comparison inside each probe,
+> picked tolerances arbitrarily, and mishandled NaN, producing false positives. Extracting a
+> fixed comparator made recheck and verifier use the same yardstick.
 
-### 4.5 `verifier/debate.py` + `agents/` — 多 agent 辩论
+### 4.5 `verifier/debate.py` + `agents/` — multi-agent debate
 
-debate 管 **battery 列不出清单的语义/算法 bug**(如 cumsum 跨块累加错、作弊、微妙数值)。
-四个角色:
+Debate handles the **semantic / algorithmic bugs the battery cannot enumerate** (e.g. cumsum
+cross-block accumulation errors, cheating, subtle numerics). Four roles:
 
-- **`agents/author.py`(证人)**:读 final kernel + `seed_*.py`,客观描述 kernel 做什么、
-  从 seed 到 final 改了什么。prompt 禁止评好坏,只描述。无新可说时喊 `NO_NEW_OBSERVATIONS.`。
-- **`agents/skeptic.py`(质疑者)**:找可能的 bug/作弊,但必须立成**结构化 claim**——
-  一个能跑代码验证的具体断言(附带要测的精确输入)。无新质疑时喊 `NO_NEW_CONCERNS.` +
-  空 claim 列表。
-- **`agents/verifier.py`(执行者)**:遍历台账里 `open` 的 claim,**每条写一段探针**构造
-  那个输入、跑 kernel + reference、用 `compare_outputs` 判,回填 claim 状态
-  (confirmed/rebutted/inconclusive)+ 证据(探针代码 + 实测数字)。
-- **`agents/judge.py`(裁判)**:不按轮次发言,**最后读整张台账出一次 verdict**。
-  它做"严重性"判断(计数做不到的):一个 confirmed 的 256 误差是真 bug 还是预期 bf16 舍入?
-  judge 可以**推翻** verifier 的初判。输出 `{verdict, confidence, decisive_claims, claim_notes, reason}`。
+- **`agents/author.py` (witness)**: reads the final kernel + `seed_*.py` and objectively
+  describes what the kernel does and what changed from seed to final. The prompt forbids
+  quality judgment — describe only. Emits `NO_NEW_OBSERVATIONS.` when it has nothing to add.
+- **`agents/skeptic.py` (challenger)**: looks for possible bugs/cheating, but must file them
+  as **structured claims** — a concrete assertion verifiable by running code (with the exact
+  input to test). Emits `NO_NEW_CONCERNS.` + an empty claim list when out of new concerns.
+- **`agents/verifier.py` (executor)**: walks the `open` claims in the ledger, **writes a probe
+  per claim** that constructs the input, runs kernel + reference, judges via `compare_outputs`,
+  and writes the result back to the claim (confirmed / rebutted / inconclusive) plus evidence
+  (probe code + measured numbers).
+- **`agents/judge.py` (arbiter)**: does not speak per round — it **reads the whole ledger once
+  at the end** and renders the verdict. It makes the severity call counting cannot: is a
+  confirmed diff of 256 a real bug or expected bf16 rounding? The judge may **override** the
+  verifier's call. Outputs `{verdict, confidence, decisive_claims, claim_notes, reason}`.
 
-- **`agents/parsing.py`**:从 LLM 回复里稳健抠 JSON(优先 ```json 块,跳过 prose 里的 ```python 代码块)。
-- **`agents/types.py`**:`Turn` / `Claim` 的 TypedDict 定义。
+- **`agents/parsing.py`**: robustly extracts JSON from an LLM reply (prefers the ```json block,
+  skips ```python code blocks that appear in prose).
+- **`agents/types.py`**: the `Turn` / `Claim` TypedDict definitions.
 
-**收敛**:每轮 author→skeptic→verifier;当 skeptic 这轮没立新 claim 就停。judge 不参与
-轮次,只在循环结束后裁决一次。
+**Convergence**: each round runs author → skeptic → verifier; it stops when the skeptic files
+no new claim. The judge is not part of the rounds; it adjudicates once after the loop.
 
-### 4.6 `verifier/llm_client.py` — LLM 调用
+### 4.6 `verifier/llm_client.py` — LLM calls
 
-统一的 Anthropic 调用。两个要点:(1) API 无状态,message 列表由我们维护;
-(2) message 排列让 prompt cache 能在同一 agent 跨轮命中(kernel/test 放可缓存前缀)。
-`oneshot()` 给 recheck/verifier 写探针用(无历史的一次性调用)。
+A single Anthropic wrapper. Two points: (1) the API is stateless, so we own the message list;
+(2) the message layout lets the prompt cache hit across rounds for the same agent (kernel/test
+go in the cacheable prefix). `oneshot()` is the historyless call used by recheck/verifier to
+write probes.
 
-### 4.7 `verifier/gpu_pick.py` — 自动选 GPU
+### 4.7 `verifier/gpu_pick.py` — automatic GPU selection
 
-跑前 `nvidia-smi` 排序 + 真做一次小 allocate 探测(光看 nvidia-smi"空闲"不够,共享机器
-上有的卡报空闲但拿不到 context),选第一个能用的设个 `CUDA_VISIBLE_DEVICES`。
+Before running, sort GPUs via `nvidia-smi` and then actually attempt a small allocation as a
+probe (a card can report "free" in nvidia-smi yet refuse a context on a shared machine), then
+set `CUDA_VISIBLE_DEVICES` to the first usable one.
 
 ---
 
-## 5. 三个信号
+## 5. The three signals
 
-一个 kernel 跑完 `kv-run` 后,你拿到三层判断,**别混为一谈**:
+After `kv-run` finishes a kernel, you get three layers of judgment — **do not conflate them**:
 
-| 信号 | 来源 | 含义 |
+| Signal | Source | Meaning |
 |---|---|---|
-| `recheck.status` | battery 的 `standard` case | **核心正确性**:spec 正常输入下对不对 |
-| `recheck.robustness` | battery 的刁难 case | **健壮性**:非连续/奇怪 size/空 等是否处理 |
-| `debate.verdict` | author/skeptic/verifier/judge | **语义审查**:列不出清单的算法 bug / 作弊 |
+| `recheck.status` | the battery's `standard` case | **Core correctness**: right on the spec's normal inputs? |
+| `recheck.robustness` | the battery's adversarial cases | **Robustness**: handles non-contiguous / odd size / empty? |
+| `debate.verdict` | author/skeptic/verifier/judge | **Semantic review**: algorithmic bugs / cheating the battery can't enumerate |
 
-> 注:目前这三个信号是分别产出的,"怎么合成一个最终结论"还是个待定的设计点。
+> Note: these three signals are currently produced separately; how to combine them into one
+> final conclusion is still an open design point.
 
 ---
 
-## 6. 目录结构
+## 6. Repository layout
 
 ```
 kernel_verification/
-├── KernelAgent/        # 上游生成器(meta-pytorch/KernelAgent),已 patch,vendored
-├── KernelBench/        # 题库(ScalingIntelligence/KernelBench),vendored
-├── verifier/           # 主包
-│   ├── generator.py    # 包装 KernelAgent
+├── KernelAgent/        # upstream generator (meta-pytorch/KernelAgent), patched, vendored
+├── KernelBench/        # problem set (ScalingIntelligence/KernelBench), vendored
+├── verifier/           # main package
+│   ├── generator.py    # wraps KernelAgent
 │   ├── dataset.py      # save_entry / load_entry / iter_entries
-│   ├── recheck.py      # 独立复测 + 刁难 battery(kv-recheck)
-│   ├── compare.py      # 固定比对器 compare_outputs(单一真相源)
-│   ├── debate.py       # 辩论主循环 run_debate
-│   ├── llm_client.py   # Anthropic 调用 + prompt cache
-│   ├── gpu_pick.py     # 自动选可用 GPU
-│   ├── build_dataset.py# 离线建数据集(kv-build)
-│   └── run.py          # 在线验证入口(kv-run)
-├── agents/             # 四个角色 + 工具
+│   ├── recheck.py      # independent re-check + adversarial battery (kv-recheck)
+│   ├── compare.py      # fixed comparator compare_outputs (single source of truth)
+│   ├── debate.py       # debate main loop run_debate
+│   ├── llm_client.py   # Anthropic calls + prompt cache
+│   ├── gpu_pick.py     # auto-pick a usable GPU
+│   ├── build_dataset.py# offline dataset build (kv-build)
+│   └── run.py          # online verification entry (kv-run)
+├── agents/             # the four roles + helpers
 │   ├── author.py  skeptic.py  verifier.py  judge.py
-│   ├── parsing.py      # 抠 JSON
+│   ├── parsing.py      # JSON extraction
 │   └── types.py        # Turn / Claim
-├── dataset/            # 生成的 kernel + 三标签(可 commit)
+├── dataset/            # generated kernels + three labels (committable)
 │   └── <name>/{problem.txt, kernel.py, test.py, seed_*.py,
 │               meta.json, recheck_test.py, debate_result.json, ...}
-├── tests/              # 探索/调试脚本
-├── pyproject.toml      # uv 项目, torch cu128, KernelAgent path dep
-└── roadmap.md          # 设计演进记录
+├── tests/              # exploration / debugging scripts
+├── pyproject.toml      # uv project, torch cu128, KernelAgent path dep
+└── roadmap.md          # design evolution notes
 ```
 
 ---
 
-## 7. CLI 速查
+## 7. CLI reference
 
 ```bash
-# 离线: 建数据集 (烧钱/慢/要 GPU, 跑一次)
-uv run kv-build --curated              # 建 10 个精选 KernelBench 题
-uv run kv-build --problem elem_add     # 建单个内置题
-uv run kv-build --curated --list       # 干跑, 只看会建哪些
+# Offline: build the dataset (expensive/slow/needs GPU, run once)
+uv run kv-build --curated              # build 10 curated KernelBench problems
+uv run kv-build --problem elem_add     # build a single built-in problem
+uv run kv-build --curated --list       # dry run, just show what would be built
 
-# 独立复测 (只跑 recheck, 不辩论)
-uv run kv-recheck                       # 跑所有还没复测的
-uv run kv-recheck elem_add              # 强制重跑一个
-uv run kv-recheck --list                # 看每个 entry 的复测状态
+# Independent re-check (only recheck, no debate)
+uv run kv-recheck                       # run everything not yet rechecked
+uv run kv-recheck elem_add              # force re-run one
+uv run kv-recheck --list                # show each entry's recheck status
 
-# 在线: 验证 (recheck → debate → verdict)
-uv run kv-run elem_add                  # 跑一个
-uv run kv-run elem_add --verbose        # 看全过程: recheck 测试 / 每个 agent 发言 / 探针代码
-uv run kv-run elem_add --force-recheck  # 重新生成 recheck 测试再跑
-uv run kv-run --list                    # 列出能跑的 entry
+# Online: verify (recheck → debate → verdict)
+uv run kv-run elem_add                  # run one
+uv run kv-run elem_add --verbose        # watch it all: recheck test / each agent turn / probe code
+uv run kv-run elem_add --force-recheck  # regenerate the recheck test, then run
+uv run kv-run --list                    # list runnable entries
 ```
 
-跑完看 `dataset/<entry>/debate_result.json` 拿完整记录。
+After a run, see `dataset/<entry>/debate_result.json` for the full record.
 
 ---
 
-## 8. 已知局限
+## 8. Known limitations
 
-- **debate verdict 仍有非确定性**:battery 把机械 bug(非连续等)变确定了,但 debate 里
-  skeptic 仍靠 LLM 即兴立 claim,语义类 bug 的覆盖还是 run-to-run 有波动。
-- **battery 的 case 仍是 LLM 写的**:清单是写死的,但每个 case 的具体构造仍由 LLM 生成,
-  有构造变数。彻底消除要纯 Python 写死的 harness(但撞到"通用调 kernel"的签名问题)。
-- **三个信号未合成**:recheck.status / robustness / debate.verdict 目前分别产出,最终
-  结论怎么综合还没定。
-- **scope 契约未固定**:非连续这类输入"算不算 bug"取决于 kernel 的预期用途,目前用
-  "正常输入失败才判死、刁钻失败只记录"的折中。
+- **The debate verdict is still non-deterministic**: the battery made mechanical bugs
+  (non-contiguous, etc.) deterministic, but inside the debate the skeptic still files claims
+  ad hoc, so coverage of semantic bugs still varies run-to-run.
+- **Battery cases are still LLM-written**: the checklist is fixed, but each case's concrete
+  construction is still generated by the LLM, so there is construction variance. Eliminating
+  it fully requires a pure-Python harness (which hits the "call any kernel generically"
+  signature problem).
+- **The three signals are not combined**: `recheck.status` / `robustness` / `debate.verdict`
+  are produced separately; how to synthesize a final conclusion is undecided.
+- **The scope contract is not fixed**: whether inputs like non-contiguous "count as a bug"
+  depends on the kernel's intended use; the current compromise is "fail on normal inputs =
+  condemned, fail on adversarial inputs = recorded only."
