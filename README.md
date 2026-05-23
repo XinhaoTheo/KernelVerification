@@ -1,124 +1,137 @@
 # Kernel Verification via Debate
 
-A system that **judges the trustworthiness** of LLM-generated Triton kernels. It does
-not trust the generator's own test; instead it independently re-checks correctness and
-runs a multi-agent debate, with a focus on catching kernels that "pass their own test
-but are actually wrong or gamed."
+A system that **decides whether to trust** a Triton kernel written by an LLM (a kernel is a
+hand-written GPU routine; Triton is the language used to write it). It does **not** believe
+the test that came with the kernel. Instead it re-checks the kernel's correctness on its own,
+then has several AI agents argue about it. The goal is to catch kernels that "pass the test
+they shipped with" but are actually wrong, or were rigged to pass.
 
 ---
 
 ## 1. Why this exists
 
-Tools like meta's KernelAgent auto-generate Triton kernels, but they **set the exam and
-sit it at the same time** — the same LLM writes the kernel, writes the test, and often
-silently downcasts fp32 to bf16 to loosen tolerance and tests only a single shape. The
-result is a kernel that "passes its own test" but may still:
+Tools like meta's KernelAgent generate Triton kernels automatically, but they **write the
+test and take it at the same time** — the same LLM writes the kernel, writes the test, and
+often quietly switches the numbers from fp32 to the lower-precision bf16 (which makes the
+"close enough" check looser) while testing only one input shape. The result is a kernel that
+passes its own test but may still:
 
-- **Read the wrong memory on non-contiguous inputs** (no `.contiguous()` call)
-- **Truncate large inputs** (hard-coded `BLOCK_SIZE`, drops data when a row is too long)
-- **Be numerically unstable** (softmax without max-subtraction, drifting reduction order)
-- **Cheat** (hard-code the test's shape, fake Triton while calling torch, lazy-eval to fool `allclose`)
+- **Read the wrong memory** when the input isn't laid out back-to-back in memory (a
+  "non-contiguous" tensor, e.g. the result of slicing with `[::2]`) because it never calls
+  `.contiguous()`
+- **Drop part of a large input** (a fixed `BLOCK_SIZE` that can't cover a long row)
+- **Give numerically shaky answers** (e.g. a softmax that skips the usual max-subtraction
+  trick, or sums things in an order that loses precision)
+- **Cheat** (hard-code the one shape the test uses, pretend to use Triton while really calling
+  PyTorch, or delay the computation to slip past the comparison)
 
-This system is the **distrustful, independent reviewer**. It accepts a kernel from any
-source (KernelAgent is just the current generator, and is replaceable) and outputs an
-evidence-backed trust judgment.
+This system is the **independent, skeptical reviewer**. It takes a kernel from any source
+(KernelAgent is just the current generator and can be swapped out) and returns a trust
+decision backed by evidence.
 
 ---
 
 ## 2. How it works: three steps
 
-The pipeline splits into one **offline** step and two **online** steps:
+The pipeline has one **offline** step (done once, ahead of time) and two **online** steps
+(run each time you verify a kernel):
 
-- **Step 1 — Dataset generation (`kv-build`)**: run KernelAgent to turn a problem into a
-  kernel and store it in `dataset/`. Expensive, slow, needs a GPU. Run once; the data
-  persists.
-- **Step 2 — Recheck (`kv-run`, first half)**: read a kernel back from `dataset/` and run
-  our own independent correctness test against it.
-- **Step 3 — Debate (`kv-run`, second half)**: run a multi-agent debate that hunts for the
-  semantic bugs a fixed test cannot enumerate, ending in a verdict.
+- **Step 1 — Build the dataset (`kv-build`)**: run KernelAgent to turn a problem into a
+  kernel and save it under `dataset/`. Expensive, slow, needs a GPU. Run once; the saved
+  data stays.
+- **Step 2 — Re-check (`kv-run`, first half)**: load a saved kernel and run our **own**
+  correctness test on it.
+- **Step 3 — Debate (`kv-run`, second half)**: have several AI agents argue about the kernel
+  to find the kinds of bugs a fixed test can't anticipate, ending in a final decision.
 
-Steps 2–3 are cheap, so you can iterate on agent prompts without regenerating kernels.
+Steps 2–3 are cheap, so you can tweak the agents' prompts and re-run without regenerating
+kernels.
 
-> **Key design point**: verification does **not** depend on the generator providing a test.
-> Swap in a generator that emits only `kernel.py` and Steps 2–3 still work — because
-> recheck writes its own test.
+> **Key design point**: the verification does **not** rely on the generator giving us a test.
+> Hand it a generator that only produces `kernel.py` and Steps 2–3 still work — because the
+> re-check writes its own test.
 
-The online half (Steps 2–3) at a glance — a recheck execution layer feeding a debate that
-ends in a verdict:
+The online half (Steps 2–3) at a glance — a re-check stage that feeds a debate, which ends
+in a decision:
 
 ![Overview: online verification](docs/overview.drawio.png)
 
 <sub>Source (editable): [docs/overview.drawio.pdf](docs/overview.drawio.pdf)</sub>
 
-### Step 1 — Dataset generation
+### Step 1 — Build the dataset
 
 ![Step 1: dataset generation](docs/step1.drawio.png)
 
 <sub>Source (editable): [docs/step1.drawio.pdf](docs/step1.drawio.pdf)</sub>
 
-A **KernelBench problem** (a PyTorch reference: `Model` + `get_inputs` + `get_init_inputs`)
-is fed to `verifier/generator.py`, which wraps `KernelAgent.TritonKernelAgent` and runs it
+A **KernelBench problem** (a PyTorch reference made of three parts: a `Model`, a `get_inputs`
+that supplies the runtime data, and a `get_init_inputs` that supplies the model's setup
+arguments) is handed to `verifier/generator.py`, which drives `KernelAgent.TritonKernelAgent`
 in three phases:
 
-1. **LLM writes a test** for the problem.
-2. **LLM generates N kernel seeds** — N independent first-draft kernels.
-3. **N workers write the kernel iteratively** in parallel: each worker writes its kernel,
-   subprocess-runs the test, feeds errors back to the LLM, and retries up to `max_rounds`.
-   Any worker passing counts as success; on failure we also recover the "best attempt" and
-   its error.
+1. **The LLM writes a test** for the problem.
+2. **The LLM writes N first-draft kernels** ("seeds") — N independent attempts.
+3. **N workers refine the kernels in parallel**: each worker writes its kernel, runs the test
+   in a separate process, feeds any errors back to the LLM, and tries again, up to
+   `max_rounds`. If any worker's kernel passes, that's a success; if all fail, we still keep
+   the closest attempt and its error.
 
-The result is saved by `verifier/dataset.py : save_entry()` into a self-contained directory
-`dataset/<name>/` holding:
+The result is saved by `verifier/dataset.py : save_entry()` into one self-contained folder,
+`dataset/<name>/`, holding:
 
 | File | Contents |
 |---|---|
 | `problem.txt` | the original problem |
-| `kernel.py` | the final kernel (best attempt if it failed) |
-| `test.py` | KernelAgent's own test (reference only, **not trusted**) |
-| `seed_*.py` | the initial seeds |
+| `kernel.py` | the final kernel (the closest attempt, if none passed) |
+| `test.py` | KernelAgent's own test (kept for reference only — **we don't rely on it**) |
+| `seed_*.py` | the first-draft kernels |
 | `meta.json` | `{ passed, status, rounds, ... }` |
-| `error.txt` | stderr/stdout on failure |
+| `error.txt` | the error output, if it failed |
 
-Because everything is **copied** (not referenced by path), the entry can be committed, moved
-between machines, or hand-authored — deleting KernelAgent's run directory does not break it.
+Because everything is **copied in** (not just pointed to), the folder can be committed to
+git, moved to another machine, or written by hand — deleting KernelAgent's working directory
+won't break it.
 
-### Step 2 — Recheck
+### Step 2 — Re-check
 
 ![Step 2: recheck](docs/step2.drawio.png)
 
 <sub>Source (editable): [docs/step2.drawio.pdf](docs/step2.drawio.pdf)</sub>
 
-This is the heart of **distrusting the generator** (`verifier/recheck.py`). `kv-run` first
-calls `get_recheck(entry)` (reuses a cached result; `--force-recheck` to redo it):
+This is where we **stop trusting the generator** (`verifier/recheck.py`). `kv-run` first
+calls `get_recheck(entry)` (it reuses a saved result if there is one; `--force-recheck` re-runs
+it):
 
 1. **`generate_test()`** — the LLM reads `problem.txt` + `kernel.py` and writes a test.
-   Because it sees the kernel source, it knows how to call it (sidestepping the "every kernel
-   has a different signature" problem). The prompt forces a **fixed adversarial battery**:
+   Because it can see the kernel's source, it knows how to call it (this sidesteps the problem
+   that every kernel takes different arguments). The prompt makes it run a **fixed set of
+   stress tests**:
 
-   | Case | What it stresses |
+   | Case | What it checks |
    |---|---|
-   | `standard` | the spec's inputs → **core correctness** |
-   | `noncontig_stride2` | non-contiguous `[::2]` / `[:, ::2]` |
-   | `noncontig_transpose` | a transposed `.t()` view |
-   | `odd_size` | size ±1, non-aligned |
-   | `zero-element tensor` (`empty`) | a zero-element input |
+   | `standard` | the problem's normal inputs → **core correctness** |
+   | `noncontig_stride2` | a non-back-to-back input via `[::2]` / `[:, ::2]` |
+   | `noncontig_transpose` | a transposed view (`.t()`) |
+   | `odd_size` | a size that's off by one (not a round number) |
+   | `zero-element tensor` (`empty`) | an empty input |
 
-   Cases 2–5 are the **robustness** tier. Each case is judged by the fixed
-   `compare_outputs()` and prints `CASE <name>: PASS/FAIL/SKIP`.
+   Cases 2–5 are the **robustness** checks. Every case is decided by the one shared comparison
+   function `compare_outputs()` and prints `CASE <name>: PASS/FAIL/SKIP`.
 
-2. **`run_test()`** — a temp dir holds `kernel.py` + `kverify_compare.py` (the fixed
-   comparator) + the test; a **subprocess** runs it (a fresh process avoids the CUDA fork
-   trap). Inside, the same `inputs` flow through both the **test kernel** and **PyTorch**,
-   and `compare_outputs()` decides each case. The exit code reflects **only** the `standard`
-   case.
+2. **`run_test()`** — a temporary folder gets `kernel.py` + `kverify_compare.py` (the shared
+   comparison function) + the test; a **separate process** runs it. (Starting a fresh process
+   avoids a known CUDA crash that happens when a process that already touched the GPU forks.)
+   Inside, the same `inputs` go through both the **kernel** and **PyTorch**, and
+   `compare_outputs()` decides each case. The process's exit code reflects **only** the
+   `standard` case.
 
-3. **Parse the `CASE` lines** into two tiers:
+3. **Read the `CASE` lines** and split the result into two levels:
    - **`standard` FAIL → `status=failed` → a real bug.**
-   - **adversarial FAIL → recorded in `robustness`, NOT auto-reject** (such inputs may be
-     outside the kernel's intended scope).
+   - **a stress-test FAIL → noted under `robustness`, but NOT an automatic rejection** (those
+     unusual inputs may be outside what the kernel was meant to handle).
 
-The recheck result is then **folded into the artifact** — `passed`, `status`, `test_code`,
-`error` — replacing whatever the upstream generator claimed.
+The re-check result is then **merged into the saved record** — `passed`, `status`,
+`test_code`, `error` — overwriting whatever the original generator claimed.
 
 ### Step 3 — Multi-agent debate
 
@@ -126,137 +139,144 @@ The recheck result is then **folded into the artifact** — `passed`, `status`, 
 
 <sub>Source (editable): [docs/step3.drawio.pdf](docs/step3.drawio.pdf)</sub>
 
-Debate (`verifier/debate.py` + `agents/`) handles the **semantic / algorithmic bugs the
-battery cannot enumerate** (cross-block accumulation errors, cheating, subtle numerics).
-**Every round of debate** runs three roles in sequence:
+The debate (`verifier/debate.py` + `agents/`) handles the **logic bugs that a fixed checklist
+can't list out in advance** (e.g. accumulation errors that only show up across blocks,
+cheating, subtle precision issues). **Each round** runs three agents in order:
 
-- **Author** — *witness*: describes what the kernel does and how it evolved from
-  `seed_*.py`. Describe only, **no judgment**.
-- **Skeptic** — *challenger*: files **structured claims** (concrete, testable assertions,
-  e.g. `{"type":"non_contiguous_bug","statement":"for x[::2] the kernel misreads"}`). Each
-  is registered into the **claims ledger** with `status: not verified` (open).
-- **Verifier** — *executor*: for each open claim, writes a **GPU probe**, runs kernel +
-  reference, judges via `compare_outputs`, and sets the claim to **confirmed / rebutted /
-  inconclusive** (with the probe code + measured numbers as evidence).
+- **Author** — *the describer*: explains what the kernel does and how it changed from its
+  first drafts (`seed_*.py`). Describe only, **no opinions**.
+- **Skeptic** — *the challenger*: looks for possible bugs and files each one as a **specific,
+  testable claim** (e.g. `{"type":"non_contiguous_bug","statement":"for x[::2] the kernel
+  reads the wrong memory"}`). Each claim goes onto a running **list of claims**, marked
+  `not verified` (open).
+- **Verifier** — *the tester*: for each open claim, writes a **small test script**, runs it on
+  the GPU against both the kernel and PyTorch, uses `compare_outputs` to judge, and marks the
+  claim **confirmed / rebutted / inconclusive** (saving the script and the measured numbers as
+  evidence).
 
-**Convergence**: if the skeptic files **new claims**, the loop repeats; when it files **no
-new claim**, the round loop stops.
+**When to stop**: if the skeptic raises **new claims**, the loop runs again; when it has **no
+new claim**, the rounds stop.
 
-Then the **Judge** — *arbiter* — reads the whole ledger **once** and renders the final
-verdict: **trust / reject / needs_more_evidence**, plus the decisive claims. The judge makes
-the severity call counting cannot (is a confirmed diff expected bf16 rounding or a real
-bug?) and may **override** the verifier.
+Then the **Judge** — *the final decision-maker* — reads the whole list of claims **once** and
+gives the verdict: **trust / reject / needs_more_evidence**, plus which claims were decisive.
+The judge makes the call that simple counting can't: is a confirmed difference just expected
+bf16 rounding, or a real bug? The judge can **overrule** the verifier.
 
 The full record is written to `dataset/<entry>/debate_result.json`:
-`{ recheck_status, verdict, claims (the ledger), history (all turns) }`.
+`{ recheck_status, verdict, claims (the full list), history (every agent turn) }`.
 
 ---
 
 ## 3. Component deep dive
 
-### 3.1 `verifier/generator.py` — wraps KernelAgent
+### 3.1 `verifier/generator.py` — drives KernelAgent
 
-Normalizes `KernelAgent.TritonKernelAgent.generate_kernel()` into a uniform artifact:
+Turns `KernelAgent.TritonKernelAgent.generate_kernel()` into one consistent record:
 `{kernel_code, test_code, passed, status, rounds, error, session_dir, raw}`.
 
-On success `kernel_code` is the final kernel; on failure it is the "best attempt from the
-worker that fought the longest" plus error info (upstream KernelAgent is patched — it
-originally left nothing on failure, see [roadmap.md](roadmap.md)).
+On success `kernel_code` is the final kernel; on failure it is the closest attempt (from
+whichever worker got furthest) plus the error. (We patched KernelAgent for this — it
+originally returned nothing on failure; see [roadmap.md](roadmap.md).)
 
-### 3.2 `verifier/dataset.py` — self-contained dataset
+### 3.2 `verifier/dataset.py` — a self-contained dataset
 
-`save_entry()` **copies** each generation's artifacts into `dataset/<name>/` (rather than
-recording a path), so deleting KernelAgent's run directory does not break the dataset — it
-can be committed, moved between machines, or hand-authored for injection. `load_entry()`
-reads it back into an artifact; `session_dir` points at the entry dir itself, which is where
-the author reads `seed_*.py` from.
+`save_entry()` **copies** each run's files into `dataset/<name>/` (instead of saving a path),
+so deleting KernelAgent's working directory doesn't break the dataset — it can be committed,
+moved between machines, or written by hand for testing. `load_entry()` reads it back into a
+record; `session_dir` points at the folder itself, which is where the Author later reads
+`seed_*.py` from.
 
-### 3.3 `verifier/recheck.py` — independent correctness re-check (our ground truth)
+### 3.3 `verifier/recheck.py` — our own correctness check (the answer we trust)
 
-`get_recheck()` runs `generate_test()` → `run_test()` → parse `CASE` lines, storing two
-tiers in `meta.json["recheck"]`: `status` (from `standard` only, drives "is it a real bug")
-and `robustness` (the adversarial cases, recorded only).
+`get_recheck()` runs `generate_test()` → `run_test()` → read the `CASE` lines, saving two
+levels in `meta.json["recheck"]`: `status` (from the `standard` case only — this is what
+decides "is it a real bug") and `robustness` (the stress-test cases, noted only).
 
-**Why the battery**: previously only the debate skeptic probed adversarial inputs ad hoc,
-which is non-deterministic — the same kernel with a non-contiguous bug would be caught one
-run (skeptic thought of it) and missed the next (it didn't). The battery hard-codes the list
-and runs it every time, so mechanical bugs (non-contiguous / odd size / empty) are no longer
-missed.
+**Why a fixed set of stress tests**: previously only the debate's skeptic poked at unusual
+inputs, and only when it happened to think of them — so the same non-contiguous bug would be
+caught one run and missed the next. The fixed set runs the same checks every time, so the
+mechanical bugs (non-contiguous / odd size / empty) are never missed.
 
-**What the two tiers mean (the scope contract)**: a kernel that fails on the spec's normal
-inputs is an unambiguous bug (reject); one that only fails on adversarial inputs like
-non-contiguous is a robustness gap — recorded but not condemned, because such inputs may be
-outside the kernel's intended scope.
+**What the two levels mean (deciding what's in scope)**: a kernel that fails on the problem's
+normal inputs is clearly broken (reject); one that only fails on unusual inputs like
+non-contiguous has a robustness gap — noted but not condemned, because those inputs may be
+outside what the kernel was meant to handle.
 
-### 3.4 `verifier/compare.py` — the single source of truth for comparison
+### 3.4 `verifier/compare.py` — the one place that decides "is it correct"
 
-`compare_outputs(out, ref) → (matches, max_diff, detail)`. Both the recheck test and the
-verifier probe **import it** (copied into the temp dir as `kverify_compare.py` at run time),
-so the "is it correct" decision lives in exactly one place and is fixed:
+`compare_outputs(out, ref) → (matches, max_diff, detail)`. Both the re-check test and the
+verifier's test scripts **import it** (it's copied into the temporary folder as
+`kverify_compare.py` at run time), so the "is it correct" decision lives in exactly one place
+and is fixed:
 
-- **Tolerance by dtype**: fp32 uses 1e-3, fp16/bf16 uses 1e-2/2e-2 (the LLM is not allowed to
-  invent its own threshold like `1e-4`)
-- **`equal_nan=True`**: kernel and reference both NaN at the same position counts as a match
-  (softmax of all-inf yields NaN in PyTorch too — that is not the kernel's fault)
-- **A bug means "diverges from the reference"**, never "produced a NaN/large value" in isolation
+- **The allowed error margin depends on the number format**: fp32 uses 1e-3, fp16/bf16 use
+  1e-2/2e-2 (the LLM is not allowed to make up its own number like `1e-4`)
+- **`equal_nan=True`**: if the kernel and the reference both produce NaN at the same spot,
+  that counts as a match (a softmax of all-`-inf` gives NaN in PyTorch too — not the kernel's
+  fault)
+- **A bug means "differs from the reference"**, never "produced a NaN or a big number" on its
+  own
 
-> This file was added after a bug: early on the LLM wrote the comparison inside each probe,
-> picked tolerances arbitrarily, and mishandled NaN, producing false positives. Extracting a
-> fixed comparator made recheck and verifier use the same yardstick.
+> This file was added after a bug: early on, the LLM wrote the comparison inside each test
+> script, picked error margins arbitrarily, and mishandled NaN, causing false alarms.
+> Pulling the comparison into one fixed function made the re-check and the verifier use the
+> same standard.
 
-### 3.5 `verifier/debate.py` + `agents/` — multi-agent debate
+### 3.5 `verifier/debate.py` + `agents/` — the multi-agent debate
 
 Four roles:
 
-- **`agents/author.py` (witness)**: reads the final kernel + `seed_*.py` and objectively
-  describes what the kernel does and what changed from seed to final. The prompt forbids
-  quality judgment — describe only. Emits `NO_NEW_OBSERVATIONS.` when it has nothing to add.
-- **`agents/skeptic.py` (challenger)**: looks for possible bugs/cheating, but must file them
-  as **structured claims** — a concrete assertion verifiable by running code (with the exact
-  input to test). Emits `NO_NEW_CONCERNS.` + an empty claim list when out of new concerns.
-- **`agents/verifier.py` (executor)**: walks the `open` claims in the ledger, **writes a probe
-  per claim** that constructs the input, runs kernel + reference, judges via `compare_outputs`,
-  and writes the result back to the claim (confirmed / rebutted / inconclusive) plus evidence
-  (probe code + measured numbers).
-- **`agents/judge.py` (arbiter)**: does not speak per round — it **reads the whole ledger once
-  at the end** and renders the verdict. It makes the severity call counting cannot: is a
-  confirmed diff of 256 a real bug or expected bf16 rounding? The judge may **override** the
-  verifier's call. Outputs `{verdict, confidence, decisive_claims, claim_notes, reason}`.
+- **`agents/author.py` (the describer)**: reads the final kernel + `seed_*.py` and plainly
+  describes what the kernel does and what changed from first draft to final. The prompt bans
+  opinions — describe only. Says `NO_NEW_OBSERVATIONS.` when there's nothing to add.
+- **`agents/skeptic.py` (the challenger)**: hunts for possible bugs or cheating, but must
+  write each one as a **specific, testable claim** (with the exact input to test). Says
+  `NO_NEW_CONCERNS.` + an empty list when out of new concerns.
+- **`agents/verifier.py` (the tester)**: goes through the open claims, **writes one test
+  script per claim** that builds the input, runs the kernel and the reference, judges with
+  `compare_outputs`, and writes the result back onto the claim (confirmed / rebutted /
+  inconclusive) along with the evidence (the script + the measured numbers).
+- **`agents/judge.py` (the final decision-maker)**: doesn't speak each round — it **reads the
+  whole list of claims once at the end** and gives the verdict. It makes the severity call
+  that counting can't: is a confirmed difference of 256 a real bug or expected bf16 rounding?
+  The judge can **overrule** the verifier. Outputs
+  `{verdict, confidence, decisive_claims, claim_notes, reason}`.
 
-- **`agents/parsing.py`**: robustly extracts JSON from an LLM reply (prefers the ```json block,
-  skips ```python code blocks that appear in prose).
-- **`agents/types.py`**: the `Turn` / `Claim` TypedDict definitions.
+- **`agents/parsing.py`**: reliably pulls the JSON out of an LLM reply (prefers the ```json
+  block, ignores ```python code blocks that show up in the prose).
+- **`agents/types.py`**: the `Turn` / `Claim` type definitions.
 
-**Convergence**: each round runs author → skeptic → verifier; it stops when the skeptic files
-no new claim. The judge is not part of the rounds; it adjudicates once after the loop.
+**When to stop**: each round runs author → skeptic → verifier; it stops when the skeptic
+raises no new claim. The judge isn't part of the rounds; it decides once after the loop ends.
 
-### 3.6 `verifier/llm_client.py` — LLM calls
+### 3.6 `verifier/llm_client.py` — the LLM calls
 
-A single Anthropic wrapper. Two points: (1) the API is stateless, so we own the message list;
-(2) the message layout lets the prompt cache hit across rounds for the same agent (kernel/test
-go in the cacheable prefix). `oneshot()` is the historyless call used by recheck/verifier to
-write probes.
+A single wrapper around Anthropic's API. Two notes: (1) the API keeps no memory between calls,
+so we hold the message list ourselves; (2) the messages are arranged so the prompt cache can
+be reused across rounds for the same agent (the kernel and test go in the part of the prompt
+that gets cached). `oneshot()` is the one-off call (no conversation history) that the re-check
+and verifier use to write their test scripts.
 
-### 3.7 `verifier/gpu_pick.py` — automatic GPU selection
+### 3.7 `verifier/gpu_pick.py` — picking a free GPU automatically
 
-Before running, sort GPUs via `nvidia-smi` and then actually attempt a small allocation as a
-probe (a card can report "free" in nvidia-smi yet refuse a context on a shared machine), then
-set `CUDA_VISIBLE_DEVICES` to the first usable one.
+Before running, it ranks GPUs using `nvidia-smi` and then actually tries a small allocation as
+a test (a card can look "free" in `nvidia-smi` but still refuse to run on a shared machine),
+then points `CUDA_VISIBLE_DEVICES` at the first one that works.
 
 ---
 
-## 4. The three signals
+## 4. The three results
 
-After `kv-run` finishes a kernel, you get three layers of judgment — **do not conflate them**:
+After `kv-run` finishes with a kernel, you get three separate results — **don't mix them up**:
 
-| Signal | Source | Meaning |
+| Result | Comes from | Means |
 |---|---|---|
-| `recheck.status` | the battery's `standard` case | **Core correctness**: right on the spec's normal inputs? |
-| `recheck.robustness` | the battery's adversarial cases | **Robustness**: handles non-contiguous / odd size / empty? |
-| `debate.verdict` | author/skeptic/verifier/judge | **Semantic review**: algorithmic bugs / cheating the battery can't enumerate |
+| `recheck.status` | the `standard` case | **Core correctness**: right on the problem's normal inputs? |
+| `recheck.robustness` | the stress-test cases | **Robustness**: handles non-contiguous / odd size / empty? |
+| `debate.verdict` | author/skeptic/verifier/judge | **Logic review**: bugs or cheating a fixed checklist can't anticipate |
 
-> Note: these three signals are currently produced separately; how to combine them into one
-> final conclusion is still an open design point.
+> Note: these three are produced separately for now; how to combine them into one final answer
+> is still an open question.
 
 ---
 
@@ -264,33 +284,33 @@ After `kv-run` finishes a kernel, you get three layers of judgment — **do not 
 
 ```
 kernel_verification/
-├── KernelAgent/        # upstream generator (meta-pytorch/KernelAgent), patched, vendored
-├── KernelBench/        # problem set (ScalingIntelligence/KernelBench), vendored
+├── KernelAgent/        # the generator we build on (meta-pytorch/KernelAgent), patched, copied in
+├── KernelBench/        # the problem set (ScalingIntelligence/KernelBench), copied in
 ├── verifier/           # main package
-│   ├── generator.py    # wraps KernelAgent
+│   ├── generator.py    # drives KernelAgent
 │   ├── dataset.py      # save_entry / load_entry / iter_entries
-│   ├── recheck.py      # independent re-check + adversarial battery (kv-recheck)
-│   ├── compare.py      # fixed comparator compare_outputs (single source of truth)
-│   ├── debate.py       # debate main loop run_debate
+│   ├── recheck.py      # our own re-check + the fixed stress tests (kv-recheck)
+│   ├── compare.py      # the shared comparison function compare_outputs
+│   ├── debate.py       # the debate loop run_debate
 │   ├── llm_client.py   # Anthropic calls + prompt cache
 │   ├── gpu_pick.py     # auto-pick a usable GPU
-│   ├── build_dataset.py# offline dataset build (kv-build)
-│   └── run.py          # online verification entry (kv-run)
+│   ├── build_dataset.py# build the dataset offline (kv-build)
+│   └── run.py          # run the online verification (kv-run)
 ├── agents/             # the four roles + helpers
 │   ├── author.py  skeptic.py  verifier.py  judge.py
-│   ├── parsing.py      # JSON extraction
+│   ├── parsing.py      # pull JSON out of replies
 │   └── types.py        # Turn / Claim
-├── dataset/            # generated kernels + three labels (committable)
+├── dataset/            # generated kernels + their three results (can be committed)
 │   └── <name>/{problem.txt, kernel.py, test.py, seed_*.py,
 │               meta.json, recheck_test.py, debate_result.json, ...}
-├── docs/               # diagrams (.drawio.png rendered in README, .drawio.pdf = editable source)
+├── docs/               # diagrams (.drawio.png shown in README, .drawio.pdf = editable source)
 │   ├── overview.drawio.{png,pdf}  # online verification at a glance
-│   ├── step1.drawio.{png,pdf}     # dataset generation
-│   ├── step2.drawio.{png,pdf}     # recheck
+│   ├── step1.drawio.{png,pdf}     # build the dataset
+│   ├── step2.drawio.{png,pdf}     # re-check
 │   └── step3.drawio.{png,pdf}     # multi-agent debate
-├── tests/              # exploration / debugging scripts
-├── pyproject.toml      # uv project, torch cu128, KernelAgent path dep
-└── roadmap.md          # design evolution notes
+├── tests/              # scratch / debugging scripts
+├── pyproject.toml      # uv project, torch cu128, KernelAgent path dependency
+└── roadmap.md          # notes on how the design evolved
 ```
 
 ---
@@ -299,20 +319,20 @@ kernel_verification/
 
 ```bash
 # Step 1 — build the dataset (expensive/slow/needs GPU, run once)
-uv run kv-build --curated              # build 10 curated KernelBench problems
-uv run kv-build --problem elem_add     # build a single built-in problem
-uv run kv-build --curated --list       # dry run, just show what would be built
+uv run kv-build --curated              # build 10 hand-picked KernelBench problems
+uv run kv-build --problem elem_add     # build one built-in problem
+uv run kv-build --curated --list       # preview only: show what would be built
 
-# Step 2 only — independent re-check (no debate)
-uv run kv-recheck                       # run everything not yet rechecked
-uv run kv-recheck elem_add              # force re-run one
-uv run kv-recheck --list                # show each entry's recheck status
+# Step 2 only — our own re-check (no debate)
+uv run kv-recheck                       # run everything not yet re-checked
+uv run kv-recheck elem_add              # re-run one (forced)
+uv run kv-recheck --list                # show each entry's re-check result
 
-# Steps 2 + 3 — verify (recheck → debate → verdict)
+# Steps 2 + 3 — full verification (re-check → debate → verdict)
 uv run kv-run elem_add                  # run one
-uv run kv-run elem_add --verbose        # watch it all: recheck test / each agent turn / probe code
-uv run kv-run elem_add --force-recheck  # regenerate the recheck test, then run
-uv run kv-run --list                    # list runnable entries
+uv run kv-run elem_add --verbose        # watch everything: the re-check test, each agent turn, each test script
+uv run kv-run elem_add --force-recheck  # redo the re-check test first, then run
+uv run kv-run --list                    # list the entries you can run
 ```
 
 After a run, see `dataset/<entry>/debate_result.json` for the full record.
@@ -321,15 +341,15 @@ After a run, see `dataset/<entry>/debate_result.json` for the full record.
 
 ## 7. Known limitations
 
-- **The debate verdict is still non-deterministic**: the battery made mechanical bugs
-  (non-contiguous, etc.) deterministic, but inside the debate the skeptic still files claims
-  ad hoc, so coverage of semantic bugs still varies run-to-run.
-- **Battery cases are still LLM-written**: the checklist is fixed, but each case's concrete
-  construction is still generated by the LLM, so there is construction variance. Eliminating
-  it fully requires a pure-Python harness (which hits the "call any kernel generically"
-  signature problem).
-- **The three signals are not combined**: `recheck.status` / `robustness` / `debate.verdict`
-  are produced separately; how to synthesize a final conclusion is undecided.
-- **The scope contract is not fixed**: whether inputs like non-contiguous "count as a bug"
-  depends on the kernel's intended use; the current compromise is "fail on normal inputs =
-  condemned, fail on adversarial inputs = recorded only."
+- **The debate verdict still varies between runs**: the fixed stress tests made the
+  mechanical bugs (non-contiguous, etc.) repeatable, but inside the debate the skeptic still
+  comes up with claims on the fly, so coverage of logic bugs still changes from run to run.
+- **The stress-test cases are still written by the LLM**: the checklist is fixed, but how each
+  case is actually built is still generated by the LLM, so there's some variation. Removing it
+  entirely would need a pure-Python harness — which runs into the "how do you call any kernel
+  generically" problem.
+- **The three results aren't combined**: `recheck.status` / `robustness` / `debate.verdict`
+  are produced separately; how to turn them into one final answer is undecided.
+- **What counts as "in scope" isn't settled**: whether an input like non-contiguous "counts as
+  a bug" depends on what the kernel was meant for; the current compromise is "fails on normal
+  inputs = condemned, fails on unusual inputs = noted only."
