@@ -43,11 +43,18 @@ Steps 2–3 are cheap, so you can iterate on agent prompts without regenerating 
 > Swap in a generator that emits only `kernel.py` and Steps 2–3 still work — because
 > recheck writes its own test.
 
+The online half (Steps 2–3) at a glance — a recheck execution layer feeding a debate that
+ends in a verdict:
+
+![Overview: online verification](docs/overview.png)
+
+<sub>Source (editable): [docs/overview.drawio.pdf](docs/overview.drawio.pdf)</sub>
+
 ### Step 1 — Dataset generation
 
-![Step 1: dataset generation](docs/step1.drawio.pdf)
+![Step 1: dataset generation](docs/step1.png)
 
-> Diagram: **[docs/step1.drawio.pdf](docs/step1.drawio.pdf)**
+<sub>Source (editable): [docs/step1.drawio.pdf](docs/step1.drawio.pdf)</sub>
 
 A **KernelBench problem** (a PyTorch reference: `Model` + `get_inputs` + `get_init_inputs`)
 is fed to `verifier/generator.py`, which wraps `KernelAgent.TritonKernelAgent` and runs it
@@ -77,9 +84,9 @@ between machines, or hand-authored — deleting KernelAgent's run directory does
 
 ### Step 2 — Recheck
 
-![Step 2: recheck](docs/step2.drawio.pdf)
+![Step 2: recheck](docs/step2.png)
 
-> Diagram: **[docs/step2.drawio.pdf](docs/step2.drawio.pdf)**
+<sub>Source (editable): [docs/step2.drawio.pdf](docs/step2.drawio.pdf)</sub>
 
 This is the heart of **distrusting the generator** (`verifier/recheck.py`). `kv-run` first
 calls `get_recheck(entry)` (reuses a cached result; `--force-recheck` to redo it):
@@ -115,9 +122,9 @@ The recheck result is then **folded into the artifact** — `passed`, `status`, 
 
 ### Step 3 — Multi-agent debate
 
-![Step 3: multi-agent debate](docs/step3.drawio.pdf)
+![Step 3: multi-agent debate](docs/step3.png)
 
-> Diagram: **[docs/step3.drawio.pdf](docs/step3.drawio.pdf)**
+<sub>Source (editable): [docs/step3.drawio.pdf](docs/step3.drawio.pdf)</sub>
 
 Debate (`verifier/debate.py` + `agents/`) handles the **semantic / algorithmic bugs the
 battery cannot enumerate** (cross-block accumulation errors, cheating, subtle numerics).
@@ -276,10 +283,11 @@ kernel_verification/
 ├── dataset/            # generated kernels + three labels (committable)
 │   └── <name>/{problem.txt, kernel.py, test.py, seed_*.py,
 │               meta.json, recheck_test.py, debate_result.json, ...}
-├── docs/               # diagrams
-│   ├── step1.drawio.pdf  # dataset generation
-│   ├── step2.drawio.pdf  # recheck
-│   └── step3.drawio.pdf  # multi-agent debate
+├── docs/               # diagrams (.png rendered in README, .drawio.pdf = editable source)
+│   ├── overview.{png,drawio.pdf}  # online verification at a glance
+│   ├── step1.{png,drawio.pdf}     # dataset generation
+│   ├── step2.{png,drawio.pdf}     # recheck
+│   └── step3.{png,drawio.pdf}     # multi-agent debate
 ├── tests/              # exploration / debugging scripts
 ├── pyproject.toml      # uv project, torch cu128, KernelAgent path dep
 └── roadmap.md          # design evolution notes
