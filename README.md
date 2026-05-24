@@ -46,13 +46,13 @@ The pipeline has one **offline** step in order to generate the test kernel (so c
 The online half (Steps 2–3) at a glance — a re-check stage that feeds a debate, which ends
 in a decision:
 
-![Overview: online verification](docs/overview.drawio.png)
+![Overview: online verification](docs/overview.drawio.svg)
 
 <sub>Source (editable): [docs/overview.drawio.pdf](docs/overview.drawio.pdf)</sub>
 
 ### Step 1 — Build the dataset
 
-![Step 1: dataset generation](docs/step1.drawio.png)
+![Step 1: dataset generation](docs/step1.drawio.svg)
 
 <sub>Source (editable): [docs/step1.drawio.pdf](docs/step1.drawio.pdf)</sub>
 
@@ -86,7 +86,7 @@ will not break it.
 
 ### Step 2 — Re-check
 
-![Step 2: recheck](docs/step2.drawio.png)
+![Step 2: recheck](docs/step2.drawio.svg)
 
 <sub>Source (editable): [docs/step2.drawio.pdf](docs/step2.drawio.pdf)</sub>
 
@@ -127,7 +127,7 @@ The re-check result is then **merged into the saved record** — `passed`, `stat
 
 ### Step 3 — Multi-agent debate
 
-![Step 3: multi-agent debate](docs/step3.drawio.png)
+![Step 3: multi-agent debate](docs/step3.drawio.svg)
 
 <sub>Source (editable): [docs/step3.drawio.pdf](docs/step3.drawio.pdf)</sub>
 
@@ -295,11 +295,11 @@ kernel_verification/
 ├── dataset/            # generated kernels + their three results (can be committed)
 │   └── <name>/{problem.txt, kernel.py, test.py, seed_*.py,
 │               meta.json, recheck_test.py, debate_result.json, ...}
-├── docs/               # diagrams (.drawio.png shown in README, .drawio.pdf = editable source)
-│   ├── overview.drawio.{png,pdf}  # online verification at a glance
-│   ├── step1.drawio.{png,pdf}     # build the dataset
-│   ├── step2.drawio.{png,pdf}     # re-check
-│   └── step3.drawio.{png,pdf}     # multi-agent debate
+├── docs/               # diagrams (.drawio.svg shown in README, .drawio.pdf = editable source)
+│   ├── overview.drawio.{svg,pdf}  # online verification at a glance
+│   ├── step1.drawio.{svg,pdf}     # build the dataset
+│   ├── step2.drawio.{svg,pdf}     # re-check
+│   └── step3.drawio.{svg,pdf}     # multi-agent debate
 ├── tests/              # scratch / debugging scripts
 ├── pyproject.toml      # uv project, torch cu128, KernelAgent path dependency
 └── roadmap.md          # notes on how the design evolved
