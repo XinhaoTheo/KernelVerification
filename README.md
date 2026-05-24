@@ -1,10 +1,7 @@
 # Kernel Verification via Debate
 
 A system that **decides whether to trust** a Triton kernel written by an LLM (a kernel is a
-hand-written GPU routine; Triton is the language used to write it). It does **not** believe
-the test that came with the kernel. Instead it re-checks the kernel's correctness on its own,
-then has several AI agents argue about it. The goal is to catch kernels that "pass the test
-they shipped with" but are actually wrong, or were rigged to pass.
+hand-written GPU routine; Triton is the language used to write it). First, it re-checks the kernel's correctness by writing several test code scripts with LLM to test the standard and robustness, then several LLM agents will act as different roles, starting the deabte argue about it. The goal is to catch kernels that "pass the test they shipped with" but are actually wrong, or were rigged to pass. We hope to simulate the human thinking and reasoning when we trying to figure out whether this kernel is correct or not. In this way, we attempt to prove its performance in real application.
 
 ---
 
@@ -16,7 +13,7 @@ often quietly switches the numbers from fp32 to the lower-precision bf16 (which 
 "close enough" check looser) while testing only one input shape. The result is a kernel that
 passes its own test but may still:
 
-- **Read the wrong memory** when the input isn't laid out back-to-back in memory (a
+- **Read the wrong memory** when the input is not laid out back-to-back in memory (a
   "non-contiguous" tensor, e.g. the result of slicing with `[::2]`) because it never calls
   `.contiguous()`
 - **Drop part of a large input** (a fixed `BLOCK_SIZE` that can't cover a long row)
@@ -31,21 +28,16 @@ decision backed by evidence.
 
 ---
 
-## 2. How it works: three steps
-
-The pipeline has one **offline** step (done once, ahead of time) and two **online** steps
+## 2. Overall Pipeline
+The pipeline has one **offline** step in order to generate the test kernel (so called dataset) and two **online** steps
 (run each time you verify a kernel):
 
-- **Step 1 — Build the dataset (`kv-build`)**: run KernelAgent to turn a problem into a
-  kernel and save it under `dataset/`. Expensive, slow, needs a GPU. Run once; the saved
-  data stays.
+- **Step 1 — Build the dataset (`kv-build`)**: run KernelAgent to turn a problem (we use KernelBench dataset) into a
+  kernel and save it under `dataset/`. Run once and the saved data stays.
 - **Step 2 — Re-check (`kv-run`, first half)**: load a saved kernel and run our **own**
   correctness test on it.
-- **Step 3 — Debate (`kv-run`, second half)**: have several AI agents argue about the kernel
-  to find the kinds of bugs a fixed test can't anticipate, ending in a final decision.
-
-Steps 2–3 are cheap, so you can tweak the agents' prompts and re-run without regenerating
-kernels.
+- **Step 3 — Debate (`kv-run`, second half)**: have several LLM agents argue about the kernel
+  to find the kinds of bugs a fixed test can not anticipate, ending in a final decision.
 
 > **Key design point**: the verification does **not** rely on the generator giving us a test.
 > Hand it a generator that only produces `kernel.py` and Steps 2–3 still work — because the
@@ -90,7 +82,7 @@ The result is saved by `verifier/dataset.py : save_entry()` into one self-contai
 
 Because everything is **copied in** (not just pointed to), the folder can be committed to
 git, moved to another machine, or written by hand — deleting KernelAgent's working directory
-won't break it.
+will not break it.
 
 ### Step 2 — Re-check
 
@@ -140,7 +132,7 @@ The re-check result is then **merged into the saved record** — `passed`, `stat
 <sub>Source (editable): [docs/step3.drawio.pdf](docs/step3.drawio.pdf)</sub>
 
 The debate (`verifier/debate.py` + `agents/`) handles the **logic bugs that a fixed checklist
-can't list out in advance** (e.g. accumulation errors that only show up across blocks,
+can not list out in advance** (e.g. accumulation errors that only show up across blocks,
 cheating, subtle precision issues). **Each round** runs three agents in order:
 
 - **Author** — *the describer*: explains what the kernel does and how it changed from its
