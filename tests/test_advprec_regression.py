@@ -19,8 +19,8 @@ from pathlib import Path
 
 import torch
 
-from verifier import compare
-from verifier.classify import classify_entry
+from verifier import compare, precision_recheck
+from verifier.classify import classify_entry, classify_problem
 from verifier.verdict import combine
 
 DS = Path(__file__).resolve().parent.parent / "dataset"
@@ -33,6 +33,21 @@ def _kernel(entry):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.kernel_function
+
+
+def _problem(forward: str, *, init="", get_init="return []",
+             inputs="return [torch.randn(8, 64)]") -> str:
+    """Build a minimal problem.txt string (Model + get_inputs + get_init_inputs)
+    so we can test classify on operators not in the dataset."""
+    init_block = f"    def __init__(self):\n        super().__init__()\n{init}\n" if init else ""
+    return (
+        "import torch\nimport torch.nn as nn\n"
+        "class Model(nn.Module):\n"
+        f"{init_block}"
+        f"    def forward(self, x):\n        {forward}\n"
+        f"def get_inputs():\n    {inputs}\n"
+        f"def get_init_inputs():\n    {get_init}\n"
+    )
 
 
 # --- classify routes every operator to the right class/judge --------------- #
@@ -125,6 +140,120 @@ def test_combine_thin_floor():
     # robustness gaps annotate, never veto
     r = combine(recheck_status="passed", debate_verdict="trust", robustness={"odd_size": "fail"})
     assert r["final"] == "trust" and r["robustness_gaps"] == ["odd_size"]
+
+
+# --- classify on operators NOT in the dataset (string problems) ------------ #
+
+def test_classify_more_operators():
+    cases = {
+        # preserve: magnitude-preserving, numerical error is faithful
+        "x * 2.0": "preserve",
+        "x + x": "preserve",
+        "x.sum(dim=-1)": "preserve",
+        "x.mean(dim=-1)": "preserve",
+        "torch.matmul(x, x.transpose(-1, -2))": "preserve",
+        # compress: squashes / saturates -> blind regions
+        "torch.tanh(x)": "compress",
+        "torch.sigmoid(x)": "compress",
+        "torch.softmax(x, dim=-1)": "compress",
+        "torch.relu(x)": "compress",
+        # select: discrete index / permutation
+        "torch.argmax(x, dim=-1)": "select",
+        "torch.sort(x, dim=-1).values": "select",
+        "torch.sort(x, dim=-1).indices": "select",
+    }
+    for forward, expect in cases.items():
+        got = classify_problem(_problem(f"return {forward}"))["op_class"]
+        assert got == expect, f"{forward!r}: classify said {got}, expected {expect}"
+
+
+def test_classify_precision_axis():
+    # normal dtype output
+    p_norm = _problem("return torch.softmax(x, dim=-1)")
+    assert classify_problem(p_norm)["precision"] == "normal"
+    # fp8 output -> low_bit -> routed to abstain
+    p_fp8 = _problem("return torch.softmax(x, dim=-1).to(torch.float8_e4m3fn)")
+    r = classify_problem(p_fp8)
+    assert r["precision"] == "low_bit" and "abstain" in r["judge"]
+
+
+# --- compare.judge dispatch by op_class ------------------------------------ #
+
+def test_judge_dispatch():
+    a, b = torch.zeros(4), torch.zeros(4)
+    # preserve / compress -> J1 (numerical)
+    assert compare.judge(a, b, op_class="preserve")["judge"] == "J1"
+    assert compare.judge(a, b, op_class="compress")["judge"] == "J1"
+    # J1 mismatch when tensors diverge
+    assert compare.judge(torch.zeros(4), torch.ones(4), op_class="preserve")["verdict"] == "mismatch"
+    # low_bit -> abstain regardless of tensors
+    assert compare.judge(a, b, op_class="low_bit")["verdict"] == "abstain"
+    # select needs scores; without them it abstains rather than guess
+    idx = torch.tensor([[0, 1]])
+    assert compare.judge(idx, idx, op_class="select", scores=None)["verdict"] == "abstain"
+
+
+# --- judge_selection (J2) edge cases --------------------------------------- #
+
+def test_j2_edge_cases():
+    scores = torch.tensor([[9.0, 8.0, 7.0, 1.0, 0.0]])
+    ref = torch.topk(scores, 3, dim=-1).indices  # {0,1,2}
+    # exact match -> match, gap 0
+    m, d = compare.judge_selection(ref, ref, scores)
+    assert m and d["value_gap"] == 0.0 and d["recall"] == 1.0
+    # dropped the largest (idx 0), kept idx 3 -> big harmful gap
+    cand = torch.tensor([[1, 2, 3]])
+    m, d = compare.judge_selection(cand, ref, scores)
+    assert not m and d["value_gap"] >= 8.0 and d["recall"] < 1.0
+    # all-tied scores: any size-k subset is equally correct -> match (gap 0)
+    tied = torch.zeros(1, 8)
+    rt = torch.topk(tied, 3, dim=-1).indices
+    ct = torch.tensor([[5, 6, 7]])
+    m, d = compare.judge_selection(ct, rt, tied)
+    assert m and d["value_gap"] == 0.0
+
+
+# --- adversarial distribution generators have the intended structure ------- #
+
+def test_adversarial_distributions():
+    import torch as t
+    sel = precision_recheck._adversarial("select", 2, 256, t.float32, "cpu")
+    # concentrated: the largest values sit in the first block (indices 0..7)
+    top = t.topk(sel, 8, dim=-1).indices
+    assert (top < 8).all(), "select adversarial must concentrate winners in block 0"
+    comp = precision_recheck._adversarial("compress", 2, 256, t.float32, "cpu")
+    # heavy-tail: one dominant peak at index 0, a band just below it
+    assert (comp[:, 0:1] > comp[:, 1:]).all(), "compress adversarial must have a single peak"
+    assert comp.shape == (2, 256)
+
+
+# --- correct kernels of each class must PASS (false-alarm guard) ------------ #
+
+def test_correct_kernels_not_flagged():
+    # a CORRECT softmax on the heavy-tail adversarial input -> match (no false alarm)
+    x = precision_recheck._adversarial("compress", 2, 256, torch.float32, "cpu")
+    ref = torch.softmax(x, dim=-1)
+    good = torch.softmax(x, dim=-1)  # identical correct kernel
+    assert compare.judge(good, ref, op_class="compress")["verdict"] == "match"
+    # a CORRECT top-k on the concentrated adversarial input -> match
+    s = precision_recheck._adversarial("select", 2, 256, torch.float32, "cpu")
+    rk = torch.topk(s, 8, dim=-1).indices
+    ck = torch.topk(s, 8, dim=-1).indices
+    assert compare.judge(ck, rk, op_class="select", scores=s)["verdict"] == "match"
+
+
+# --- false-REJECT guard: a correct selection with a different tie-break ----- #
+
+def test_no_false_reject_on_tiebreak():
+    # correct kernel picks a DIFFERENT but equally-valid set of tied winners.
+    # index recall would be < 100% (and wrongly reject); J2 value-gap says match.
+    scores = torch.tensor([[5.0, 5.0, 5.0, 5.0, 1.0]])  # four-way tie at the top
+    ref = torch.tensor([[0, 1]])      # reference tie-break
+    cand = torch.tensor([[2, 3]])     # different valid pair of 5.0s
+    r = compare.judge(cand, ref, op_class="select", scores=scores)
+    assert r["verdict"] == "match" and r["value_gap"] == 0.0, f"must not false-reject, got {r}"
+    # contrast: naive index recall here is 0/2 = 0% -> would have rejected
+    assert r["recall"] == 0.0
 
 
 def main() -> int:
