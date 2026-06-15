@@ -40,7 +40,7 @@ The pipeline has one **offline** step in order to generate the test kernel (so c
 - **Step 2b — Precision recheck (`kv-run` / `kv-precision-recheck`)**: a **classifier** first
   decides the operator's class, then a **value-distribution battery** is fed through the
   judge that fits that class (allclose / value-gap / abstain). This catches kernels that are
-  right on benign inputs but wrong on the operator's class-specific stress distribution — see
+  right on standard inputs but wrong on the operator's class-specific stress distribution — see
   [Step 2b](#step-2b--precision-recheck-operator-class-routed) and
   [precision_verification.md](precision_verification.md).
 - **Step 3 — Debate (`kv-run`)**: several LLM agents argue about the kernel to find the bugs a
@@ -136,7 +136,7 @@ The re-check result is then **merged into the saved record** — `passed`, `stat
 
 ![Step 2b: precision recheck](docs/step2b_precision.svg)
 
-The Step 2 battery above varies the input's **shape/layout**, but always on benign
+The Step 2 battery above varies the input's **shape/layout**, but always on standard
 `torch.randn` **values**. That misses a whole class of bugs where the *judging rule itself*
 fails: `compare_outputs`' "small numerical error ⇒ correct" only holds for some operators.
 Step 2b (`verifier/precision_recheck.py`, run on every `kv-run` or standalone via
@@ -151,7 +151,7 @@ Full analysis: [precision_verification.md](precision_verification.md).
 | `op_class` | Examples | What makes it special | Can we trust numerical error? |
 |---|---|---|---|
 | **preserve** | matmul, add/mul, sum | magnitude-preserving; an error of size δ shows up as ~δ in the output | **Yes** — error is a faithful proxy |
-| **compress** | softmax, ReLU/GELU/SiLU | squashes small/tail values toward 0, so tail errors are **invisible** on benign inputs | No — has blind regions |
+| **compress** | softmax, ReLU/GELU/SiLU | squashes small/tail values toward 0, so tail errors are **invisible** on standard inputs | No — has blind regions |
 | **select** | sort, top-k, argmax | output is a set of **indices**; `\|cand − ref\|` is undefined | No — there is no numerical distance |
 
 `precision ∈ { normal, low_bit }` — **the number format of the output**:
@@ -161,7 +161,7 @@ Full analysis: [precision_verification.md](precision_verification.md).
 | **normal** | fp32 / bf16 / fp16 output | numerical comparison is usable |
 | **low_bit** | fp8 / fp4 / int4 output | sub-resolution (tail) errors round to **exactly 0** — *no* tolerance or input can recover them |
 
-**2. Feed a class-appropriate adversarial distribution** (the "送分" benign `randn` is exactly
+**2. Feed a class-appropriate adversarial distribution** (the "送分" standard `randn` is exactly
 what hides these bugs). There are **two** distributions, each aimed at one class's blind spot:
 
 | Distribution | What it is | Targets | Exposes |
@@ -176,7 +176,7 @@ what hides these bugs). There are **two** distributions, each aimed at one class
 | **J1 · allclose** | compress | dtype-tiered numerical tolerance (`compare_outputs`), but on the adversarial distribution |
 | **J2 · value-gap** | select | weights a dropped key by how much better it is than the worst kept key — **not** raw index recall (which punishes harmless tie-swaps) |
 | **abstain** | low_bit | refuses to decide numerically and routes to a downstream / task-level check |
-| *(skipped)* | preserve | no compression/selection blind spot — Step 2's benign battery already covers it |
+| *(skipped)* | preserve | no compression/selection blind spot — Step 2's shape/layout battery already covers it |
 
 The result is a **`precision_recheck` verdict ∈ { match, mismatch, abstain, skipped }**, recorded
 in `meta.json["precision_recheck"]`. A `mismatch` is an empirically-measured, class-specific
