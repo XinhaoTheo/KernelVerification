@@ -60,3 +60,78 @@ def compare_outputs(out, ref) -> tuple[bool, float, str]:
         f"nan_mismatch={nan_mismatch}, inf_mismatch={inf_mismatch}, match={matches}"
     )
     return matches, max_diff, detail
+
+
+# --------------------------------------------------------------------------- #
+# Class-routed judging (precision_verification.md §5.2)                        #
+#                                                                             #
+# `compare_outputs` above IS the numerical judge (J1) and stays the default   #
+# for continuous ops. The functions below add the other judges and a router   #
+# so the right one is chosen by operator class (from verifier/classify.py),   #
+# instead of forcing one allclose tolerance onto every operator.              #
+# --------------------------------------------------------------------------- #
+
+# J2 default: a dropped key is "harmful" if it scores more than this above the
+# smallest key the candidate kept. ~0 means a harmless boundary swap.
+DEFAULT_GAP_TOL = 0.05
+
+
+def judge_selection(cand_idx, ref_idx, scores, *, gap_tol: float = DEFAULT_GAP_TOL):
+    """J2 — judge a top-k/selection by VALUE-GAP, never by raw index recall.
+
+    Index recall punishes harmless tie-break swaps (and is non-deterministic
+    under races), so it both false-rejects correct kernels and fails to rank
+    harm. Instead: for each TRUE top-k key the candidate dropped, measure how
+    much better it is than the worst key the candidate kept. gap≈0 => harmless
+    swap (kept something as good); gap big => dropped a clearly-better key.
+    """
+    import torch
+    s = torch.as_tensor(scores).flatten().float()
+    cset = {int(i) for i in torch.as_tensor(cand_idx).flatten().tolist()}
+    rset = {int(i) for i in torch.as_tensor(ref_idx).flatten().tolist()}
+    missed = rset - cset
+    recall = len(cset & rset) / max(len(rset), 1)
+    if not missed:
+        return True, {"verdict": "match", "judge": "J2", "value_gap": 0.0,
+                      "recall": recall}
+    min_kept = min((s[i].item() for i in cset), default=float("-inf"))
+    gap = max(s[m].item() - min_kept for m in missed)
+    matches = gap <= gap_tol
+    return matches, {
+        "verdict": "match" if matches else "mismatch", "judge": "J2",
+        "value_gap": round(gap, 4), "recall": round(recall, 3),
+        "note": "value-gap weighted; index recall is reported but NOT the verdict",
+    }
+
+
+def abstain(reason: str) -> dict:
+    return {"verdict": "abstain", "judge": "J3/abstain", "reason": reason}
+
+
+def judge(out, ref, *, op_class: str = "preserve", scores=None,
+          gap_tol: float = DEFAULT_GAP_TOL) -> dict:
+    """Route to the judge that fits the operator class (classify.py's label).
+
+    Returns {verdict: "match"|"mismatch"|"abstain", judge, ...}. "abstain" is a
+    first-class outcome: when the judge structurally cannot tell a correct kernel
+    from a buggy one (low-bit outputs), reporting abstain is correct, a confident
+    wrong PASS/FAIL is not.
+    """
+    if op_class == "low_bit":
+        return abstain(
+            "output dtype is low-bit (fp8/fp4/int4): sub-resolution errors round "
+            "to 0, so numerical comparison cannot separate correct from buggy. "
+            "Route to a downstream / task-level check."
+        )
+    if op_class == "select":
+        if scores is None:
+            return abstain("selection judge (J2) needs the input scores to weight "
+                           "dropped keys by value-gap")
+        _, detail = judge_selection(out, ref, scores, gap_tol=gap_tol)
+        return detail
+    # preserve / compress -> numerical judge (J1). For compress, the operator
+    # class still matters upstream: recheck must FEED adversarial distributions
+    # (that is pillar X, not the judge), but the judge itself is allclose.
+    matches, max_diff, detail = compare_outputs(out, ref)
+    return {"verdict": "match" if matches else "mismatch", "judge": "J1",
+            "max_diff": max_diff, "detail": detail}

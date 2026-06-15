@@ -67,8 +67,50 @@ Rules for the JSON:
 """
 
 
+# Class-specific attack guidance (from verifier/classify.py via artifact["op_class"]).
+# Tells the skeptic WHERE this operator's blind spot is, so it constructs the
+# distribution that exposes it instead of guessing (precision_verification.md §5.1).
+CLASS_GUIDANCE = {
+    "compress": (
+        "OPERATOR CLASS = compress (softmax / activation). It squashes small "
+        "values toward 0, so tail / dead-zone errors are INVISIBLE on benign "
+        "inputs. Attack the tail, not the peak: construct a clear peak plus a "
+        "HEAVY band of comparable values just below it (so the tail carries real "
+        "aggregate mass), or a flat distribution with no dominant. A claim should "
+        "name such an input explicitly."
+    ),
+    "select": (
+        "OPERATOR CLASS = select (sort / topk). Output is INDICES — do NOT argue "
+        "about numerical closeness or index recall. Construct distributions where "
+        "winners CONCENTRATE (one block) or TIE near the cutoff. Judge a miss by "
+        "the VALUE-GAP between the dropped key and the worst kept key: gap≈0 is a "
+        "harmless swap, a large gap is a real bug."
+    ),
+    "preserve": (
+        "OPERATOR CLASS = preserve (matmul / elementwise). Numerical comparison is "
+        "faithful here; focus on standard correctness, shapes, contiguity, and "
+        "accumulation order rather than distribution attacks."
+    ),
+}
+
+_LOW_BIT_NOTE = (
+    " The output is LOW-BIT (fp8/fp4/int4): tail errors round to 0 and are "
+    "structurally unrepresentable, so a numerical match does NOT prove correctness "
+    "— flag for a downstream / task-level check rather than asserting it is fine."
+)
+
+
+def _system_for(artifact: dict) -> str:
+    guidance = CLASS_GUIDANCE.get(artifact.get("op_class"))
+    if not guidance:
+        return SYSTEM
+    if artifact.get("precision") == "low_bit":
+        guidance += _LOW_BIT_NOTE
+    return SYSTEM + "\n\n=== ROUTER GUIDANCE ===\n" + guidance
+
+
 def respond(history: list[Turn], artifact: dict, tools=None) -> Turn:
-    text = llm_client.call(system=SYSTEM, artifact=artifact, history=history)
+    text = llm_client.call(system=_system_for(artifact), artifact=artifact, history=history)
     round_idx = _next_round(history, "skeptic")
     parsed = parsing.extract_json(text) or {}
     claims = parsed.get("claims") or []

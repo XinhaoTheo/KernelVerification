@@ -30,8 +30,9 @@ import json  # noqa: E402
 import sys  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-from . import dataset, recheck  # noqa: E402
+from . import dataset, precision_recheck, recheck  # noqa: E402
 from .debate import run_debate  # noqa: E402
+from .verdict import combine  # noqa: E402
 
 
 def main() -> int:
@@ -101,15 +102,47 @@ def main() -> int:
         artifact["test_code"] = rc["test_code"]
     artifact["error"] = {"text": rc["error_text"]} if rc["error_text"] else {}
 
+    # Precision-aware recheck: operator-class-routed judge (J1/J2/abstain) run on
+    # ADVERSARIAL distributions — the dimension benign recheck cannot cover.
+    print("\n=== Precision recheck (operator-class-routed judge) ===")
+    pr = precision_recheck.precision_recheck(args.entry)
+    op_class = pr.get("op_class")
+    artifact["op_class"] = op_class          # debate agents reason class-aware
+    artifact["precision"] = pr.get("precision")
+    artifact["robustness"] = rob             # judge arbitrates over robustness too
+    pr_extra = pr.get("adversarial") or {}
+    pr_num = {k: v for k, v in pr_extra.items() if k in ("value_gap", "max_diff", "recall")}
+    print(f"  op_class={op_class} precision={pr.get('precision')} "
+          f"-> {pr.get('verdict')} ({pr.get('judge')})  {pr_num or ''}")
+    if pr.get("verdict") == "abstain":
+        print(f"  ⓘ abstain: {pr.get('reason')}")
+
+    # Design B: fold precision's empirical finding into the debate as a pre-filed
+    # claim, so the judge reasons WITH it (not re-discovering it from scratch).
+    seed = precision_recheck.to_claim(pr)
+    if seed:
+        print(f"  ↳ seeding debate with precision claim [{seed['id']}] ({seed['status']})")
+
     print("\n=== Running debate ===")
-    verdict, history, claims = run_debate(artifact, verbose=args.verbose)
+    verdict, history, claims = run_debate(
+        artifact, verbose=args.verbose, seed_claims=[seed] if seed else None
+    )
 
     print("\n=== Claims ledger ===")
     for c in claims:
         print(f"  [{c.get('id')}] {c.get('status'):<12s} {c.get('statement', '')[:80]}")
 
-    print("\n=== Verdict ===")
+    print("\n=== Debate verdict ===")
     print(json.dumps(verdict, indent=2, ensure_ascii=False))
+
+    # Judge is the final arbiter; combine is only a thin standard-correctness floor.
+    final = combine(
+        recheck_status=rc["status"],
+        debate_verdict=verdict.get("verdict"),
+        robustness=rob,
+    )
+    print("\n=== FINAL verdict (judge-arbitrated) ===")
+    print(json.dumps(final, indent=2, ensure_ascii=False))
 
     transcript_path = (
         Path(args.out)
@@ -121,7 +154,9 @@ def main() -> int:
             {
                 "entry": args.entry,
                 "recheck_status": rc["status"],
+                "precision_recheck": pr,
                 "verdict": verdict,
+                "final": final,
                 "claims": claims,
                 "history": history,
                 "rounds": len(history) // 3,  # author + skeptic + verifier per round

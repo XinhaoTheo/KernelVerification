@@ -25,17 +25,28 @@ def run_debate(
     max_rounds: int | None = None,
     tools=None,
     verbose: bool = False,
+    seed_claims: list[Claim] | None = None,
 ) -> tuple[dict, list[Turn], list[Claim]]:
     """Run author -> skeptic -> verifier rounds, then judge over the ledger.
 
     Returns (verdict, full_history, claims_ledger). With verbose=True, prints
     each turn's full text and the verifier's per-claim probe code live.
+
+    seed_claims pre-seed the ledger (design B): findings from earlier stages
+    (e.g. precision_recheck's empirical mismatch/abstain) enter the debate as
+    already-resolved claims, so the judge weighs them alongside the skeptic's
+    instead of the debate re-discovering them. They are skipped by the verifier
+    (it only probes status=="open").
     """
     if max_rounds is None:
         max_rounds = int(os.getenv("DEBATE_MAX_ROUNDS", "4"))
 
     history: list[Turn] = []
-    ledger: list[Claim] = []
+    ledger: list[Claim] = list(seed_claims or [])
+    if verbose and ledger:
+        print(f"\n[debate] seeded {len(ledger)} pre-filed claim(s) from earlier stages:")
+        for c in ledger:
+            print(f"     [{c['id']}] {c['status']}: {c['statement'][:100]}")
 
     for round_idx in range(max_rounds):
         auth = author.respond(history, artifact, tools)

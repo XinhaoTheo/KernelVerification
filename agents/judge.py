@@ -60,14 +60,30 @@ cannot — in particular you MAY OVERRIDE a "confirmed" if the measured
 divergence is actually expected behavior (e.g. ordinary bf16 rounding at a large
 reduction dim, not a real bug). When you override, say so in that claim's note.
 
+You are the FINAL ARBITER over ALL signals, not just the skeptic's claims. Below
+the ledger you are also given the STANDARD recheck result and the robustness
+summary. The ledger may include a pre-filed claim from precision_recheck (an
+empirical check on this operator's class-specific adversarial distribution).
+Weigh everything yourself and issue ONE final decision.
+
 Decision guidance:
-- Any confirmed claim that is a GENUINE defect (not expected precision) → "reject".
-- All claims rebutted or overridden-as-benign, nothing real stands → "trust".
-- Real concerns remain only inconclusive/open (untested) → "needs_more_evidence".
+- standard recheck = failed → the kernel is wrong on the problem's NORMAL inputs.
+  That is a fact, not a severity call: verdict "reject".
+- a CONFIRMED precision_recheck claim → an empirically MEASURED defect on the
+  operator's adversarial distribution. Treat a large value-gap (selection) or an
+  above-tolerance divergence (compress) as a GENUINE bug → "reject", unless you
+  can justify it as provably expected precision (say so in claim_notes).
+- an INCONCLUSIVE precision_recheck claim on low-bit output → numerical comparison
+  structurally cannot decide → verdict "needs_downstream" (route to a task-level check).
+- any other confirmed GENUINE defect → "reject".
+- all claims rebutted / overridden-as-benign and standard passed → "trust".
+- real concerns remain only inconclusive/open (untested) → "needs_more_evidence".
+- robustness gaps alone (unusual inputs) do NOT force reject — they may be out of
+  the kernel's intended scope; note them but let them only lower confidence.
 
 Reply with exactly one JSON object:
   {
-    "verdict": "trust" | "reject" | "needs_more_evidence",
+    "verdict": "trust" | "reject" | "needs_more_evidence" | "needs_downstream",
     "confidence": 0.0-1.0,
     "decisive_claims": ["c2", ...],          // claim ids that drove the verdict
     "claim_notes": {"c2": "confirmed and genuine: 256 >> bf16 ulp, real bug"},
@@ -80,6 +96,55 @@ Weigh measured evidence over rhetoric.
 
 _AUTHOR_DONE = "NO_NEW_OBSERVATIONS."
 _SKEPTIC_DONE = "NO_NEW_CONCERNS."
+
+# Class-specific SEVERITY guidance (from verifier/classify.py via artifact). Tells
+# the judge what standard to use for "is this a real bug or expected" per class.
+_CLASS_SEVERITY = {
+    "select": (
+        "\n\nOPERATOR CLASS = select (sort/topk): the output is INDICES. Judge a "
+        "dropped key by its VALUE-GAP versus the kept set, not by index recall — a "
+        "tie-break swap with gap≈0 is harmless, a dropped high-value key is a real "
+        "bug. A 'confirmed' that is only a near-tie swap may be overridden as benign."
+    ),
+    "compress": (
+        "\n\nOPERATOR CLASS = compress (softmax/activation): tail errors are tiny on "
+        "benign inputs but real when the tail carries mass. Treat a divergence found "
+        "on a heavy-tail/flat adversarial input as a GENUINE defect, not benign "
+        "rounding."
+    ),
+    "preserve": (
+        "\n\nOPERATOR CLASS = preserve (matmul/elementwise): numerical error is a "
+        "faithful proxy; standard precision judgement applies."
+    ),
+}
+
+_LOW_BIT_SEVERITY = (
+    "\n\nThe output is LOW-BIT (fp8/fp4/int4): sub-resolution (tail) errors round to "
+    "0, so a numerical match does NOT prove correctness and a small divergence may be "
+    "unrepresentable. Prefer 'needs_more_evidence' (route downstream) over 'trust' "
+    "when correctness hinges on values the format cannot represent."
+)
+
+
+def _class_severity(artifact: dict) -> str:
+    g = _CLASS_SEVERITY.get((artifact or {}).get("op_class"), "")
+    if (artifact or {}).get("precision") == "low_bit":
+        g += _LOW_BIT_SEVERITY
+    return g
+
+
+def _decision_context(artifact: dict) -> str:
+    """Surface the deterministic signals so the judge can arbitrate over them
+    (design A: the judge is the final arbiter, not a rule layer downstream)."""
+    a = artifact or {}
+    rob = a.get("robustness") or {}
+    rob_fails = [k for k, v in rob.items() if v == "fail"]
+    return (
+        "\n\n=== STANDARD SIGNALS (you arbitrate over these too) ===\n"
+        f"- standard recheck (benign correctness): {a.get('status', 'unknown')}\n"
+        f"- operator class / precision: {a.get('op_class', '?')} / {a.get('precision', '?')}\n"
+        f"- robustness gaps (unusual inputs, may be out of scope): {rob_fails or 'none'}"
+    )
 
 
 def no_new_arguments(history: list[Turn], artifact: dict, round_idx: int) -> bool:
@@ -132,7 +197,10 @@ def final_verdict(history: list[Turn], artifact: dict, ledger: list[Claim] | Non
     it deems expected behavior via claim_notes.
     """
     ledger = ledger or []
-    system = SYSTEM_VERDICT + "\n\n=== CLAIMS LEDGER ===\n" + _format_ledger(ledger)
+    system = (
+        SYSTEM_VERDICT + _class_severity(artifact) + _decision_context(artifact)
+        + "\n\n=== CLAIMS LEDGER ===\n" + _format_ledger(ledger)
+    )
     raw = llm_client.call(
         system=system,
         artifact=artifact,

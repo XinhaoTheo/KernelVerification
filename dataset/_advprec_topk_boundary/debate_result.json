@@ -1,0 +1,148 @@
+{
+  "entry": "_advprec_topk_boundary",
+  "recheck_status": "passed",
+  "precision_recheck": {
+    "op_class": "select",
+    "precision": "normal",
+    "verdict": "mismatch",
+    "judge": "J2",
+    "benign": {
+      "verdict": "mismatch",
+      "judge": "J2",
+      "value_gap": 0.6441,
+      "recall": 0.967,
+      "note": "value-gap weighted; index recall is reported but NOT the verdict"
+    },
+    "adversarial": {
+      "verdict": "mismatch",
+      "judge": "J2",
+      "value_gap": 6.8416,
+      "recall": 0.375,
+      "note": "value-gap weighted; index recall is reported but NOT the verdict"
+    }
+  },
+  "verdict": {
+    "verdict": "reject",
+    "confidence": 0.98,
+    "decisive_claims": [
+      "p1",
+      "c2",
+      "c3"
+    ],
+    "claim_notes": {
+      "p1": "Confirmed empirically: adversarial J2 distribution yields value_gap=6.8416 and recall=0.375, a genuine select-class defect with large value gaps — not a tie-break swap.",
+      "c2": "Confirmed: per-block quota of per=3 drops 5 of 8 true top-k indices when all winners concentrate in one block; value gap ~94 vs -1e9 is enormous and harmful.",
+      "c3": "Confirmed: remainder truncation unconditionally discards elements beyond index 255 for n=257; the global maximum at index 256 is silently dropped.",
+      "c4": "The claim that the kernel uses no Triton is factually true, but this was filed as a bug and is better understood as a design note. The kernel's correctness defects (c2, c3, p1) are the decisive issues."
+    },
+    "reason": "Claims p1, c2, and c3 are all empirically confirmed with large value gaps — not benign tie-break swaps. The precision_recheck (p1) measured recall=0.375 and value_gap=6.84 on the adversarial distribution. The verifier directly confirmed that the per-block quota (c2) drops 5 of 8 true top-k winners with a value gap of ~94 vs -1e9, and that the remainder truncation (c3) silently discards the global maximum at index 256. These are genuine correctness defects that cause the kernel to return wrong top-k results on important real-world distributions."
+  },
+  "final": {
+    "final": "reject",
+    "reason": "judge (final arbiter) verdict = reject",
+    "robustness_gaps": [
+      "noncontig_stride2",
+      "odd_size"
+    ],
+    "note": "robustness gaps present (not a veto); lowers confidence"
+  },
+  "claims": [
+    {
+      "id": "p1",
+      "type": "precision_select",
+      "statement": "precision_recheck empirically caught a select-class defect on its adversarial distribution (J2): {'value_gap': 6.8416, 'recall': 0.375}. Benign inputs hide it; the divergence is real on the class-specific stress distribution.",
+      "raised_by": "precision_recheck",
+      "round": -1,
+      "status": "confirmed",
+      "evidence": [
+        {
+          "by": "precision_recheck",
+          "verdict_line": "adversarial J2 -> mismatch {'value_gap': 6.8416, 'recall': 0.375}"
+        }
+      ]
+    },
+    {
+      "id": "c2",
+      "type": "concentrated_distribution_bug",
+      "statement": "For scores = torch.full((1, 256), -1e9) with scores[0, 0:8] = torch.tensor([100., 99., 98., 97., 96., 95., 94., 93.]), k=8: all 8 true top-k values are in block 0 (indices 0-31), but per-block quota per=3 means only 3 are returned; the remaining 5 true top-k indices are missing, with a value gap of ~94 vs -1e9.",
+      "raised_by": "skeptic",
+      "round": 0,
+      "status": "confirmed",
+      "evidence": [
+        {
+          "by": "verifier",
+          "verdict_line": "CONFIRMED: per-block quota causes 5 missing true top-k indices with large value gap",
+          "probe_code": "from kernel import kernel_function\nfrom kverify_compare import compare_outputs\nimport torch\n\ndef main():\n    try:\n        # Construct the exact input described in the claim\n        scores = torch.full((1, 256), -1e9)\n        scores[0, 0:8] = torch.tensor([100., 99., 98., 97., 96., 95., 94., 93.])\n\n        k = 8\n\n        # Kernel output\n        out = kernel_function(scores, k=k)\n\n        # Reference: true top-k indices\n        ref = torch.topk(scores, k, dim=-1).indices\n\n        print(f\"Kernel output indices: {out}\")\n        print(f\"Reference indices:     {ref}\")\n\n        # Check if the kernel output contains all true top-k indices\n        # Since this is an index problem, we check set membership\n        out_set = set(out[0].tolist())\n        ref_set = set(ref[0].tolist())\n\n        missing = ref_set - out_set\n        print(f\"Missing indices from kernel output: {missing}\")\n        print(f\"Number of missing true top-k indices: {len(missing)}\")\n\n        # Value gap analysis\n        if missing:\n            missing_vals = [scores[0, idx].item() for idx in missing]\n            spurious_indices = out_set - ref_set\n            spurious_vals = [scores[0, idx].item() for idx in spurious_indices]\n            print(f\"Missing values: {missing_vals}\")\n            print(f\"Spurious indices: {spurious_indices}, values: {spurious_vals}\")\n\n        # Use compare_outputs on the index tensors themselves\n        # Since indices differ, compare_outputs should detect mismatch\n        matches, max_diff, detail = compare_outputs(out, ref)\n        print(detail)\n\n        if not matches or len(missing) > 0:\n            print(f\"CONFIRMED: per-block quota causes {len(missing)} missing true top-k indices with large value gap\")\n        else:\n            print(\"REFUTED: kernel correctly returns all top-k indices\")\n\n    except AssertionError as e:\n        print(f\"REFUTED: kernel correctly rejects out-of-contract input via assert: {e}\")\n    except Exception as e:\n        print(f\"CONFIRMED: kernel raised {type(e).__name__}: {e}\")\n\nif __name__ == \"__main__\":\n    main()",
+          "probe_stdout": "Kernel output indices: tensor([[  0,   1,   2, 180, 148, 181, 182, 244]])\nReference indices:     tensor([[0, 1, 2, 3, 4, 5, 6, 7]])\nMissing indices from kernel output: {3, 4, 5, 6, 7}\nNumber of missing true top-k indices: 5\nMissing values: [97.0, 96.0, 95.0, 94.0, 93.0]\nSpurious indices: {148, 244, 180, 181, 182}, values: [-1000000000.0, -1000000000.0, -1000000000.0, -1000000000.0, -1000000000.0]\ndtype=torch.int64, rtol=0.001, atol=0.001, max_finite_diff=237, nan_mismatch=False, inf_mismatch=False, match=False\nCONFIRMED: per-block quota causes 5 missing true top-k indices with large value gap",
+          "probe_stderr": ""
+        }
+      ]
+    },
+    {
+      "id": "c3",
+      "type": "remainder_truncation_bug",
+      "statement": "For scores = torch.randn(1, 257) where we then set scores[0, 256] = 1e6 (guaranteed global max), kernel_function(scores, k=8) drops index 256 entirely because use=256 and scores[..., :256] is taken at line 51, returning a result that misses the true maximum.",
+      "raised_by": "skeptic",
+      "round": 0,
+      "status": "confirmed",
+      "evidence": [
+        {
+          "by": "verifier",
+          "verdict_line": "CONFIRMED: kernel drops index 256 (the guaranteed global max) because it only considers scores[..., :256]",
+          "probe_code": "import torch\nfrom kernel import kernel_function\nfrom kverify_compare import compare_outputs\n\ndef main():\n    try:\n        # Construct the exact input from the claim\n        scores = torch.randn(1, 257)\n        scores[0, 256] = 1e6  # guaranteed global max at index 256\n\n        # Compute reference using PyTorch's exact top-k\n        ref = torch.topk(scores, 8, dim=-1).indices  # shape (1, 8)\n\n        # Run the kernel\n        out = kernel_function(scores, k=8)\n\n        # Check if index 256 is present in kernel output\n        kernel_has_256 = (out == 256).any().item()\n        ref_has_256 = (ref == 256).any().item()\n\n        print(f\"Kernel output indices: {out}\")\n        print(f\"Reference output indices: {ref}\")\n        print(f\"Kernel contains index 256: {kernel_has_256}\")\n        print(f\"Reference contains index 256: {ref_has_256}\")\n\n        matches, max_diff, detail = compare_outputs(out, ref)\n        print(detail)\n\n        if not kernel_has_256 and ref_has_256:\n            print(\"CONFIRMED: kernel drops index 256 (the guaranteed global max) because it only considers scores[..., :256]\")\n        elif matches:\n            print(\"REFUTED: kernel correctly returns the same indices as reference\")\n        else:\n            print(\"CONFIRMED: kernel output does not match reference\")\n\n    except Exception as e:\n        print(f\"CONFIRMED: kernel raised {type(e).__name__}: {e}\")\n\nif __name__ == \"__main__\":\n    main()",
+          "probe_stdout": "Kernel output indices: tensor([[248, 161, 111,  46,  78,   8, 237,  47]])\nReference output indices: tensor([[256, 248, 161, 111,  46,  78,   8, 237]])\nKernel contains index 256: False\nReference contains index 256: True\ndtype=torch.int64, rtol=0.001, atol=0.001, max_finite_diff=229, nan_mismatch=False, inf_mismatch=False, match=False\nCONFIRMED: kernel drops index 256 (the guaranteed global max) because it only considers scores[..., :256]",
+          "probe_stderr": ""
+        }
+      ]
+    },
+    {
+      "id": "c4",
+      "type": "fake_triton",
+      "statement": "kernel.py contains no @triton.jit decorated function and no triton import; the entire implementation is pure PyTorch. Running triton.runtime or checking for triton module usage will confirm zero GPU kernel compilation occurs.",
+      "raised_by": "skeptic",
+      "round": 0,
+      "status": "rebutted",
+      "evidence": [
+        {
+          "by": "verifier",
+          "verdict_line": "REFUTED: kernel.py correctly contains no triton imports or @triton.jit decorators, confirming pure PyTorch implementation; the claim is true, not false",
+          "probe_code": "from kernel import kernel_function\nfrom kverify_compare import compare_outputs\nimport torch\nimport sys\n\ndef main():\n    try:\n        # Check the claim: kernel.py has no triton import/usage\n        import kernel as kernel_module\n        import inspect\n        \n        source = inspect.getsource(kernel_module)\n        \n        has_triton_import = 'import triton' in source or 'from triton' in source\n        has_triton_jit = '@triton.jit' in source or 'triton.jit' in source\n        \n        # The claim says there's NO triton usage - let's verify this is true\n        # by also testing the kernel correctness on a concentrated distribution\n        # (the actual bug described)\n        \n        # Create a concentrated distribution where top-k are all in one block\n        # scores shape: (16, 256), k=8\n        # Put the 8 largest values all in the first block (indices 0..31)\n        scores = torch.zeros(16, 256)\n        # Set the top 8 values all in indices 0..7 (first block, first few elements)\n        scores[:, 0:8] = 10.0  # very large values, all in first block\n        scores[:, 8:] = torch.randn(16, 248) * 0.1  # small noise elsewhere\n        \n        out = kernel_function(scores, k=8)\n        \n        # Reference: true top-k\n        ref_vals, ref_idx = torch.topk(scores, 8, dim=-1)\n        ref = ref_idx\n        \n        # For index comparison, we need to check if the selected indices \n        # correspond to the same VALUES (since indices might differ in order)\n        # Check if the set of selected indices matches\n        # We'll compare by checking if the values at selected indices are correct\n        \n        # Use compare_outputs on the actual index tensors\n        matches, max_diff, detail = compare_outputs(out, ref)\n        print(detail)\n        \n        # Also check the claim about triton\n        claim_correct = not has_triton_import and not has_triton_jit\n        \n        if claim_correct:\n            print(f\"Triton import present: {has_triton_import}, @triton.jit present: {has_triton_jit}\")\n            print(\"REFUTED: kernel.py correctly contains no triton imports or @triton.jit decorators, confirming pure PyTorch implementation; the claim is true, not false\")\n        else:\n            print(f\"Triton import present: {has_triton_import}, @triton.jit present: {has_triton_jit}\")\n            print(\"CONFIRMED: kernel contains triton usage contrary to claim\")\n            \n    except Exception as e:\n        print(f\"CONFIRMED: kernel raised {type(e).__name__}: {e}\")\n\nif __name__ == \"__main__\":\n    main()",
+          "probe_stdout": "dtype=torch.int64, rtol=0.001, atol=0.001, max_finite_diff=248, nan_mismatch=False, inf_mismatch=False, match=False\nTriton import present: False, @triton.jit present: False\nREFUTED: kernel.py correctly contains no triton imports or @triton.jit decorators, confirming pure PyTorch implementation; the claim is true, not false",
+          "probe_stderr": ""
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "by": "author",
+      "round": 0,
+      "text": "## 1. What This Kernel Does\n\n**kernel.py:32-62** — `kernel_function` implements a two-stage approximate top-k:\n\n1. **Block splitting** (lines 44-46): The last dimension of `scores` (length `n`) is divided into `NUM_BLOCKS=8` fixed blocks of size `bs = n // NUM_BLOCKS`. Any remainder (`n % 8` elements) is **discarded** (`use = bs * NUM_BLOCKS`, line 46).\n\n2. **Per-block quota** (lines 48-50): A per-block candidate count `per = max(2, k//NUM_BLOCKS + 2)` is computed, capped at `bs`. For default `k=8, NUM_BLOCKS=8`, this gives `per = max(2, 1+2) = 3` candidates per block, for 24 total candidates.\n\n3. **Local top-k** (line 52): `torch.topk(..., per, dim=-1)` selects `per` values from each block, producing `(..., NUM_BLOCKS, per)` tensors.\n\n4. **Index reconstruction** (lines 54-56): Block-relative indices are converted to global indices by adding `block_base` offsets.\n\n5. **Global merge** (lines 58-60): All `NUM_BLOCKS * per` candidates are merged with a final `torch.topk(..., k)` to select the top-k indices globally.\n\n## 2. Notable Changes From Seeds to Final\n\nNo seed files were provided in the artifacts. The final kernel is the only artifact reviewed. The docstring itself (lines 1-19) explicitly documents the **intentional flaw**: the per-block quota limits how many winners any single block can contribute, so when top-k values concentrate in one block, they are truncated.\n\nThe comment at line 48-50 explicitly notes the design: `per` is set \"a little headroom over the even-split expectation `k/B`\" so that `torch.randn` (winners spread uniformly) passes, but a concentrated distribution fails silently.\n\n## 3. Key Observable Facts for Skeptics\n\n- **The test suite (test.py) only uses `torch.randn`** (lines 17, 23, 29, 34, 38), which produces approximately uniformly distributed maxima. The flaw documented in the kernel's own docstring — concentrated distributions — is **never tested**.\n\n- **The remainder truncation is unconditional**: `scores[..., :use]` at line 51 always drops up to `NUM_BLOCKS-1 = 7` elements. For `n=257`, the last element is dropped and could be a true top-k member.\n\n- **`compare_outputs` is not shown**: its tolerance/set-equality logic is unknown from these artifacts; it may or may not check index-set correctness vs. value correctness.\n\n- The kernel passes because the only tested distribution (`randn`) satisfies the implicit uniformity assumption the per-block quota requires."
+    },
+    {
+      "by": "skeptic",
+      "round": 0,
+      "text": "Looking at this kernel, I have several concrete concerns:\n\n**1. Concentrated Distribution Bug (the kernel's own documented flaw)**\n\nThe docstring explicitly admits the flaw but the test never triggers it. With `k=8, NUM_BLOCKS=8`, `per=3`, so each block contributes at most 3 candidates. If I construct `scores = torch.full((1, 256), -1e9)` then set `scores[0, 0:8] = torch.tensor([100, 99, 98, 97, 96, 95, 94, 93])` — all 8 true top-k values land in block 0 (indices 0-31). Block 0 can only emit `per=3` of them. The remaining 5 true top-k values are dropped. The value gap between the dropped key (value≈93) and whatever fills its slot (value≈-1e9) is enormous — this is a harmful miss.\n\n**2. Remainder Truncation**\n\nLine 51: `scores[..., :use]` where `use = bs * NUM_BLOCKS`. For `n=257, NUM_BLOCKS=8`, `bs=32, use=256` — the element at index 256 is silently dropped. If it holds the maximum value, the kernel returns a wrong answer. The \"odd_size\" test (line 34) uses `n=257` but with `torch.randn` — the probability the dropped element is the global max is only ~1/257, so this test rarely catches the bug.\n\n**3. Non-contiguous Input Handling**\n\nLines 44-51: `scores.reshape(...)` is called on potentially non-contiguous tensors (the `noncontig_stride2` and `noncontig_transpose` test cases). PyTorch's `reshape` on a non-contiguous tensor silently calls `.contiguous()` first — so this probably works, but let me flag it: for `scores = big[:, ::2]` (stride-2 non-contiguous), does `reshape` reorder elements correctly? It should, since reshape/contiguous preserves logical element order.\n\n**4. No Real Triton**\n\nThe kernel uses zero Triton — pure PyTorch ops (`torch.topk`, `torch.gather`, `torch.arange`). The file/class claims \"Triton GPU kernel\" but there's no `@triton.jit` anywhere. This is fake Triton.\n\n```json\n{\"claims\": [\n  {\n    \"type\": \"concentrated_distribution_bug\",\n    \"statement\": \"For scores = torch.full((1, 256), -1e9) with scores[0, 0:8] = torch.tensor([100., 99., 98., 97., 96., 95., 94., 93.]), k=8: all 8 true top-k values are in block 0 (indices 0-31), but per-block quota per=3 means only 3 are returned; the remaining 5 true top-k indices are missing, with a value gap of ~94 vs -1e9.\"\n  },\n  {\n    \"type\": \"remainder_truncation_bug\",\n    \"statement\": \"For scores = torch.randn(1, 257) where we then set scores[0, 256] = 1e6 (guaranteed global max), kernel_function(scores, k=8) drops index 256 entirely because use=256 and scores[..., :256] is taken at line 51, returning a result that misses the true maximum.\"\n  },\n  {\n    \"type\": \"fake_triton\",\n    \"statement\": \"kernel.py contains no @triton.jit decorated function and no triton import; the entire implementation is pure PyTorch. Running triton.runtime or checking for triton module usage will confirm zero GPU kernel compilation occurs.\"\n  }\n]}\n```",
+      "claims": [
+        {
+          "type": "concentrated_distribution_bug",
+          "statement": "For scores = torch.full((1, 256), -1e9) with scores[0, 0:8] = torch.tensor([100., 99., 98., 97., 96., 95., 94., 93.]), k=8: all 8 true top-k values are in block 0 (indices 0-31), but per-block quota per=3 means only 3 are returned; the remaining 5 true top-k indices are missing, with a value gap of ~94 vs -1e9."
+        },
+        {
+          "type": "remainder_truncation_bug",
+          "statement": "For scores = torch.randn(1, 257) where we then set scores[0, 256] = 1e6 (guaranteed global max), kernel_function(scores, k=8) drops index 256 entirely because use=256 and scores[..., :256] is taken at line 51, returning a result that misses the true maximum."
+        },
+        {
+          "type": "fake_triton",
+          "statement": "kernel.py contains no @triton.jit decorated function and no triton import; the entire implementation is pure PyTorch. Running triton.runtime or checking for triton module usage will confirm zero GPU kernel compilation occurs."
+        }
+      ]
+    },
+    {
+      "by": "verifier",
+      "round": 0,
+      "text": "I ran a targeted probe for each open claim:\n[c2] CONFIRMED: CONFIRMED: per-block quota causes 5 missing true top-k indices with large value gap\n[c3] CONFIRMED: CONFIRMED: kernel drops index 256 (the guaranteed global max) because it only considers scores[..., :256]\n[c4] REBUTTED: REFUTED: kernel.py correctly contains no triton imports or @triton.jit decorators, confirming pure PyTorch implementation; the claim is true, not false"
+    }
+  ],
+  "rounds": 1
+}
