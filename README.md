@@ -34,21 +34,28 @@ The pipeline has one **offline** step in order to generate the test kernel (so c
 
 - **Step 1 — Build the dataset (`kv-build`)**: run KernelAgent to turn a problem (we use KernelBench dataset) into a
   kernel and save it under `dataset/`. Run once and the saved data stays.
-- **Step 2 — Re-check (`kv-run`, first half)**: load a saved kernel and run our **own**
-  correctness test on it.
-- **Step 3 — Debate (`kv-run`, second half)**: have several LLM agents argue about the kernel
-  to find the kinds of bugs a fixed test can not anticipate, ending in a final decision.
+- **Step 2 — Re-check (`kv-run`)**: load a saved kernel and run our **own** correctness test —
+  a `standard` case (core correctness) plus a **shape/layout battery** (non-contiguous, odd
+  size, empty).
+- **Step 2b — Precision recheck (`kv-run` / `kv-precision-recheck`)**: a **classifier** first
+  decides the operator's class, then a **value-distribution battery** is fed through the
+  judge that fits that class (allclose / value-gap / abstain). This catches kernels that are
+  right on benign inputs but wrong on the operator's class-specific stress distribution — see
+  [Step 2b](#step-2b--precision-recheck-operator-class-routed) and
+  [precision_verification.md](precision_verification.md).
+- **Step 3 — Debate (`kv-run`)**: several LLM agents argue about the kernel to find the bugs a
+  fixed checklist can not anticipate. The debate is now **class-aware** (it receives the
+  operator class) and the **judge is the final arbiter** over every signal.
 
 > **Key design point**: the verification does **not** rely on the generator giving us a test.
 > Hand it a generator that only produces `kernel.py` and Steps 2–3 still work — because the
 > re-check writes its own test.
 
-The online half (Steps 2–3) at a glance — a re-check stage that feeds a debate, which ends
-in a decision:
+The whole online pipeline at a glance — re-check **and** precision check feed a class-aware
+debate; the judge arbitrates a single final verdict (`trust / reject / needs_more_evidence /
+needs_downstream`):
 
-![Overview: online verification](docs/overview.drawio.svg)
-
-<sub>Source (editable): [docs/overview.drawio.pdf](docs/overview.drawio.pdf)</sub>
+![Overview: online verification](docs/kvoverall.drawio.svg)
 
 ### Step 1 — Build the dataset
 
@@ -125,15 +132,66 @@ it):
 The re-check result is then **merged into the saved record** — `passed`, `status`,
 `test_code`, `error` — overwriting whatever the original generator claimed.
 
+### Step 2b — Precision recheck (operator-class-routed)
+
+![Step 2b: precision recheck](docs/step2b_precision.svg)
+
+The Step 2 battery above varies the input's **shape/layout**, but always on benign
+`torch.randn` **values**. That misses a whole class of bugs where the *judging rule itself*
+fails: `compare_outputs`' "small numerical error ⇒ correct" only holds for some operators.
+Step 2b (`verifier/precision_recheck.py`, run on every `kv-run` or standalone via
+`kv-precision-recheck`) closes that gap with **"先判算子哪类 → 选裁判 → 判不了就 abstain"**.
+Full analysis: [precision_verification.md](precision_verification.md).
+
+**1. Classify the operator** (`verifier/classify.py`). It runs only the *trusted reference*
+(`problem.txt`'s PyTorch) on small CPU inputs — no kernel, no GPU — and labels it on two axes:
+
+`op_class ∈ { preserve, compress, select }` — **what the math does to errors**:
+
+| `op_class` | Examples | What makes it special | Can we trust numerical error? |
+|---|---|---|---|
+| **preserve** | matmul, add/mul, sum | magnitude-preserving; an error of size δ shows up as ~δ in the output | **Yes** — error is a faithful proxy |
+| **compress** | softmax, ReLU/GELU/SiLU | squashes small/tail values toward 0, so tail errors are **invisible** on benign inputs | No — has blind regions |
+| **select** | sort, top-k, argmax | output is a set of **indices**; `\|cand − ref\|` is undefined | No — there is no numerical distance |
+
+`precision ∈ { normal, low_bit }` — **the number format of the output**:
+
+| `precision` | Means | Consequence |
+|---|---|---|
+| **normal** | fp32 / bf16 / fp16 output | numerical comparison is usable |
+| **low_bit** | fp8 / fp4 / int4 output | sub-resolution (tail) errors round to **exactly 0** — *no* tolerance or input can recover them |
+
+**2. Feed a class-appropriate adversarial distribution** (the "送分" benign `randn` is exactly
+what hides these bugs). There are **two** distributions, each aimed at one class's blind spot:
+
+| Distribution | What it is | Targets | Exposes |
+|---|---|---|---|
+| **concentrated** | the true top-k "winners" all clustered in one region/block (think attention sinks / recent tokens) | **select** | per-block-quota / "winners are spread" assumptions that silently drop important keys |
+| **heavy-tail** | one peak + a heavy band of comparable values just below it, so the tail carries real aggregate mass | **compress** | tail-truncation / cheap-tail-exp that assumes "the tail is negligible" |
+
+**3. Route to the judge that fits the class** (`verifier/compare.py : judge()`):
+
+| Judge | Used for | How it decides |
+|---|---|---|
+| **J1 · allclose** | compress | dtype-tiered numerical tolerance (`compare_outputs`), but on the adversarial distribution |
+| **J2 · value-gap** | select | weights a dropped key by how much better it is than the worst kept key — **not** raw index recall (which punishes harmless tie-swaps) |
+| **abstain** | low_bit | refuses to decide numerically and routes to a downstream / task-level check |
+| *(skipped)* | preserve | no compression/selection blind spot — Step 2's benign battery already covers it |
+
+The result is a **`precision_recheck` verdict ∈ { match, mismatch, abstain, skipped }**, recorded
+in `meta.json["precision_recheck"]`. A `mismatch` is an empirically-measured, class-specific
+defect; `abstain` means the numbers genuinely cannot decide.
+
 ### Step 3 — Multi-agent debate
 
-![Step 3: multi-agent debate](docs/step3.drawio.svg)
-
-<sub>Source (editable): [docs/step3.drawio.pdf](docs/step3.drawio.pdf)</sub>
+![Step 3: multi-agent debate](docs/kv3.drawio.svg)
 
 The debate (`verifier/debate.py` + `agents/`) handles the **logic bugs that a fixed checklist
 can not list out in advance** (e.g. accumulation errors that only show up across blocks,
-cheating, subtle precision issues). **Each round** runs three agents in order:
+cheating, subtle precision issues). It is **class-aware**: it receives the `op_class` /
+`precision` from Step 2b's classifier, so the skeptic attacks the right blind spot (tail for
+compress, concentrated/tied distributions for select) and the judge applies class-appropriate
+severity. **Each round** runs three agents in order:
 
 - **Author** — *the describer*: explains what the kernel does and how it changed from its
   first drafts (`seed_*.py`). Describe only, **no opinions**.
@@ -149,13 +207,21 @@ cheating, subtle precision issues). **Each round** runs three agents in order:
 **When to stop**: if the skeptic raises **new claims**, the loop runs again; when it has **no
 new claim**, the rounds stop.
 
-Then the **Judge** — *the final decision-maker* — reads the whole list of claims **once** and
-gives the verdict: **trust / reject / needs_more_evidence**, plus which claims were decisive.
-The judge makes the call that simple counting can't: is a confirmed difference just expected
-bf16 rounding, or a real bug? The judge can **overrule** the verifier.
+**The precision finding enters here too** (`design B`): Step 2b's `precision_recheck` verdict
+is pre-filed into the claims ledger as an already-resolved claim (`confirmed` on a `mismatch`,
+`inconclusive` on an `abstain`), so the judge weighs that empirical evidence instead of
+re-discovering it.
+
+Then the **Judge** — *the final arbiter* — reads the whole ledger **plus** the standard-recheck
+status and robustness summary, and gives the verdict: **`trust` / `reject` /
+`needs_more_evidence` / `needs_downstream`**, plus which claims were decisive. It makes the call
+that counting can't (is a confirmed difference expected bf16 rounding or a real bug?), can
+**overrule** the verifier, and is the final say on the precision finding too. A thin
+deterministic floor (`verifier/verdict.py`) only enforces one fact: a kernel wrong on the
+problem's *normal* inputs can never be `trust`.
 
 The full record is written to `dataset/<entry>/debate_result.json`:
-`{ recheck_status, verdict, claims (the full list), history (every agent turn) }`.
+`{ recheck_status, precision_recheck, verdict, final, claims (the full list), history }`.
 
 ---
 
@@ -257,18 +323,28 @@ then points `CUDA_VISIBLE_DEVICES` at the first one that works.
 
 ---
 
-## 4. The three results
+## 4. The signals and the final verdict
 
-After `kv-run` finishes with a kernel, you get three separate results — **don't mix them up**:
+`kv-run` produces four separate signals, then combines them into one answer:
 
-| Result | Comes from | Means |
-|---|---|---|
-| `recheck.status` | the `standard` case | **Core correctness**: right on the problem's normal inputs? |
-| `recheck.robustness` | the stress-test cases | **Robustness**: handles non-contiguous / odd size / empty? |
-| `debate.verdict` | author/skeptic/verifier/judge | **Logic review**: bugs or cheating a fixed checklist can't anticipate |
+| Signal | Comes from | Means | Values |
+|---|---|---|---|
+| `recheck.status` | the `standard` case | **Core correctness**: right on the problem's normal inputs? | `passed` / `failed` |
+| `recheck.robustness` | the shape/layout battery | **Robustness**: handles non-contiguous / odd size / empty? | per-case `pass/fail/skip` |
+| `precision_recheck.verdict` | classifier + class-routed judge on the adversarial distribution | **Precision review**: right on the operator's class-specific stress distribution? | `match` / `mismatch` / `abstain` / `skipped` |
+| `debate.verdict` | author/skeptic/verifier/judge | **Logic review**: bugs or cheating a fixed checklist can't anticipate | `trust` / `reject` / `needs_more_evidence` / `needs_downstream` |
 
-> Note: these three are produced separately for now; how to combine them into one final answer
-> is still an open question.
+These no longer float separately. The **judge is the final arbiter** — it sees the recheck
+status, robustness, and the precision finding (pre-filed into its ledger), and issues the
+verdict. `verifier/verdict.py` then applies one deterministic **floor** on top: a kernel that
+failed the `standard` case can never be `trust`. The combined answer is the `final` field:
+
+| `final` | Meaning |
+|---|---|
+| `trust` | no real defect stands |
+| `reject` | a genuine defect (standard failure, a confirmed precision/logic bug) |
+| `needs_more_evidence` | real concerns remain only untested |
+| `needs_downstream` | numerical comparison structurally can't decide (low-bit) — route to a task-level check |
 
 ---
 
@@ -281,26 +357,32 @@ kernel_verification/
 ├── verifier/           # main package
 │   ├── generator.py    # drives KernelAgent
 │   ├── dataset.py      # save_entry / load_entry / iter_entries
-│   ├── recheck.py      # our own re-check + the fixed stress tests (kv-recheck)
-│   ├── compare.py      # the shared comparison function compare_outputs
-│   ├── debate.py       # the debate loop run_debate
+│   ├── recheck.py      # our own re-check + the shape/layout battery (kv-recheck)
+│   ├── classify.py     # operator-class router: op_class + precision (Step 2b)
+│   ├── precision_recheck.py # class-routed judge on adversarial distributions (kv-precision-recheck)
+│   ├── compare.py      # compare_outputs (J1) + judge() router (J1/J2/abstain)
+│   ├── verdict.py      # the thin standard-correctness floor over the judge
+│   ├── debate.py       # the debate loop run_debate (class-aware, seeds precision claim)
 │   ├── llm_client.py   # Anthropic calls + prompt cache
 │   ├── gpu_pick.py     # auto-pick a usable GPU
 │   ├── build_dataset.py# build the dataset offline (kv-build)
 │   └── run.py          # run the online verification (kv-run)
-├── agents/             # the four roles + helpers
+├── agents/             # the four roles + helpers (skeptic/judge are class-aware)
 │   ├── author.py  skeptic.py  verifier.py  judge.py
 │   ├── parsing.py      # pull JSON out of replies
 │   └── types.py        # Turn / Claim
-├── dataset/            # generated kernels + their three results (can be committed)
-│   └── <name>/{problem.txt, kernel.py, test.py, seed_*.py,
-│               meta.json, recheck_test.py, debate_result.json, ...}
-├── docs/               # diagrams (.drawio.svg shown in README, .drawio.pdf = editable source)
-│   ├── overview.drawio.{svg,pdf}  # online verification at a glance
-│   ├── step1.drawio.{svg,pdf}     # build the dataset
-│   ├── step2.drawio.{svg,pdf}     # re-check
-│   └── step3.drawio.{svg,pdf}     # multi-agent debate
-├── tests/              # scratch / debugging scripts
+├── dataset/            # generated kernels + their results (can be committed)
+│   ├── <name>/{problem.txt, kernel.py, test.py, seed_*.py,
+│   │           meta.json, recheck_test.py, debate_result.json, ...}
+│   └── _advprec_*/     # hand-written red-team entries (precision-axis yardsticks)
+├── docs/               # diagrams (.svg shown in README)
+│   ├── kvoverall.drawio.svg   # the whole online pipeline (current)
+│   ├── step1.drawio.svg       # build the dataset
+│   ├── step2.drawio.svg       # re-check (shape/layout battery)
+│   ├── step2b_precision.svg   # precision recheck (classify + class-routed judge)
+│   └── kv3.drawio.svg         # multi-agent debate (class-aware)
+├── tests/              # demos (advprec_*_demo.py) + assert regression (test_advprec_regression.py)
+├── precision_verification.md  # the precision-judgment axis: design + 4-class analysis + limits
 ├── pyproject.toml      # uv project, torch cu128, KernelAgent path dependency
 └── roadmap.md          # notes on how the design evolved
 ```
@@ -320,7 +402,12 @@ uv run kv-recheck                       # run everything not yet re-checked
 uv run kv-recheck elem_add              # re-run one (forced)
 uv run kv-recheck --list                # show each entry's re-check result
 
-# Steps 2 + 3 — full verification (re-check → debate → verdict)
+# Step 2b only — precision recheck (classify + class-routed judge, no debate)
+uv run kv-precision-recheck             # run all: classify + adversarial-distribution judge
+uv run kv-precision-recheck _advprec_topk_boundary   # one entry
+uv run kv-precision-recheck --list      # show each entry's op_class / precision / verdict
+
+# Steps 2 + 2b + 3 — full verification (re-check → precision → debate → final verdict)
 uv run kv-run elem_add                  # run one
 uv run kv-run elem_add --verbose        # watch everything: the re-check test, each agent turn, each test script
 uv run kv-run elem_add --force-recheck  # redo the re-check test first, then run
