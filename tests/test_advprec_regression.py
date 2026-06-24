@@ -256,6 +256,28 @@ def test_no_false_reject_on_tiebreak():
     assert r["recall"] == 0.0
 
 
+# --- the WHOLE dataset matrix end-to-end through precision_recheck --------- #
+
+def test_all_advprec_entries_matrix():
+    """Drive every dataset/_advprec_* entry through precision_recheck and assert its
+    meta's expected.precision_verdict. Covers the full op_class x precision x
+    {correct, buggy} matrix: catch (mismatch) / control (match) / abstain / skipped.
+    CPU-only (all _advprec_ kernels are pure torch)."""
+    import json
+    import os
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""  # force CPU for the whole matrix
+    entries = sorted(d.name for d in DS.iterdir()
+                     if d.name.startswith("_advprec_") and (d / "meta.json").exists())
+    assert len(entries) >= 11, f"expected the full matrix, found {len(entries)}"
+    for entry in entries:
+        meta = json.loads((DS / entry / "meta.json").read_text())
+        exp = meta.get("expected", {}).get("precision_verdict")
+        assert exp, f"{entry}: meta has no expected.precision_verdict"
+        got = precision_recheck.precision_recheck(entry).get("verdict")
+        assert got == exp, f"{entry}: precision verdict {got!r}, expected {exp!r}"
+
+
 def main() -> int:
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
