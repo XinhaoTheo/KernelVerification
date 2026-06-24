@@ -342,6 +342,14 @@ o = softmax(q@k[I]/√d) · V[I],   I = top-k 选出的 2000 个 key 的下标
    abstain 路径已验证（错误在低比特里湮灭、诚实弃权而非假装通过），但「弃权之后真去比下游任务」没建。
    且 INT4/FP4 非 torch 原生 dtype，要手动量化模拟。属有意延后（见 §5.4）。
 
-**优先级判断**：这些里没有一个是"现在就会出错"的——它们是"未来遇到某类算子/某种 kernel 才暴露"的边界。
-当前 dataset 全部正确处理。建议遇到时再针对性修，而不是预先全堵（过早优化）。最可能先撞上的是 #2（多漏选累积）
-和 #4（多输入算子）。
+8. **复合算子（如 sparse attention）会被 classify 误判成 preserve → 被 skip → 漏掉 bug**。
+   实测：仿造 MagicPIG（arXiv 2410.16179，LSH 采样稀疏注意力）做的红队 entry
+   [_advprec_magicpig_attn](dataset/_advprec_magicpig_attn) 是 §4 的 select+compress 叠加靶子，但
+   classify 在它身上跑增益探针（扰动 q，平坦 softmax 下输出是保数量级的加权平均）→ 判成 **preserve →
+   precision_recheck 直接 skip**，根本不查。而它确有 distribution-dependent bug：
+   [demo](tests/advprec_magicpig_demo.py) 显示 concentrated 分数下 o 对（0.000）、uniform 分数下 o 偏 0.19
+   （正是论文说的失效）。**这是测真实论文逼出来的真 gap**。修法需三件：① 复合算子分类（增益探针看不出"内部含 select+softmax"，要靠语义/结构检测）② 多输入对抗（接 #4）③ 下游输出 o 当判据（§2 class-2 已指出）。当前 [_advprec_magicpig_attn](dataset/_advprec_magicpig_attn) 标 `demo_only`，矩阵测试跳过，yardstick 是那个 demo。
+
+**优先级判断**：#1–#7 里没有一个是"现在就会出错"的——是"未来遇到某类算子才暴露"的边界，当前单算子 dataset 全部正确处理。
+但 **#8 是已经实测到的真 gap**（attention 被 skip），不是假设——它最该先修，因为 sparse attention 正是这套验证器
+最想覆盖的高价值目标（§4）。其次是 #2（多漏选累积）、#4（多输入算子，和 #8 同源）。

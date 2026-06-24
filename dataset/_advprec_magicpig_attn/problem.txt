@@ -1,0 +1,31 @@
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    """Single-query attention o = softmax(q·kᵀ/√d) · V — the dense reference that
+    MagicPIG (arXiv 2410.16179, LSH-sampling sparse attention) approximates.
+
+    This is the precision_verification.md §4 stacked-blind-spot target: the kernel
+    SELECTS a subset of keys (LSH buckets, a probabilistic top-k) and then COMPRESSES
+    via softmax. The faithful judge compares the DOWNSTREAM output o, not the selected
+    index set."""
+    def __init__(self, d_head):
+        super().__init__()
+        self.scale = d_head ** -0.5
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        scores = (k @ q) * self.scale          # (N,)
+        w = torch.softmax(scores, dim=-1)        # (N,) attention weights
+        return w @ v                              # (d_head,) output
+
+d_head = 64
+n_keys = 256
+
+def get_inputs():
+    q = torch.randn(d_head)
+    k = torch.randn(n_keys, d_head)
+    v = torch.randn(n_keys, d_head)
+    return [q, k, v]
+
+def get_init_inputs():
+    return [d_head]

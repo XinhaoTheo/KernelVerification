@@ -272,6 +272,8 @@ def test_all_advprec_entries_matrix():
     assert len(entries) >= 11, f"expected the full matrix, found {len(entries)}"
     for entry in entries:
         meta = json.loads((DS / entry / "meta.json").read_text())
+        if meta.get("demo_only"):
+            continue  # e.g. _advprec_magicpig_attn: multi-input attention, demo-judged
         exp = meta.get("expected", {}).get("precision_verdict")
         assert exp, f"{entry}: meta has no expected.precision_verdict"
         got = precision_recheck.precision_recheck(entry).get("verdict")
