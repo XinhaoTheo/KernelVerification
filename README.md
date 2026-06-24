@@ -182,6 +182,61 @@ The result is a **`precision_recheck` verdict ∈ { match, mismatch, abstain, sk
 in `meta.json["precision_recheck"]`. A `mismatch` is an empirically-measured, class-specific
 defect; `abstain` means the numbers genuinely cannot decide.
 
+#### The red-team test set (`dataset/_advprec_*`)
+
+To prove the precision axis actually works, the dataset carries hand-written `_advprec_*`
+entries covering every cell of the `op_class × precision × {correct, buggy}` matrix — both
+**positives** (a buggy kernel that must be caught) and **negatives** (a correct kernel that must
+NOT be flagged). `tests/test_advprec_regression.py` drives them all through `precision_recheck`
+and asserts each verdict.
+
+| Kind | Entries | Verdict | What it checks |
+|---|---|---|---|
+| **catch** (select) | `topk_boundary`, `topk_subsample` | `mismatch` | a buggy top-k is caught — two different bug mechanisms |
+| **catch** (compress) | `softmax_tail`, `softmax_countcap` | `mismatch` | a buggy softmax is caught — two different bug mechanisms |
+| **control** | `topk_correct`, `softmax_correct` | `match` | a correct kernel is NOT false-alarmed |
+| **control** (preserve) | `matmul_correct` | `skipped` | a preserve op is correctly skipped (no blind spot) |
+| **abstain** (low-bit) | `softmax_fp8_tail`, `softmax_fp8_correct`, `matmul_fp8` | `abstain` | low-bit honestly abstains — for buggy AND correct kernels |
+| **boundary** | `matmul_bug` | `skipped` | a preserve bug is left to the standard recheck, not the precision axis |
+| **research target** | `magicpig_attn` | *(demo)* | a real sparse-attention method — exposes a verifier gap (below) |
+
+Per entry:
+
+- **`topk_boundary`** — an approximate top-k with a *per-block-quota* bug: recall ≈ 1.0 on
+  `torch.randn` but collapses (recall 0.38, value-gap ~7) when the winners concentrate in one
+  block. The distribution-dependent false accept. Caught by J2's value-gap.
+- **`topk_subsample`** — a second select bug, *different mechanism*: top-k over a strided
+  subsample, so winners off the stride are unreachable. Confirms the catch is not over-fit to
+  one bug.
+- **`softmax_tail`** — a softmax that *truncates the far tail*: error ~0 on `randn`, but on a
+  heavy-tail distribution the dropped mass is real (max error ~0.04). The compression-driven
+  false accept.
+- **`softmax_countcap`** — a second compress bug, *different mechanism*: keeps only the 32
+  largest exp terms and zeros the rest. Same lesson, different code.
+- **`topk_correct` / `softmax_correct`** — correct kernels; precision_recheck must return
+  `match` even on the adversarial distribution. False-alarm guards (the dataset needs negatives,
+  not just positives).
+- **`matmul_correct`** — a correct preserve op. Preserve has no compression/selection blind
+  spot, so the precision battery returns `skipped` and defers to the standard recheck.
+- **`matmul_bug`** — a genuinely wrong preserve op that still returns `skipped`: documents the
+  boundary that the precision axis does **not** overreach into preserve (the standard recheck
+  owns that).
+- **`softmax_fp8_tail` / `softmax_fp8_correct`** — a buggy and a correct FP8 softmax. Both
+  `abstain`: in low-bit the tail error rounds to exactly 0, so numerical comparison can't decide
+  — and that is true regardless of whether the kernel is right. Abstain is **format-driven**.
+- **`matmul_fp8`** — a correct FP8 matmul; `abstain` too, showing the low-bit rule applies across
+  op-classes, not just compress.
+- **`magicpig_attn`** — a MagicPIG-style ([arXiv 2410.16179](https://arxiv.org/abs/2410.16179))
+  LSH-sampling sparse attention: hash the keys into buckets, attend only to the query's bucket,
+  softmax over that subset (the §4 *select + compress* stacked target). Judged on the downstream
+  output `o` (`tests/advprec_magicpig_demo.py`): on concentrated scores `o` matches dense
+  (~0.000), on uniform scores it is off by ~0.19 — the paper's stated failure mode. **It exposes
+  a real gap**: `classify` labels attention `preserve` (the gain probe on a flat softmax sees a
+  magnitude-preserving average), so `precision_recheck` *skips* it and would miss the bug. Marked
+  `demo_only`; catching this class needs composite-op classification + multi-input adversarial
+  inputs + downstream-output judging (see [precision_verification.md](precision_verification.md)
+  §7 #8).
+
 ### Step 3 — Multi-agent debate
 
 ![Step 3: multi-agent debate](docs/kv3.drawio.svg)
