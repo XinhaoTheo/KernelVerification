@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 
@@ -152,7 +152,7 @@ class Claim:
     updated_at: str = field(default_factory=utc_now_iso)
 
     def to_dict(self) -> dict[str, JsonValue]:
-        return {
+        return cast(dict[str, JsonValue], {
             "id": self.id,
             "statement": self.statement,
             "rationale": self.rationale,
@@ -164,7 +164,7 @@ class Claim:
             "evidence": [evidence.to_dict() for evidence in self.evidence],
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-        }
+        })
 
 
 @dataclass(slots=True)
@@ -180,7 +180,7 @@ class RunState:
     skeptic_review: dict[str, JsonValue] | None = None
 
     def to_dict(self) -> dict[str, JsonValue]:
-        return {
+        return cast(dict[str, JsonValue], {
             "entry": self.entry,
             "artifact": self.artifact,
             "skills": self.skills,
@@ -190,9 +190,8 @@ class RunState:
             "verdict": self.verdict,
             "convergence": self.convergence,
             "skeptic_review": self.skeptic_review,
-        }
+        })
 
 
 def _enum_value(value: Enum | str) -> str:
     return value.value if isinstance(value, Enum) else value
-

@@ -317,8 +317,10 @@ def _tool_output_summary(event: ToolEvent) -> dict[str, Any]:
             if key in output
         }
     elif event.tool == "finalize_probe_evidence":
-        claim = output.get("claim") if isinstance(output.get("claim"), dict) else {}
-        evidence = output.get("evidence") if isinstance(output.get("evidence"), dict) else {}
+        claim_raw = output.get("claim")
+        evidence_raw = output.get("evidence")
+        claim: dict[str, Any] = claim_raw if isinstance(claim_raw, dict) else {}
+        evidence: dict[str, Any] = evidence_raw if isinstance(evidence_raw, dict) else {}
         summary = {
             "claim_id": claim.get("id"),
             "claim_status": claim.get("status"),

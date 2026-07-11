@@ -20,6 +20,7 @@ _DEFAULT_OPENAI_REASONING_EFFORT = "minimal"
 class LLMClient(Protocol):
     def call(self, *, system: str, user: str, max_tokens: int = 4096) -> str:
         """Return raw model text. The caller parses the agent protocol."""
+        ...
 
 
 @dataclass(slots=True)

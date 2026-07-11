@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from verifier.agentic.llm import LLMClient
 from verifier.agentic.protocol import AgentResponse, parse_agent_response
@@ -71,7 +72,7 @@ def _state_for_prompt(state: RunState) -> dict[str, JsonValue]:
     for key in ("kernel_code", "test_code"):
         if isinstance(artifact.get(key), str):
             artifact[key] = _truncate(str(artifact[key]), 12000)
-    return {
+    return cast(dict[str, JsonValue], {
         "entry": state.entry,
         "artifact": artifact,
         "history": [turn.to_dict() for turn in state.history[-6:]],
@@ -80,7 +81,7 @@ def _state_for_prompt(state: RunState) -> dict[str, JsonValue]:
         "claim_coverage": _claim_coverage(state),
         "convergence": state.convergence,
         "skeptic_review": state.skeptic_review,
-    }
+    })
 
 
 def _claim_coverage(state: RunState) -> dict[str, JsonValue]:
@@ -94,11 +95,11 @@ def _claim_coverage(state: RunState) -> dict[str, JsonValue]:
         for claim in state.claims
         if _status_value(claim.status) == ClaimStatus.OPEN.value and not claim.evidence
     ]
-    return {
+    return cast(dict[str, JsonValue], {
         "open_claim_ids": open_claim_ids,
         "uncovered_open_claim_ids": uncovered_open_claim_ids,
         "all_open_claims_have_evidence": not uncovered_open_claim_ids,
-    }
+    })
 
 
 def _status_value(status) -> str:

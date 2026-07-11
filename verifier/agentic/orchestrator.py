@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, Sequence
 
 from .persistence import PersistedRun, persist_run
 from .protocol import AgentResponse
@@ -28,6 +28,7 @@ class Agent(Protocol):
 
     def act(self, *, state: RunState, tools: list[dict]) -> AgentResponse:
         """Return the agent's next JSON-protocol action."""
+        ...
 
 
 @dataclass(slots=True)
@@ -83,7 +84,7 @@ class AgenticOrchestrator:
 
     def run_agents_sequential(
         self,
-        agents: list[Agent],
+        agents: Sequence[Agent],
         *,
         max_rounds: int,
         tool_budget: int | None = None,
@@ -123,7 +124,7 @@ class AgenticOrchestrator:
 
     def run_verification_workflow(
         self,
-        agents: list[Agent],
+        agents: Sequence[Agent],
         *,
         max_debate_rounds: int,
         max_claim_rounds: int,
@@ -306,7 +307,7 @@ class AgenticOrchestrator:
         return persist_run(self.state, self.run_dir, stop_reason=stop_reason)
 
 
-def _first_agent_with_role(agents: list[Agent], role: Role) -> Agent | None:
+def _first_agent_with_role(agents: Sequence[Agent], role: Role) -> Agent | None:
     for agent in agents:
         if _role_value(agent.role) == role.value:
             return agent

@@ -92,8 +92,8 @@ def _enforce_reject_scope_guard(context: ToolContext, *, verdict: str, decisive_
         if claim is None:
             invalid.append(f"{claim_id}: unknown claim")
             continue
-        status = claim.status.value if hasattr(claim.status, "value") else str(claim.status)
-        scope = claim.scope.value if hasattr(claim.scope, "value") else str(claim.scope)
+        status = claim.status.value if isinstance(claim.status, ClaimStatus) else str(claim.status)
+        scope = claim.scope.value if isinstance(claim.scope, ClaimScope) else str(claim.scope)
         if status != ClaimStatus.CONFIRMED.value or scope != ClaimScope.IN_SCOPE.value:
             invalid.append(f"{claim_id}: status={status}, scope={scope}")
             continue
