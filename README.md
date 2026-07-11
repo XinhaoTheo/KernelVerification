@@ -1,16 +1,15 @@
-# Kernel Verification via Agentic Debate
+# Kernel Verification via Agent Debate
 
 A system that **decides whether to trust** a Triton kernel written by an LLM. A kernel is a
-hand-written GPU routine; Triton is the language used to write it. The hard part is not only
-running a test. The hard part is deciding **what should be tested**, whether a suspicious case
-is actually inside the benchmark contract, and whether the evidence is strong enough to reject
-the kernel.
+hand-written GPU routine; Triton is the language used to write it. Several LLM agents take
+different roles and debate the kernel: one describes what the implementation does, one raises
+concrete bug hypotheses, one runs local experiments, and one judges the accumulated evidence.
+The goal is to catch kernels that "pass the test they shipped with" but are actually wrong,
+overfit, or not supported by enough evidence. We want to simulate the way a careful human
+reviewer reasons about a kernel: read the code, form hypotheses, run targeted experiments,
+and only then decide whether the kernel should be trusted.
 
-Earlier versions of this project tried to solve that with a fixed verification pipeline:
-standard recheck, robustness batteries, operator classifiers, precision rechecks, and a
-predefined checklist of cases. That direction was too rigid. It made the program decide what
-to investigate before seeing the kernel's actual implementation. The current system is built
-around a different rule:
+The current design keeps that debate evidence-driven:
 
 ```text
 Agents decide what to investigate.
@@ -19,9 +18,9 @@ Tools provide executable local capabilities.
 Runtime executes tools locally and records evidence.
 ```
 
-The verifier is now an **agentic kernel verification system**. LLM agents discuss the kernel,
-raise concrete bug hypotheses, call local tools to inspect files or run probes, update a claim
-ledger, and let a judge give a final verdict based on accumulated evidence.
+The verifier does not ask the LLM to directly run Python, Triton, CUDA, or filesystem
+operations. Agents issue structured tool calls; the local runtime executes them and records
+the result in a claim ledger, tool-event ledger, transcript, and final verdict.
 
 ---
 
