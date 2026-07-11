@@ -1,4 +1,4 @@
-"""On-disk dataset of generated kernel artifacts for the debate layer.
+"""On-disk dataset of generated kernel artifacts for the agentic verifier.
 
 Each entry is a self-contained directory:
     dataset/<name>/
@@ -86,11 +86,10 @@ def load_entry(
     *,
     dataset_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Materialize a dataset entry as a debate-compatible artifact dict.
+    """Materialize a dataset entry as an artifact dict.
 
     The returned dict mirrors what verifier.generator.generate_kernel returns,
-    so debate.run_debate accepts it unchanged. `session_dir` points at the
-    dataset entry directory itself — author agent's seed_*.py glob will work.
+    `session_dir` points at the dataset entry directory itself so local tools can import and inspect artifacts.
     """
     base = (dataset_dir or DEFAULT_DATASET_DIR) / name
     if not base.exists() or not (base / "meta.json").exists():

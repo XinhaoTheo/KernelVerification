@@ -1,492 +1,581 @@
-# Kernel Verification via Debate
+# Kernel Verification via Agentic Debate
 
-A system that **decides whether to trust** a Triton kernel written by an LLM (a kernel is a
-hand-written GPU routine; Triton is the language used to write it). First, it re-checks the kernel's correctness by writing several test code scripts with LLM to test the standard and robustness, then several LLM agents will act as different roles, starting the deabte argue about it. The goal is to catch kernels that "pass the test they shipped with" but are actually wrong, or were rigged to pass. We hope to simulate the human thinking and reasoning when we trying to figure out whether this kernel is correct or not. In this way, we attempt to prove its performance in real application.
+A system that **decides whether to trust** a Triton kernel written by an LLM. A kernel is a
+hand-written GPU routine; Triton is the language used to write it. The hard part is not only
+running a test. The hard part is deciding **what should be tested**, whether a suspicious case
+is actually inside the benchmark contract, and whether the evidence is strong enough to reject
+the kernel.
+
+Earlier versions of this project tried to solve that with a fixed verification pipeline:
+standard recheck, robustness batteries, operator classifiers, precision rechecks, and a
+predefined checklist of cases. That direction was too rigid. It made the program decide what
+to investigate before seeing the kernel's actual implementation. The current system is built
+around a different rule:
+
+```text
+Agents decide what to investigate.
+Skills constrain how investigation should be done.
+Tools provide executable local capabilities.
+Runtime executes tools locally and records evidence.
+```
+
+The verifier is now an **agentic kernel verification system**. LLM agents discuss the kernel,
+raise concrete bug hypotheses, call local tools to inspect files or run probes, update a claim
+ledger, and let a judge give a final verdict based on accumulated evidence.
 
 ---
 
 ## 1. Why this exists
 
-Tools like meta's KernelAgent generate Triton kernels automatically, but they **write the
-test and take it at the same time** — the same LLM writes the kernel, writes the test, and
-often quietly switches the numbers from fp32 to the lower-precision bf16 (which makes the
-"close enough" check looser) while testing only one input shape. The result is a kernel that
-passes its own test but may still:
+Tools like Meta's KernelAgent can generate Triton kernels automatically, but the generated
+kernel usually ships with a narrow test. Often the same LLM writes the kernel, writes the test,
+and only checks one or two friendly input shapes. A kernel can pass that test and still be
+wrong in ways that matter:
 
-- **Read the wrong memory** when the input is not laid out back-to-back in memory (a
-  "non-contiguous" tensor, e.g. the result of slicing with `[::2]`) because it never calls
-  `.contiguous()`
-- **Drop part of a large input** (a fixed `BLOCK_SIZE` that can't cover a long row)
-- **Give numerically shaky answers** (e.g. a softmax that skips the usual max-subtraction
-  trick, or sums things in an order that loses precision)
-- **Cheat** (hard-code the one shape the test uses, pretend to use Triton while really calling
-  PyTorch, or delay the computation to slip past the comparison)
+- **Read the wrong memory** because it assumes contiguous layout or ignores tensor strides.
+- **Drop part of an input** because the implementation silently caps a block size or row size.
+- **Use the wrong numerical path** and only look correct under loose bf16/fp16 tolerances.
+- **Handle the benchmark case but fail an important nearby case**, where the hard question is
+  whether that nearby case is actually in scope.
+- **Cheat or overfit** by hard-coding the shape, dtype, or input pattern used by the original
+  test.
 
-This system is the **independent, skeptical reviewer**. It takes a kernel from any source
-(KernelAgent is just the current generator and can be swapped out) and returns a trust
-decision backed by evidence.
+This project is the independent reviewer. It takes a saved kernel artifact, lets agents reason
+about where it might fail, runs local experiments through controlled tools, and returns a
+trust decision backed by a transcript, claim ledger, tool events, probe outputs, and a final
+verdict.
+
+The key difference from a normal test harness is that the verifier is **evidence-driven, not
+checklist-driven**. It does not assume every kernel should be tested with the same fixed
+battery. The Skeptic proposes concrete hypotheses, the Experimenter runs targeted probes, and
+the Judge decides only from recorded evidence.
 
 ---
 
 ## 2. Overall Pipeline
-The pipeline has one **offline** step in order to generate the test kernel (so called dataset) and two **online** steps
-(run each time you verify a kernel):
 
-- **Step 1 — Build the dataset (`kv-build`)**: run KernelAgent to turn a problem (we use KernelBench dataset) into a
-  kernel and save it under `dataset/`. Run once and the saved data stays.
-- **Step 2 — Re-check (`kv-run`)**: load a saved kernel and run our **own** correctness test —
-  a `standard` case (core correctness) plus a **shape/layout battery** (non-contiguous, odd
-  size, empty).
-- **Step 2b — Precision recheck (`kv-run` / `kv-precision-recheck`)**: a **classifier** first
-  decides the operator's class, then a **value-distribution battery** is fed through the
-  judge that fits that class (allclose / value-gap / abstain). This catches kernels that are
-  right on standard inputs but wrong on the operator's class-specific stress distribution — see
-  [Step 2b](#step-2b--precision-recheck-operator-class-routed) and
-  [precision_verification.md](precision_verification.md).
-- **Step 3 — Debate (`kv-run`)**: several LLM agents argue about the kernel to find the bugs a
-  fixed checklist can not anticipate. The debate is now **class-aware** (it receives the
-  operator class) and the **judge is the final arbiter** over every signal.
+The project has one **offline** step to create or collect kernel artifacts, and one **online**
+agentic verification step that runs each time we want a trust decision.
 
-> **Key design point**: the verification does **not** rely on the generator giving us a test.
-> Hand it a generator that only produces `kernel.py` and Steps 2–3 still work — because the
-> re-check writes its own test.
+- **Step 1 — Build or load the dataset (`kv-build`)**: run KernelAgent on a KernelBench
+  problem and save the resulting artifact under `dataset/<entry>/`. This step is only about
+  producing a self-contained folder with `problem.txt`, `kernel.py`, `test.py`, seeds, and
+  metadata. The verifier does not treat the generator's test as the final authority.
+- **Step 2 — Agentic verification (`kv-agentic-run`)**: load the artifact, let several LLM
+  agents discuss it, allow only structured tool calls for local execution, and record every
+  important conclusion as a claim with evidence.
 
-The whole online pipeline at a glance — re-check **and** precision check feed a class-aware
-debate; the judge arbitrates a single final verdict (`trust / reject / needs_more_evidence /
-needs_downstream`):
+The online workflow looks like this:
 
-![Overview: online verification](docs/kvoverall.drawio.svg)
+```text
+dataset/<entry>/
+  problem.txt
+  kernel.py
+  test.py
+  meta.json
+  seed_*.py
+        |
+        v
+AgenticOrchestrator
+        |
+        v
+Describer -> Skeptic -> Experimenter -> Skeptic review -> Judge
+        |
+        v
+Tool registry -> local tools -> ToolEvent ledger
+        |
+        v
+Claim ledger + transcript + verdict.json
+```
 
 ### Step 1 — Build the dataset
 
-![Step 1: dataset generation](docs/step1.drawio.svg)
-
-<sub>Source (editable): [docs/step1.drawio.pdf](docs/step1.drawio.pdf)</sub>
-
-A **KernelBench problem** (a PyTorch reference made of three parts: a `Model`, a `get_inputs`
-that supplies the runtime data, and a `get_init_inputs` that supplies the model's setup
-arguments) is handed to `verifier/generator.py`, which drives `KernelAgent.TritonKernelAgent`
-in three phases:
-
-1. **The LLM writes a test** for the problem.
-2. **The LLM writes N first-draft kernels** ("seeds") — N independent attempts.
-3. **N workers refine the kernels in parallel**: each worker writes its kernel, runs the test
-   in a separate process, feeds any errors back to the LLM, and tries again, up to
-   `max_rounds`. If any worker's kernel passes, that's a success; if all fail, we still keep
-   the closest attempt and its error.
-
-The result is saved by `verifier/dataset.py : save_entry()` into one self-contained folder,
-`dataset/<name>/`, holding:
+A KernelBench problem is a PyTorch reference task. KernelAgent turns it into a Triton kernel
+attempt and a test. `kv-build` stores the result as a self-contained dataset entry:
 
 | File | Contents |
 |---|---|
-| `problem.txt` | the original problem |
-| `kernel.py` | the final kernel (the closest attempt, if none passed) |
-| `test.py` | KernelAgent's own test (kept for reference only — **we don't rely on it**) |
-| `seed_*.py` | the first-draft kernels |
-| `meta.json` | `{ passed, status, rounds, ... }` |
-| `error.txt` | the error output, if it failed |
+| `problem.txt` | the original problem or benchmark contract |
+| `kernel.py` | the final generated kernel, or the closest failed attempt |
+| `test.py` | KernelAgent's generated test, kept as benchmark/context evidence |
+| `seed_*.py` | first-draft kernels, if available |
+| `meta.json` | status, pass/fail metadata, generation rounds, and related fields |
+| `error.txt` | error output when generation failed |
 
-Because everything is **copied in** (not just pointed to), the folder can be committed to
-git, moved to another machine, or written by hand — deleting KernelAgent's working directory
-will not break it.
+The important property is that `dataset/<entry>/` is portable. The verifier can run from this
+folder without depending on the original KernelAgent working directory.
 
-### Step 2 — Re-check
+### Step 2 — Agentic verification
 
-![Step 2: recheck](docs/step2.drawio.svg)
+`kv-agentic-run` starts by loading the artifact and then runs agents through the JSON tool-call
+protocol.
 
-<sub>Source (editable): [docs/step2.drawio.pdf](docs/step2.drawio.pdf)</sub>
+#### 2.1 Describer
 
-This is where we **stop trusting the generator** (`verifier/recheck.py`). `kv-run` first
-calls `get_recheck(entry)` (it reuses a saved result if there is one; `--force-recheck` re-runs
-it):
+The Describer explains what the kernel appears to implement. It may inspect `problem.txt`,
+`kernel.py`, or other artifact files, but it does not record claims or make a verdict. The
+goal is to give the later agents a clear implementation summary without turning that summary
+into evidence by itself.
 
-1. **`generate_test()`** — the LLM reads `problem.txt` + `kernel.py` and writes a test.
-   Because it can see the kernel's source, it knows how to call it (this sidesteps the problem
-   that every kernel takes different arguments). The prompt makes it run a **fixed set of
-   stress tests**:
+#### 2.2 Skeptic
 
-   | Case | What it checks |
-   |---|---|
-   | `standard` | the problem's normal inputs → **core correctness** |
-   | `noncontig_stride2` | a non-back-to-back input via `[::2]` / `[:, ::2]` |
-   | `noncontig_transpose` | a transposed view (`.t()`) |
-   | `odd_size` | a size that's off by one (not a round number) |
-   | `zero-element tensor` (`empty`) | an empty input |
+The Skeptic raises concrete, testable bug hypotheses. A good claim names:
 
-   Cases 2–5 are the **robustness** checks. Every case is decided by the one shared comparison
-   function `compare_outputs()` and prints `CASE <name>: PASS/FAIL/SKIP`.
+- the condition being tested;
+- the possible wrong behavior;
+- why the source or benchmark context makes the hypothesis plausible;
+- whether the case is `in_scope`, `out_of_scope`, or `unknown`.
 
-2. **`run_test()`** — a temporary folder gets `kernel.py` + `kverify_compare.py` (the shared
-   comparison function) + the test; a **separate process** runs it. (Starting a fresh process
-   avoids a known CUDA crash that happens when a process that already touched the GPU forks.)
-   Inside, the same `inputs` go through both the **kernel** and **PyTorch**, and
-   `compare_outputs()` decides each case. The process's exit code reflects **only** the
-   `standard` case.
+The Skeptic is limited to a small number of claims per turn. This is intentional. We want the
+highest-risk hypotheses first, not a long speculative checklist.
 
-3. **Read the `CASE` lines** and split the result into two levels:
-   - **`standard` FAIL → `status=failed` → a real bug.**
-   - **a stress-test FAIL → noted under `robustness`, but NOT an automatic rejection** (those
-     unusual inputs may be outside what the kernel was meant to handle).
+#### 2.3 Experimenter
 
-The re-check result is then **merged into the saved record** — `passed`, `status`,
-`test_code`, `error` — overwriting whatever the original generator claimed.
+The Experimenter is the only role that should run probes. It does not directly execute Python
+or CUDA by itself. It calls local tools such as `run_claim_probe`, then consumes the returned
+tool event with `finalize_probe_evidence` or the lower-level evidence tools. Probe code runs
+locally in the runtime, not inside the LLM.
 
-### Step 2b — Precision recheck (operator-class-routed)
+For each important claim, the Experimenter should either confirm it, rebut it, or mark it
+inconclusive with evidence.
 
-![Step 2b: precision recheck](docs/step2b_precision.svg)
+#### 2.4 Skeptic review and Judge
 
-The Step 2 battery above varies the input's **shape/layout**, but always on standard
-`torch.randn` **values**. That misses a whole class of bugs where the *judging rule itself*
-fails: `compare_outputs`' "small numerical error ⇒ correct" only holds for some operators.
-Step 2b (`verifier/precision_recheck.py`, run on every `kv-run` or standalone via
-`kv-precision-recheck`) closes that gap with **"先判算子哪类 → 选裁判 → 判不了就 abstain"**.
-Full analysis: [precision_verification.md](precision_verification.md).
+After evidence is added, the Skeptic must review the latest ledger. If there are no more
+high-quality in-scope claims, it records `record_no_new_claims`.
 
-**1. Classify the operator** (`verifier/classify.py`). It runs only the *trusted reference*
-(`problem.txt`'s PyTorch) on small CPU inputs — no kernel, no GPU — and labels it on two axes:
+The Judge then reads the run state, claims, evidence, tool events, and skeptic review. It can
+either:
 
-`op_class ∈ { preserve, compress, select }` — **what the math does to errors**:
+- call `record_verdict` with `trust`, `reject`, or `needs_more_evidence`; or
+- call `request_more_debate` when more investigation is needed and debate budget remains.
 
-| `op_class` | Examples | What makes it special | Can we trust numerical error? |
-|---|---|---|---|
-| **preserve** | matmul, add/mul, sum | magnitude-preserving; an error of size δ shows up as ~δ in the output | **Yes** — error is a faithful proxy |
-| **compress** | softmax, ReLU/GELU/SiLU | squashes small/tail values toward 0, so tail errors are **invisible** on standard inputs | No — has blind regions |
-| **select** | sort, top-k, argmax | output is a set of **indices**; `\|cand − ref\|` is undefined | No — there is no numerical distance |
-
-`precision ∈ { normal, low_bit }` — **the number format of the output**:
-
-| `precision` | Means | Consequence |
-|---|---|---|
-| **normal** | fp32 / bf16 / fp16 output | numerical comparison is usable |
-| **low_bit** | fp8 / fp4 / int4 output | sub-resolution (tail) errors round to **exactly 0** — *no* tolerance or input can recover them |
-
-**2. Feed a class-appropriate adversarial distribution** (the "送分" standard `randn` is exactly
-what hides these bugs). There are **two** distributions, each aimed at one class's blind spot:
-
-| Distribution | What it is | Targets | Exposes |
-|---|---|---|---|
-| **concentrated** | the true top-k "winners" all clustered in one region/block (think attention sinks / recent tokens) | **select** | per-block-quota / "winners are spread" assumptions that silently drop important keys |
-| **heavy-tail** | one peak + a heavy band of comparable values just below it, so the tail carries real aggregate mass | **compress** | tail-truncation / cheap-tail-exp that assumes "the tail is negligible" |
-
-**3. Route to the judge that fits the class** (`verifier/compare.py : judge()`):
-
-| Judge | Used for | How it decides |
-|---|---|---|
-| **J1 · allclose** | compress | dtype-tiered numerical tolerance (`compare_outputs`), but on the adversarial distribution |
-| **J2 · value-gap** | select | weights a dropped key by how much better it is than the worst kept key — **not** raw index recall (which punishes harmless tie-swaps) |
-| **abstain** | low_bit | refuses to decide numerically and routes to a downstream / task-level check |
-| *(skipped)* | preserve | no compression/selection blind spot — Step 2's shape/layout battery already covers it |
-
-The result is a **`precision_recheck` verdict ∈ { match, mismatch, abstain, skipped }**, recorded
-in `meta.json["precision_recheck"]`. A `mismatch` is an empirically-measured, class-specific
-defect; `abstain` means the numbers genuinely cannot decide.
-
-#### The red-team test set (`dataset/_advprec_*`)
-
-To prove the precision axis actually works, the dataset carries hand-written `_advprec_*`
-entries covering every cell of the `op_class × precision × {correct, buggy}` matrix — both
-**positives** (a buggy kernel that must be caught) and **negatives** (a correct kernel that must
-NOT be flagged). `tests/test_advprec_regression.py` drives them all through `precision_recheck`
-and asserts each verdict.
-
-| Kind | Entries | Verdict | What it checks |
-|---|---|---|---|
-| **catch** (select) | `topk_boundary`, `topk_subsample` | `mismatch` | a buggy top-k is caught — two different bug mechanisms |
-| **catch** (compress) | `softmax_tail`, `softmax_countcap` | `mismatch` | a buggy softmax is caught — two different bug mechanisms |
-| **control** | `topk_correct`, `softmax_correct` | `match` | a correct kernel is NOT false-alarmed |
-| **control** (preserve) | `matmul_correct` | `skipped` | a preserve op is correctly skipped (no blind spot) |
-| **abstain** (low-bit) | `softmax_fp8_tail`, `softmax_fp8_correct`, `matmul_fp8` | `abstain` | low-bit honestly abstains — for buggy AND correct kernels |
-| **boundary** | `matmul_bug` | `skipped` | a preserve bug is left to the standard recheck, not the precision axis |
-| **research target** | `magicpig_attn` | *(demo)* | a real sparse-attention method — exposes a verifier gap (below) |
-
-Per entry:
-
-- **`topk_boundary`** — an approximate top-k with a *per-block-quota* bug: recall ≈ 1.0 on
-  `torch.randn` but collapses (recall 0.38, value-gap ~7) when the winners concentrate in one
-  block. The distribution-dependent false accept. Caught by J2's value-gap.
-- **`topk_subsample`** — a second select bug, *different mechanism*: top-k over a strided
-  subsample, so winners off the stride are unreachable. Confirms the catch is not over-fit to
-  one bug.
-- **`softmax_tail`** — a softmax that *truncates the far tail*: error ~0 on `randn`, but on a
-  heavy-tail distribution the dropped mass is real (max error ~0.04). The compression-driven
-  false accept.
-- **`softmax_countcap`** — a second compress bug, *different mechanism*: keeps only the 32
-  largest exp terms and zeros the rest. Same lesson, different code.
-- **`topk_correct` / `softmax_correct`** — correct kernels; precision_recheck must return
-  `match` even on the adversarial distribution. False-alarm guards (the dataset needs negatives,
-  not just positives).
-- **`matmul_correct`** — a correct preserve op. Preserve has no compression/selection blind
-  spot, so the precision battery returns `skipped` and defers to the standard recheck.
-- **`matmul_bug`** — a genuinely wrong preserve op that still returns `skipped`: documents the
-  boundary that the precision axis does **not** overreach into preserve (the standard recheck
-  owns that).
-- **`softmax_fp8_tail` / `softmax_fp8_correct`** — a buggy and a correct FP8 softmax. Both
-  `abstain`: in low-bit the tail error rounds to exactly 0, so numerical comparison can't decide
-  — and that is true regardless of whether the kernel is right. Abstain is **format-driven**.
-- **`matmul_fp8`** — a correct FP8 matmul; `abstain` too, showing the low-bit rule applies across
-  op-classes, not just compress.
-- **`magicpig_attn`** — a MagicPIG-style ([arXiv 2410.16179](https://arxiv.org/abs/2410.16179))
-  LSH-sampling sparse attention: hash the keys into buckets, attend only to the query's bucket,
-  softmax over that subset (the §4 *select + compress* stacked target). Judged on the downstream
-  output `o` (`tests/advprec_magicpig_demo.py`): on concentrated scores `o` matches dense
-  (~0.000), on uniform scores it is off by ~0.19 — the paper's stated failure mode. **It exposes
-  a real gap**: `classify` labels attention `preserve` (the gain probe on a flat softmax sees a
-  magnitude-preserving average), so `precision_recheck` *skips* it and would miss the bug. Marked
-  `demo_only`; catching this class needs composite-op classification + multi-input adversarial
-  inputs + downstream-output judging (see [precision_verification.md](precision_verification.md)
-  §7 #8).
-
-### Step 3 — Multi-agent debate
-
-![Step 3: multi-agent debate](docs/kv3.drawio.svg)
-
-The debate (`verifier/debate.py` + `agents/`) handles the **logic bugs that a fixed checklist
-can not list out in advance** (e.g. accumulation errors that only show up across blocks,
-cheating, subtle precision issues). It is **class-aware**: it receives the `op_class` /
-`precision` from Step 2b's classifier, so the skeptic attacks the right blind spot (tail for
-compress, concentrated/tied distributions for select) and the judge applies class-appropriate
-severity. **Each round** runs three agents in order:
-
-- **Author** — *the describer*: explains what the kernel does and how it changed from its
-  first drafts (`seed_*.py`). Describe only, **no opinions**.
-- **Skeptic** — *the challenger*: looks for possible bugs and files each one as a **specific,
-  testable claim** (e.g. `{"type":"non_contiguous_bug","statement":"for x[::2] the kernel
-  reads the wrong memory"}`). Each claim goes onto a running **list of claims**, marked
-  `not verified` (open).
-- **Verifier** — *the tester*: for each open claim, writes a **small test script**, runs it on
-  the GPU against both the kernel and PyTorch, uses `compare_outputs` to judge, and marks the
-  claim **confirmed / rebutted / inconclusive** (saving the script and the measured numbers as
-  evidence).
-
-**When to stop**: if the skeptic raises **new claims**, the loop runs again; when it has **no
-new claim**, the rounds stop.
-
-**The precision finding enters here too** (`design B`): Step 2b's `precision_recheck` verdict
-is pre-filed into the claims ledger as an already-resolved claim (`confirmed` on a `mismatch`,
-`inconclusive` on an `abstain`), so the judge weighs that empirical evidence instead of
-re-discovering it.
-
-Then the **Judge** — *the final arbiter* — reads the whole ledger **plus** the standard-recheck
-status and robustness summary, and gives the verdict: **`trust` / `reject` /
-`needs_more_evidence` / `needs_downstream`**, plus which claims were decisive. It makes the call
-that counting can't (is a confirmed difference expected bf16 rounding or a real bug?), can
-**overrule** the verifier, and is the final say on the precision finding too. A thin
-deterministic floor (`verifier/verdict.py`) only enforces one fact: a kernel wrong on the
-problem's *normal* inputs can never be `trust`.
-
-The full record is written to `dataset/<entry>/debate_result.json`:
-`{ recheck_status, precision_recheck, verdict, final, claims (the full list), history }`.
+The Judge participates at the end of each debate round once claim coverage and skeptic review
+requirements are satisfied.
 
 ---
 
 ## 3. Component deep dive
 
-### 3.1 `verifier/generator.py` — drives KernelAgent
+### 3.1 `verifier/build_dataset.py` and `verifier/dataset.py` — dataset artifacts
 
-Turns `KernelAgent.TritonKernelAgent.generate_kernel()` into one consistent record:
-`{kernel_code, test_code, passed, status, rounds, error, session_dir, raw}`.
+`kv-build` drives KernelAgent and saves the output through `verifier/dataset.py`. The dataset
+layer deliberately stays simple: it loads and saves artifact files. It does not decide whether
+a kernel is correct.
 
-On success `kernel_code` is the final kernel; on failure it is the closest attempt (from
-whichever worker got furthest) plus the error. (We patched KernelAgent for this — it
-originally returned nothing on failure; see [roadmap.md](roadmap.md).)
+`test.py` is still useful, but its meaning has changed. It is no longer "the test we blindly
+trust." It is evidence about the benchmark domain. For example, if `test.py` fixes
+`features = 64`, then `features = 0` should not become a decisive in-scope rejection unless
+another benchmark artifact explicitly requires that case.
 
-### 3.2 `verifier/dataset.py` — a self-contained dataset
+### 3.2 `verifier/agentic/orchestrator.py` — the workflow driver
 
-`save_entry()` **copies** each run's files into `dataset/<name>/` (instead of saving a path),
-so deleting KernelAgent's working directory doesn't break the dataset — it can be committed,
-moved between machines, or written by hand for testing. `load_entry()` reads it back into a
-record; `session_dir` points at the folder itself, which is where the Author later reads
-`seed_*.py` from.
+The orchestrator owns the verification loop. It:
 
-### 3.3 `verifier/recheck.py` — our own correctness check (the answer we trust)
+- initializes `RunState`;
+- loads the artifact through tools;
+- calls LLM agents;
+- exposes the tool schemas;
+- validates and executes tool calls;
+- records every turn and every tool result;
+- enforces loop budgets and convergence rules.
 
-`get_recheck()` runs `generate_test()` → `run_test()` → read the `CASE` lines, saving two
-levels in `meta.json["recheck"]`: `status` (from the `standard` case only — this is what
-decides "is it a real bug") and `robustness` (the stress-test cases, noted only).
+There are two loops:
 
-**Why a fixed set of stress tests**: previously only the debate's skeptic poked at unusual
-inputs, and only when it happened to think of them — so the same non-contiguous bug would be
-caught one run and missed the next. The fixed set runs the same checks every time, so the
-mechanical bugs (non-contiguous / odd size / empty) are never missed.
+- the **debate round loop**, where Describer and Skeptic can add or refine hypotheses;
+- the **claim coverage loop**, where Experimenter must gather evidence for open claims before
+  Judge can finalize.
 
-**What the two levels mean (deciding what's in scope)**: a kernel that fails on the problem's
-normal inputs is clearly broken (reject); one that only fails on unusual inputs like
-non-contiguous has a robustness gap — noted but not condemned, because those inputs may be
-outside what the kernel was meant to handle.
+The default full workflow is:
 
-### 3.4 `verifier/compare.py` — the one place that decides "is it correct"
+```text
+describer
+skeptic
+experimenter until open claims are covered
+skeptic review
+judge
+repeat if judge requests more debate
+```
 
-`compare_outputs(out, ref) → (matches, max_diff, detail)`. Both the re-check test and the
-verifier's test scripts **import it** (it's copied into the temporary folder as
-`kverify_compare.py` at run time), so the "is it correct" decision lives in exactly one place
-and is fixed:
+### 3.3 `verifier/agentic/protocol.py` — JSON tool-call protocol
 
-- **The allowed error margin depends on the number format**: fp32 uses 1e-3, fp16/bf16 use
-  1e-2/2e-2 (the LLM is not allowed to make up its own number like `1e-4`)
-- **`equal_nan=True`**: if the kernel and the reference both produce NaN at the same spot,
-  that counts as a match (a softmax of all-`-inf` gives NaN in PyTorch too — not the kernel's
-  fault)
-- **A bug means "differs from the reference"**, never "produced a NaN or a big number" on its
-  own
+Agents must return exactly one JSON object:
 
-> This file was added after a bug: early on, the LLM wrote the comparison inside each test
-> script, picked error margins arbitrarily, and mishandled NaN, causing false alarms.
-> Pulling the comparison into one fixed function made the re-check and the verifier use the
-> same standard.
+```json
+{
+  "message": "I will inspect the kernel source and record one concrete claim.",
+  "tool_calls": [
+    {
+      "tool": "inspect_kernel_source",
+      "args": {"entry": "elem_add", "start_line": 1, "end_line": 120}
+    }
+  ]
+}
+```
 
-### 3.5 `verifier/debate.py` + `agents/` — the multi-agent debate
+The LLM is responsible for deciding what to investigate. The local runtime is responsible for
+actually reading files, running probes, updating ledgers, and writing artifacts. This is the
+main separation between reasoning and execution.
 
-Four roles:
+### 3.4 `verifier/agentic/agents/` — the four roles
 
-- **`agents/author.py` (the describer)**: reads the final kernel + `seed_*.py` and plainly
-  describes what the kernel does and what changed from first draft to final. The prompt bans
-  opinions — describe only. Says `NO_NEW_OBSERVATIONS.` when there's nothing to add.
-- **`agents/skeptic.py` (the challenger)**: hunts for possible bugs or cheating, but must
-  write each one as a **specific, testable claim** (with the exact input to test). Says
-  `NO_NEW_CONCERNS.` + an empty list when out of new concerns.
-- **`agents/verifier.py` (the tester)**: goes through the open claims, **writes one test
-  script per claim** that builds the input, runs the kernel and the reference, judges with
-  `compare_outputs`, and writes the result back onto the claim (confirmed / rebutted /
-  inconclusive) along with the evidence (the script + the measured numbers).
-- **`agents/judge.py` (the final decision-maker)**: doesn't speak each round — it **reads the
-  whole list of claims once at the end** and gives the verdict. It makes the severity call
-  that counting can't: is a confirmed difference of 256 a real bug or expected bf16 rounding?
-  The judge can **overrule** the verifier. Outputs
-  `{verdict, confidence, decisive_claims, claim_notes, reason}`.
+Current roles:
 
-- **`agents/parsing.py`**: reliably pulls the JSON out of an LLM reply (prefers the ```json
-  block, ignores ```python code blocks that show up in the prose).
-- **`agents/types.py`**: the `Turn` / `Claim` type definitions.
+| Agent | Responsibility |
+|---|---|
+| `describer.py` | explain implementation and visible assumptions |
+| `skeptic.py` | raise concrete bug claims and later review whether new claims remain |
+| `experimenter.py` | run local probes and attach evidence to claims |
+| `judge.py` | decide final verdict or request more debate |
 
-**When to stop**: each round runs author → skeptic → verifier; it stops when the skeptic
-raises no new claim. The judge isn't part of the rounds; it decides once after the loop ends.
+The prompts include skill files from `verifier/agentic/skills/`. These skills are markdown
+workflow instructions. They are not executable code. They tell the agents how to behave:
+prefer evidence, avoid vague claims, respect scope, design probes carefully, and converge only
+after the latest evidence has been reviewed.
 
-### 3.6 `verifier/llm_client.py` — the LLM calls
+### 3.5 `verifier/agentic/tools/` — local capabilities
 
-A single wrapper around Anthropic's API. Two notes: (1) the API keeps no memory between calls,
-so we hold the message list ourselves; (2) the messages are arranged so the prompt cache can
-be reused across rounds for the same agent (the kernel and test go in the part of the prompt
-that gets cached). `oneshot()` is the one-off call (no conversation history) that the re-check
-and verifier use to write their test scripts.
+Tools are deliberately low-level. They provide capabilities, not fixed verification policy.
 
-### 3.7 `verifier/gpu_pick.py` — picking a free GPU automatically
+| Tool | Purpose |
+|---|---|
+| `load_artifact` | load one dataset entry into run state |
+| `inspect_problem` | read `problem.txt` |
+| `inspect_kernel_source` | read numbered slices of `kernel.py` |
+| `list_artifact_files` | list files inside the artifact |
+| `read_artifact_file` | read a controlled file inside the artifact |
+| `record_claim` | add one concrete claim to the ledger |
+| `read_claim_ledger` | read current claims and evidence |
+| `record_no_new_claims` | let Skeptic state that latest evidence was reviewed |
+| `append_evidence` | attach evidence manually to a claim |
+| `update_claim_status` | set `open`, `confirmed`, `rebutted`, or `inconclusive` |
+| `run_python_probe` | run agent-written Python locally and capture outputs |
+| `run_claim_probe` | run a probe tied to one claim and return an evidence draft |
+| `finalize_probe_evidence` | consume a `run_claim_probe` result and update the claim |
+| `retrieve_experiment_history` | read prior probe history |
+| `request_more_debate` | let Judge ask for another round |
+| `record_verdict` | write the final verdict |
 
-Before running, it ranks GPUs using `nvidia-smi` and then actually tries a small allocation as
-a test (a card can look "free" in `nvidia-smi` but still refuse to run on a shared machine),
-then points `CUDA_VISIBLE_DEVICES` at the first one that works.
+The tool registry validates required arguments and records both successful and failed tool
+events. Tool failures are part of the transcript and can themselves become evidence.
+
+### 3.6 `verifier/agentic/ledger.py` and `state.py` — claims and evidence
+
+The claim ledger is the center of the system. A claim is not just text. It has a status,
+scope, rationale, and evidence list.
+
+Claim statuses:
+
+| Status | Meaning |
+|---|---|
+| `open` | proposed but not yet decided |
+| `confirmed` | evidence supports the bug claim |
+| `rebutted` | evidence argues against the exact claim |
+| `inconclusive` | evidence was collected but does not decide it |
+
+Claim scopes:
+
+| Scope | Meaning |
+|---|---|
+| `in_scope` | required by the benchmark/test input contract |
+| `out_of_scope` | useful generalization note, but not a benchmark correctness failure |
+| `unknown` | not enough contract evidence to make it decisive |
+
+Evidence records where a conclusion came from. It may point to source inspection, a runtime
+probe, a tool error, or agent analysis. The important rule is that final claims should be
+backed by something recorded in the ledger or tool events.
+
+### 3.7 `verifier/agentic/tools/execution.py` — local probes
+
+Probe tools write the generated Python to `probes/<tool_event_id>_probe.py`, run it locally,
+capture stdout/stderr, parse the last stdout line as JSON when possible, and save the result
+under the run directory.
+
+The LLM can decide what code to run, but it cannot directly access the filesystem or GPU
+outside the tool interface. This keeps the agentic layer auditable: every probe has source
+code, captured output, and a corresponding `ToolEvent`.
+
+### 3.8 `verifier/agentic/persistence.py` — run records and transcript
+
+Each run is persisted to disk. The most useful human file is `transcript.md`, which shows the
+timeline, agent messages, tool calls, output summaries, claims, evidence, and verdict.
+
+The structured files are for replay and programmatic analysis. The transcript is for debugging
+why a verdict happened.
+
+### 3.9 `verifier/agentic/llm.py` — provider adapter
+
+The agentic verifier can call Anthropic or OpenAI/ChatGPT providers. The CLI accepts
+`--provider anthropic`, `--provider openai`, or `--provider chatgpt`. The default comes from
+`.env`.
 
 ---
 
 ## 4. The signals and the final verdict
 
-`kv-run` produces four separate signals, then combines them into one answer:
+The current system produces one main signal: the **claim ledger**. Everything else feeds into
+that ledger.
 
-| Signal | Comes from | Means | Values |
-|---|---|---|---|
-| `recheck.status` | the `standard` case | **Core correctness**: right on the problem's normal inputs? | `passed` / `failed` |
-| `recheck.robustness` | the shape/layout battery | **Robustness**: handles non-contiguous / odd size / empty? | per-case `pass/fail/skip` |
-| `precision_recheck.verdict` | classifier + class-routed judge on the adversarial distribution | **Precision review**: right on the operator's class-specific stress distribution? | `match` / `mismatch` / `abstain` / `skipped` |
-| `debate.verdict` | author/skeptic/verifier/judge | **Logic review**: bugs or cheating a fixed checklist can't anticipate | `trust` / `reject` / `needs_more_evidence` / `needs_downstream` |
+| Signal | Comes from | Means |
+|---|---|---|
+| `history` | agent turns | what each agent said and requested |
+| `tool_events` | local tool calls | what was actually read, executed, or mutated |
+| `claims` | Skeptic + ledger tools | the hypotheses under investigation |
+| `evidence` | Experimenter + tools | source/probe support for each claim |
+| `skeptic_review` | `record_no_new_claims` | Skeptic reviewed latest evidence and found no new high-quality claims |
+| `verdict` | Judge | final trust decision |
 
-These no longer float separately. The **judge is the final arbiter** — it sees the recheck
-status, robustness, and the precision finding (pre-filed into its ledger), and issues the
-verdict. `verifier/verdict.py` then applies one deterministic **floor** on top: a kernel that
-failed the `standard` case can never be `trust`. The combined answer is the `final` field:
+Verdict values:
 
-| `final` | Meaning |
+| Verdict | Meaning |
 |---|---|
-| `trust` | no real defect stands |
-| `reject` | a genuine defect (standard failure, a confirmed precision/logic bug) |
-| `needs_more_evidence` | real concerns remain only untested |
-| `needs_downstream` | numerical comparison structurally can't decide (low-bit) — route to a task-level check |
+| `trust` | no confirmed in-scope correctness failure remains |
+| `reject` | at least one confirmed in-scope correctness failure is decisive |
+| `needs_more_evidence` | important in-scope claims remain unresolved |
+
+`record_verdict` has a deterministic guard for reject: a reject verdict can only use decisive
+claims that are `confirmed`, `in_scope`, and backed by scope evidence from the benchmark/test
+input domain. A claim about a useful but out-of-contract stress case can be recorded, tested,
+and discussed, but it should not reject a benchmark kernel by itself.
+
+This scope rule is intentionally simple. The system does not try to build a smart static
+contract parser. The LLM reads the artifact and explains scope; the tool layer only prevents
+the most obvious unsafe reject.
 
 ---
 
 ## 5. Repository layout
 
-```
+```text
 kernel_verification/
-├── KernelAgent/        # the generator we build on (meta-pytorch/KernelAgent), patched, copied in
-├── KernelBench/        # the problem set (ScalingIntelligence/KernelBench), copied in
-├── verifier/           # main package
-│   ├── generator.py    # drives KernelAgent
-│   ├── dataset.py      # save_entry / load_entry / iter_entries
-│   ├── recheck.py      # our own re-check + the shape/layout battery (kv-recheck)
-│   ├── classify.py     # operator-class router: op_class + precision (Step 2b)
-│   ├── precision_recheck.py # class-routed judge on adversarial distributions (kv-precision-recheck)
-│   ├── compare.py      # compare_outputs (J1) + judge() router (J1/J2/abstain)
-│   ├── verdict.py      # the thin standard-correctness floor over the judge
-│   ├── debate.py       # the debate loop run_debate (class-aware, seeds precision claim)
-│   ├── llm_client.py   # Anthropic calls + prompt cache
-│   ├── gpu_pick.py     # auto-pick a usable GPU
-│   ├── build_dataset.py# build the dataset offline (kv-build)
-│   └── run.py          # run the online verification (kv-run)
-├── agents/             # the four roles + helpers (skeptic/judge are class-aware)
-│   ├── author.py  skeptic.py  verifier.py  judge.py
-│   ├── parsing.py      # pull JSON out of replies
-│   └── types.py        # Turn / Claim
-├── dataset/            # generated kernels + their results (can be committed)
-│   ├── <name>/{problem.txt, kernel.py, test.py, seed_*.py,
-│   │           meta.json, recheck_test.py, debate_result.json, ...}
-│   └── _advprec_*/     # hand-written red-team entries (precision-axis yardsticks)
-├── docs/               # diagrams (.svg shown in README)
-│   ├── kvoverall.drawio.svg   # the whole online pipeline (current)
-│   ├── step1.drawio.svg       # build the dataset
-│   ├── step2.drawio.svg       # re-check (shape/layout battery)
-│   ├── step2b_precision.svg   # precision recheck (classify + class-routed judge)
-│   └── kv3.drawio.svg         # multi-agent debate (class-aware)
-├── tests/              # demos (advprec_*_demo.py) + assert regression (test_advprec_regression.py)
-├── precision_verification.md  # the precision-judgment axis: design + 4-class analysis + limits
-├── pyproject.toml      # uv project, torch cu128, KernelAgent path dependency
-└── roadmap.md          # notes on how the design evolved
+├── KernelAgent/              # kernel generator dependency
+├── KernelBench/              # benchmark/problem source dependency
+├── dataset/                  # saved kernel artifacts
+│   └── <entry>/
+│       ├── problem.txt
+│       ├── kernel.py
+│       ├── test.py
+│       ├── meta.json
+│       └── seed_*.py
+├── verifier/
+│   ├── build_dataset.py      # kv-build
+│   ├── dataset.py            # artifact load/save helpers
+│   ├── gpu_pick.py           # optional GPU selection helper
+│   ├── agentic_run.py        # kv-agentic-run CLI
+│   └── agentic/
+│       ├── orchestrator.py   # agent loop, claim coverage, convergence
+│       ├── protocol.py       # JSON response parsing
+│       ├── state.py          # RunState, Turn, ToolEvent, Claim, Evidence
+│       ├── ledger.py         # claim/evidence mutation rules
+│       ├── persistence.py    # run.json, transcript.md, replay loading
+│       ├── llm.py            # Anthropic/OpenAI provider adapter
+│       ├── agents/
+│       │   ├── describer.py
+│       │   ├── skeptic.py
+│       │   ├── experimenter.py
+│       │   └── judge.py
+│       ├── tools/
+│       │   ├── artifacts.py
+│       │   ├── claims.py
+│       │   ├── execution.py
+│       │   ├── history.py
+│       │   ├── registry.py
+│       │   └── verdict.py
+│       └── skills/
+│           ├── kernel-verification.md
+│           ├── evidence-driven-review.md
+│           ├── claim-lifecycle.md
+│           ├── experiment-design.md
+│           ├── adversarial-precision.md
+│           ├── metric-selection.md
+│           ├── scope-policy.md
+│           └── convergence.md
+├── tests/                    # unit tests for protocol, tools, workflow, persistence
+├── agentic_roadmap.md        # design roadmap for the refactor
+├── agentic_optimization_plan.md
+├── README-original.md        # backup of the previous README before this rewrite
+├── README.md
+└── pyproject.toml
 ```
+
+The old fixed verification modules and root-level debate agents are no longer the primary
+system. New verification should route through `verifier/agentic/` and `kv-agentic-run`.
 
 ---
 
 ## 6. CLI reference
 
-```bash
-# Step 1 — build the dataset (expensive/slow/needs GPU, run once)
-uv run kv-build --curated              # build 10 hand-picked KernelBench problems
-uv run kv-build --problem elem_add     # build one built-in problem
-uv run kv-build --curated --list       # preview only: show what would be built
+### 6.1 Setup
 
-# Step 2 only — our own re-check (no debate)
-uv run kv-recheck                       # run everything not yet re-checked
-uv run kv-recheck elem_add              # re-run one (forced)
-uv run kv-recheck --list                # show each entry's re-check result
+Copy `.env.example` to `.env` and set only the keys you need:
 
-# Step 2b only — precision recheck (classify + class-routed judge, no debate)
-uv run kv-precision-recheck             # run all: classify + adversarial-distribution judge
-uv run kv-precision-recheck _advprec_topk_boundary   # one entry
-uv run kv-precision-recheck --list      # show each entry's op_class / precision / verdict
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
 
-# Steps 2 + 2b + 3 — full verification (re-check → precision → debate → final verdict)
-uv run kv-run elem_add                  # run one
-uv run kv-run elem_add --verbose        # watch everything: the re-check test, each agent turn, each test script
-uv run kv-run elem_add --force-recheck  # redo the re-check test first, then run
-uv run kv-run --list                    # list the entries you can run
+AGENTIC_PROVIDER=openai        # anthropic | openai | chatgpt
+AGENTIC_MODEL=gpt-5            # or another model supported by the provider
+AGENTIC_MAX_ROUNDS=4
 ```
 
-After a run, see `dataset/<entry>/debate_result.json` for the full record.
+KernelAgent generation can use its own settings in `.env`, but the verifier does not need
+KernelAgent settings when it is only verifying existing `dataset/` entries.
+
+### 6.2 Build dataset entries
+
+```bash
+uv run kv-build --list
+uv run kv-build --problem elem_add
+```
+
+This creates or refreshes `dataset/<entry>/`.
+
+### 6.3 Dry-run the tool protocol
+
+```bash
+uv run kv-agentic-run elem_add --dry-run
+uv run kv-agentic-run --all --dry-run
+```
+
+Dry-run does not call an LLM. It is useful for checking artifact loading and persistence.
+
+### 6.4 Run one real agent
+
+```bash
+uv run kv-agentic-run elem_add \
+  --provider openai \
+  --model gpt-5 \
+  --agent skeptic \
+  --max-debate-rounds 1
+```
+
+This is mostly useful for prompt or protocol debugging.
+
+### 6.5 Run the full agentic verifier
+
+```bash
+uv run kv-agentic-run elem_add \
+  --provider openai \
+  --model gpt-5 \
+  --agents describer,skeptic,experimenter,judge \
+  --max-debate-rounds 5 \
+  --min-debate-rounds-before-judge 2 \
+  --max-claim-rounds 3 \
+  --max-claim-rounds-per-claim 3 \
+  --tool-budget 150 \
+  --max-tokens 4096
+```
+
+This is the normal verification command. It gives the Skeptic at least one chance to review
+evidence before Judge finalizes.
+
+### 6.6 Run every dataset entry
+
+```bash
+uv run kv-agentic-run --all \
+  --dataset-dir dataset \
+  --run-dir /tmp/kv-agentic-full-run \
+  --provider openai \
+  --model gpt-5 \
+  --agents describer,skeptic,experimenter,judge \
+  --max-debate-rounds 5 \
+  --min-debate-rounds-before-judge 2 \
+  --max-claim-rounds 3 \
+  --max-claim-rounds-per-claim 3 \
+  --tool-budget 150 \
+  --max-tokens 4096
+```
+
+When `--all` is used with `--run-dir`, each entry gets a subdirectory:
+
+```text
+/tmp/kv-agentic-full-run/<entry>/
+```
+
+### 6.7 Continue from a saved run
+
+```bash
+uv run kv-agentic-run elem_add \
+  --replay-run /tmp/kv-agentic-full-run/elem_add/run.json \
+  --provider openai \
+  --agent judge
+```
+
+Replay loads the saved `RunState` and continues from it.
+
+### 6.8 Useful loop controls
+
+| Option | Meaning |
+|---|---|
+| `--max-debate-rounds` | maximum outer debate rounds |
+| `--min-debate-rounds-before-judge` | force at least this many debate rounds before Judge |
+| `--max-claim-rounds` | baseline Experimenter rounds allowed for claim coverage |
+| `--max-claim-rounds-per-claim` | dynamic Experimenter budget per uncovered claim |
+| `--tool-budget` | stop after this many tool calls |
+| `--stop-when-no-open-claims` | stop early when all claims are resolved |
+| `--no-require-claim-coverage` | allow Judge even when open claims lack evidence |
+
+---
+
+### 6.9 Run artifacts and debugging
+
+Each run directory contains:
+
+```text
+run.json
+claims.json
+tool_events.jsonl
+transcript.md
+verdict.json        # only when Judge records a verdict
+probes/             # only when probe tools are used
+```
+
+| File | Who uses it | Purpose |
+|---|---|---|
+| `transcript.md` | humans | easiest file to read when debugging; shows timeline, messages, tools, claims, verdict |
+| `run.json` | humans + code | complete structured state for replay and programmatic analysis |
+| `claims.json` | humans + code | claim ledger only |
+| `tool_events.jsonl` | humans + code | one tool execution per line, useful for batch analysis |
+| `verdict.json` | humans + code | final Judge verdict |
+| `probes/*_probe.py` | humans | exact Python probe code generated by the agent |
+| `probes/*_stdout.txt` | humans | captured stdout from the probe |
+| `probes/*_stderr.txt` | humans | captured stderr from the probe |
+| `probes/*_json_result.json` | humans + code | parsed JSON from the last stdout line, when available |
+
+The best debugging path is usually:
+
+1. Open `transcript.md`.
+2. Find the final `record_verdict` tool event.
+3. Check the decisive claims in the `Claims` section.
+4. Follow each claim's evidence to the corresponding `run_claim_probe` or source inspection
+   tool event.
+5. Open the probe files under `probes/` if the evidence summary is not enough.
 
 ---
 
 ## 7. Known limitations
 
-- **Parallelism in Multi-agents** currently the debate stage, all agents works in sequence, and this cannot be easily arranged in parallel. Since the skeptic needs the description from author and the verifier needs the claim from skeptic to verify. This is natuarrly in sequence pipeline which makes the parallelism hard to realize.
+- **The verifier still depends on LLM judgment.** The system records more evidence now, but
+  the choice of hypotheses and interpretation of scope still come from agents. This is by
+  design; the project is an agentic verifier, not a fixed static analyzer.
 
-- **Lack good evaluation** Currently still thinking how to evaluate the performance and effectiveness of our pipeline
+- **Scope is conservative but not fully formal.** The system distinguishes benchmark-domain
+  failures from generalization failures, but it does not parse every possible input contract
+  into a formal spec. A reject verdict is guarded against obvious out-of-scope claims, but
+  nuanced scope still depends on the agents reading `problem.txt`, `test.py`, and metadata.
 
-- **The debate verdict still varies between runs**: the fixed stress tests made the
-  mechanical bugs (non-contiguous, etc.) repeatable, but inside the debate the skeptic still
-  comes up with claims randomly, so coverage of logic bugs still changes from run to run.
-  
-- **The stress-test cases are still written by the LLM**: the checklist is fixed, but how each
-  case is actually built is still generated by the LLM, so there's some variation. Removing it
-  entirely would need a pure-Python harness — which runs into the "how do you call any kernel
-  generically" problem.
-  
-- **The three results aren't combined**: `recheck.status` / `robustness` / `debate.verdict`
-  are produced separately; how to turn them into one final answer is undecided.
+- **Probe quality varies.** Experimenter-generated probes are saved and auditable, but the
+  first probe may not be the best probe. The workflow allows more debate rounds so agents can
+  critique and improve the evidence.
+
+- **Runtime cost can be high.** Full dataset verification calls LLM APIs many times and may
+  run GPU probes. Use `--tool-budget`, smaller debate budgets, or single-entry runs while
+  debugging.
+
+- **`decisive_claims` is currently shared across verdict types.** For `reject`, it means the
+  confirmed in-scope claims that caused rejection. For `trust`, it often means the claims whose
+  rebuttal was decisive. That is usable today, but the naming could be clearer in a later
+  schema revision.
+
+- **This README intentionally has no diagrams.** The old diagrams described the removed fixed
+  pipeline and should not be treated as documentation for the current agentic system.

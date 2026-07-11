@@ -1,6 +1,6 @@
 """CLI: generate kernels for a list of problems and save them as dataset entries.
 
-Run once (or whenever you want fresh kernels). After that, verifier.run reads
+Run once (or whenever you want fresh kernels). After that, kv-agentic-run reads
 from the dataset offline — no KernelAgent calls, no $$$, no GPU contention.
 
 Sources of problems:
