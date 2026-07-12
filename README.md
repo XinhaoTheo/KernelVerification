@@ -1,13 +1,6 @@
-# Kernel Verification via Agent Debate
+# Kernel Verification via Multi-Agent Debate
 
-A system that **decides whether to trust** a Triton kernel written by an LLM. A kernel is a
-hand-written GPU routine; Triton is the language used to write it. Several LLM agents take
-different roles and debate the kernel: one describes what the implementation does, one raises
-concrete bug hypotheses, one runs local experiments, and one judges the accumulated evidence.
-The goal is to catch kernels that "pass the test they shipped with" but are actually wrong,
-overfit, or not supported by enough evidence. We want to simulate the way a careful human
-reviewer reasons about a kernel: read the code, form hypotheses, run targeted experiments,
-and only then decide whether the kernel should be trusted.
+A system that **decides whether to trust** a Triton kernel written by an LLM. A kernel is a hand-written GPU routine. Triton is the language used to write it. One agent is not enough for conclude the correctness of the kernel. We propose several LLM agents take different roles and debate the kernel: one describes what the implementation does, one raises concrete bug hypotheses, one runs local experiments, and one judges the accumulated evidence. The goal is to let different agent discuss about the correctness and eventually can have an agreement. We want to simulate the way a careful human reviewer reasons about a kernel: read the code, form hypotheses, run targeted experiments, and only then decide whether the kernel should be trusted.
 
 The current design keeps that debate evidence-driven:
 
@@ -18,36 +11,26 @@ Tools provide executable local capabilities.
 Runtime executes tools locally and records evidence.
 ```
 
-The verifier does not ask the LLM to directly run Python, Triton, CUDA, or filesystem
-operations. Agents issue structured tool calls; the local runtime executes them and records
-the result in a claim ledger, tool-event ledger, transcript, and final verdict.
+The verifier does not ask the LLM to directly run Python, Triton, CUDA, or filesystem operations. Agents issue structured tool calls. the local runtime executes them and records the result in a claim ledger, tool-event ledger, transcript, and final verdict.
 
 ---
 
 ## 1. Why this exists
 
-Tools like Meta's KernelAgent can generate Triton kernels automatically, but the generated
-kernel usually ships with a narrow test. Often the same LLM writes the kernel, writes the test,
-and only checks one or two friendly input shapes. A kernel can pass that test and still be
+Tools like Meta's KernelAgent can generate Triton kernels automatically, but the generated kernel usually ships with a narrow test. Often the same LLM writes the kernel, writes the test, and only checks one or two friendly input shapes. A kernel can pass that test and still be
 wrong in ways that matter:
 
-- **Read the wrong memory** because it assumes contiguous layout or ignores tensor strides.
-- **Drop part of an input** because the implementation silently caps a block size or row size.
-- **Use the wrong numerical path** and only look correct under loose bf16/fp16 tolerances.
-- **Handle the benchmark case but fail an important nearby case**, where the hard question is
-  whether that nearby case is actually in scope.
-- **Cheat or overfit** by hard-coding the shape, dtype, or input pattern used by the original
-  test.
+- **A single allclose test is not a reliable correctness test.** For matmul-like kernels, output error often tracks real error. For softmax, activations, top-k, and low-bit kernels, the same numeric tolerance can falsely accept bad kernels or falsely reject good ones.
 
-This project is the independent reviewer. It takes a saved kernel artifact, lets agents reason
-about where it might fail, runs local experiments through controlled tools, and returns a
-trust decision backed by a transcript, claim ledger, tool events, probe outputs, and a final
-verdict.
+- **Softmax and activations can hide errors.** Tail logits, negative ReLU inputs, and saturated GELU/SiLU regions can be computed incorrectly while the final output barely changes, so standard random tests may pass.
 
-The key difference from a normal test harness is that the verifier is **evidence-driven, not
-checklist-driven**. It does not assume every kernel should be tested with the same fixed
-battery. The Skeptic proposes concrete hypotheses, the Experimenter runs targeted probes, and
-the Judge decides only from recorded evidence.
+- **Selection operators need different metrics.** `topk`, `sort`, and sparse-attention selection are about which values are selected. Index recall, value error, and downstream output can disagree, especially around ties or cutoff boundaries.
+
+- **Low-bit kernels break fixed tolerances.** FP8/FP4/INT4 can round meaningful differences to the same code, while correct low-bit outputs may still be far from FP32 references. One tolerance cannot separate correct lossy behavior from real bugs.
+
+This project is the independent reviewer. It takes a saved kernel artifact, lets agents reason about where it might fail, runs local experiments through controlled tools, and returns a trust decision backed by a transcript, claim ledger, tool events, probe outputs, and a final verdict.
+
+The key difference from a normal test harness is that the verifier is **evidence-driven, not checklist-driven**. The verifier must inspect the operator, choose the right stress distribution, pick the right metric, decide what is in scope, run targeted probes, and judge the evidence. Those choices depend on the kernel, so they should be made dynamically by agents, constrained by skills, and executed by local tools.
 
 ---
 
