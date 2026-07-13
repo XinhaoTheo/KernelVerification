@@ -1,23 +1,31 @@
 # Kernel Verification via Multi-Agent Debate
 
-A system that **decides whether to trust** a Triton kernel written by an LLM. A kernel is a hand-written GPU routine. Triton is the language used to write it. One agent is not enough for conclude the correctness of the kernel. We propose several LLM agents take different roles and debate the kernel: one describes what the implementation does, one raises concrete bug hypotheses, one runs local experiments, and one judges the accumulated evidence. The goal is to let different agent discuss about the correctness and eventually can have an agreement. We want to simulate the way a careful human reviewer reasons about a kernel: read the code, form hypotheses, run targeted experiments, and only then decide whether the kernel should be trusted.
+This system **decides whether to trust** a Triton kernel written by an LLM. A kernel is a
+handwritten GPU routine, and Triton is the language used to write it. One agent is not enough to
+decide whether a kernel is correct. The system gives several LLM agents different roles. One
+describes the implementation, one finds possible bugs, one runs local experiments, and one judges
+the collected evidence. The agents discuss the kernel and work toward an agreement. This follows
+the way a careful human reviewer works: read the code, identify possible problems, run focused
+experiments, and then decide whether the kernel should be trusted.
 
 The current design keeps that debate evidence-driven:
 
 ```text
 Agents decide what to investigate.
-Skills constrain how investigation should be done.
-Tools provide executable local capabilities.
+Skills set rules for the investigation.
+Tools provide local actions that can be executed.
 Runtime executes tools locally and records evidence.
 ```
 
-The verifier does not ask the LLM to directly run Python, Triton, CUDA, or filesystem operations. Agents issue structured tool calls. the local runtime executes them and records the result in a claim ledger, tool-event ledger, transcript, and final verdict.
+The verifier does not ask the LLM to directly run Python, Triton, CUDA, or filesystem operations.
+Agents send structured tool calls. The local runtime executes them and records the results in a
+claim ledger, tool-event ledger, transcript, and final verdict.
 
 ---
 
 ## 1. Why this exists
 
-Tools like Meta's KernelAgent can generate Triton kernels automatically, but the generated kernel usually ships with a narrow test. Often the same LLM writes the kernel, writes the test, and only checks one or two friendly input shapes. A kernel can pass that test and still be
+Tools like Meta's KernelAgent can generate Triton kernels automatically, but the generated kernel usually comes with only a narrow test. Often the same LLM writes the kernel, writes the test, and only checks one or two simple input shapes. A kernel can pass that test and still be
 wrong in ways that matter:
 
 - **A single allclose test is not a reliable correctness test.** For matmul-like kernels, output error often tracks real error. For softmax, activations, top-k, and low-bit kernels, the same numeric tolerance can falsely accept bad kernels or falsely reject good ones.
@@ -26,11 +34,11 @@ wrong in ways that matter:
 
 - **Selection operators need different metrics.** `topk`, `sort`, and sparse-attention selection are about which values are selected. Index recall, value error, and downstream output can disagree, especially around ties or cutoff boundaries.
 
-- **Low-bit kernels break fixed tolerances.** FP8/FP4/INT4 can round meaningful differences to the same code, while correct low-bit outputs may still be far from FP32 references. One tolerance cannot separate correct lossy behavior from real bugs.
+- **Low-bit kernels break fixed tolerances.** FP8/FP4/INT4 can round meaningful differences to the same code, while correct low-bit outputs may still be far from FP32 references. One tolerance cannot separate expected low-precision error from real bugs.
 
 This project is the independent reviewer. It takes a saved kernel artifact, lets agents reason about where it might fail, runs local experiments through controlled tools, and returns a trust decision backed by a transcript, claim ledger, tool events, probe outputs, and a final verdict.
 
-The key difference from a normal test harness is that the verifier is **evidence-driven, not checklist-driven**. The verifier must inspect the operator, choose the right stress distribution, pick the right metric, decide what is in scope, run targeted probes, and judge the evidence. Those choices depend on the kernel, so they should be made dynamically by agents, constrained by skills, and executed by local tools.
+The key difference from a normal test harness is that the verifier is **evidence-driven, not checklist-driven**. The verifier must inspect the operator, choose useful stress cases, pick the right metric, decide what is in scope, run targeted probes, and judge the evidence. Those choices depend on the kernel. Agents make them as the run proceeds, skills set the rules, and local tools perform the work.
 
 ---
 
@@ -39,6 +47,16 @@ The key difference from a normal test harness is that the verifier is **evidence
 The project has one **offline** step to create or collect kernel artifacts, and one **online**
 agentic verification step that runs each time we want a trust decision.
 
+The diagram below shows how those two steps connect to the verifier's runtime design.
+Skills guide how the agents investigate, agents send structured tool calls, and the
+Orchestrator owns the shared state while running tools and moving the debate forward.
+
+<p align="center">
+  <img src="assets/readme/overall_pipeline.drawio.svg" alt="Overall multi-agent kernel verification pipeline" width="100%">
+</p>
+
+<p align="center"><em>Figure 1. End-to-end kernel verification pipeline and agent runtime protocol.</em></p>
+
 - **Step 1 — Build or load the dataset (`kv-build`)**: run KernelAgent on a KernelBench
   problem and save the resulting artifact under `dataset/<entry>/`. This step is only about
   producing a self-contained folder with `problem.txt`, `kernel.py`, `test.py`, seeds, and
@@ -46,29 +64,6 @@ agentic verification step that runs each time we want a trust decision.
 - **Step 2 — Agentic verification (`kv-agentic-run`)**: load the artifact, let several LLM
   agents discuss it, allow only structured tool calls for local execution, and record every
   important conclusion as a claim with evidence.
-
-The online workflow looks like this:
-
-```text
-dataset/<entry>/
-  problem.txt
-  kernel.py
-  test.py
-  meta.json
-  seed_*.py
-        |
-        v
-AgenticOrchestrator
-        |
-        v
-Describer -> Skeptic -> Experimenter -> Skeptic review -> Judge
-        |
-        v
-Tool registry -> local tools -> ToolEvent ledger
-        |
-        v
-Claim ledger + transcript + verdict.json
-```
 
 ### Step 1 — Build the dataset
 
@@ -84,7 +79,7 @@ attempt and a test. `kv-build` stores the result as a self-contained dataset ent
 | `meta.json` | status, pass/fail metadata, generation rounds, and related fields |
 | `error.txt` | error output when generation failed |
 
-The important property is that `dataset/<entry>/` is portable. The verifier can run from this
+The important property is that `dataset/<entry>/` is self-contained. The verifier can run from this
 folder without depending on the original KernelAgent working directory.
 
 ### Step 2 — Agentic verification
@@ -101,20 +96,20 @@ into evidence by itself.
 
 #### 2.2 Skeptic
 
-The Skeptic raises concrete, testable bug hypotheses. A good claim names:
+The Skeptic raises concrete, testable claims about possible bugs. A good claim names:
 
-- the condition being tested;
-- the possible wrong behavior;
-- why the source or benchmark context makes the hypothesis plausible;
+- the condition being tested.
+- the possible wrong behavior.
+- why the source or benchmark context makes the claim likely.
 - whether the case is `in_scope`, `out_of_scope`, or `unknown`.
 
 The Skeptic is limited to a small number of claims per turn. This is intentional. We want the
-highest-risk hypotheses first, not a long speculative checklist.
+highest-risk claims first, not a long list of guesses.
 
 #### 2.3 Experimenter
 
 The Experimenter is the only role that should run probes. It does not directly execute Python
-or CUDA by itself. It calls local tools such as `run_claim_probe`, then consumes the returned
+or CUDA by itself. It calls local tools such as `run_claim_probe`, then reads the returned
 tool event with `finalize_probe_evidence` or the lower-level evidence tools. Probe code runs
 locally in the runtime, not inside the LLM.
 
@@ -129,7 +124,7 @@ high-quality in-scope claims, it records `record_no_new_claims`.
 The Judge then reads the run state, claims, evidence, tool events, and skeptic review. It can
 either:
 
-- call `record_verdict` with `trust`, `reject`, or `needs_more_evidence`; or
+- call `record_verdict` with `trust`, `reject`, or `needs_more_evidence`.
 - call `request_more_debate` when more investigation is needed and debate budget remains.
 
 The Judge participates at the end of each debate round once claim coverage and skeptic review
@@ -137,34 +132,45 @@ requirements are satisfied.
 
 ---
 
-## 3. Component deep dive
+## 3. Component details
 
 ### 3.1 `verifier/build_dataset.py` and `verifier/dataset.py` — dataset artifacts
 
 `kv-build` drives KernelAgent and saves the output through `verifier/dataset.py`. The dataset
-layer deliberately stays simple: it loads and saves artifact files. It does not decide whether
-a kernel is correct.
+layer only loads and saves artifact files. It does not decide whether a kernel is correct.
 
 `test.py` is still useful, but its meaning has changed. It is no longer "the test we blindly
 trust." It is evidence about the benchmark domain. For example, if `test.py` fixes
-`features = 64`, then `features = 0` should not become a decisive in-scope rejection unless
+`features = 64`, then `features = 0` should not become an in-scope reason to reject unless
 another benchmark artifact explicitly requires that case.
 
 ### 3.2 `verifier/agentic/orchestrator.py` — the workflow driver
 
 The orchestrator owns the verification loop. It:
 
-- initializes `RunState`;
-- loads the artifact through tools;
-- calls LLM agents;
-- exposes the tool schemas;
-- validates and executes tool calls;
-- records every turn and every tool result;
+- initializes `RunState`.
+- loads the artifact through tools.
+- calls LLM agents.
+- exposes the tool schemas.
+- validates and executes tool calls.
+- records every turn and every tool result.
 - enforces loop budgets and convergence rules.
+
+The Orchestrator therefore controls the workflow and owns the run state. The
+figure below expands the evidence path: an open claim leads to a targeted probe, the runtime
+records the raw tool result, and the Experimenter interprets that result before attaching it as
+evidence and updating the claim status. A raw observation is not treated as evidence until it is
+linked to a concrete claim.
+
+<p align="center">
+  <img src="assets/readme/Orchestrator.drawio.svg" alt="Orchestrator shared state and evidence loop" width="100%">
+</p>
+
+<p align="center"><em>Figure 2. Orchestrator responsibilities, shared run state, and the evidence loop.</em></p>
 
 There are two loops:
 
-- the **debate round loop**, where Describer and Skeptic can add or refine hypotheses;
+- the **debate round loop**, where Describer and Skeptic can add or refine claims.
 - the **claim coverage loop**, where Experimenter must gather evidence for open claims before
   Judge can finalize.
 
@@ -196,8 +202,8 @@ Agents must return exactly one JSON object:
 ```
 
 The LLM is responsible for deciding what to investigate. The local runtime is responsible for
-actually reading files, running probes, updating ledgers, and writing artifacts. This is the
-main separation between reasoning and execution.
+reading files, running probes, updating ledgers, and writing artifacts. This separates reasoning
+from execution.
 
 ### 3.4 `verifier/agentic/agents/` — the four roles
 
@@ -212,12 +218,12 @@ Current roles:
 
 The prompts include skill files from `verifier/agentic/skills/`. These skills are markdown
 workflow instructions. They are not executable code. They tell the agents how to behave:
-prefer evidence, avoid vague claims, respect scope, design probes carefully, and converge only
+prefer evidence, avoid unclear claims, respect scope, design probes carefully, and finish only
 after the latest evidence has been reviewed.
 
 ### 3.5 `verifier/agentic/tools/` — local capabilities
 
-Tools are deliberately low-level. They provide capabilities, not fixed verification policy.
+Tools are small and focused. They provide actions, not fixed verification policy.
 
 | Tool | Purpose |
 |---|---|
@@ -260,8 +266,8 @@ Claim scopes:
 | Scope | Meaning |
 |---|---|
 | `in_scope` | required by the benchmark/test input contract |
-| `out_of_scope` | useful generalization note, but not a benchmark correctness failure |
-| `unknown` | not enough contract evidence to make it decisive |
+| `out_of_scope` | useful note about unsupported inputs, but not a benchmark correctness failure |
+| `unknown` | not enough contract evidence to make a decision |
 
 Evidence records where a conclusion came from. It may point to source inspection, a runtime
 probe, a tool error, or agent analysis. The important rule is that final claims should be
@@ -274,15 +280,15 @@ capture stdout/stderr, parse the last stdout line as JSON when possible, and sav
 under the run directory.
 
 The LLM can decide what code to run, but it cannot directly access the filesystem or GPU
-outside the tool interface. This keeps the agentic layer auditable: every probe has source
+outside the tool interface. This makes every probe easy to review. Each probe has source
 code, captured output, and a corresponding `ToolEvent`.
 
 ### 3.8 `verifier/agentic/persistence.py` — run records and transcript
 
-Each run is persisted to disk. The most useful human file is `transcript.md`, which shows the
+Each run is saved to disk. The most useful human file is `transcript.md`, which shows the
 timeline, agent messages, tool calls, output summaries, claims, evidence, and verdict.
 
-The structured files are for replay and programmatic analysis. The transcript is for debugging
+The structured files are for replay and automated analysis. The transcript is for debugging
 why a verdict happened.
 
 ### 3.9 `verifier/agentic/llm.py` — provider adapter
@@ -301,8 +307,8 @@ that ledger.
 | Signal | Comes from | Means |
 |---|---|---|
 | `history` | agent turns | what each agent said and requested |
-| `tool_events` | local tool calls | what was actually read, executed, or mutated |
-| `claims` | Skeptic + ledger tools | the hypotheses under investigation |
+| `tool_events` | local tool calls | what was actually read, executed, or changed |
+| `claims` | Skeptic + ledger tools | the possible bugs under investigation |
 | `evidence` | Experimenter + tools | source/probe support for each claim |
 | `skeptic_review` | `record_no_new_claims` | Skeptic reviewed latest evidence and found no new high-quality claims |
 | `verdict` | Judge | final trust decision |
@@ -312,16 +318,16 @@ Verdict values:
 | Verdict | Meaning |
 |---|---|
 | `trust` | no confirmed in-scope correctness failure remains |
-| `reject` | at least one confirmed in-scope correctness failure is decisive |
+| `reject` | at least one confirmed in-scope correctness failure is strong enough to reject the kernel |
 | `needs_more_evidence` | important in-scope claims remain unresolved |
 
-`record_verdict` has a deterministic guard for reject: a reject verdict can only use decisive
+`record_verdict` has a fixed check for `reject`. A reject verdict can only use
 claims that are `confirmed`, `in_scope`, and backed by scope evidence from the benchmark/test
-input domain. A claim about a useful but out-of-contract stress case can be recorded, tested,
+input domain. A claim about a useful test case outside the contract can be recorded, tested,
 and discussed, but it should not reject a benchmark kernel by itself.
 
-This scope rule is intentionally simple. The system does not try to build a smart static
-contract parser. The LLM reads the artifact and explains scope; the tool layer only prevents
+This scope rule is simple by design. The system does not try to build a smart static
+contract parser. The LLM reads the artifact and explains scope. The tool layer only prevents
 the most obvious unsafe reject.
 
 ---
@@ -381,7 +387,7 @@ kernel_verification/
 ```
 
 The old fixed verification modules and root-level debate agents are no longer the primary
-system. New verification should route through `verifier/agentic/` and `kv-agentic-run`.
+system. New verification should use `verifier/agentic/` and `kv-agentic-run`.
 
 ---
 
@@ -419,7 +425,7 @@ uv run kv-agentic-run elem_add --dry-run
 uv run kv-agentic-run --all --dry-run
 ```
 
-Dry-run does not call an LLM. It is useful for checking artifact loading and persistence.
+Dry-run does not call an LLM. It is useful for checking artifact loading and saved run files.
 
 ### 6.4 Run one real agent
 
@@ -514,8 +520,8 @@ probes/             # only when probe tools are used
 
 | File | Who uses it | Purpose |
 |---|---|---|
-| `transcript.md` | humans | easiest file to read when debugging; shows timeline, messages, tools, claims, verdict |
-| `run.json` | humans + code | complete structured state for replay and programmatic analysis |
+| `transcript.md` | humans | easiest file to read when debugging, with the timeline, messages, tools, claims, and verdict |
+| `run.json` | humans + code | complete structured state for replay and automated analysis |
 | `claims.json` | humans + code | claim ledger only |
 | `tool_events.jsonl` | humans + code | one tool execution per line, useful for batch analysis |
 | `verdict.json` | humans + code | final Judge verdict |
@@ -528,8 +534,8 @@ The best debugging path is usually:
 
 1. Open `transcript.md`.
 2. Find the final `record_verdict` tool event.
-3. Check the decisive claims in the `Claims` section.
-4. Follow each claim's evidence to the corresponding `run_claim_probe` or source inspection
+3. Check the claims used for the verdict in the `Claims` section.
+4. Follow each claim's evidence to the matching `run_claim_probe` or source inspection
    tool event.
 5. Open the probe files under `probes/` if the evidence summary is not enough.
 
@@ -538,17 +544,17 @@ The best debugging path is usually:
 ## 7. Known limitations
 
 - **The verifier still depends on LLM judgment.** The system records more evidence now, but
-  the choice of hypotheses and interpretation of scope still come from agents. This is by
-  design; the project is an agentic verifier, not a fixed static analyzer.
+  the choice of possible bugs and interpretation of scope still come from agents. This is by
+  design. The project is an agentic verifier, not a fixed static analyzer.
 
-- **Scope is conservative but not fully formal.** The system distinguishes benchmark-domain
-  failures from generalization failures, but it does not parse every possible input contract
+- **Scope handling is careful but not fully formal.** The system separates benchmark failures
+  from failures on unsupported inputs, but it does not parse every possible input contract
   into a formal spec. A reject verdict is guarded against obvious out-of-scope claims, but
-  nuanced scope still depends on the agents reading `problem.txt`, `test.py`, and metadata.
+  harder scope cases still depend on the agents reading `problem.txt`, `test.py`, and metadata.
 
-- **Probe quality varies.** Experimenter-generated probes are saved and auditable, but the
+- **Probe quality varies.** Experimenter-generated probes are saved and easy to review, but the
   first probe may not be the best probe. The workflow allows more debate rounds so agents can
-  critique and improve the evidence.
+  review and improve the evidence.
 
 - **Runtime cost can be high.** Full dataset verification calls LLM APIs many times and may
   run GPU probes. Use `--tool-budget`, smaller debate budgets, or single-entry runs while
@@ -556,8 +562,5 @@ The best debugging path is usually:
 
 - **`decisive_claims` is currently shared across verdict types.** For `reject`, it means the
   confirmed in-scope claims that caused rejection. For `trust`, it often means the claims whose
-  rebuttal was decisive. That is usable today, but the naming could be clearer in a later
+  evidence ruled them out. That works today, but the naming could be clearer in a later
   schema revision.
-
-- **This README intentionally has no diagrams.** The old diagrams described the removed fixed
-  pipeline and should not be treated as documentation for the current agentic system.
