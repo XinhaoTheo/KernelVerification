@@ -216,12 +216,30 @@ Current roles:
 | `experimenter.py` | run local probes and attach evidence to claims |
 | `judge.py` | decide final verdict or request more debate |
 
-The prompts include skill files from `verifier/agentic/skills/`. These skills are markdown
-workflow instructions. They are not executable code. They tell the agents how to behave:
-prefer evidence, avoid unclear claims, respect scope, design probes carefully, and finish only
-after the latest evidence has been reviewed.
+Each role loads the skill files that match its work. Skills guide agent behavior, while tools
+perform the actual local actions.
 
-### 3.5 `verifier/agentic/tools/` — local capabilities
+### 3.5 `verifier/agentic/skills/` — verification guidance
+
+Skills are markdown instructions added to agent prompts. They are not executable code. They
+help agents follow the same verification rules while still choosing what to investigate for each
+kernel.
+
+| Skill | Read by | Used during |
+|---|---|---|
+| `kernel-verification.md` | Describer, Skeptic, Experimenter, Judge | the full evidence-driven workflow |
+| `evidence-driven-review.md` | Describer, Skeptic, Experimenter, Judge | source review, evidence review, and the final decision |
+| `claim-lifecycle.md` | Skeptic, Experimenter, Judge | claim creation, evidence updates, and claim review |
+| `experiment-design.md` | Experimenter | probe design and result collection |
+| `adversarial-precision.md` | Describer, Skeptic, Experimenter, Judge | kernels with softmax, activations, selection, or low precision |
+| `metric-selection.md` | Skeptic, Experimenter, Judge | choosing probe metrics and judging results |
+| `scope-policy.md` | Skeptic, Experimenter, Judge | deciding whether a claim belongs to the benchmark input domain |
+| `convergence.md` | Judge | deciding whether to finish or request another debate round |
+
+Skills provide guidance, not a fixed checklist. Agents decide which guidance matters for the
+current kernel, and the Orchestrator keeps the workflow within its budgets and state rules.
+
+### 3.6 `verifier/agentic/tools/` — local capabilities
 
 Tools are small and focused. They provide actions, not fixed verification policy.
 
@@ -237,8 +255,8 @@ Tools are small and focused. They provide actions, not fixed verification policy
 | `record_no_new_claims` | let Skeptic state that latest evidence was reviewed |
 | `append_evidence` | attach evidence manually to a claim |
 | `update_claim_status` | set `open`, `confirmed`, `rebutted`, or `inconclusive` |
-| `run_python_probe` | run agent-written Python locally and capture outputs |
-| `run_claim_probe` | run a probe tied to one claim and return an evidence draft |
+| `run_python_probe` | run exploratory or debugging Python that is not tied to a claim |
+| `run_claim_probe` | run Python for an existing claim and return an evidence draft linked to it |
 | `finalize_probe_evidence` | consume a `run_claim_probe` result and update the claim |
 | `retrieve_experiment_history` | read prior probe history |
 | `request_more_debate` | let Judge ask for another round |
@@ -247,7 +265,12 @@ Tools are small and focused. They provide actions, not fixed verification policy
 The tool registry validates required arguments and records both successful and failed tool
 events. Tool failures are part of the transcript and can themselves become evidence.
 
-### 3.6 `verifier/agentic/ledger.py` and `state.py` — claims and evidence
+`run_python_probe` and `run_claim_probe` use the same local Python runner. The first is for free
+exploration and debugging. The second requires a `claim_id` and returns an evidence draft linked
+to that claim. A later `finalize_probe_evidence` call attaches the result and updates the claim
+status.
+
+### 3.7 `verifier/agentic/ledger.py` and `state.py` — claims and evidence
 
 The claim ledger is the center of the system. A claim is not just text. It has a status,
 scope, rationale, and evidence list.
@@ -273,7 +296,7 @@ Evidence records where a conclusion came from. It may point to source inspection
 probe, a tool error, or agent analysis. The important rule is that final claims should be
 backed by something recorded in the ledger or tool events.
 
-### 3.7 `verifier/agentic/tools/execution.py` — local probes
+### 3.8 `verifier/agentic/tools/execution.py` — local probes
 
 Probe tools write the generated Python to `probes/<tool_event_id>_probe.py`, run it locally,
 capture stdout/stderr, parse the last stdout line as JSON when possible, and save the result
@@ -283,7 +306,7 @@ The LLM can decide what code to run, but it cannot directly access the filesyste
 outside the tool interface. This makes every probe easy to review. Each probe has source
 code, captured output, and a corresponding `ToolEvent`.
 
-### 3.8 `verifier/agentic/persistence.py` — run records and transcript
+### 3.9 `verifier/agentic/persistence.py` — run records and transcript
 
 Each run is saved to disk. The most useful human file is `transcript.md`, which shows the
 timeline, agent messages, tool calls, output summaries, claims, evidence, and verdict.
@@ -291,7 +314,7 @@ timeline, agent messages, tool calls, output summaries, claims, evidence, and ve
 The structured files are for replay and automated analysis. The transcript is for debugging
 why a verdict happened.
 
-### 3.9 `verifier/agentic/llm.py` — provider adapter
+### 3.10 `verifier/agentic/llm.py` — provider adapter
 
 The agentic verifier can call Anthropic or OpenAI/ChatGPT providers. The CLI accepts
 `--provider anthropic`, `--provider openai`, or `--provider chatgpt`. The default comes from
