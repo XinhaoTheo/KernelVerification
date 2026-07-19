@@ -163,6 +163,12 @@ def build_core_registry() -> ToolRegistry:
         update_claim_status,
         update_claim_status_schema,
     )
+    from .description import (
+        record_description_update,
+        record_description_update_schema,
+        request_description,
+        request_description_schema,
+    )
     from .execution import (
         finalize_probe_evidence,
         finalize_probe_evidence_schema,
@@ -209,6 +215,18 @@ def build_core_registry() -> ToolRegistry:
         description="Read a controlled text file path inside one dataset artifact directory.",
         input_schema=read_artifact_file_schema(),
         handler=read_artifact_file,
+    )
+    registry.register(
+        name="request_description",
+        description="Request a Describer clarification for source, contract, probe, or verdict ambiguity.",
+        input_schema=request_description_schema(),
+        handler=request_description,
+    )
+    registry.register(
+        name="record_description_update",
+        description="Record a structured Describer update to the shared description model.",
+        input_schema=record_description_update_schema(),
+        handler=record_description_update,
     )
     registry.register(
         name="record_claim",

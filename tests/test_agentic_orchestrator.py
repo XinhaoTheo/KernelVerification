@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 from verifier.agentic.orchestrator import AgenticOrchestrator, build_context_response
-from verifier.agentic.state import Role
+from verifier.agentic.protocol import AgentResponse
+from verifier.agentic.state import Role, ToolCall
 from verifier.agentic_run import main as agentic_main
 
 
@@ -59,6 +60,72 @@ def test_agentic_run_dry_run_cli_writes_run_json(tmp_path, capsys) -> None:
     assert "tools_executed: 3" in captured.out
     assert (run_dir / "run.json").exists()
     assert (run_dir / "tool_events.jsonl").exists()
+
+
+class StaticAgent:
+    def __init__(self, role, responses):
+        self.role = role
+        self.responses = list(responses)
+
+    def act(self, *, state, tools):
+        _ = state, tools
+        if not self.responses:
+            raise AssertionError(f"no response left for {self.role}")
+        return self.responses.pop(0)
+
+
+def test_orchestrator_inserts_describer_for_pending_description_task(tmp_path) -> None:
+    orchestrator = AgenticOrchestrator(run_dir=tmp_path / "run")
+    describer = StaticAgent(
+        Role.DESCRIBER,
+        [
+            AgentResponse(message="Initial description.", tool_calls=[]),
+            AgentResponse(
+                message="Clarify requested scope.",
+                tool_calls=[
+                    ToolCall(
+                        tool="record_description_update",
+                        args={
+                            "summary": "The benchmark contract needs test.py evidence.",
+                            "task_id": "d1",
+                            "scope_notes": ["Do not reject on cases absent from test.py/get_inputs."],
+                        },
+                    )
+                ],
+            ),
+        ],
+    )
+    skeptic = StaticAgent(
+        Role.SKEPTIC,
+        [
+            AgentResponse(
+                message="Need contract clarification before raising a claim.",
+                tool_calls=[
+                    ToolCall(
+                        tool="request_description",
+                        args={
+                            "reason_kind": "contract_scope",
+                            "question": "Is zero feature size benchmark-covered?",
+                            "source_refs": ["test.py"],
+                        },
+                    )
+                ],
+            )
+        ],
+    )
+
+    result = orchestrator.run_agents_sequential([describer, skeptic], max_rounds=1)
+
+    assert result.stop_reason == "max_rounds_exhausted"
+    assert [turn.role for turn in orchestrator.state.history] == [Role.DESCRIBER, Role.SKEPTIC, Role.DESCRIBER]
+    assert [event.tool for event in orchestrator.state.tool_events] == [
+        "request_description",
+        "record_description_update",
+    ]
+    assert orchestrator.state.description_tasks[0].status == "resolved"
+    assert orchestrator.state.description_model.scope_notes == [
+        "Do not reject on cases absent from test.py/get_inputs."
+    ]
 
 
 def _write_artifact(dataset_root: Path) -> None:

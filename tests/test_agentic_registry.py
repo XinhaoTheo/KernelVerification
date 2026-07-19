@@ -220,6 +220,55 @@ def test_claim_tools_append_evidence_update_status_and_read_ledger() -> None:
     ]
 
 
+def test_description_tools_record_model_and_resolve_task() -> None:
+    state = RunState()
+    registry = build_core_registry()
+
+    request = registry.call(
+        "request_description",
+        {
+            "reason_kind": "contract_scope",
+            "question": "Does the benchmark require feature size 0?",
+            "related_claims": ["c1"],
+            "source_refs": ["test.py"],
+        },
+        context=ToolContext(state=state, current_role=Role.JUDGE.value, current_turn=1),
+    )
+    update = registry.call(
+        "record_description_update",
+        {
+            "summary": "The benchmark fixes features to 64, so feature size 0 is not directly covered.",
+            "task_id": request["id"],
+            "contract_model": ["test.py fixes features=64."],
+            "kernel_model": ["The kernel specializes the feature dimension."],
+            "risk_map": ["Shape specialization is the relevant risk."],
+            "scope_notes": ["features==0 needs explicit scope evidence before reject."],
+            "open_questions": ["Are nearby feature sizes benchmark-covered?"],
+            "impact_on_claims": ["c1"],
+        },
+        context=ToolContext(state=state, current_role=Role.DESCRIBER.value, current_turn=2),
+    )
+
+    assert request["id"] == "d1"
+    assert state.description_tasks[0].status == "resolved"
+    assert state.description_tasks[0].response_summary.startswith("The benchmark fixes")
+    assert state.description_model.contract_model == ["test.py fixes features=64."]
+    assert update["update"]["task_ids"] == ["d1"]
+    assert [event.tool for event in state.tool_events] == ["request_description", "record_description_update"]
+
+
+def test_record_description_update_is_describer_only() -> None:
+    state = RunState()
+    registry = build_core_registry()
+
+    with pytest.raises(ValueError, match="only be called by the describer"):
+        registry.call(
+            "record_description_update",
+            {"summary": "Skeptic cannot mutate the description model."},
+            context=ToolContext(state=state, current_role=Role.SKEPTIC.value, current_turn=1),
+        )
+
+
 def test_request_more_debate_tool_records_judge_request() -> None:
     state = RunState()
     registry = build_core_registry()

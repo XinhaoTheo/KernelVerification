@@ -37,6 +37,11 @@ class ToolStatus(str, Enum):
     ERROR = "error"
 
 
+class DescriptionTaskStatus(str, Enum):
+    OPEN = "open"
+    RESOLVED = "resolved"
+
+
 class EvidenceKind(str, Enum):
     RUNTIME_PROBE = "runtime_probe"
     SOURCE_INSPECTION = "source_inspection"
@@ -114,6 +119,88 @@ class ArtifactRef:
 
 
 @dataclass(slots=True)
+class DescriptionModel:
+    contract_model: list[str] = field(default_factory=list)
+    kernel_model: list[str] = field(default_factory=list)
+    risk_map: list[str] = field(default_factory=list)
+    scope_notes: list[str] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "contract_model": list(self.contract_model),
+            "kernel_model": list(self.kernel_model),
+            "risk_map": list(self.risk_map),
+            "scope_notes": list(self.scope_notes),
+            "open_questions": list(self.open_questions),
+        }
+
+
+@dataclass(slots=True)
+class DescriptionTask:
+    id: str
+    reason_kind: str
+    question: str
+    requested_by: Role | str
+    status: DescriptionTaskStatus | str = DescriptionTaskStatus.OPEN
+    related_claims: list[str] = field(default_factory=list)
+    source_refs: list[str] = field(default_factory=list)
+    request_turn: int | None = None
+    response_summary: str = ""
+    created_at: str = field(default_factory=utc_now_iso)
+    resolved_at: str | None = None
+    resolved_turn: int | None = None
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "id": self.id,
+            "reason_kind": self.reason_kind,
+            "question": self.question,
+            "requested_by": _enum_value(self.requested_by),
+            "status": _enum_value(self.status),
+            "related_claims": list(self.related_claims),
+            "source_refs": list(self.source_refs),
+            "request_turn": self.request_turn,
+            "response_summary": self.response_summary,
+            "created_at": self.created_at,
+            "resolved_at": self.resolved_at,
+            "resolved_turn": self.resolved_turn,
+        }
+
+
+@dataclass(slots=True)
+class DescriptionUpdate:
+    id: str
+    summary: str
+    task_ids: list[str] = field(default_factory=list)
+    contract_model: list[str] = field(default_factory=list)
+    kernel_model: list[str] = field(default_factory=list)
+    risk_map: list[str] = field(default_factory=list)
+    scope_notes: list[str] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
+    impact_on_claims: list[str] = field(default_factory=list)
+    created_by: Role | str = Role.DESCRIBER
+    turn: int | None = None
+    created_at: str = field(default_factory=utc_now_iso)
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {
+            "id": self.id,
+            "summary": self.summary,
+            "task_ids": list(self.task_ids),
+            "contract_model": list(self.contract_model),
+            "kernel_model": list(self.kernel_model),
+            "risk_map": list(self.risk_map),
+            "scope_notes": list(self.scope_notes),
+            "open_questions": list(self.open_questions),
+            "impact_on_claims": list(self.impact_on_claims),
+            "created_by": _enum_value(self.created_by),
+            "turn": self.turn,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass(slots=True)
 class Evidence:
     id: str
     kind: EvidenceKind | str
@@ -172,6 +259,9 @@ class RunState:
     entry: str | None = None
     artifact: dict[str, JsonValue] | None = None
     skills: list[str] = field(default_factory=list)
+    description_model: DescriptionModel = field(default_factory=DescriptionModel)
+    description_tasks: list[DescriptionTask] = field(default_factory=list)
+    description_updates: list[DescriptionUpdate] = field(default_factory=list)
     history: list[Turn] = field(default_factory=list)
     tool_events: list[ToolEvent] = field(default_factory=list)
     claims: list[Claim] = field(default_factory=list)
@@ -184,6 +274,9 @@ class RunState:
             "entry": self.entry,
             "artifact": self.artifact,
             "skills": self.skills,
+            "description_model": self.description_model.to_dict(),
+            "description_tasks": [task.to_dict() for task in self.description_tasks],
+            "description_updates": [update.to_dict() for update in self.description_updates],
             "history": [turn.to_dict() for turn in self.history],
             "tool_events": [event.to_dict() for event in self.tool_events],
             "claims": [claim.to_dict() for claim in self.claims],

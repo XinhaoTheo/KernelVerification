@@ -13,6 +13,7 @@ evidence, and tool events.
 
 Rules:
 - Prefer evidence over rhetoric.
+- Read description_model before judging: contract_model and scope_notes constrain what can reject; kernel_model and risk_map explain what the evidence means.
 - Rationale is not evidence.
 - Before recording a verdict, check claim_coverage and skeptic_review in the run state.
 - If any open claim has no evidence, do not call record_verdict; ask for Experimenter coverage of those claim ids.
@@ -24,6 +25,7 @@ Rules:
 - If the PyTorch/reference result is also NaN, non-finite, raises the same error, or has unspecified tie-breaking, do not treat that evidence as a confirmed correctness failure.
 - Rebutted claims reduce concern for their exact statement only.
 - Inconclusive important in-scope claims should usually produce needs_more_evidence.
+- If source/contract interpretation blocks the verdict, call request_description instead of guessing.
 - If more critique or follow-up investigation is needed and debate budget remains, call request_more_debate instead of record_verdict.
 - Use record_verdict exactly once when you are ready to finalize.
 - Do not run probes or mutate claims.

@@ -8,7 +8,7 @@ from typing import Protocol, Sequence
 
 from .persistence import PersistedRun, persist_run
 from .protocol import AgentResponse
-from .state import ClaimStatus, Role, RunState, ToolCall, Turn
+from .state import ClaimStatus, DescriptionTaskStatus, Role, RunState, ToolCall, Turn
 from .tools.registry import ToolContext, ToolRegistry, build_core_registry
 
 _DEFAULT_SKILLS = [
@@ -82,6 +82,19 @@ class AgenticOrchestrator:
         response = agent.act(state=self.state, tools=self.registry.list_tools())
         return self.apply_agent_response(role=agent.role, response=response)
 
+    def run_pending_description_tasks(self, describer: Agent | None, *, max_turns: int = 3) -> list[dict]:
+        if describer is None or not self.has_open_description_tasks():
+            return []
+        outputs: list[dict] = []
+        for _ in range(max_turns):
+            if not self.has_open_description_tasks():
+                break
+            before = self._description_progress_signature()
+            outputs.extend(self.run_agent_once(describer))
+            if self._description_progress_signature() == before:
+                break
+        return outputs
+
     def run_agents_sequential(
         self,
         agents: Sequence[Agent],
@@ -98,6 +111,7 @@ class AgenticOrchestrator:
         start_tool_events = len(self.state.tool_events)
 
         skipped_judge_for_coverage = False
+        describer = _first_agent_with_role(agents, Role.DESCRIBER)
 
         for round_no in range(1, max_rounds + 1):
             for agent in agents:
@@ -113,6 +127,10 @@ class AgenticOrchestrator:
                 outputs.extend(self.run_agent_once(agent))
                 if stop_on_verdict and self.state.verdict is not None:
                     return LoopResult(outputs, round_no, "verdict_recorded")
+                if _role_value(agent.role) != Role.DESCRIBER.value:
+                    outputs.extend(self.run_pending_description_tasks(describer))
+                    if stop_on_verdict and self.state.verdict is not None:
+                        return LoopResult(outputs, round_no, "verdict_recorded")
                 if tool_budget is not None and len(self.state.tool_events) - start_tool_events >= tool_budget:
                     return LoopResult(outputs, round_no, "tool_budget_exhausted")
             if stop_when_no_open_claims and self.state.claims and not self.has_open_claims():
@@ -154,6 +172,7 @@ class AgenticOrchestrator:
         experimenter = _first_agent_with_role(agents, Role.EXPERIMENTER)
         judge = _first_agent_with_role(agents, Role.JUDGE)
         skeptic = _first_agent_with_role(agents, Role.SKEPTIC)
+        describer = _first_agent_with_role(agents, Role.DESCRIBER)
 
         for debate_round in range(1, max_debate_rounds + 1):
             for agent in debate_agents:
@@ -162,6 +181,10 @@ class AgenticOrchestrator:
                 outputs.extend(self.run_agent_once(agent))
                 if stop_on_verdict and self.state.verdict is not None:
                     return LoopResult(outputs, debate_round, "verdict_recorded")
+                if _role_value(agent.role) != Role.DESCRIBER.value:
+                    outputs.extend(self.run_pending_description_tasks(describer))
+                    if stop_on_verdict and self.state.verdict is not None:
+                        return LoopResult(outputs, debate_round, "verdict_recorded")
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
                     return LoopResult(outputs, debate_round, "tool_budget_exhausted")
 
@@ -180,8 +203,10 @@ class AgenticOrchestrator:
                     return LoopResult(outputs, debate_round, "tool_budget_exhausted")
 
                 before_claims = self._claim_progress_signature()
+                before_description = self._description_progress_signature()
                 before_tool_events = len(self.state.tool_events)
                 outputs.extend(self.run_agent_once(experimenter))
+                outputs.extend(self.run_pending_description_tasks(describer))
                 claim_rounds += 1
 
                 if stop_on_verdict and self.state.verdict is not None:
@@ -189,10 +214,11 @@ class AgenticOrchestrator:
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
                     return LoopResult(outputs, debate_round, "tool_budget_exhausted")
                 claims_changed = self._claim_progress_signature() != before_claims
+                description_changed = self._description_progress_signature() != before_description
                 probe_output_added = self._has_new_probe_event_since(before_tool_events)
                 if force_probe_consumption and not claims_changed:
                     return LoopResult(outputs, debate_round, "probe_output_unconsumed")
-                if not claims_changed and not probe_output_added:
+                if not claims_changed and not probe_output_added and not description_changed:
                     return LoopResult(outputs, debate_round, "claim_coverage_stalled")
 
             if judge is not None:
@@ -212,6 +238,9 @@ class AgenticOrchestrator:
                     return LoopResult(outputs, debate_round, "skeptic_review_required")
                 self.state.convergence = None
                 outputs.extend(self.run_agent_once(judge))
+                if stop_on_verdict and self.state.verdict is not None:
+                    return LoopResult(outputs, debate_round, "verdict_recorded")
+                outputs.extend(self.run_pending_description_tasks(describer))
                 if stop_on_verdict and self.state.verdict is not None:
                     return LoopResult(outputs, debate_round, "verdict_recorded")
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
@@ -255,11 +284,19 @@ class AgenticOrchestrator:
             "run_python_probe",
             "run_claim_probe",
             "finalize_probe_evidence",
+            "request_description",
+            "record_description_update",
         }
         return not any(event.tool in stale_tools for event in self.state.tool_events[reviewed_count:])
 
     def has_open_claims(self) -> bool:
         return any(_status_value(claim.status) == ClaimStatus.OPEN.value for claim in self.state.claims)
+
+    def has_open_description_tasks(self) -> bool:
+        return any(
+            _status_value(task.status) == DescriptionTaskStatus.OPEN.value
+            for task in self.state.description_tasks
+        )
 
     def has_uncovered_open_claims(self) -> bool:
         return bool(self.uncovered_open_claim_ids())
@@ -298,6 +335,19 @@ class AgenticOrchestrator:
         return tuple(
             (claim.id, _status_value(claim.status), len(claim.evidence))
             for claim in self.state.claims
+        )
+
+    def _description_progress_signature(self) -> tuple[tuple[tuple[str, str, str], ...], int, tuple[int, ...]]:
+        return (
+            tuple((task.id, _status_value(task.status), task.response_summary) for task in self.state.description_tasks),
+            len(self.state.description_updates),
+            (
+                len(self.state.description_model.contract_model),
+                len(self.state.description_model.kernel_model),
+                len(self.state.description_model.risk_map),
+                len(self.state.description_model.scope_notes),
+                len(self.state.description_model.open_questions),
+            ),
         )
 
     def _has_new_probe_event_since(self, start_index: int) -> bool:

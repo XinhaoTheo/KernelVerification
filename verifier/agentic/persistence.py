@@ -7,7 +7,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .state import ArtifactRef, Claim, Evidence, RunState, ToolCall, ToolEvent, Turn
+from .state import (
+    ArtifactRef,
+    Claim,
+    DescriptionModel,
+    DescriptionTask,
+    DescriptionUpdate,
+    Evidence,
+    RunState,
+    ToolCall,
+    ToolEvent,
+    Turn,
+)
 
 
 @dataclass(slots=True)
@@ -61,6 +72,9 @@ def load_run_state(run_json: Path) -> RunState:
         entry=raw.get("entry"),
         artifact=raw.get("artifact"),
         skills=list(raw.get("skills") or []),
+        description_model=_description_model_from_dict(raw.get("description_model") or {}),
+        description_tasks=[_description_task_from_dict(item) for item in raw.get("description_tasks") or []],
+        description_updates=[_description_update_from_dict(item) for item in raw.get("description_updates") or []],
         history=[_turn_from_dict(item) for item in raw.get("history") or []],
         tool_events=[_tool_event_from_dict(item) for item in raw.get("tool_events") or []],
         claims=[_claim_from_dict(item) for item in raw.get("claims") or []],
@@ -101,6 +115,50 @@ def _tool_event_from_dict(raw: dict[str, Any]) -> ToolEvent:
         args=dict(raw.get("args") or {}),
         status=str(raw.get("status", "")),
         output=dict(raw.get("output") or {}),
+        created_at=str(raw.get("created_at", "")),
+    )
+
+
+def _description_model_from_dict(raw: dict[str, Any]) -> DescriptionModel:
+    return DescriptionModel(
+        contract_model=[str(item) for item in raw.get("contract_model") or []],
+        kernel_model=[str(item) for item in raw.get("kernel_model") or []],
+        risk_map=[str(item) for item in raw.get("risk_map") or []],
+        scope_notes=[str(item) for item in raw.get("scope_notes") or []],
+        open_questions=[str(item) for item in raw.get("open_questions") or []],
+    )
+
+
+def _description_task_from_dict(raw: dict[str, Any]) -> DescriptionTask:
+    return DescriptionTask(
+        id=str(raw.get("id", "")),
+        reason_kind=str(raw.get("reason_kind", "other")),
+        question=str(raw.get("question", "")),
+        requested_by=str(raw.get("requested_by", "unknown")),
+        status=str(raw.get("status", "open")),
+        related_claims=[str(item) for item in raw.get("related_claims") or []],
+        source_refs=[str(item) for item in raw.get("source_refs") or []],
+        request_turn=raw.get("request_turn"),
+        response_summary=str(raw.get("response_summary", "")),
+        created_at=str(raw.get("created_at", "")),
+        resolved_at=raw.get("resolved_at"),
+        resolved_turn=raw.get("resolved_turn"),
+    )
+
+
+def _description_update_from_dict(raw: dict[str, Any]) -> DescriptionUpdate:
+    return DescriptionUpdate(
+        id=str(raw.get("id", "")),
+        summary=str(raw.get("summary", "")),
+        task_ids=[str(item) for item in raw.get("task_ids") or []],
+        contract_model=[str(item) for item in raw.get("contract_model") or []],
+        kernel_model=[str(item) for item in raw.get("kernel_model") or []],
+        risk_map=[str(item) for item in raw.get("risk_map") or []],
+        scope_notes=[str(item) for item in raw.get("scope_notes") or []],
+        open_questions=[str(item) for item in raw.get("open_questions") or []],
+        impact_on_claims=[str(item) for item in raw.get("impact_on_claims") or []],
+        created_by=str(raw.get("created_by", "describer")),
+        turn=raw.get("turn"),
         created_at=str(raw.get("created_at", "")),
     )
 
@@ -155,6 +213,10 @@ def _render_transcript(state: RunState, *, stop_reason: str | None = None) -> st
     lines.append(f"- Turns: {len(state.history)}")
     lines.append(f"- Tool events: {len(state.tool_events)}")
     lines.append(f"- Claims: {len(state.claims)}")
+    lines.append(f"- Description updates: {len(state.description_updates)}")
+    open_description_tasks = sum(1 for task in state.description_tasks if _value_text(task.status) == "open")
+    if state.description_tasks:
+        lines.append(f"- Description tasks: {open_description_tasks} open / {len(state.description_tasks)} total")
     if stop_reason:
         lines.append(f"- Stop reason: {_md_inline(stop_reason)}")
     if state.verdict:
@@ -167,6 +229,7 @@ def _render_transcript(state: RunState, *, stop_reason: str | None = None) -> st
     lines.append("")
 
     _append_timeline(lines, state)
+    _append_description_model(lines, state)
     _append_claims(lines, state)
     _append_tool_events(lines, state)
     _append_verdict(lines, state)
@@ -206,6 +269,31 @@ def _append_timeline(lines: list[str], state: RunState) -> None:
                 if summary:
                     lines.append("  Output summary:")
                     lines.extend(_indented_json(summary, indent="  ", limit=1200))
+        lines.append("")
+
+
+def _append_description_model(lines: list[str], state: RunState) -> None:
+    lines.append("## Description Model")
+    lines.append("")
+    model = state.description_model.to_dict()
+    if not any(model.values()) and not state.description_tasks and not state.description_updates:
+        lines.append("No description model recorded.")
+        lines.append("")
+        return
+    lines.extend(_indented_json(model, indent="", limit=_MAX_TRANSCRIPT_JSON))
+    lines.append("")
+    if state.description_tasks:
+        lines.append("Description tasks:")
+        for task in state.description_tasks:
+            lines.append(f"- `{task.id}` `{_value_text(task.status)}` {_md_inline(task.reason_kind)}: {task.question}")
+            if task.response_summary:
+                lines.append(f"  Response: {task.response_summary}")
+        lines.append("")
+    if state.description_updates:
+        lines.append("Recent description updates:")
+        for update in state.description_updates[-5:]:
+            task_ids = ", ".join(update.task_ids) if update.task_ids else "initial"
+            lines.append(f"- `{update.id}` tasks={_md_inline(task_ids)}: {update.summary}")
         lines.append("")
 
 
@@ -302,7 +390,29 @@ def _tool_output_summary(event: ToolEvent) -> dict[str, Any]:
         if key in output and output[key] is not None:
             summary[key] = output[key]
 
-    if event.tool == "record_claim":
+    if event.tool == "request_description":
+        summary = {
+            key: output.get(key)
+            for key in ("id", "status", "reason_kind", "question", "related_claims", "source_refs", "requested_by")
+            if key in output
+        }
+    elif event.tool == "record_description_update":
+        update_raw = output.get("update")
+        update: dict[str, Any] = update_raw if isinstance(update_raw, dict) else {}
+        resolved = output.get("resolved_tasks")
+        summary = {
+            "update_id": update.get("id"),
+            "summary": update.get("summary"),
+            "task_ids": update.get("task_ids"),
+            "contract_model": update.get("contract_model"),
+            "kernel_model": update.get("kernel_model"),
+            "risk_map": update.get("risk_map"),
+            "scope_notes": update.get("scope_notes"),
+            "open_questions": update.get("open_questions"),
+            "impact_on_claims": update.get("impact_on_claims"),
+            "resolved_tasks": resolved,
+        }
+    elif event.tool == "record_claim":
         summary = {
             key: output.get(key)
             for key in ("id", "status", "scope", "scope_rationale", "scope_evidence", "statement", "rationale")

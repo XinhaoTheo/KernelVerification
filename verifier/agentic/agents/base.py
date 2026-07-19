@@ -76,6 +76,13 @@ def _state_for_prompt(state: RunState) -> dict[str, JsonValue]:
         "entry": state.entry,
         "artifact": artifact,
         "history": [turn.to_dict() for turn in state.history[-6:]],
+        "description_model": state.description_model.to_dict(),
+        "open_description_tasks": [
+            task.to_dict()
+            for task in state.description_tasks
+            if _status_value(task.status) == "open"
+        ],
+        "recent_description_updates": [update.to_dict() for update in state.description_updates[-5:]],
         "tool_events": [event.to_dict() for event in state.tool_events[-12:]],
         "claims": [claim.to_dict() for claim in state.claims],
         "claim_coverage": _claim_coverage(state),

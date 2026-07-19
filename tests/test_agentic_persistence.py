@@ -71,6 +71,45 @@ def test_load_run_state_round_trip(tmp_path) -> None:
     assert "## Tool Events" in transcript
 
 
+def test_description_model_persists_and_renders_in_transcript(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    registry = build_core_registry()
+    state = RunState(entry="toy")
+    context = ToolContext(state=state, run_dir=run_dir)
+
+    request = registry.call(
+        "request_description",
+        {
+            "reason_kind": "source_interpretation",
+            "question": "Does the kernel hard-code the feature dimension?",
+            "source_refs": ["kernel.py:1-4"],
+        },
+        context=ToolContext(state=state, run_dir=run_dir, current_role=Role.SKEPTIC.value, current_turn=1),
+    )
+    registry.call(
+        "record_description_update",
+        {
+            "summary": "The source is too small to prove hard-coding, but the visible model is recorded.",
+            "task_id": request["id"],
+            "contract_model": ["The toy problem requires adding one to each element."],
+            "kernel_model": ["The kernel returns x + 1."],
+            "risk_map": ["Boundary behavior should be checked only if benchmark-covered."],
+            "scope_notes": ["Use test.py/get_inputs before marking a nearby case in scope."],
+        },
+        context=ToolContext(state=state, run_dir=run_dir, current_role=Role.DESCRIBER.value, current_turn=2),
+    )
+
+    persisted = AgenticOrchestrator(state=state, run_dir=run_dir).persist(stop_reason="description_test")
+    loaded = load_run_state(persisted.run_json)
+    transcript = persisted.transcript_md.read_text()
+
+    assert loaded.description_model.kernel_model == ["The kernel returns x + 1."]
+    assert loaded.description_tasks[0].status == "resolved"
+    assert loaded.description_updates[0].task_ids == ["d1"]
+    assert "## Description Model" in transcript
+    assert "The kernel returns x + 1" in transcript
+
+
 def test_retrieve_experiment_history_reads_persisted_probe_events(tmp_path) -> None:
     run_dir = tmp_path / "run"
     registry = build_core_registry()
