@@ -67,6 +67,12 @@ def record_verdict(context: ToolContext, args: dict) -> dict:
     reason = str(args["reason"]).strip()
     if not reason:
         raise ValueError("reason must be non-empty")
+    if verdict in {"trust", "reject"}:
+        open_claims = [claim.id for claim in context.state.claims if _claim_status(claim) == ClaimStatus.OPEN.value]
+        if open_claims:
+            raise ValueError(
+                f"{verdict} verdict requires all claims to be resolved; open claims: {', '.join(open_claims)}"
+            )
     _enforce_reject_scope_guard(context, verdict=verdict, decisive_claims=decisive_claims)
 
     context.state.verdict = {
@@ -131,3 +137,7 @@ def _has_benchmark_scope_evidence(context: ToolContext, scope_evidence: list[dic
         if entry_dir.exists() and not (entry_dir / "test.py").exists():
             return any("problem.txt" in source for source in sources)
     return False
+
+
+def _claim_status(claim) -> str:
+    return claim.status.value if isinstance(claim.status, ClaimStatus) else str(claim.status)

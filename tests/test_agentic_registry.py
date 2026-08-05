@@ -18,13 +18,28 @@ def test_core_registry_records_claim() -> None:
             "statement": "non-contiguous input may be read as contiguous",
             "rationale": "the source appears to use contiguous pointer arithmetic",
         },
-        context=ToolContext(state=state),
+        context=ToolContext(state=state, current_role=Role.SKEPTIC.value),
     )
 
     assert result["id"] == "c1"
     assert state.claims[0].statement == "non-contiguous input may be read as contiguous"
     assert state.tool_events[0].id == "t1"
     assert state.tool_events[0].status == ToolStatus.OK
+
+
+def test_registry_filters_tool_schemas_by_role() -> None:
+    registry = build_core_registry()
+
+    skeptic_tools = {tool["name"] for tool in registry.list_tools(role=Role.SKEPTIC)}
+    experimenter_tools = {tool["name"] for tool in registry.list_tools(role=Role.EXPERIMENTER)}
+    judge_tools = {tool["name"] for tool in registry.list_tools(role=Role.JUDGE)}
+
+    assert "record_claim" in skeptic_tools
+    assert "run_claim_probe" not in skeptic_tools
+    assert "run_claim_probe" in experimenter_tools
+    assert "record_verdict" not in experimenter_tools
+    assert "record_verdict" in judge_tools
+    assert "update_claim_status" not in judge_tools
 
 
 def test_skeptic_record_claim_is_limited_to_three_per_turn() -> None:
@@ -42,16 +57,18 @@ def test_skeptic_record_claim_is_limited_to_three_per_turn() -> None:
             context=context,
         )
 
-    with pytest.raises(ValueError, match="at most 3 claims per turn"):
-        registry.call(
-            "record_claim",
-            {
-                "statement": "claim 4",
-                "rationale": "test rationale",
-            },
-            context=context,
-        )
+    result = registry.call(
+        "record_claim",
+        {
+            "statement": "claim 4",
+            "rationale": "test rationale",
+        },
+        context=context,
+    )
 
+    assert result["ok"] is False
+    assert result["error_type"] == "LedgerError"
+    assert "at most 3 claims per turn" in result["message"]
     assert len(state.claims) == 3
     assert [event.status for event in state.tool_events] == [
         ToolStatus.OK,
@@ -99,22 +116,30 @@ def test_record_no_new_claims_is_skeptic_only() -> None:
     state = RunState()
     registry = build_core_registry()
 
-    with pytest.raises(ValueError, match="only be called by the skeptic"):
-        registry.call(
-            "record_no_new_claims",
-            {
-                "reason": "Judge cannot assert skeptic review.",
-                "reviewed_claims": [],
-            },
-            context=ToolContext(state=state, current_role=Role.JUDGE.value, current_turn=1),
-        )
+    result = registry.call(
+        "record_no_new_claims",
+        {
+            "reason": "Judge cannot assert skeptic review.",
+            "reviewed_claims": [],
+        },
+        context=ToolContext(state=state, current_role=Role.JUDGE.value, current_turn=1),
+    )
+    assert result["ok"] is False
+    assert result["error_type"] == "ToolRegistryError"
+    assert "not allowed" in result["message"]
 
 
 def test_registry_validates_required_args() -> None:
     registry = build_core_registry()
 
-    with pytest.raises(ToolRegistryError, match="missing required arg"):
-        registry.call("record_claim", {"statement": "missing rationale"}, context=ToolContext(RunState()))
+    result = registry.call(
+        "record_claim",
+        {"statement": "missing rationale"},
+        context=ToolContext(RunState(), current_role=Role.SKEPTIC.value),
+    )
+    assert result["ok"] is False
+    assert result["error_type"] == "ToolRegistryError"
+    assert "missing required arg" in result["message"]
 
 
 def test_load_artifact_tool_loads_dataset_entry(tmp_path) -> None:
@@ -125,7 +150,7 @@ def test_load_artifact_tool_loads_dataset_entry(tmp_path) -> None:
     result = registry.call(
         "load_artifact",
         {"entry": "toy"},
-        context=ToolContext(state=state, dataset_dir=tmp_path),
+        context=ToolContext(state=state, dataset_dir=tmp_path, current_role=Role.ORCHESTRATOR.value),
     )
 
     assert result["entry"] == "toy"
@@ -139,7 +164,7 @@ def test_artifact_tools_inspect_source_problem_and_files(tmp_path) -> None:
 
     state = RunState()
     registry = build_core_registry()
-    context = ToolContext(state=state, dataset_dir=tmp_path)
+    context = ToolContext(state=state, dataset_dir=tmp_path, current_role=Role.ORCHESTRATOR.value)
 
     files = registry.call("list_artifact_files", {"entry": "toy"}, context=context)
     source = registry.call(
@@ -165,13 +190,17 @@ def test_read_artifact_file_rejects_path_escape_and_records_error(tmp_path) -> N
     state = RunState()
     registry = build_core_registry()
 
-    with pytest.raises(ValueError, match="escapes entry directory"):
-        registry.call(
-            "read_artifact_file",
-            {"entry": "toy", "path": "../outside.txt"},
-            context=ToolContext(state=state, dataset_dir=tmp_path),
-        )
+    result = registry.call(
+        "read_artifact_file",
+        {"entry": "toy", "path": "../outside.txt"},
+        context=ToolContext(
+            state=state,
+            dataset_dir=tmp_path,
+            current_role=Role.ORCHESTRATOR.value,
+        ),
+    )
 
+    assert result["ok"] is False
     assert state.tool_events[0].tool == "read_artifact_file"
     assert state.tool_events[0].status == ToolStatus.ERROR
     assert state.tool_events[0].output["error_type"] == "ValueError"
@@ -180,7 +209,6 @@ def test_read_artifact_file_rejects_path_escape_and_records_error(tmp_path) -> N
 def test_claim_tools_append_evidence_update_status_and_read_ledger() -> None:
     state = RunState()
     registry = build_core_registry()
-    context = ToolContext(state=state)
 
     claim = registry.call(
         "record_claim",
@@ -188,7 +216,7 @@ def test_claim_tools_append_evidence_update_status_and_read_ledger() -> None:
             "statement": "kernel ignores stride",
             "rationale": "source line uses x + offsets without stride",
         },
-        context=context,
+        context=ToolContext(state=state, current_role=Role.SKEPTIC.value),
     )
     evidence = registry.call(
         "append_evidence",
@@ -200,14 +228,18 @@ def test_claim_tools_append_evidence_update_status_and_read_ledger() -> None:
             "tool_event_id": "t1",
             "data": {"path": "kernel.py", "line": 8},
         },
-        context=context,
+        context=ToolContext(state=state, current_role=Role.EXPERIMENTER.value),
     )
     updated = registry.call(
         "update_claim_status",
         {"claim_id": claim["id"], "status": "confirmed"},
-        context=context,
+        context=ToolContext(state=state, current_role=Role.EXPERIMENTER.value),
     )
-    ledger = registry.call("read_claim_ledger", {}, context=context)
+    ledger = registry.call(
+        "read_claim_ledger",
+        {},
+        context=ToolContext(state=state, current_role=Role.EXPERIMENTER.value),
+    )
 
     assert evidence["id"] == "c1.e1"
     assert updated["status"] == "confirmed"
@@ -261,12 +293,14 @@ def test_record_description_update_is_describer_only() -> None:
     state = RunState()
     registry = build_core_registry()
 
-    with pytest.raises(ValueError, match="only be called by the describer"):
-        registry.call(
-            "record_description_update",
-            {"summary": "Skeptic cannot mutate the description model."},
-            context=ToolContext(state=state, current_role=Role.SKEPTIC.value, current_turn=1),
-        )
+    result = registry.call(
+        "record_description_update",
+        {"summary": "Skeptic cannot mutate the description model."},
+        context=ToolContext(state=state, current_role=Role.SKEPTIC.value, current_turn=1),
+    )
+    assert result["ok"] is False
+    assert result["error_type"] == "ToolRegistryError"
+    assert "not allowed" in result["message"]
 
 
 def test_request_more_debate_tool_records_judge_request() -> None:
@@ -279,7 +313,7 @@ def test_request_more_debate_tool_records_judge_request() -> None:
             "reason": "Skeptic should review inconclusive evidence.",
             "focus_claims": ["c1"],
         },
-        context=ToolContext(state=state),
+        context=ToolContext(state=state, current_role=Role.JUDGE.value),
     )
 
     assert result["request"] == "more_debate"
@@ -292,17 +326,19 @@ def test_record_claim_requires_scope_evidence_for_in_scope_claim() -> None:
     state = RunState()
     registry = build_core_registry()
 
-    with pytest.raises(ValueError, match="scope_evidence"):
-        registry.call(
-            "record_claim",
-            {
-                "statement": "in-scope claim without evidence",
-                "rationale": "test rationale",
-                "scope": "in_scope",
-                "scope_rationale": "This claims to be in scope but cites no source.",
-            },
-            context=ToolContext(state=state),
-        )
+    result = registry.call(
+        "record_claim",
+        {
+            "statement": "in-scope claim without evidence",
+            "rationale": "test rationale",
+            "scope": "in_scope",
+            "scope_rationale": "This claims to be in scope but cites no source.",
+        },
+        context=ToolContext(state=state, current_role=Role.SKEPTIC.value),
+    )
+    assert result["ok"] is False
+    assert result["error_type"] == "LedgerError"
+    assert "scope_evidence" in result["message"]
 
 
 def test_record_claim_allows_out_of_scope_without_scope_evidence() -> None:
@@ -317,7 +353,7 @@ def test_record_claim_allows_out_of_scope_without_scope_evidence() -> None:
             "scope": "out_of_scope",
             "scope_rationale": "This is outside the contract.",
         },
-        context=ToolContext(state=state),
+        context=ToolContext(state=state, current_role=Role.SKEPTIC.value),
     )
 
     assert claim["scope"] == "out_of_scope"
@@ -327,11 +363,10 @@ def test_record_claim_allows_out_of_scope_without_scope_evidence() -> None:
 def test_reject_verdict_requires_in_scope_confirmed_decisive_claim() -> None:
     state = RunState()
     registry = build_core_registry()
-    context = ToolContext(state=state)
     claim = registry.call(
         "record_claim",
         {"statement": "unknown scope bug", "rationale": "test rationale"},
-        context=context,
+        context=ToolContext(state=state, current_role=Role.SKEPTIC.value),
     )
     registry.call(
         "append_evidence",
@@ -341,27 +376,32 @@ def test_reject_verdict_requires_in_scope_confirmed_decisive_claim() -> None:
             "summary": "Confirmed by probe.",
             "supports": "confirmed",
         },
-        context=context,
+        context=ToolContext(state=state, current_role=Role.EXPERIMENTER.value),
     )
-    registry.call("update_claim_status", {"claim_id": claim["id"], "status": "confirmed"}, context=context)
+    registry.call(
+        "update_claim_status",
+        {"claim_id": claim["id"], "status": "confirmed"},
+        context=ToolContext(state=state, current_role=Role.EXPERIMENTER.value),
+    )
 
-    with pytest.raises(ValueError, match="scope_evidence"):
-        registry.call(
-            "record_verdict",
-            {
-                "verdict": "reject",
-                "confidence": 0.9,
-                "decisive_claims": [claim["id"]],
-                "reason": "Unknown-scope claim should not reject.",
-            },
-            context=context,
-        )
+    result = registry.call(
+        "record_verdict",
+        {
+            "verdict": "reject",
+            "confidence": 0.9,
+            "decisive_claims": [claim["id"]],
+            "reason": "Unknown-scope claim should not reject.",
+        },
+        context=ToolContext(state=state, current_role=Role.JUDGE.value),
+    )
+    assert result["ok"] is False
+    assert result["error_type"] == "ValueError"
+    assert "scope_evidence" in result["message"]
 
 
 def test_reject_verdict_rejects_problem_only_scope_evidence() -> None:
     state = RunState()
     registry = build_core_registry()
-    context = ToolContext(state=state)
     claim = registry.call(
         "record_claim",
         {
@@ -373,7 +413,7 @@ def test_reject_verdict_rejects_problem_only_scope_evidence() -> None:
                 {"source": "problem.txt", "summary": "The broad operator description implies this case."}
             ],
         },
-        context=context,
+        context=ToolContext(state=state, current_role=Role.SKEPTIC.value),
     )
     registry.call(
         "append_evidence",
@@ -383,28 +423,33 @@ def test_reject_verdict_rejects_problem_only_scope_evidence() -> None:
             "summary": "Confirmed by probe.",
             "supports": "confirmed",
         },
-        context=context,
+        context=ToolContext(state=state, current_role=Role.EXPERIMENTER.value),
     )
-    registry.call("update_claim_status", {"claim_id": claim["id"], "status": "confirmed"}, context=context)
+    registry.call(
+        "update_claim_status",
+        {"claim_id": claim["id"], "status": "confirmed"},
+        context=ToolContext(state=state, current_role=Role.EXPERIMENTER.value),
+    )
 
-    with pytest.raises(ValueError, match="benchmark/test-domain scope_evidence"):
-        registry.call(
-            "record_verdict",
-            {
-                "verdict": "reject",
-                "confidence": 0.9,
-                "decisive_claims": [claim["id"]],
-                "reason": "Problem-only scope evidence should not reject.",
-            },
-            context=context,
-        )
+    result = registry.call(
+        "record_verdict",
+        {
+            "verdict": "reject",
+            "confidence": 0.9,
+            "decisive_claims": [claim["id"]],
+            "reason": "Problem-only scope evidence should not reject.",
+        },
+        context=ToolContext(state=state, current_role=Role.JUDGE.value),
+    )
+    assert result["ok"] is False
+    assert result["error_type"] == "ValueError"
+    assert "benchmark/test-domain scope_evidence" in result["message"]
 
 
 def test_reject_verdict_accepts_test_domain_confirmed_decisive_claim(tmp_path) -> None:
     _write_artifact(tmp_path)
     state = RunState(entry="toy")
     registry = build_core_registry()
-    context = ToolContext(state=state, dataset_dir=tmp_path)
     claim = registry.call(
         "record_claim",
         {
@@ -416,7 +461,11 @@ def test_reject_verdict_accepts_test_domain_confirmed_decisive_claim(tmp_path) -
                 {"source": "test.py::get_inputs", "summary": "The benchmark input generator creates this case."}
             ],
         },
-        context=context,
+        context=ToolContext(
+            state=state,
+            dataset_dir=tmp_path,
+            current_role=Role.SKEPTIC.value,
+        ),
     )
     registry.call(
         "append_evidence",
@@ -426,9 +475,21 @@ def test_reject_verdict_accepts_test_domain_confirmed_decisive_claim(tmp_path) -
             "summary": "Confirmed by probe.",
             "supports": "confirmed",
         },
-        context=context,
+        context=ToolContext(
+            state=state,
+            dataset_dir=tmp_path,
+            current_role=Role.EXPERIMENTER.value,
+        ),
     )
-    registry.call("update_claim_status", {"claim_id": claim["id"], "status": "confirmed"}, context=context)
+    registry.call(
+        "update_claim_status",
+        {"claim_id": claim["id"], "status": "confirmed"},
+        context=ToolContext(
+            state=state,
+            dataset_dir=tmp_path,
+            current_role=Role.EXPERIMENTER.value,
+        ),
+    )
 
     verdict = registry.call(
         "record_verdict",
@@ -438,7 +499,11 @@ def test_reject_verdict_accepts_test_domain_confirmed_decisive_claim(tmp_path) -
             "decisive_claims": [claim["id"]],
             "reason": "Benchmark-domain confirmed claim can reject.",
         },
-        context=context,
+        context=ToolContext(
+            state=state,
+            dataset_dir=tmp_path,
+            current_role=Role.JUDGE.value,
+        ),
     )
 
     assert verdict["verdict"] == "reject"

@@ -118,6 +118,21 @@ def _run_one_entry(entry: str, args, agent_names: list[str]) -> None:
         else AgenticOrchestrator(dataset_dir=Path(args.dataset_dir), run_dir=run_dir)
     )
 
+    try:
+        _run_one_entry_unsafe(entry, args, agent_names, orchestrator)
+    except Exception:
+        orchestrator.persist(stop_reason="fatal_workflow_error")
+        raise
+
+
+def _run_one_entry_unsafe(
+    entry: str,
+    args,
+    agent_names: list[str],
+    orchestrator: AgenticOrchestrator,
+) -> None:
+    mode = "dry_run" if args.dry_run else "+".join(agent_names)
+
     if args.dry_run:
         outputs = orchestrator.apply_agent_response(
             role=Role.ORCHESTRATOR,

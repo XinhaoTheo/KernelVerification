@@ -58,7 +58,6 @@ def test_skeptic_agent_uses_json_protocol_and_records_claim(tmp_path) -> None:
                         "args": {
                             "statement": "Non-contiguous inputs may be treated as contiguous.",
                             "rationale": "The visible kernel source does not mention stride handling.",
-                            "raised_by": "skeptic",
                         },
                     }
                 ],
@@ -233,6 +232,41 @@ def test_agentic_cli_single_skeptic_uses_fake_client(tmp_path, monkeypatch, caps
     assert "mode: skeptic" in captured.out
     assert "claims: 1" in captured.out
     assert (tmp_path / "run" / "run.json").exists()
+
+
+def test_agentic_cli_persists_partial_run_on_workflow_failure(tmp_path, monkeypatch, capsys) -> None:
+    _write_artifact(tmp_path / "dataset")
+
+    class FailingAgent:
+        role = Role.SKEPTIC
+
+        def act(self, *, state, tools):
+            _ = state, tools
+            raise RuntimeError("simulated agent failure")
+
+    monkeypatch.setattr("verifier.agentic_run._build_agents", lambda *args, **kwargs: [FailingAgent()])
+
+    exit_code = agentic_main(
+        [
+            "--all",
+            "--dataset-dir",
+            str(tmp_path / "dataset"),
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--agents",
+            "skeptic",
+            "--max-rounds",
+            "1",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "simulated agent failure" in captured.out
+    run_data = json.loads((tmp_path / "run" / "toy" / "run.json").read_text())
+    transcript = (tmp_path / "run" / "toy" / "transcript.md").read_text()
+    assert "Stop reason: `fatal_workflow_error`" in transcript
+    assert run_data["verdict"] is None
 
 
 def test_agentic_cli_runs_describer_then_skeptic_with_fake_client(tmp_path, monkeypatch, capsys) -> None:

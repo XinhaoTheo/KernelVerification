@@ -75,7 +75,11 @@ def test_description_model_persists_and_renders_in_transcript(tmp_path) -> None:
     run_dir = tmp_path / "run"
     registry = build_core_registry()
     state = RunState(entry="toy")
-    context = ToolContext(state=state, run_dir=run_dir)
+    context = ToolContext(
+        state=state,
+        run_dir=run_dir,
+        current_role=Role.EXPERIMENTER.value,
+    )
 
     request = registry.call(
         "request_description",
@@ -114,7 +118,11 @@ def test_retrieve_experiment_history_reads_persisted_probe_events(tmp_path) -> N
     run_dir = tmp_path / "run"
     registry = build_core_registry()
     state = RunState(entry="toy")
-    context = ToolContext(state=state, run_dir=run_dir)
+    context = ToolContext(
+        state=state,
+        run_dir=run_dir,
+        current_role=Role.EXPERIMENTER.value,
+    )
 
     registry.call(
         "run_python_probe",
@@ -128,7 +136,7 @@ def test_retrieve_experiment_history_reads_persisted_probe_events(tmp_path) -> N
     claim = registry.call(
         "record_claim",
         {"statement": "Claim-bound probe should be persisted.", "rationale": "History must include claim probes."},
-        context=context,
+        context=ToolContext(state=state, run_dir=run_dir, current_role=Role.SKEPTIC.value),
     )
     registry.call(
         "run_claim_probe",
@@ -146,7 +154,11 @@ def test_retrieve_experiment_history_reads_persisted_probe_events(tmp_path) -> N
     history = registry.call(
         "retrieve_experiment_history",
         {"limit": 5},
-        context=ToolContext(state=new_state, run_dir=run_dir),
+        context=ToolContext(
+            state=new_state,
+            run_dir=run_dir,
+            current_role=Role.EXPERIMENTER.value,
+        ),
     )
 
     assert history["exists"] is True

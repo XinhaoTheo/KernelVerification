@@ -3,14 +3,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from verifier.agentic.state import RunState, ToolStatus
+from verifier.agentic.state import Role, RunState, ToolStatus
 from verifier.agentic.tools.registry import ToolContext, build_core_registry
 
 
 def test_run_python_probe_captures_stdout_json_and_artifacts(tmp_path) -> None:
     state = RunState(entry="adhoc")
     registry = build_core_registry()
-    context = ToolContext(state=state, run_dir=tmp_path / "run")
+    context = ToolContext(
+        state=state,
+        run_dir=tmp_path / "run",
+        current_role=Role.EXPERIMENTER.value,
+    )
 
     result = registry.call(
         "run_python_probe",
@@ -43,7 +47,12 @@ def test_run_python_probe_can_import_loaded_artifact_kernel(tmp_path) -> None:
 
     state = RunState()
     registry = build_core_registry()
-    context = ToolContext(state=state, dataset_dir=tmp_path / "dataset", run_dir=tmp_path / "run")
+    context = ToolContext(
+        state=state,
+        dataset_dir=tmp_path / "dataset",
+        run_dir=tmp_path / "run",
+        current_role=Role.ORCHESTRATOR.value,
+    )
 
     registry.call("load_artifact", {"entry": "toy"}, context=context)
     result = registry.call(
@@ -53,7 +62,12 @@ def test_run_python_probe_can_import_loaded_artifact_kernel(tmp_path) -> None:
             "timeout_s": 5,
             "use_gpu": False,
         },
-        context=context,
+        context=ToolContext(
+            state=state,
+            dataset_dir=tmp_path / "dataset",
+            run_dir=tmp_path / "run",
+            current_role=Role.EXPERIMENTER.value,
+        ),
     )
 
     assert result["event_id"] == "t2"
@@ -73,7 +87,11 @@ def test_run_python_probe_timeout_returns_structured_result(tmp_path) -> None:
             "timeout_s": 1,
             "use_gpu": False,
         },
-        context=ToolContext(state=state, run_dir=tmp_path / "run"),
+        context=ToolContext(
+            state=state,
+            run_dir=tmp_path / "run",
+            current_role=Role.EXPERIMENTER.value,
+        ),
     )
 
     assert result["event_id"] == "t1"
@@ -86,11 +104,19 @@ def test_run_python_probe_timeout_returns_structured_result(tmp_path) -> None:
 def test_run_claim_probe_returns_claim_bound_evidence_draft(tmp_path) -> None:
     state = RunState(entry="adhoc")
     registry = build_core_registry()
-    context = ToolContext(state=state, run_dir=tmp_path / "run")
+    context = ToolContext(
+        state=state,
+        run_dir=tmp_path / "run",
+        current_role=Role.EXPERIMENTER.value,
+    )
     claim = registry.call(
         "record_claim",
         {"statement": "Probe should observe value 3.", "rationale": "The hypothesis needs runtime evidence."},
-        context=context,
+        context=ToolContext(
+            state=state,
+            run_dir=tmp_path / "run",
+            current_role=Role.SKEPTIC.value,
+        ),
     )
 
     result = registry.call(
@@ -116,11 +142,19 @@ def test_run_claim_probe_returns_claim_bound_evidence_draft(tmp_path) -> None:
 def test_finalize_probe_evidence_consumes_claim_probe_and_updates_claim(tmp_path) -> None:
     state = RunState(entry="adhoc")
     registry = build_core_registry()
-    context = ToolContext(state=state, run_dir=tmp_path / "run")
+    context = ToolContext(
+        state=state,
+        run_dir=tmp_path / "run",
+        current_role=Role.EXPERIMENTER.value,
+    )
     claim = registry.call(
         "record_claim",
         {"statement": "Probe should observe value 3.", "rationale": "The hypothesis needs runtime evidence."},
-        context=context,
+        context=ToolContext(
+            state=state,
+            run_dir=tmp_path / "run",
+            current_role=Role.SKEPTIC.value,
+        ),
     )
     probe = registry.call(
         "run_claim_probe",
@@ -131,7 +165,11 @@ def test_finalize_probe_evidence_consumes_claim_probe_and_updates_claim(tmp_path
             "timeout_s": 5,
             "use_gpu": False,
         },
-        context=context,
+        context=ToolContext(
+            state=state,
+            run_dir=tmp_path / "run",
+            current_role=Role.EXPERIMENTER.value,
+        ),
     )
 
     result = registry.call(

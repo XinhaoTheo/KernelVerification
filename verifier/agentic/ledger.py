@@ -85,6 +85,12 @@ class ClaimLedger:
         if claim.status == next_status:
             return claim
         self._validate_transition(_normalize_claim_status(claim.status), next_status)
+        if next_status != ClaimStatus.OPEN and not any(
+            _status_value(evidence.supports) == next_status.value for evidence in claim.evidence
+        ):
+            raise LedgerError(
+                f"claim {claim_id} needs evidence supporting {next_status.value} before status update"
+            )
         claim.status = next_status
         claim.updated_at = utc_now_iso()
         return claim
@@ -125,6 +131,10 @@ def _normalize_claim_status(status: ClaimStatus | str) -> ClaimStatus:
     except ValueError as exc:
         valid = ", ".join(item.value for item in ClaimStatus)
         raise LedgerError(f"invalid claim status {status!r}; expected one of: {valid}") from exc
+
+
+def _status_value(status: ClaimStatus | str) -> str:
+    return status.value if isinstance(status, ClaimStatus) else str(status)
 
 
 

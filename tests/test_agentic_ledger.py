@@ -43,8 +43,15 @@ def test_rejects_direct_confirmed_to_rebutted_transition() -> None:
     state = RunState()
     ledger = ClaimLedger(state)
     claim = ledger.record_claim(statement="stride is ignored", rationale="source uses linear offsets")
+    ledger.append_evidence(
+        claim_id=claim.id,
+        kind=EvidenceKind.SOURCE_INSPECTION,
+        tool_event_id="t1",
+        summary="The source supports the original claim.",
+        supports=ClaimStatus.CONFIRMED,
+        data={"path": "kernel.py"},
+    )
     ledger.update_claim_status(claim_id=claim.id, status=ClaimStatus.CONFIRMED)
 
     with pytest.raises(LedgerError, match="invalid claim status transition"):
         ledger.update_claim_status(claim_id=claim.id, status=ClaimStatus.REBUTTED)
-

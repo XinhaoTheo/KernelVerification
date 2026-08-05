@@ -40,11 +40,6 @@ def record_claim_schema() -> dict:
                 },
                 "default": []
             },
-            "raised_by": {
-                "type": "string",
-                "enum": ["describer", "skeptic", "experimenter", "judge", "orchestrator"],
-                "default": "skeptic",
-            },
         },
         "additionalProperties": False,
     }
@@ -101,7 +96,7 @@ def record_no_new_claims_schema() -> dict:
 
 def record_claim(context: ToolContext, args: dict) -> dict:
     _enforce_skeptic_claim_limit(context)
-    raised_by = str(args.get("raised_by") or Role.SKEPTIC.value)
+    raised_by = context.current_role or Role.SKEPTIC.value
     claim = ClaimLedger(context.state).record_claim(
         statement=str(args["statement"]),
         rationale=str(args["rationale"]),

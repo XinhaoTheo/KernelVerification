@@ -79,7 +79,7 @@ class AgenticOrchestrator:
         return outputs
 
     def run_agent_once(self, agent: Agent) -> list[dict]:
-        response = agent.act(state=self.state, tools=self.registry.list_tools())
+        response = agent.act(state=self.state, tools=self.registry.list_tools(role=agent.role))
         return self.apply_agent_response(role=agent.role, response=response)
 
     def run_pending_description_tasks(self, describer: Agent | None, *, max_turns: int = 3) -> list[dict]:
@@ -120,7 +120,7 @@ class AgenticOrchestrator:
                 if (
                     require_claim_coverage
                     and _role_value(agent.role) == Role.JUDGE.value
-                    and self.has_uncovered_open_claims()
+                    and self.open_claim_ids()
                 ):
                     skipped_judge_for_coverage = True
                     continue
@@ -193,7 +193,7 @@ class AgenticOrchestrator:
                 max_claim_rounds=max_claim_rounds,
                 max_claim_rounds_per_claim=max_claim_rounds_per_claim,
             )
-            while require_claim_coverage and self.has_uncovered_open_claims():
+            while require_claim_coverage and self.open_claim_ids():
                 if experimenter is None:
                     return LoopResult(outputs, debate_round, "claim_coverage_required")
                 force_probe_consumption = claim_rounds >= claim_round_budget and self.has_unconsumed_probe_events()
@@ -222,7 +222,7 @@ class AgenticOrchestrator:
                     return LoopResult(outputs, debate_round, "claim_coverage_stalled")
 
             if judge is not None:
-                if require_claim_coverage and self.has_uncovered_open_claims():
+                if require_claim_coverage and self.open_claim_ids():
                     continue
                 if debate_round < min_debate_rounds_before_judge:
                     self._record_internal_more_debate_request(
@@ -252,7 +252,7 @@ class AgenticOrchestrator:
             elif stop_when_no_open_claims and self.state.claims and not self.has_open_claims():
                 return LoopResult(outputs, debate_round, "no_open_claims")
 
-        if require_claim_coverage and self.has_uncovered_open_claims():
+        if require_claim_coverage and self.open_claim_ids():
             return LoopResult(outputs, max_debate_rounds, "claim_coverage_required")
         return LoopResult(outputs, max_debate_rounds, "max_rounds_exhausted")
 
@@ -298,22 +298,19 @@ class AgenticOrchestrator:
             for task in self.state.description_tasks
         )
 
-    def has_uncovered_open_claims(self) -> bool:
-        return bool(self.uncovered_open_claim_ids())
-
-    def uncovered_open_claim_ids(self) -> list[str]:
+    def open_claim_ids(self) -> list[str]:
         return [
             claim.id
             for claim in self.state.claims
-            if _status_value(claim.status) == ClaimStatus.OPEN.value and not claim.evidence
+            if _status_value(claim.status) == ClaimStatus.OPEN.value
         ]
 
     def has_unconsumed_probe_events(self) -> bool:
         return bool(self._unconsumed_probe_event_ids())
 
     def _claim_round_budget(self, *, max_claim_rounds: int, max_claim_rounds_per_claim: int) -> int:
-        uncovered_count = len(self.uncovered_open_claim_ids())
-        return max(max_claim_rounds, uncovered_count * max_claim_rounds_per_claim)
+        open_claim_count = len(self.open_claim_ids())
+        return max(max_claim_rounds, open_claim_count * max_claim_rounds_per_claim)
 
     def _unconsumed_probe_event_ids(self) -> set[str]:
         consumed_event_ids = {
@@ -325,7 +322,11 @@ class AgenticOrchestrator:
         return {
             event.id
             for event in self.state.tool_events
-            if event.tool in {"run_python_probe", "run_claim_probe"} and event.id not in consumed_event_ids
+            if event.tool in {"run_python_probe", "run_claim_probe"}
+            and _status_value(event.status) == "ok"
+            and event.tool == "run_claim_probe"
+            and event.output.get("claim_id")
+            and event.id not in consumed_event_ids
         }
 
     def _tool_budget_exhausted(self, start_tool_events: int, tool_budget: int | None) -> bool:
