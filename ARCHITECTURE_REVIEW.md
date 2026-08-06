@@ -22,6 +22,127 @@ The runtime also persists claims, tool events, probe artifacts, transcripts, and
 the final verdict. The core direction is sound, but several boundaries still
 depend too heavily on prompts or are described incorrectly in the diagrams.
 
+## Independent Re-Review (2026-08-05)
+
+The sections below this point were written as a forward-looking plan. This section is a
+fresh pass against the code as it actually stands, not against what the plan assumed. Two
+findings here were not in the original plan at all and are judged more urgent than anything
+below; three of the original P0 items turned out to already be implemented in the same commit
+that introduced this document, which the plan text below does not reflect.
+
+### P(-1): No End-to-End Run Has Ever Produced a Verdict
+
+No directory under `dataset/*/agentic_runs/` exists anywhere in the repository. All 56 tests
+in `tests/` pass, but every one of them drives the orchestrator with a fake/stub `LLMClient`
+(see `tests/test_agentic_llm_agent.py`, `tests/test_agentic_cli_batch.py`). That proves the
+protocol, ledger, and registry machinery are internally consistent. It does not prove that four
+real LLM agents, talking to each other only through this state machine, actually converge to a
+correct verdict on a real kernel — including the exact red-team kernels
+(`dataset/_advprec_topk_boundary`, `dataset/_advprec_softmax_tail`, ...) that the previous
+fixed-pipeline system demonstrably caught with a real transcript before this rewrite deleted
+those transcripts.
+
+This is a bigger risk than any code-quality item below. An elaborate, well-guarded state
+machine that has never been exercised end-to-end with a real model is an unvalidated
+hypothesis, not a working verifier.
+
+Acceptance criteria:
+
+- At least one committed `run.json` + `transcript.md` per red-team entry, produced by
+  `kv-agentic-run <entry> --agents describer,skeptic,experimenter,judge` against a real
+  provider, showing the correct verdict (`reject` for buggy entries, `trust` for their
+  `_correct` counterparts).
+- If a run does not converge to the right verdict, that is real information about the design —
+  more valuable than any item in the rest of this document — and should be triaged before
+  further hardening work.
+
+### P(-1): No Sandboxing on Agent-Executed Probe Code — Fixed
+
+`verifier/agentic/tools/execution.py::_execute_python_probe` used to run LLM-generated code via
+`subprocess.run([sys.executable, probe_path], env=env, timeout=timeout_s, ...)` with no
+containment beyond the wall-clock timeout, sharing the orchestrator's OS user, filesystem, and
+network. The threat model this project exists for is "the kernel under review may be
+adversarial," and the probe code that inspects that kernel is itself LLM-generated, reacting to
+that kernel's source, unattended, on every Experimenter turn — treating it as trusted was
+inconsistent with the project's own premise.
+
+Implemented and empirically verified on this host (not assumed):
+
+- **CPU**: an unconditional `ulimit -t <timeout_s + 30>` wrapper (`/bin/sh -c 'ulimit -t N;
+  exec "$@"'`). Verified a tight busy loop is SIGKILLed at the limit; does not interact with
+  CUDA.
+- **Memory**: `systemd-run --user --scope -p MemoryMax=8192M` when a systemd user session is
+  available, gated behind a cached one-time availability probe. **`ulimit -v`/`RLIMIT_AS` was
+  tried first and rejected** — verified empirically that even a 16 GiB `RLIMIT_AS` makes CUDA
+  context creation fail (`cudaGetDeviceCount` "out of memory"), because the NVIDIA driver's
+  virtual-address bookkeeping for a device context is far larger than actual usage. cgroup
+  `MemoryMax` tracks resident memory instead, so a 4-6 GiB cap runs real CUDA matmuls fine while
+  still SIGKILLing a genuine 20 GiB runaway allocation — verified both ways on this host. When
+  no systemd user session exists, memory is honestly left uncapped (recorded as `null` in
+  `sandbox.memory_limit_mb`) rather than applying a `ulimit -v` value that is either broken
+  (probe's own `import torch` on a CUDA-enabled build fails below ~8 GiB just to mmap the
+  shared libraries) or too loose to mean anything.
+- **Network**: `unshare --net --map-root-user` when unprivileged netns unshare works. Verified
+  it blocks real outbound connections (`OSError: Network is unreachable`) while leaving
+  loopback usable.
+- **Env hygiene**: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, cloud credentials, `SSH_AUTH_SOCK`,
+  and similar are stripped from every probe's environment unconditionally, independent of
+  whether network isolation is available.
+- **Process-group kill on timeout**: the probe now launches via `Popen(..., start_new_session=True)`
+  instead of `subprocess.run(timeout=...)`, so a timeout kills the probe's entire process group
+  (`os.killpg`) rather than only the immediate child — closing the gap where a probe-spawned
+  grandchild could survive as an orphan after the parent was killed. Verified no orphan
+  survives after a timeout.
+- Every probe result now carries a `sandbox` field (`cpu_limit_s`, `memory_limit_mb`,
+  `cpu_quota_pct`, `network_isolated`, `mode`) recording what was *actually* applied to that
+  specific run, so the transcript is auditable rather than assuming protection was in place.
+- Escape hatch: `AGENTIC_PROBE_SANDBOX=off` disables the wrapper entirely, for environments
+  where it misbehaves.
+
+This is still a blast-radius backstop, not a full sandbox — no seccomp/container/gVisor,
+filesystem confinement is by convention (cwd) only, and GPU VRAM itself is not capped (cgroup
+`MemoryMax` covers host RAM, not device memory). Full test suite re-run after the change: 56
+passed.
+
+### Status Correction for P0 Items Below
+
+Verified against the current tree (commit `38f0436`), not against the plan text:
+
+| Original P0 item | Status |
+|---|---|
+| Enforce Role-Specific Tool Access | **Implemented.** `ToolSpec.allowed_roles`, `ToolRegistry.list_tools(role=...)` schema filtering, and `ToolRegistry._authorize` execution-time check all exist in `verifier/agentic/tools/registry.py`. `record_claim` already derives `raised_by` from `context.current_role`, not from an argument. |
+| Return Tool Errors to the Workflow | **Implemented.** `ToolRegistry.call` catches `Exception` (not `BaseException`), records one error `ToolEvent`, and returns a structured `{"ok": false, "error": {...}}` result instead of raising. `verifier/agentic_run.py::_run_one_entry` persists state via `orchestrator.persist(stop_reason="fatal_workflow_error")` before re-raising unexpected failures. |
+| Close the Claim Evidence/Status Loop | **Implemented.** `ClaimLedger.update_claim_status` in `verifier/agentic/ledger.py` requires matching evidence before a non-open status is accepted. `record_verdict` in `tools/verdict.py` independently blocks `trust`/`reject` while any claim is `open`. |
+
+The sections below are kept because the permission matrix, error-shape examples, and test
+lists are still accurate reference material — just no longer a to-do list. Treat their
+"Current problem" framing as historical, describing the state before this same commit, not
+the state now.
+
+### One Cleanup Found While Verifying the Above — Fixed
+
+`verifier/agentic/agents/base.py::_claim_coverage` computed `open_claim_ids`,
+`pending_open_claim_ids`, and `uncovered_open_claim_ids` as the identical list comprehension
+three times, evidently left over from the "for prompt compatibility" migration the plan
+mentions in the (now-implemented) claim/evidence section. Collapsed to a single
+`open_claim_ids` field plus the (distinct, derived) `all_open_claims_have_evidence` boolean.
+No skill file or test referenced the two dropped aliases by name — the only existing check
+was for the outer `"claim_coverage"` key in the prompt text
+(`tests/test_agentic_llm_agent.py:138`), which still passes. Full suite re-run: 56 passed.
+
+### Revised Priority Order
+
+1. Run the system end-to-end against the red-team dataset with a real provider; fix whatever
+   that surfaces before anything else here. **Still the top open item.**
+2. ~~Add a resource/network limit to probe subprocess execution.~~ Done.
+3. ~~Collapse the `_claim_coverage` duplicate fields.~~ Done.
+4. Re-audit the "Recommended Order" list further down against current code the same way this
+   section did — items 4-7 there (initial description model guarantee, diagram accuracy,
+   README wording, pytest collection scope) have not been re-verified here and may or may not
+   still be open.
+
+---
+
 ## P0: Enforce Role-Specific Tool Access
 
 ### Current problem
@@ -682,21 +803,43 @@ This is an engineering cleanup issue, not a verification-logic failure.
 
 ## Recommended Order
 
-1. Add role-specific tool authorization.
-2. Make tool failures recoverable and persist partial runs.
-3. Require resolved claim statuses before Judge.
-4. Enforce the initial description model.
-5. Correct and re-export both diagrams.
-6. Apply the small corresponding README updates.
-7. Restrict pytest collection.
+Superseded by "Revised Priority Order" in the Independent Re-Review section above for items
+1-3. Re-verified during this pass:
+
+1. ~~Add role-specific tool authorization.~~ Done (see Status Correction table above).
+2. ~~Make tool failures recoverable and persist partial runs.~~ Done (see Status Correction
+   table above).
+3. ~~Require resolved claim statuses before Judge.~~ Done (see Status Correction table above).
+4. Enforce the initial description model. **Not re-verified in this pass** — the on-demand
+   `request_description`/`record_description_update` path exists and is exercised by tests,
+   but whether the Describer is *guaranteed* to populate the model before the first Skeptic
+   turn (rather than only on request) was not checked against current
+   `orchestrator.run_verification_workflow`.
+5. Correct and re-export both diagrams. **Not re-verified** — `assets/readme/*.drawio.svg`
+   were re-exported in commit `38f0436` per its diff, but this pass did not open the SVGs to
+   confirm the "Author" vs. "Describer" label and other issues listed above are actually fixed.
+6. Apply the small corresponding README updates. **Not re-verified** in detail; README.md was
+   substantially rewritten in `38f0436` and reads as agentic-architecture-first, but was not
+   line-checked against every item in the original P1 sections.
+7. Restrict pytest collection. **Confirmed still open** — `pyproject.toml` has no
+   `[tool.pytest.ini_options]` / `testpaths` entry as of this pass.
 
 ## Prototype Completion Boundary
 
-The prototype can be considered architecturally complete when:
+The prototype can be considered architecturally complete when, in addition to the items
+already satisfied below, the two P(-1) findings above are closed:
 
-- role boundaries are enforced by code rather than prompts alone;
-- every claim reaches an evidence-backed terminal status before verdict;
-- failed tools remain visible to agents and in persisted transcripts;
-- the description model is guaranteed and can be refreshed on demand;
-- README diagrams accurately represent the implemented state and control flow;
-- the project test command runs without collecting external artifacts.
+- role boundaries are enforced by code rather than prompts alone — **done**;
+- every claim reaches an evidence-backed terminal status before verdict — **done**;
+- failed tools remain visible to agents and in persisted transcripts — **done**;
+- the description model is guaranteed and can be refreshed on demand — not re-verified;
+- README diagrams accurately represent the implemented state and control flow — not
+  re-verified;
+- the project test command runs without collecting external artifacts — **still open**;
+- **at least one real end-to-end run, with a real LLM provider, has produced a correct verdict
+  on a known red-team dataset entry** — not done, not previously required by this document,
+  and now considered the actual gate before calling this a working verifier rather than a
+  well-tested state machine.
+- **probe execution has a resource/network limit beyond a wall-clock timeout** — **done** (CPU
+  ulimit, cgroup memory cap where available, netns network block where available, env hygiene,
+  process-group kill on timeout).

@@ -97,16 +97,9 @@ def _claim_coverage(state: RunState) -> dict[str, JsonValue]:
         for claim in state.claims
         if _status_value(claim.status) == ClaimStatus.OPEN.value
     ]
-    pending_open_claim_ids = [
-        claim.id
-        for claim in state.claims
-        if _status_value(claim.status) == ClaimStatus.OPEN.value
-    ]
     return cast(dict[str, JsonValue], {
         "open_claim_ids": open_claim_ids,
-        "pending_open_claim_ids": pending_open_claim_ids,
-        "uncovered_open_claim_ids": pending_open_claim_ids,
-        "all_open_claims_have_evidence": not pending_open_claim_ids,
+        "all_open_claims_have_evidence": not open_claim_ids,
     })
 
 

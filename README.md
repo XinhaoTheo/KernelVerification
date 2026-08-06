@@ -57,6 +57,21 @@ Orchestrator owns the shared state while running tools and moving the debate for
 
 <p align="center"><em>Figure 1. End-to-end kernel verification pipeline and agent runtime protocol.</em></p>
 
+> **Draft under review — not final.** The figure below is a redesign proposal for Figure 1,
+> staged here for comparison rather than replacing it yet. It fixes the mismatches recorded in
+> [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md) ("Align the Diagrams with the
+> Implementation"): the first role is `Describer` not `Author`, the Tools box is grouped by the
+> role that is actually allowed to call each tool instead of listing a `compare result` tool that
+> no longer exists, the Description Model / Claim Ledger / Tool Events / Convergence objects are
+> shown as the real shared state, and the Skeptic-review gate that blocks Judge is drawn
+> explicitly instead of omitted. Once one of the two is picked, the other should be deleted.
+
+<p align="center">
+  <img src="assets/readme/overall_pipeline_v2_proposal.svg" alt="Draft redesign proposal for the overall pipeline diagram" width="100%">
+</p>
+
+<p align="center"><em>Figure 1b (draft proposal). Same pipeline, redrawn so the Tools box, Skeptic-review gate, and shared-state objects match the current implementation.</em></p>
+
 - **Step 1 — Build or load the dataset (`kv-build`)**: run KernelAgent on a KernelBench
   problem and save the resulting artifact under `dataset/<entry>/`. This step is only about
   producing a self-contained folder with `problem.txt`, `kernel.py`, `test.py`, seeds, and
@@ -169,6 +184,24 @@ linked to a concrete claim.
 </p>
 
 <p align="center"><em>Figure 2. Orchestrator responsibilities, shared run state, and the evidence loop.</em></p>
+
+> **Draft under review — not final.** The figure below is a redesign proposal for Figure 2,
+> staged here for comparison rather than replacing it yet. It fixes the mismatches recorded in
+> [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md): evidence is drawn embedded inside each claim
+> instead of as a separate ledger with fields (`tool_name`, `raw_result_ref`, `confidence`) that
+> don't exist and without the `supports` field that does; the fabricated "Run Context" box
+> (`current_run_id`, `resource limits`, ...) is replaced with the real `RunState` fields
+> (`description_model`, `history`, `tool_events`, `convergence`, `skeptic_review`); `Judge` is no
+> longer labeled read-only; the evidence-attach and status-update steps are shown as the single
+> atomic `finalize_probe_evidence` call the code actually uses; and the diagram is restructured
+> around the debate-round loop nested around the claim-coverage loop, matching the two loops
+> described in the text above. Once one of the two is picked, the other should be deleted.
+
+<p align="center">
+  <img src="assets/readme/Orchestrator_v2_proposal.svg" alt="Draft redesign proposal for the Orchestrator diagram" width="100%">
+</p>
+
+<p align="center"><em>Figure 2b (draft proposal). Same responsibilities, redrawn so the shared-state fields, the evidence loop, and the Skeptic-review gate match the current implementation.</em></p>
 
 There are two loops:
 

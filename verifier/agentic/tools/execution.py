@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
+import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -23,6 +26,143 @@ _CLAIM_PROBE_SUPPORTS = [
     ClaimStatus.REBUTTED.value,
     ClaimStatus.INCONCLUSIVE.value,
 ]
+
+# Probe code is written by an LLM reacting to a possibly-adversarial kernel's source and
+# executed unattended on every Experimenter turn. These bounds are a blast-radius backstop,
+# not a full sandbox: see ARCHITECTURE_REVIEW.md, "No Sandboxing on Agent-Executed Probe Code".
+_CPU_LIMIT_HEADROOM_S = 30  # RLIMIT_CPU is a kernel-enforced backstop behind the wall-clock
+# timeout below; the headroom keeps it from firing on legitimate GPU-bound probes, where wall
+# time vastly exceeds actual CPU-seconds consumed.
+_DEFAULT_PROBE_MEMORY_MB = int(os.getenv("AGENTIC_PROBE_MEMORY_MAX_MB", "8192"))
+_DEFAULT_PROBE_CPU_QUOTA_PCT = int(os.getenv("AGENTIC_PROBE_CPU_QUOTA_PCT", "400"))
+_SANDBOX_DISABLED = os.getenv("AGENTIC_PROBE_SANDBOX", "").strip().lower() in {"off", "0", "false"}
+
+# Removed from the probe's environment regardless of whether network isolation is available,
+# so a probe that does reach the network cannot exfiltrate these even accidentally.
+_SENSITIVE_ENV_VARS = {
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENAI_ORG_ID",
+    "HF_TOKEN",
+    "HUGGINGFACE_TOKEN",
+    "GITHUB_TOKEN",
+    "GITLAB_TOKEN",
+    "NPM_TOKEN",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "SSH_AUTH_SOCK",
+    "SSH_AGENT_PID",
+}
+
+
+@functools.lru_cache(maxsize=1)
+def _systemd_scope_available() -> bool:
+    """True if `systemd-run --user --scope` can enforce a real cgroup memory cap here.
+
+    Verified (not assumed) to coexist with CUDA: unlike RLIMIT_AS/`ulimit -v`, cgroup
+    memory.max tracks resident memory, not the driver's large virtual-address reservations,
+    so it does not spuriously kill legitimate torch/CUDA probes the way RLIMIT_AS does.
+    """
+    if _SANDBOX_DISABLED or not sys.platform.startswith("linux"):
+        return False
+    if shutil.which("systemd-run") is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["systemd-run", "--user", "--scope", "--quiet", "-p", "MemoryMax=64M", "--", "true"],
+            capture_output=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+@functools.lru_cache(maxsize=1)
+def _netns_available() -> bool:
+    """True if an unprivileged network-namespace unshare works here (blocks real network,
+    leaves loopback usable)."""
+    if _SANDBOX_DISABLED or not sys.platform.startswith("linux"):
+        return False
+    if shutil.which("unshare") is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["unshare", "--net", "--map-root-user", "true"],
+            capture_output=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _build_sandboxed_argv(inner_argv: list[str], *, timeout_s: int) -> tuple[list[str], dict[str, Any]]:
+    """Wrap the probe command with best-effort containment, innermost first.
+
+    Layering, from the process actually exec'd outward:
+      1. `ulimit -t` (RLIMIT_CPU): always applied on POSIX. Cheap, and does not conflict with
+         CUDA the way a virtual-memory ulimit does, so it is safe as an unconditional backstop.
+      2. `unshare --net`: real network isolation, when unprivileged netns unshare works.
+      3. `systemd-run --user --scope -p MemoryMax=...`: real physical-memory cap via cgroups,
+         when a systemd user session is available. Confirmed empirically that RLIMIT_AS cannot
+         play this role for this codebase: even a 16 GiB `ulimit -v` makes CUDA context
+         creation fail with "out of memory" (driver virtual-address bookkeeping dwarfs actual
+         usage), while a 4-6 GiB cgroup MemoryMax runs real CUDA matmuls fine because cgroup
+         accounting tracks resident pages, not virtual reservations.
+
+    If neither `unshare` nor `systemd-run` is usable (non-Linux host, no systemd user session,
+    or AGENTIC_PROBE_SANDBOX=off), the probe still runs — only with the CPU backstop applied,
+    which is recorded honestly in the returned metadata rather than claiming protection that
+    was not actually applied.
+    """
+    argv = list(inner_argv)
+    meta: dict[str, Any] = {
+        "cpu_limit_s": None,
+        "memory_limit_mb": None,
+        "cpu_quota_pct": None,
+        "network_isolated": False,
+    }
+
+    if os.name == "posix":
+        cpu_limit_s = min(timeout_s + _CPU_LIMIT_HEADROOM_S, _MAX_TIMEOUT_S + _CPU_LIMIT_HEADROOM_S)
+        argv = ["/bin/sh", "-c", f'ulimit -t {cpu_limit_s} 2>/dev/null; exec "$@"', "probe-runner", *argv]
+        meta["cpu_limit_s"] = cpu_limit_s
+
+    if _netns_available():
+        argv = ["unshare", "--net", "--map-root-user", *argv]
+        meta["network_isolated"] = True
+
+    if _systemd_scope_available():
+        argv = [
+            "systemd-run",
+            "--user",
+            "--scope",
+            "--quiet",
+            "-p",
+            f"MemoryMax={_DEFAULT_PROBE_MEMORY_MB}M",
+            "-p",
+            f"CPUQuota={_DEFAULT_PROBE_CPU_QUOTA_PCT}%",
+            "--",
+            *argv,
+        ]
+        meta["memory_limit_mb"] = _DEFAULT_PROBE_MEMORY_MB
+        meta["cpu_quota_pct"] = _DEFAULT_PROBE_CPU_QUOTA_PCT
+
+    modes = []
+    if meta["memory_limit_mb"] is not None:
+        modes.append("cgroup_memory")
+    if meta["network_isolated"]:
+        modes.append("netns")
+    modes.append("cpu_ulimit" if meta["cpu_limit_s"] is not None else "none")
+    meta["mode"] = "+".join(modes)
+    return argv, meta
+
+
+def _strip_sensitive_env(env: dict[str, str]) -> dict[str, str]:
+    return {key: value for key, value in env.items() if key not in _SENSITIVE_ENV_VARS}
 
 
 def run_python_probe_schema() -> dict:
@@ -151,27 +291,29 @@ def _execute_python_probe(context: ToolContext, args: dict) -> dict:
 
     cwd = _probe_cwd(context, run_dir)
     env = _probe_env(context, cwd=cwd, use_gpu=use_gpu)
+    argv, sandbox_meta = _build_sandboxed_argv([sys.executable, str(probe_path)], timeout_s=timeout_s)
 
     started = time.monotonic()
     timed_out = False
+    proc = subprocess.Popen(
+        argv,
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,  # own process group, so a timeout can kill the whole tree
+    )
     try:
-        completed = subprocess.run(
-            [sys.executable, str(probe_path)],
-            cwd=str(cwd),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
-        )
-        exit_code = completed.returncode
-        stdout = completed.stdout
-        stderr = completed.stderr
-    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+        exit_code = proc.returncode
+    except subprocess.TimeoutExpired:
         timed_out = True
         exit_code = None
-        stdout = _coerce_output(exc.stdout)
-        stderr = _coerce_output(exc.stderr)
+        _kill_process_group(proc)
+        stdout, stderr = proc.communicate()
+    stdout = _coerce_output(stdout)
+    stderr = _coerce_output(stderr)
     duration_s = time.monotonic() - started
 
     stdout_path.write_text(stdout, encoding="utf-8")
@@ -204,7 +346,25 @@ def _execute_python_probe(context: ToolContext, args: dict) -> dict:
         "json_result": json_result,
         "json_parse_error": json_parse_error,
         "artifacts": artifacts,
+        "sandbox": sandbox_meta,
     }
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """Kill the probe's entire process group, not just the immediate child.
+
+    `start_new_session=True` puts the probe (and the ulimit/unshare/systemd-run wrappers
+    around it) in their own process group. Killing only `proc` on timeout can leave a
+    grandchild the probe spawned running as an orphan; killing the group does not.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # already exited
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 def _run_dir(context: ToolContext) -> Path:
@@ -227,7 +387,7 @@ def _probe_cwd(context: ToolContext, run_dir: Path) -> Path:
 
 
 def _probe_env(context: ToolContext, *, cwd: Path, use_gpu: bool) -> dict[str, str]:
-    env = os.environ.copy()
+    env = _strip_sensitive_env(os.environ.copy())
     if not use_gpu:
         env["CUDA_VISIBLE_DEVICES"] = ""
 
