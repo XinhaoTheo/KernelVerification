@@ -62,6 +62,8 @@ class AgenticOrchestrator:
                 round=current_turn,
                 text=response.message,
                 tool_calls=response.tool_calls,
+                duration_s=response.duration_s,
+                usage=response.usage,
             )
         )
 

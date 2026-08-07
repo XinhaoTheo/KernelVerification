@@ -29,10 +29,15 @@ class LLMAgent:
             tools=tools,
             max_tokens=self.max_tokens,
         )
+        metrics = getattr(self.llm_client, "last_metrics", None)
         try:
-            return parse_agent_response(text)
+            response = parse_agent_response(text)
         except ProtocolError as exc:
             raise ProtocolError(f"{exc} | raw_response={_snippet(text)!r}") from exc
+        if metrics is not None:
+            response.duration_s = metrics.duration_s
+            response.usage = metrics.to_dict()
+        return response
 
     def _build_system_prompt(self) -> str:
         parts = [
@@ -75,6 +80,14 @@ def _load_skills(skill_names: list[str]) -> str:
     return "\n\n".join(sections)
 
 
+def _turn_for_prompt(turn) -> dict[str, JsonValue]:
+    """Turn.to_dict() minus timing/token-usage bookkeeping agents have no use for."""
+    data = turn.to_dict()
+    data.pop("duration_s", None)
+    data.pop("usage", None)
+    return data
+
+
 def _state_for_prompt(state: RunState) -> dict[str, JsonValue]:
     artifact = dict(state.artifact or {})
     for key in ("kernel_code", "test_code"):
@@ -83,7 +96,7 @@ def _state_for_prompt(state: RunState) -> dict[str, JsonValue]:
     return cast(dict[str, JsonValue], {
         "entry": state.entry,
         "artifact": artifact,
-        "history": [turn.to_dict() for turn in state.history[-6:]],
+        "history": [_turn_for_prompt(turn) for turn in state.history[-6:]],
         "description_model": state.description_model.to_dict(),
         "open_description_tasks": [
             task.to_dict()

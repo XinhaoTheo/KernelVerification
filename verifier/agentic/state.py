@@ -70,6 +70,8 @@ class Turn:
     round: int
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
+    duration_s: float | None = None
+    usage: dict[str, JsonValue] | None = None
 
     def to_dict(self) -> dict[str, JsonValue]:
         return {
@@ -77,6 +79,8 @@ class Turn:
             "round": self.round,
             "text": self.text,
             "tool_calls": [call.to_dict() for call in self.tool_calls],
+            "duration_s": self.duration_s,
+            "usage": self.usage,
         }
 
 

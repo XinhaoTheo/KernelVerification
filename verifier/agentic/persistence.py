@@ -96,11 +96,14 @@ def load_tool_events_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _turn_from_dict(raw: dict[str, Any]) -> Turn:
+    duration_s = raw.get("duration_s")
     return Turn(
         role=raw.get("role", "unknown"),
         round=int(raw.get("round", 0)),
         text=str(raw.get("text", "")),
         tool_calls=[_tool_call_from_dict(item) for item in raw.get("tool_calls") or []],
+        duration_s=float(duration_s) if duration_s is not None else None,
+        usage=dict(raw["usage"]) if raw.get("usage") else None,
     )
 
 
@@ -205,6 +208,34 @@ _MAX_TRANSCRIPT_TEXT = 1200
 _MAX_TRANSCRIPT_JSON = 2000
 
 
+def usage_totals(state: RunState) -> dict[str, Any]:
+    """Aggregate LLM call duration/token usage across every turn in this run."""
+    total_duration_s = 0.0
+    input_tokens = 0
+    output_tokens = 0
+    cache_creation_input_tokens = 0
+    cache_read_input_tokens = 0
+    calls_with_metrics = 0
+    for turn in state.history:
+        if turn.duration_s is not None:
+            total_duration_s += turn.duration_s
+        if turn.usage:
+            calls_with_metrics += 1
+            input_tokens += int(turn.usage.get("input_tokens") or 0)
+            output_tokens += int(turn.usage.get("output_tokens") or 0)
+            cache_creation_input_tokens += int(turn.usage.get("cache_creation_input_tokens") or 0)
+            cache_read_input_tokens += int(turn.usage.get("cache_read_input_tokens") or 0)
+    return {
+        "llm_calls": calls_with_metrics,
+        "total_duration_s": round(total_duration_s, 3),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+        "cache_read_input_tokens": cache_read_input_tokens,
+    }
+
+
 def _render_transcript(state: RunState, *, stop_reason: str | None = None) -> str:
     lines: list[str] = []
     lines.append("# Agentic Verification Transcript")
@@ -214,6 +245,18 @@ def _render_transcript(state: RunState, *, stop_reason: str | None = None) -> st
     lines.append(f"- Tool events: {len(state.tool_events)}")
     lines.append(f"- Claims: {len(state.claims)}")
     lines.append(f"- Description updates: {len(state.description_updates)}")
+    totals = usage_totals(state)
+    if totals["llm_calls"]:
+        lines.append(
+            f"- LLM time: {totals['total_duration_s']}s across {totals['llm_calls']} calls "
+            f"| tokens: in={totals['input_tokens']} out={totals['output_tokens']} "
+            f"total={totals['total_tokens']}"
+        )
+        if totals["cache_read_input_tokens"] or totals["cache_creation_input_tokens"]:
+            lines.append(
+                f"- Cache tokens: created={totals['cache_creation_input_tokens']} "
+                f"read={totals['cache_read_input_tokens']}"
+            )
     open_description_tasks = sum(1 for task in state.description_tasks if _value_text(task.status) == "open")
     if state.description_tasks:
         lines.append(f"- Description tasks: {open_description_tasks} open / {len(state.description_tasks)} total")
@@ -241,7 +284,14 @@ def _append_timeline(lines: list[str], state: RunState) -> None:
     lines.append("")
     event_index = 0
     for turn in state.history:
-        lines.append(f"### Turn {turn.round} - {_md_inline(_value_text(turn.role))}")
+        header = f"### Turn {turn.round} - {_md_inline(_value_text(turn.role))}"
+        if turn.duration_s is not None or turn.usage:
+            usage = turn.usage or {}
+            header += (
+                f" ({turn.duration_s if turn.duration_s is not None else '?'}s, "
+                f"in={usage.get('input_tokens', '?')} out={usage.get('output_tokens', '?')})"
+            )
+        lines.append(header)
         lines.append("")
         if turn.text.strip():
             lines.append("Message:")

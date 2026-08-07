@@ -9,7 +9,7 @@ from pathlib import Path
 from verifier import dataset
 from verifier.agentic.agents import build_describer_agent, build_experimenter_agent, build_judge_agent, build_skeptic_agent
 from verifier.agentic.llm import build_llm_client, default_provider
-from verifier.agentic.persistence import load_run_state
+from verifier.agentic.persistence import load_run_state, usage_totals
 from verifier.agentic.orchestrator import AgenticOrchestrator, build_context_response
 from verifier.agentic.state import Role
 
@@ -96,19 +96,32 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("no dataset entries found")
 
     failures = 0
+    batch_duration_s = 0.0
+    batch_input_tokens = 0
+    batch_output_tokens = 0
     for entry in entries:
         try:
-            _run_one_entry(entry, args, agent_names)
+            totals = _run_one_entry(entry, args, agent_names)
+            batch_duration_s += totals["total_duration_s"]
+            batch_input_tokens += totals["input_tokens"]
+            batch_output_tokens += totals["output_tokens"]
         except Exception as exc:
             failures += 1
             _print(f"entry: {entry}")
             _print(f"error: {type(exc).__name__}: {exc}")
             if not args.all:
                 raise
+        _print("")
+
+    if len(entries) > 1:
+        _print(f"=== batch totals across {len(entries)} entries ({failures} failed) ===")
+        _print(f"llm_time_s: {round(batch_duration_s, 3)}")
+        _print(f"tokens_in: {batch_input_tokens} tokens_out: {batch_output_tokens} "
+               f"total: {batch_input_tokens + batch_output_tokens}")
     return 1 if failures else 0
 
 
-def _run_one_entry(entry: str, args, agent_names: list[str]) -> None:
+def _run_one_entry(entry: str, args, agent_names: list[str]) -> dict:
     mode = "dry_run" if args.dry_run else "+".join(agent_names)
     run_dir = _run_dir_for_entry(entry, args, mode)
     state = load_run_state(Path(args.replay_run)) if args.replay_run else None
@@ -119,7 +132,7 @@ def _run_one_entry(entry: str, args, agent_names: list[str]) -> None:
     )
 
     try:
-        _run_one_entry_unsafe(entry, args, agent_names, orchestrator)
+        return _run_one_entry_unsafe(entry, args, agent_names, orchestrator)
     except Exception:
         orchestrator.persist(stop_reason="fatal_workflow_error")
         raise
@@ -130,7 +143,7 @@ def _run_one_entry_unsafe(
     args,
     agent_names: list[str],
     orchestrator: AgenticOrchestrator,
-) -> None:
+) -> dict:
     mode = "dry_run" if args.dry_run else "+".join(agent_names)
 
     if args.dry_run:
@@ -184,11 +197,18 @@ def _run_one_entry_unsafe(
     _print(f"claims: {len(orchestrator.state.claims)}")
     if loop_result is not None:
         _print(f"stop_reason: {loop_result.stop_reason}")
+    totals = usage_totals(orchestrator.state)
+    if totals["llm_calls"]:
+        _print(
+            f"llm_time_s: {totals['total_duration_s']} "
+            f"tokens_in: {totals['input_tokens']} tokens_out: {totals['output_tokens']}"
+        )
     _print(f"run_dir: {persisted.run_dir}")
     _print(f"run_json: {persisted.run_json}")
     _print(f"transcript_md: {persisted.transcript_md}")
     if persisted.verdict_json is not None:
         _print(f"verdict_json: {persisted.verdict_json}")
+    return totals
 
 
 def _run_dir_for_entry(entry: str, args, mode: str) -> Path:
