@@ -72,7 +72,7 @@ def test_skeptic_agent_uses_json_protocol_and_records_claim(tmp_path) -> None:
     assert outputs[0]["tool"] == "record_claim"
     assert orchestrator.state.claims[0].statement == "Non-contiguous inputs may be treated as contiguous."
     assert fake.calls
-    assert "You must respond with exactly one JSON object" in fake.calls[0]["system"]
+    assert "tool-calling mechanism" in fake.calls[0]["system"]
     assert "Available Tools" in fake.calls[0]["user"]
 
 

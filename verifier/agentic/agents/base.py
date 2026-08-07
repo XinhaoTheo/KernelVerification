@@ -38,10 +38,14 @@ class LLMAgent:
         parts = [
             self.instructions.strip(),
             "",
-            "You must respond with exactly one JSON object and no surrounding prose.",
-            "The JSON object schema is:",
-            '{"message": "short explanation", "tool_calls": [{"tool": "tool_name", "args": {}}]}',
-            "Use tool_calls to request local runtime actions. Do not claim a tool was run unless it appears in the ledger.",
+            "Tools are provided for this turn through the tool-calling mechanism. To take any "
+            "action (record a claim, run a probe, update state, request a verdict, etc.) you "
+            "must call the tool directly through that mechanism.",
+            "Do not describe a tool call in your message text, and do not write it out as a "
+            "JSON object yourself -- a tool call written as text is not executed and has no "
+            "effect. Do not claim a tool was run unless it appears in the ledger.",
+            "Your message should be a short natural-language explanation of what you are doing "
+            "and why, separate from any tool call you make.",
         ]
         skills = _load_skills(self.skill_names)
         if skills:
