@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -18,8 +19,22 @@ _DEFAULT_OPENAI_REASONING_EFFORT = "minimal"
 
 
 class LLMClient(Protocol):
-    def call(self, *, system: str, user: str, max_tokens: int = 4096) -> str:
-        """Return raw model text. The caller parses the agent protocol."""
+    def call(
+        self,
+        *,
+        system: str,
+        user: str,
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int = 4096,
+    ) -> str:
+        """Return raw model text shaped like the agent JSON protocol.
+
+        When `tools` is given, implementations should prefer the provider's
+        native tool-calling so tool_call args are schema-validated by the
+        provider instead of hand-parsed from free text, then re-serialize the
+        result into the same `{"message": ..., "tool_calls": [...]}` text
+        shape so callers do not need to know which path was used.
+        """
         ...
 
 
@@ -33,13 +48,37 @@ class AnthropicLLMClient:
 
         self._client = Anthropic(timeout=default_timeout_seconds())
 
-    def call(self, *, system: str, user: str, max_tokens: int = 4096) -> str:
-        response = self._client.messages.create(
-            model=self.model or default_model("anthropic"),
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
+    def call(
+        self,
+        *,
+        system: str,
+        user: str,
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int = 4096,
+    ) -> str:
+        kwargs: dict[str, Any] = {
+            "model": self.model or default_model("anthropic"),
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if tools:
+            kwargs["tools"] = _anthropic_tool_specs(tools)
+            kwargs["tool_choice"] = {"type": "auto"}
+
+        response = self._client.messages.create(**kwargs)
+
+        if tools:
+            return _serialize_tool_response(
+                message="".join(
+                    block.text for block in response.content if getattr(block, "type", None) == "text"
+                ),
+                tool_calls=[
+                    {"tool": block.name, "args": dict(block.input)}
+                    for block in response.content
+                    if getattr(block, "type", None) == "tool_use"
+                ],
+            )
         return "".join(
             block.text for block in response.content if getattr(block, "type", None) == "text"
         )
@@ -55,27 +94,72 @@ class OpenAILLMClient:
 
         self._client = OpenAI(timeout=default_timeout_seconds())
 
-    def call(self, *, system: str, user: str, max_tokens: int = 4096) -> str:
+    def call(
+        self,
+        *,
+        system: str,
+        user: str,
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int = 4096,
+    ) -> str:
         if not hasattr(self._client, "responses"):
-            response = self._client.chat.completions.create(
-                model=self.model or default_model("openai"),
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=max_tokens,
-                response_format={"type": "json_object"},
-            )
-            return response.choices[0].message.content or ""
+            return self._call_chat_completions(system=system, user=user, tools=tools, max_tokens=max_tokens)
+        return self._call_responses(system=system, user=user, tools=tools, max_tokens=max_tokens)
 
-        response = self._client.responses.create(
-            model=self.model or default_model("openai"),
-            instructions=system,
-            input=user,
-            max_output_tokens=max_tokens,
-            reasoning={"effort": default_openai_reasoning_effort()},
-            text={"format": {"type": "json_object"}},
+    def _call_chat_completions(
+        self, *, system: str, user: str, tools: list[dict[str, Any]] | None, max_tokens: int
+    ) -> str:
+        kwargs: dict[str, Any] = {
+            "model": self.model or default_model("openai"),
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            kwargs["tools"] = _openai_chat_tool_specs(tools)
+            kwargs["tool_choice"] = "auto"
+        else:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = self._client.chat.completions.create(**kwargs)
+        message = response.choices[0].message
+        if not tools:
+            return message.content or ""
+
+        return _serialize_tool_response(
+            message=message.content or "",
+            tool_calls=[
+                {"tool": call.function.name, "args": json.loads(call.function.arguments or "{}")}
+                for call in (message.tool_calls or [])
+            ],
         )
+
+    def _call_responses(
+        self, *, system: str, user: str, tools: list[dict[str, Any]] | None, max_tokens: int
+    ) -> str:
+        kwargs: dict[str, Any] = {
+            "model": self.model or default_model("openai"),
+            "instructions": system,
+            "input": user,
+            "max_output_tokens": max_tokens,
+            "reasoning": {"effort": default_openai_reasoning_effort()},
+        }
+        if tools:
+            kwargs["tools"] = _openai_responses_tool_specs(tools)
+            kwargs["tool_choice"] = "auto"
+        else:
+            kwargs["text"] = {"format": {"type": "json_object"}}
+
+        response = self._client.responses.create(**kwargs)
+
+        if tools:
+            return _serialize_tool_response(
+                message=_extract_openai_text(response),
+                tool_calls=_extract_openai_function_calls(response),
+            )
+
         output_text = getattr(response, "output_text", None)
         if output_text:
             return output_text
@@ -125,11 +209,73 @@ def default_model(provider: str | None = None) -> str:
     return os.getenv("AGENTIC_ANTHROPIC_MODEL") or _DEFAULT_ANTHROPIC_MODEL
 
 
+def _serialize_tool_response(*, message: str, tool_calls: list[dict[str, Any]]) -> str:
+    """Re-encode a provider's native tool-call result as the agent JSON protocol text.
+
+    Keeping this as the single choke point means parse_agent_response, LLMAgent,
+    and every test built against the text protocol stay unchanged regardless of
+    which provider or calling convention produced the result.
+    """
+    return json.dumps({"message": message, "tool_calls": tool_calls})
+
+
+def _anthropic_tool_specs(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {"name": tool["name"], "description": tool["description"], "input_schema": tool["input_schema"]}
+        for tool in tools
+    ]
+
+
+def _openai_chat_tool_specs(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": tool["input_schema"],
+            },
+        }
+        for tool in tools
+    ]
+
+
+def _openai_responses_tool_specs(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": tool["input_schema"],
+        }
+        for tool in tools
+    ]
+
+
 def _extract_openai_text(response) -> str:
     parts: list[str] = []
     for item in getattr(response, "output", []) or []:
+        if getattr(item, "type", None) == "function_call":
+            continue
         for content in getattr(item, "content", []) or []:
             text = getattr(content, "text", None)
             if text:
                 parts.append(text)
     return "".join(parts)
+
+
+def _extract_openai_function_calls(response) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for item in getattr(response, "output", []) or []:
+        if getattr(item, "type", None) != "function_call":
+            continue
+        name = getattr(item, "name", None)
+        if not name:
+            continue
+        raw_args = getattr(item, "arguments", None) or "{}"
+        try:
+            args = json.loads(raw_args)
+        except json.JSONDecodeError:
+            args = {}
+        calls.append({"tool": name, "args": args})
+    return calls

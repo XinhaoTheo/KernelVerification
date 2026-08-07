@@ -30,31 +30,54 @@ findings here were not in the original plan at all and are judged more urgent th
 below; three of the original P0 items turned out to already be implemented in the same commit
 that introduced this document, which the plan text below does not reflect.
 
-### P(-1): No End-to-End Run Has Ever Produced a Verdict
+### P(-1): No End-to-End Run Has Ever Produced a Verdict — First Real Run Done, Partial
 
-No directory under `dataset/*/agentic_runs/` exists anywhere in the repository. All 56 tests
-in `tests/` pass, but every one of them drives the orchestrator with a fake/stub `LLMClient`
-(see `tests/test_agentic_llm_agent.py`, `tests/test_agentic_cli_batch.py`). That proves the
-protocol, ledger, and registry machinery are internally consistent. It does not prove that four
-real LLM agents, talking to each other only through this state machine, actually converge to a
-correct verdict on a real kernel — including the exact red-team kernels
-(`dataset/_advprec_topk_boundary`, `dataset/_advprec_softmax_tail`, ...) that the previous
-fixed-pipeline system demonstrably caught with a real transcript before this rewrite deleted
-those transcripts.
+**Update (2026-08-06):** `kv-agentic-run --all --agents describer,skeptic,experimenter,judge`
+was run for the first time against a real provider (Anthropic). Result: 5 of 24 entries
+completed with a recorded verdict; 19 failed with `ProtocolError: agent response is not valid
+JSON`. This is the first real signal this document has ever had, and it cuts both ways:
 
-This is a bigger risk than any code-quality item below. An elaborate, well-guarded state
-machine that has never been exercised end-to-end with a real model is an unvalidated
-hypothesis, not a working verifier.
+- **The 5 that completed all reached the correct verdict.** The four `_correct` negative
+  controls (`_advprec_matmul_correct`, `_advprec_matmul_fp8`, `_advprec_softmax_correct`,
+  `_advprec_softmax_fp8_correct`) all got `trust` with confidence 0.9-0.97, and the Judge's own
+  reasoning correctly treated FP8 lossiness as shared between kernel and reference rather than
+  a kernel-specific defect — the exact class-aware judgment the old rule-based precision axis
+  tried to hand-code, produced here by free agent reasoning instead. `_advprec_topk_subsample`
+  (a real bug: `STRIDE=2` excludes odd-indexed keys from top-k) got `reject` at confidence 0.95,
+  backed by an actual runtime probe (16/16 rows missing a true top-8 index, mean value-gap
+  0.66-2.17), not assertion without evidence. This is meaningful positive signal for the core
+  thesis, on the (small, unfortunately) sample that got far enough to produce one.
+- **`_advprec_topk_boundary`** — the specific tie-break-bug entry this document named above as
+  the target acceptance case — was one of the 19 that failed to parse. It is still unverified.
+- **Root cause of the 19 failures, diagnosed and fixed the same day:** `AnthropicLLMClient.call`
+  had no structured-output enforcement — it asked for JSON via system-prompt text only, unlike
+  `OpenAILLMClient.call` which already used `response_format={"type": "json_object"}`. 15/19
+  failures were prose wrapped around otherwise-valid JSON (`Expecting value` / `Expecting ','
+  delimiter` / `Expecting property name`); 4/19 were genuine `max_tokens` truncation
+  (`Unterminated string starting at`) on verbose Describer turns. A contributing gap: the raw
+  malformed text was never persisted anywhere, so today's specific failures can't be replayed
+  for a byte-for-byte post-mortem — confirmed only by inspecting the last-successful turn's
+  content in each failed run's partial transcript.
 
-Acceptance criteria:
+  Fixed: both `AnthropicLLMClient` and `OpenAILLMClient` now use the provider's native
+  tool-calling (`tools=`/`tool_choice`) when tools are available, instead of hand-parsing JSON
+  out of free text — this is exactly the migration `agentic_roadmap.md` §9 anticipated
+  ("swapped to native Anthropic/OpenAI tool calling without changing tool implementations").
+  The result is re-serialized into the same `{"message", "tool_calls"}` text shape inside
+  `llm.py` (`_serialize_tool_response`), so `protocol.py`, `LLMAgent`, the tool registry, and
+  every existing test are unchanged. `protocol.py::_extract_json_text` was also hardened
+  (fenced-block-anywhere, then balanced-brace scan respecting string escaping) as a second line
+  of defense for any future non-tool-calling text path. `LLMAgent.act` now attaches a
+  head+tail snippet of the raw response to any `ProtocolError` it re-raises, so a future failure
+  is diagnosable without re-running. All fixes verified against the real Anthropic and OpenAI
+  APIs (not just the mocked test suite): a live tool-calling round-trip through the unchanged
+  `parse_agent_response` succeeded for both providers.
 
-- At least one committed `run.json` + `transcript.md` per red-team entry, produced by
-  `kv-agentic-run <entry> --agents describer,skeptic,experimenter,judge` against a real
-  provider, showing the correct verdict (`reject` for buggy entries, `trust` for their
-  `_correct` counterparts).
-- If a run does not converge to the right verdict, that is real information about the design —
-  more valuable than any item in the rest of this document — and should be triaged before
-  further hardening work.
+Acceptance criteria, revised:
+
+- Re-run the 19 failed entries with the tool-calling fix; confirm `_advprec_topk_boundary`
+  specifically converges to `reject`.
+- A full `--all` run with zero `ProtocolError` failures, whatever the verdicts turn out to be.
 
 ### P(-1): No Sandboxing on Agent-Executed Probe Code — Fixed
 

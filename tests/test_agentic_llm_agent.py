@@ -16,8 +16,8 @@ class FakeLLMClient:
         self.responses = [text] if isinstance(text, str) else list(text)
         self.calls = []
 
-    def call(self, *, system: str, user: str, max_tokens: int = 4096) -> str:
-        self.calls.append({"system": system, "user": user, "max_tokens": max_tokens})
+    def call(self, *, system: str, user: str, tools: list[dict] | None = None, max_tokens: int = 4096) -> str:
+        self.calls.append({"system": system, "user": user, "tools": tools, "max_tokens": max_tokens})
         if not self.responses:
             raise AssertionError("FakeLLMClient has no responses left")
         return self.responses.pop(0)

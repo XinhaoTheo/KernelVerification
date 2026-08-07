@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from verifier.agentic.llm import LLMClient
-from verifier.agentic.protocol import AgentResponse, parse_agent_response
+from verifier.agentic.protocol import AgentResponse, ProtocolError, parse_agent_response
 from verifier.agentic.state import ClaimStatus, JsonValue, Role, RunState
 
 _DEFAULT_SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
@@ -26,9 +26,13 @@ class LLMAgent:
         text = self.llm_client.call(
             system=self._build_system_prompt(),
             user=self._build_user_prompt(state=state, tools=tools),
+            tools=tools,
             max_tokens=self.max_tokens,
         )
-        return parse_agent_response(text)
+        try:
+            return parse_agent_response(text)
+        except ProtocolError as exc:
+            raise ProtocolError(f"{exc} | raw_response={_snippet(text)!r}") from exc
 
     def _build_system_prompt(self) -> str:
         parts = [
@@ -111,3 +115,15 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n...[truncated, {len(text) - limit} more chars]"
+
+
+def _snippet(text: str, *, head: int = 1500, tail: int = 1500) -> str:
+    """Head+tail snippet for debugging a malformed raw LLM response.
+
+    Truncation-caused parse errors (e.g. "Unterminated string") are visible
+    near the end; prose-wrapping errors ("Expecting value") are visible near
+    the start. Keeping both is more useful here than a single-sided cut.
+    """
+    if len(text) <= head + tail:
+        return text
+    return f"{text[:head]}\n...[{len(text) - head - tail} chars omitted]...\n{text[-tail:]}"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -72,9 +73,57 @@ def _parse_tool_call(raw: Any, index: int) -> ToolCall:
 
 
 def _extract_json_text(text: str) -> str:
+    """Best-effort extraction of one JSON object from a raw model response.
+
+    Anthropic's API has no JSON-mode enforcement (unlike OpenAI's
+    response_format=json_object), so the model sometimes wraps the object in
+    commentary or a fenced block that doesn't span the whole response. Try,
+    in order: a fenced block anywhere in the text, then the first balanced
+    top-level {...} anywhere in the text. Fall back to the stripped text
+    so genuinely invalid input still raises a normal ProtocolError.
+    """
     stripped = text.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if len(lines) >= 3 and lines[-1].strip() == "```":
-            return "\n".join(lines[1:-1]).strip()
+
+    fenced = _find_fenced_block(stripped)
+    if fenced is not None:
+        stripped = fenced
+
+    balanced = _find_balanced_object(stripped)
+    if balanced is not None:
+        return balanced
     return stripped
+
+
+def _find_fenced_block(text: str) -> str | None:
+    match = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def _find_balanced_object(text: str) -> str | None:
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return None

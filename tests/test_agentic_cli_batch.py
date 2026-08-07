@@ -34,7 +34,7 @@ def test_agentic_cli_openai_provider_uses_factory(tmp_path, monkeypatch, capsys)
     calls = []
 
     class FakeLLMClient:
-        def call(self, *, system: str, user: str, max_tokens: int = 4096) -> str:
+        def call(self, *, system: str, user: str, tools: list[dict] | None = None, max_tokens: int = 4096) -> str:
             return json.dumps({"message": "No claims.", "tool_calls": []})
 
     def fake_build_llm_client(*, provider=None, model=None):
