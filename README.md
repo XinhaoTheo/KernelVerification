@@ -70,6 +70,12 @@ Orchestrator owns the shared state while running tools and moving the debate for
 A KernelBench problem is a PyTorch reference task. KernelAgent turns it into a Triton kernel
 attempt and a test. `kv-build` stores the result as a self-contained dataset entry:
 
+<p align="center">
+  <img src="assets/readme/dataset.drawio.svg" alt="Dataset generation: KernelBench problem through generator.py to a dataset entry" width="70%">
+</p>
+
+<p align="center"><em>Dataset generation — generator.py wraps KernelAgent.TritonKernelAgent to produce a self-contained dataset entry.</em></p>
+
 | File | Contents |
 |---|---|
 | `problem.txt` | the original problem or benchmark contract |
@@ -158,35 +164,26 @@ The orchestrator owns the verification loop. It:
 - records every turn and every tool result.
 - enforces loop budgets and convergence rules.
 
-The Orchestrator therefore controls the workflow and owns the run state. The
-figure below expands the evidence path: an open claim leads to a targeted probe, the runtime
-records the raw tool result, and the Experimenter interprets that result before attaching it as
-evidence and updating the claim status. A raw observation is not treated as evidence until it is
-linked to a concrete claim.
+The Orchestrator therefore controls the workflow and owns the run state: every tool call from
+every role goes through it, and no agent ever calls another agent directly.
 
-<p align="center">
-  <img src="assets/readme/Orchestrator.drawio.svg" alt="Orchestrator shared state and evidence loop" width="100%">
-</p>
+```mermaid
+flowchart LR
+    Agents["Agents<br/>(Describer / Skeptic / Experimenter / Judge)"]
+    Orch{{"Orchestrator"}}
+    Tools[["Tools<br/>(role-scoped)"]]
+    State[("Shared State<br/>(RunState)")]
 
-<p align="center"><em>Figure 2. Orchestrator responsibilities, shared run state, and the evidence loop.</em></p>
+    Agents -- "① request tool_call" --> Orch
+    Orch -- "② execute" --> Tools
+    Tools -- "③ raw result" --> Orch
+    Orch -- "④ update" --> State
+    Orch -- "⑤ return output" --> Agents
+```
 
-> **Draft under review — not final.** The figure below is a redesign proposal for Figure 2,
-> staged here for comparison rather than replacing it yet. It fixes the mismatches recorded in
-> [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md): evidence is drawn embedded inside each claim
-> instead of as a separate ledger with fields (`tool_name`, `raw_result_ref`, `confidence`) that
-> don't exist and without the `supports` field that does; the fabricated "Run Context" box
-> (`current_run_id`, `resource limits`, ...) is replaced with the real `RunState` fields
-> (`description_model`, `history`, `tool_events`, `convergence`, `skeptic_review`); `Judge` is no
-> longer labeled read-only; the evidence-attach and status-update steps are shown as the single
-> atomic `finalize_probe_evidence` call the code actually uses; and the diagram is restructured
-> around the debate-round loop nested around the claim-coverage loop, matching the two loops
-> described in the text above. Once one of the two is picked, the other should be deleted.
-
-<p align="center">
-  <img src="assets/readme/Orchestrator_v2_proposal.svg" alt="Draft redesign proposal for the Orchestrator diagram" width="100%">
-</p>
-
-<p align="center"><em>Figure 2b (draft proposal). Same responsibilities, redrawn so the shared-state fields match the current implementation. The colored dot on each state box above is reused in the tables below.</em></p>
+An open claim leads to a targeted probe, the runtime records the raw tool result, and the
+Experimenter interprets that result before attaching it as evidence and updating the claim
+status. A raw observation is not treated as evidence until it is linked to a concrete claim.
 
 **Six real tool calls — what each one reads before it runs, and writes after** (`verifier/agentic/tools/*.py`):
 
