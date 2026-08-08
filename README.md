@@ -201,7 +201,30 @@ linked to a concrete claim.
   <img src="assets/readme/Orchestrator_v2_proposal.svg" alt="Draft redesign proposal for the Orchestrator diagram" width="100%">
 </p>
 
-<p align="center"><em>Figure 2b (draft proposal). Same responsibilities, redrawn so the shared-state fields, the evidence loop, and the Skeptic-review gate match the current implementation.</em></p>
+<p align="center"><em>Figure 2b (draft proposal). Same responsibilities, redrawn so the shared-state fields match the current implementation. The colored dot on each state box above is reused in the tables below.</em></p>
+
+**Six real tool calls — what each one reads before it runs, and writes after** (`verifier/agentic/tools/*.py`):
+
+| Agent | Tool call | Reads before running (input) | Writes after running (output) |
+|---|---|---|---|
+| Skeptic | `record_claim(statement, scope, ...)` | 🟣 Description — kernel contract, so the claim is grounded in something concrete | 🔵 Claims — new claim appended, `status=open` |
+| Experimenter | `run_claim_probe(claim_id, code)` | 🔵 Claims — the claim's own statement<br>⚪ Input — kernel.py / test.py source | 🟠 Run Log — raw ToolEvent recorded; not evidence yet |
+| Experimenter | `finalize_probe_evidence(event_id, claim_id, supports)` | 🟠 Run Log — that ToolEvent's raw output | 🔵 Claims — evidence attached + status updated on the same claim, atomically |
+| Skeptic | `record_no_new_claims()` | 🔵 Claims — are they all resolved yet? | 🟡 Convergence / Skeptic Review — decision |
+| Judge | `request_more_debate(reason)` | 🔵 Claims + 🟡 Convergence / Skeptic Review | 🟡 Convergence — `more_debate` request + reason |
+| Judge | `record_verdict(verdict, confidence, reason, ...)` | 🔵 Claims + 🟡 Convergence / Skeptic Review | 🟢 Verdict — terminal, set exactly once, then the workflow stops |
+
+**Role → tool permission table** (from `ToolRegistry.register(allowed_roles=...)`, enforced in code by `ToolRegistry._authorize`, not by prompt instructions alone):
+
+| Tool group | Describer | Skeptic | Experimenter | Judge |
+|---|:---:|:---:|:---:|:---:|
+| `inspect_problem` · `inspect_kernel_source` · `list_artifact_files` · `read_artifact_file` · `read_claim_ledger` | ✅ | ✅ | ✅ | ✅ |
+| `request_description` · `retrieve_experiment_history` | | ✅ | ✅ | ✅ |
+| `record_description_update` | ✅ | | | |
+| `record_claim` · `record_no_new_claims` | | ✅ | | |
+| `append_evidence` · `update_claim_status` · `run_python_probe` · `run_claim_probe` · `finalize_probe_evidence` | | | ✅ | |
+| `request_more_debate` · `record_verdict` | | | | ✅ |
+| `load_artifact` (deterministic context-loading step, not agent-invoked) | | | | |
 
 There are two loops:
 
