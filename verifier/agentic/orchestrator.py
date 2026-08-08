@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Protocol, Sequence
 
@@ -10,6 +11,24 @@ from .persistence import PersistedRun, persist_run
 from .protocol import AgentResponse
 from .state import ClaimStatus, DescriptionTaskStatus, Role, RunState, ToolCall, Turn
 from .tools.registry import ToolContext, ToolRegistry, build_core_registry
+
+
+class StopReason(str, Enum):
+    """Why a run_* loop returned. Values are the stable strings persisted to run.json/transcripts."""
+
+    VERDICT_RECORDED = "verdict_recorded"
+    TOOL_BUDGET_EXHAUSTED = "tool_budget_exhausted"
+    CLAIM_COVERAGE_REQUIRED = "claim_coverage_required"
+    CLAIM_COVERAGE_STALLED = "claim_coverage_stalled"
+    PROBE_OUTPUT_UNCONSUMED = "probe_output_unconsumed"
+    SKEPTIC_REVIEW_REQUIRED = "skeptic_review_required"
+    MORE_DEBATE_REQUESTED = "more_debate_requested"
+    NO_OPEN_CLAIMS = "no_open_claims"
+    MAX_ROUNDS_EXHAUSTED = "max_rounds_exhausted"
+
+    def __str__(self) -> str:  # keep f-strings/prints as the plain value, not "StopReason.X"
+        return self.value
+
 
 _DEFAULT_SKILLS = [
     "kernel-verification.md",
@@ -35,7 +54,7 @@ class Agent(Protocol):
 class LoopResult:
     outputs: list[dict]
     rounds_completed: int
-    stop_reason: str
+    stop_reason: StopReason | str
 
 
 @dataclass(slots=True)
@@ -97,6 +116,28 @@ class AgenticOrchestrator:
                 break
         return outputs
 
+    def _run_agent_and_check_verdict(
+        self,
+        agent: Agent,
+        *,
+        outputs: list[dict],
+        describer: Agent | None,
+        stop_on_verdict: bool,
+    ) -> StopReason | None:
+        """Run one agent turn, then drain any description tasks it triggered.
+
+        Extends `outputs` in place. Returns a StopReason if the caller should stop
+        immediately (a verdict was just recorded), or None to keep looping.
+        """
+        outputs.extend(self.run_agent_once(agent))
+        if stop_on_verdict and self.state.verdict is not None:
+            return StopReason.VERDICT_RECORDED
+        if _role_value(agent.role) != Role.DESCRIBER.value:
+            outputs.extend(self.run_pending_description_tasks(describer))
+            if stop_on_verdict and self.state.verdict is not None:
+                return StopReason.VERDICT_RECORDED
+        return None
+
     def run_agents_sequential(
         self,
         agents: Sequence[Agent],
@@ -117,8 +158,8 @@ class AgenticOrchestrator:
 
         for round_no in range(1, max_rounds + 1):
             for agent in agents:
-                if tool_budget is not None and len(self.state.tool_events) - start_tool_events >= tool_budget:
-                    return LoopResult(outputs, round_no - 1, "tool_budget_exhausted")
+                if self._tool_budget_exhausted(start_tool_events, tool_budget):
+                    return LoopResult(outputs, round_no - 1, StopReason.TOOL_BUDGET_EXHAUSTED)
                 if (
                     require_claim_coverage
                     and _role_value(agent.role) == Role.JUDGE.value
@@ -126,21 +167,19 @@ class AgenticOrchestrator:
                 ):
                     skipped_judge_for_coverage = True
                     continue
-                outputs.extend(self.run_agent_once(agent))
-                if stop_on_verdict and self.state.verdict is not None:
-                    return LoopResult(outputs, round_no, "verdict_recorded")
-                if _role_value(agent.role) != Role.DESCRIBER.value:
-                    outputs.extend(self.run_pending_description_tasks(describer))
-                    if stop_on_verdict and self.state.verdict is not None:
-                        return LoopResult(outputs, round_no, "verdict_recorded")
-                if tool_budget is not None and len(self.state.tool_events) - start_tool_events >= tool_budget:
-                    return LoopResult(outputs, round_no, "tool_budget_exhausted")
+                stop_reason = self._run_agent_and_check_verdict(
+                    agent, outputs=outputs, describer=describer, stop_on_verdict=stop_on_verdict,
+                )
+                if stop_reason is not None:
+                    return LoopResult(outputs, round_no, stop_reason)
+                if self._tool_budget_exhausted(start_tool_events, tool_budget):
+                    return LoopResult(outputs, round_no, StopReason.TOOL_BUDGET_EXHAUSTED)
             if stop_when_no_open_claims and self.state.claims and not self.has_open_claims():
-                return LoopResult(outputs, round_no, "no_open_claims")
+                return LoopResult(outputs, round_no, StopReason.NO_OPEN_CLAIMS)
 
         if skipped_judge_for_coverage:
-            return LoopResult(outputs, max_rounds, "claim_coverage_required")
-        return LoopResult(outputs, max_rounds, "max_rounds_exhausted")
+            return LoopResult(outputs, max_rounds, StopReason.CLAIM_COVERAGE_REQUIRED)
+        return LoopResult(outputs, max_rounds, StopReason.MAX_ROUNDS_EXHAUSTED)
 
     def run_verification_workflow(
         self,
@@ -179,16 +218,14 @@ class AgenticOrchestrator:
         for debate_round in range(1, max_debate_rounds + 1):
             for agent in debate_agents:
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
-                    return LoopResult(outputs, debate_round - 1, "tool_budget_exhausted")
-                outputs.extend(self.run_agent_once(agent))
-                if stop_on_verdict and self.state.verdict is not None:
-                    return LoopResult(outputs, debate_round, "verdict_recorded")
-                if _role_value(agent.role) != Role.DESCRIBER.value:
-                    outputs.extend(self.run_pending_description_tasks(describer))
-                    if stop_on_verdict and self.state.verdict is not None:
-                        return LoopResult(outputs, debate_round, "verdict_recorded")
+                    return LoopResult(outputs, debate_round - 1, StopReason.TOOL_BUDGET_EXHAUSTED)
+                stop_reason = self._run_agent_and_check_verdict(
+                    agent, outputs=outputs, describer=describer, stop_on_verdict=stop_on_verdict,
+                )
+                if stop_reason is not None:
+                    return LoopResult(outputs, debate_round, stop_reason)
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
-                    return LoopResult(outputs, debate_round, "tool_budget_exhausted")
+                    return LoopResult(outputs, debate_round, StopReason.TOOL_BUDGET_EXHAUSTED)
 
             claim_rounds = 0
             claim_round_budget = self._claim_round_budget(
@@ -197,31 +234,32 @@ class AgenticOrchestrator:
             )
             while require_claim_coverage and self.open_claim_ids():
                 if experimenter is None:
-                    return LoopResult(outputs, debate_round, "claim_coverage_required")
+                    return LoopResult(outputs, debate_round, StopReason.CLAIM_COVERAGE_REQUIRED)
                 force_probe_consumption = claim_rounds >= claim_round_budget and self.has_unconsumed_probe_events()
                 if claim_rounds >= claim_round_budget and not force_probe_consumption:
-                    return LoopResult(outputs, debate_round, "claim_coverage_required")
+                    return LoopResult(outputs, debate_round, StopReason.CLAIM_COVERAGE_REQUIRED)
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
-                    return LoopResult(outputs, debate_round, "tool_budget_exhausted")
+                    return LoopResult(outputs, debate_round, StopReason.TOOL_BUDGET_EXHAUSTED)
 
                 before_claims = self._claim_progress_signature()
                 before_description = self._description_progress_signature()
                 before_tool_events = len(self.state.tool_events)
-                outputs.extend(self.run_agent_once(experimenter))
-                outputs.extend(self.run_pending_description_tasks(describer))
+                stop_reason = self._run_agent_and_check_verdict(
+                    experimenter, outputs=outputs, describer=describer, stop_on_verdict=stop_on_verdict,
+                )
                 claim_rounds += 1
 
-                if stop_on_verdict and self.state.verdict is not None:
-                    return LoopResult(outputs, debate_round, "verdict_recorded")
+                if stop_reason is not None:
+                    return LoopResult(outputs, debate_round, stop_reason)
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
-                    return LoopResult(outputs, debate_round, "tool_budget_exhausted")
+                    return LoopResult(outputs, debate_round, StopReason.TOOL_BUDGET_EXHAUSTED)
                 claims_changed = self._claim_progress_signature() != before_claims
                 description_changed = self._description_progress_signature() != before_description
                 probe_output_added = self._has_new_probe_event_since(before_tool_events)
                 if force_probe_consumption and not claims_changed:
-                    return LoopResult(outputs, debate_round, "probe_output_unconsumed")
+                    return LoopResult(outputs, debate_round, StopReason.PROBE_OUTPUT_UNCONSUMED)
                 if not claims_changed and not probe_output_added and not description_changed:
-                    return LoopResult(outputs, debate_round, "claim_coverage_stalled")
+                    return LoopResult(outputs, debate_round, StopReason.CLAIM_COVERAGE_STALLED)
 
             if judge is not None:
                 if require_claim_coverage and self.open_claim_ids():
@@ -237,26 +275,25 @@ class AgenticOrchestrator:
                     )
                     if debate_round < max_debate_rounds:
                         continue
-                    return LoopResult(outputs, debate_round, "skeptic_review_required")
+                    return LoopResult(outputs, debate_round, StopReason.SKEPTIC_REVIEW_REQUIRED)
                 self.state.convergence = None
-                outputs.extend(self.run_agent_once(judge))
-                if stop_on_verdict and self.state.verdict is not None:
-                    return LoopResult(outputs, debate_round, "verdict_recorded")
-                outputs.extend(self.run_pending_description_tasks(describer))
-                if stop_on_verdict and self.state.verdict is not None:
-                    return LoopResult(outputs, debate_round, "verdict_recorded")
+                stop_reason = self._run_agent_and_check_verdict(
+                    judge, outputs=outputs, describer=describer, stop_on_verdict=stop_on_verdict,
+                )
+                if stop_reason is not None:
+                    return LoopResult(outputs, debate_round, stop_reason)
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
-                    return LoopResult(outputs, debate_round, "tool_budget_exhausted")
+                    return LoopResult(outputs, debate_round, StopReason.TOOL_BUDGET_EXHAUSTED)
                 if self._more_debate_requested():
                     if debate_round < max_debate_rounds:
                         continue
-                    return LoopResult(outputs, debate_round, "more_debate_requested")
+                    return LoopResult(outputs, debate_round, StopReason.MORE_DEBATE_REQUESTED)
             elif stop_when_no_open_claims and self.state.claims and not self.has_open_claims():
-                return LoopResult(outputs, debate_round, "no_open_claims")
+                return LoopResult(outputs, debate_round, StopReason.NO_OPEN_CLAIMS)
 
         if require_claim_coverage and self.open_claim_ids():
-            return LoopResult(outputs, max_debate_rounds, "claim_coverage_required")
-        return LoopResult(outputs, max_debate_rounds, "max_rounds_exhausted")
+            return LoopResult(outputs, max_debate_rounds, StopReason.CLAIM_COVERAGE_REQUIRED)
+        return LoopResult(outputs, max_debate_rounds, StopReason.MAX_ROUNDS_EXHAUSTED)
 
     def _record_internal_more_debate_request(self, *, reason: str) -> None:
         from .state import utc_now_iso
@@ -324,9 +361,8 @@ class AgenticOrchestrator:
         return {
             event.id
             for event in self.state.tool_events
-            if event.tool in {"run_python_probe", "run_claim_probe"}
+            if event.tool == "run_claim_probe"
             and _status_value(event.status) == "ok"
-            and event.tool == "run_claim_probe"
             and event.output.get("claim_id")
             and event.id not in consumed_event_ids
         }
