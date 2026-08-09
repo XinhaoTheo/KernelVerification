@@ -29,7 +29,7 @@ _CLAIM_PROBE_SUPPORTS = [
 
 # Probe code is written by an LLM reacting to a possibly-adversarial kernel's source and
 # executed unattended on every Experimenter turn. These bounds are a blast-radius backstop,
-# not a full sandbox: see ARCHITECTURE_REVIEW.md, "No Sandboxing on Agent-Executed Probe Code".
+# not a full sandbox: see docs/ARCHITECTURE_REVIEW.md, "No Sandboxing on Agent-Executed Probe Code".
 _CPU_LIMIT_HEADROOM_S = 30  # RLIMIT_CPU is a kernel-enforced backstop behind the wall-clock
 # timeout below; the headroom keeps it from firing on legitimate GPU-bound probes, where wall
 # time vastly exceeds actual CPU-seconds consumed.

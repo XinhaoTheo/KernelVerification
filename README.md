@@ -290,6 +290,8 @@ Tools are small and focused. They provide actions, not fixed verification policy
 | `inspect_kernel_source` | read numbered slices of `kernel.py` |
 | `list_artifact_files` | list files inside the artifact |
 | `read_artifact_file` | read a controlled file inside the artifact |
+| `request_description` | ask the Describer to clarify source, contract, probe, or verdict ambiguity |
+| `record_description_update` | Describer writes a structured update to the shared description model |
 | `record_claim` | add one concrete claim to the ledger |
 | `read_claim_ledger` | read current claims and evidence |
 | `record_no_new_claims` | let Skeptic state that latest evidence was reviewed |
@@ -313,7 +315,28 @@ status.
 ### 3.7 `verifier/agentic/ledger.py` and `state.py` — claims and evidence
 
 The claim ledger is the center of the system. A claim is not just text. It has a status,
-scope, rationale, and evidence list.
+scope, rationale, and evidence list — and that evidence list is embedded directly inside the
+claim, not stored as a separate ledger:
+
+```mermaid
+classDiagram
+    class Claim {
+        id
+        statement
+        status : open / confirmed / rebutted / inconclusive
+        raised_by
+        scope, scope_rationale, scope_evidence
+    }
+    class Evidence {
+        id
+        kind
+        tool_event_id
+        summary
+        supports
+        data, artifacts
+    }
+    Claim "1" *-- "many" Evidence : embedded in claim, not a separate ledger
+```
 
 Claim statuses:
 
@@ -442,9 +465,11 @@ kernel_verification/
 │           ├── scope-policy.md
 │           └── convergence.md
 ├── tests/                    # unit tests for protocol, tools, workflow, persistence
-├── agentic_roadmap.md        # design roadmap for the refactor
-├── agentic_optimization_plan.md
-├── README-original.md        # backup of the previous README before this rewrite
+├── docs/
+│   ├── ARCHITECTURE_REVIEW.md    # known architecture gaps and fixes applied
+│   ├── agentic_roadmap.md        # design roadmap for the refactor
+│   ├── agentic_optimization_plan.md
+│   └── README-original.md        # backup of the previous README before this rewrite
 ├── README.md
 └── pyproject.toml
 ```
