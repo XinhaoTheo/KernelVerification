@@ -1,18 +1,15 @@
 # allclose 对抗案例种子集(12 个,后续滚到 100:50 FN + 50 FP)
 
-规则先说一遍,确保没跑偏:
-
-- **FN(阈值拉高会全错的那一半)**:kernel 是真的有 bug,但如果验证系统把容差放宽,常规/随机测试压根测不出这个 bug,allclose 会判"过"。
-- **FP(阈值拉低会全错的那一半)**:kernel 其实是对的(或者是另一种同样合法的实现),但如果验证系统把容差收紧,allclose 会拿它跟某一份参考实现比,判成"错"。
-- 每个 case 最后比较的都是连续输出(attention 结果、加权和、loss 值这些),不是直接比离散的选择结果本身。
-- 每个 kernel 都是真实存在、能查到源码/论文的,不是编的。
+- **FN(if the threshold is high this will all be decided as no-pass)**:kernel Has the bug,but if the verification allows the threshold,random or normal test will not detect this bug, toech.allclose will decide this as pass(correct)。
+- **FP(if the threshold is low this will all be decided as no-pass)**:kernel It is correct, but if the threshold is tight, allclose will compare this with the reference and decide it as no-pass。
+- Every case at last is the continuous not discrete (attention result、加权和、loss value),not to compare the discrete。
 
 ---
 
-## FN 组(bug 真实存在,但常规测试/宽松容差发现不了)
+## FN Group
 
-### FN1. NSA 稀疏 attention 里选 block 的并列阈值 bug
-kernel 是什么:NSA(Native Sparse Attention)那种结构——先给每个 block 打分选出 top-k 个 block,再对选中的 block 做正常的 attention,最后输出连续的 attention 结果。fla-org 和 XunhaoLai 都有公开的 Triton 实现,是真在训练/推理里用的东西。
+### FN1. NSA sparse attention select block (if 2 block have same value) bug
+kernel: NSA(Native Sparse Attention)那种结构——先给每个 block 打分选出 top-k 个 block,再对选中的 block 做正常的 attention,最后输出连续的 attention 结果。fla-org 和 XunhaoLai 都有公开的 Triton 实现,是真在训练/推理里用的东西。
 
 bug 是什么:更新"当前 top-k 里最小值"这个阈值的时候用了严格大于,没用大于等于。分数一旦打平(现实场景里很常见,比如两个 block 内容高度重复,或者精度不够被舍成一样的分数),后到的那个 block 会被错误地挤掉。
 
