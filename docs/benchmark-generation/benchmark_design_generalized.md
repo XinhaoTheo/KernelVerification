@@ -2,6 +2,24 @@
 
 We have 13 cases and plan to expand the benchmark to 100 cases: 50 FN + 50 FP.
 
+## At a Glance
+
+| Seed | What goes wrong and why normal tests miss it | Extension examples |
+| --- | --- | --- |
+| **FN1: Deterministic ties** | The kernel chooses the wrong item when two scores are equal. Random scores almost never tie, so ordinary tests do not reach the failing case. | Stable `argmax`, beam search, segmented top-k, MoE routing |
+| **FN2: Rare code paths** | The bug exists in a branch that runs only under unusual conditions. Most tests stay on the common path, and a single run may not reveal the resulting bias. | Fallback kernels, all-masked rows, overflow recovery, rejection sampling |
+| **FN3: Irregular boundaries** | The kernel handles complete blocks correctly but mishandles the leftover elements at the end. Tests using clean, divisible sizes never create that leftover region. | GEMM tails, ragged sequences, odd head sizes, partial quantization groups |
+| **FN4: Homogeneous routing data** | The kernel reads from the wrong head, expert, or memory location. If every possible source contains similar data, reading from the wrong place still produces a similar result. | GQA head mapping, MoE experts, KV-cache page tables, batch reordering |
+| **FN5: Real input distributions** | The quantization rule works on simple random values but fails on the outliers and correlations found in real model data. Synthetic Gaussian inputs often do not contain the structure needed to trigger severe clipping. | Calibration mismatch, channel outliers, delayed scales, heavy-tailed gradients |
+| **FN6: Long-horizon accumulation** | Each step introduces a small error that looks harmless by itself. A short test sees almost no difference, but the error can grow across a long sequence or many updates. | Recurrent scans, optimizer updates, iterative solvers, repeated requantization |
+| **FN7: Near-zero regimes** | Two formulas behave similarly at normal magnitudes but very differently near zero. Random inputs rarely contain an all-zero or extremely small row, so the bug remains hidden. | RMSNorm/LayerNorm, reciprocal and square root, masked softmax, gradient underflow |
+| **FP1: Unspecified ties** | The specification allows several correct answers when scores are tied. A reference chooses one answer, while another correct implementation chooses a different one and is wrongly rejected. | Top-p sampling, MoE routing, beam search, `argmax` and sorting |
+| **FP2: Representation conventions** | Two kernels store the same mathematical information in different orders or layouts. Their tensors look different until the layouts are aligned or the downstream operation is compared. | RoPE layouts, NCHW/NHWC, packed QKV, transposed scale layouts |
+| **FP3: Reduction order** | Both kernels add the same values but do so in a different order. Floating-point rounding happens after every step, so the final values can drift slightly even when both algorithms are correct. | Cross-entropy, parallel scans, softmax, all-reduce, atomic accumulation |
+| **FP4: Precision-dependent error** | Low-precision kernels deliberately round or clip values. A tolerance designed for FP32 can reject the normal quantization error of a correct FP8, FP4, or INT4 kernel. | FP8/FP4 GEMM, INT4 dequantization, low-bit attention, approximate math |
+| **FP5: Intentional randomness** | The kernel intentionally makes random choices, so two correct runs can produce different samples. One run therefore cannot be used as the only exact reference for another. | Stochastic rounding, dropout, token sampling, randomized quantization |
+| **FP6: Unstable comparison metrics** | The comparison metric itself becomes misleading near zero. A tiny absolute difference can look like a huge percentage error even though it has no practical effect. | Near-zero cosine similarity, sparse outputs, probability tails, tiny gradients |
+
 First, the rules, to make sure the benchmark stays on target:
 
 - **FN (the half that fails when the tolerance is too loose):** The kernel really has a bug, but a verification system using a loose tolerance cannot expose it with conventional or random tests, so `allclose` reports a pass.
@@ -342,27 +360,3 @@ The agents should debate whether the apparent failure comes from the kernel or f
 #### 4. Extension directions
 
 This mechanism appears in cosine similarity near zero norm, relative error around zero, saturated activations, sparse outputs dominated by zeros, tiny probability tails, and gradients close to convergence.
-
----
-
-## Summary
-
-The seed set contains 13 cases: 7 FNs and 6 FPs. The cases cover real kernel families including sparse attention (NSA), speculative decoding, GPTQ INT4, GQA, INT8 quantization, KV-cache quantization, RMSNorm, MoE routing, RoPE, cross-entropy, FP8/FP4 attention, Mamba2, and top-p sampling.
-
-The FN group contains 4 underlying ways to evade conventional testing:
-
-1. **Insufficient scenario coverage (FN3 and FN6):** Tests use only conventional configurations, shapes, or sequence lengths, so the code path containing the bug is never tested. The numerical difference is not hidden; it is never produced. This mechanism can be reproduced in almost any kernel by finding a configuration dimension that conventional tests omit.
-2. **Random test data misses special numerical values (FN1 and FN7):** Randomly generated inputs naturally avoid exact ties and near-zero values, so bugs triggered only at those boundary points remain dormant.
-3. **Statistical evidence or realistic data distributions are required (FN2 and FN5):** The bug creates a distribution-level bias or appears only on real data distributions. A one-shot comparison with randomly initialized inputs does not provide the necessary evidence.
-4. **Test data lacks variation along the misrouted dimension (FN4):** The bug itself can create a large numerical error, but homogeneous values across the confused dimension—or a test that checks only coarse aggregate statistics—make incorrect routing or indexing invisible. This differs from insufficient scenario coverage: the configuration is exercised, but the data contains too little distinguishing information to reveal the mistake. When expanding to 100 cases, this mechanism deserves more examples, such as misaligned MoE expert weights or batch elements.
-
-The FP group contains six mechanisms:
-
-1. **Valid ambiguity in tie-breaking (FP1):** A selection contains a tie and the specification does not define a unique answer. MoE routing and top-p sampling are two extensions of this mechanism.
-2. **Different floating-point reduction orders (FP3):** The algorithms are mathematically equivalent, but different addition orders create numerical drift that grows with scale. Cross-entropy and Mamba2 are two variants.
-3. **The precision level determines the appropriate tolerance (FP4):** Lower-bit quantization has a wider inherent noise floor, so one fixed tolerance should not be applied across precision levels.
-4. **Different numerical representation conventions (FP2):** Parameterizations differ elementwise while remaining mathematically equivalent and producing the same downstream behavior.
-5. **The kernel is intentionally stochastic (FP5):** A single deterministic comparison is incompatible with the kernel's design.
-6. **The comparison metric is unstable in an extreme-value region (FP6):** The problem lies in the chosen metric, not in the kernel implementation.
-
-Together, the FN group has four mechanisms and the FP group has six, with two mechanisms represented by multiple kernel variants. This taxonomy provides a useful path for expanding to 100 cases: reproduce each mechanism across several kernel families while continuing to add genuinely distinct mechanisms, rather than repeatedly relabeling the same pattern as a different bug.
