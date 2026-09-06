@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Protocol, Sequence, cast
 
 from .persistence import PersistedRun, persist_run
 from .protocol import AgentResponse
-from .state import ClaimStatus, DescriptionTaskStatus, Role, RunState, ToolCall, Turn
+from .state import ClaimStatus, DescriptionTaskStatus, JsonValue, Role, RunState, ToolCall, Turn
 from .tools.registry import ToolContext, ToolRegistry, build_core_registry
 
 
@@ -232,12 +232,28 @@ class AgenticOrchestrator:
                 max_claim_rounds=max_claim_rounds,
                 max_claim_rounds_per_claim=max_claim_rounds_per_claim,
             )
+            # On the last round a stalled coverage loop must not end the run with
+            # no verdict: stop probing and fall through to the Judge, which is
+            # then told what was left unresolved.
+            can_force_verdict = judge is not None and debate_round >= max_debate_rounds
+
+            def _coverage_stop(reason: StopReason) -> LoopResult | None:
+                return None if can_force_verdict else LoopResult(outputs, debate_round, reason)
+
             while require_claim_coverage and self.open_claim_ids():
                 if experimenter is None:
-                    return LoopResult(outputs, debate_round, StopReason.CLAIM_COVERAGE_REQUIRED)
+                    result = _coverage_stop(StopReason.CLAIM_COVERAGE_REQUIRED)
+                    if result is not None:
+                        return result
+                    break
                 force_probe_consumption = claim_rounds >= claim_round_budget and self.has_unconsumed_probe_events()
                 if claim_rounds >= claim_round_budget and not force_probe_consumption:
-                    return LoopResult(outputs, debate_round, StopReason.CLAIM_COVERAGE_REQUIRED)
+                    result = _coverage_stop(StopReason.CLAIM_COVERAGE_REQUIRED)
+                    if result is not None:
+                        return result
+                    break
+                # A blown tool budget is a hard resource limit, not a debate
+                # outcome, so it still stops the run outright.
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
                     return LoopResult(outputs, debate_round, StopReason.TOOL_BUDGET_EXHAUSTED)
 
@@ -257,29 +273,83 @@ class AgenticOrchestrator:
                 description_changed = self._description_progress_signature() != before_description
                 probe_output_added = self._has_new_probe_event_since(before_tool_events)
                 if force_probe_consumption and not claims_changed:
-                    return LoopResult(outputs, debate_round, StopReason.PROBE_OUTPUT_UNCONSUMED)
+                    result = _coverage_stop(StopReason.PROBE_OUTPUT_UNCONSUMED)
+                    if result is not None:
+                        return result
+                    break
                 if not claims_changed and not probe_output_added and not description_changed:
-                    return LoopResult(outputs, debate_round, StopReason.CLAIM_COVERAGE_STALLED)
+                    result = _coverage_stop(StopReason.CLAIM_COVERAGE_STALLED)
+                    if result is not None:
+                        return result
+                    break
 
             if judge is not None:
-                if require_claim_coverage and self.open_claim_ids():
+                # On the last round the run must end with a verdict rather than
+                # a stop reason, so the gates below stop blocking and whatever is
+                # still unresolved is disclosed to the Judge instead.
+                final_round = debate_round >= max_debate_rounds
+
+                if require_claim_coverage and self.open_claim_ids() and not final_round:
                     continue
                 if debate_round < min_debate_rounds_before_judge:
                     self._record_internal_more_debate_request(
                         reason="minimum debate rounds before Judge not reached",
                     )
                     continue
+
+                # The Skeptic's other speaking slot is at the top of the round,
+                # before the Experimenter runs, so any probe run afterwards
+                # invalidates a sign-off made there. Without a turn here the gate
+                # below could never open in a round where the Experimenter did
+                # any work, and the Judge would never be reached. Run the Skeptic
+                # now, once the evidence it has to review actually exists. If it
+                # raises new claims instead of signing off, the gate below sends
+                # the run into another round, which is the intended outcome.
                 if skeptic is not None and not self._skeptic_review_current():
+                    # Mark the turn as a review so the Skeptic switches out of
+                    # hypothesis-generation mode. Without this it arrives with
+                    # its usual "raise concrete bug hypotheses" instructions and
+                    # tends to open a fresh claim here, which sends the run into
+                    # another round instead of letting the Judge rule.
+                    self._record_skeptic_final_review_request()
+                    stop_reason = self._run_agent_and_check_verdict(
+                        skeptic, outputs=outputs, describer=describer, stop_on_verdict=stop_on_verdict,
+                    )
+                    if stop_reason is not None:
+                        return LoopResult(outputs, debate_round, stop_reason)
+                    if self._tool_budget_exhausted(start_tool_events, tool_budget):
+                        return LoopResult(outputs, debate_round, StopReason.TOOL_BUDGET_EXHAUSTED)
+                    if require_claim_coverage and self.open_claim_ids() and not final_round:
+                        continue
+
+                if skeptic is not None and not self._skeptic_review_current() and not final_round:
                     self._record_internal_more_debate_request(
                         reason="Skeptic must review the latest evidence and call record_no_new_claims before Judge",
                     )
-                    if debate_round < max_debate_rounds:
-                        continue
-                    return LoopResult(outputs, debate_round, StopReason.SKEPTIC_REVIEW_REQUIRED)
-                self.state.convergence = None
-                stop_reason = self._run_agent_and_check_verdict(
+                    continue
+
+                forced_context: dict[str, JsonValue] | None = None
+                if final_round:
+                    # Discloses anything still open (and whether the Skeptic ever
+                    # signed off) to the Judge, and settles the ledger enough for
+                    # record_verdict to accept any of its three verdicts.
+                    notice = self._close_out_for_forced_verdict()
+                    forced_context = {
+                        "unresolved_claims": notice["unresolved_claims"],
+                        "skeptic_signed_off": notice["skeptic_signed_off"],
+                    }
+                else:
+                    self.state.convergence = None
+                stop_reason = self._run_judge_until_decision(
                     judge, outputs=outputs, describer=describer, stop_on_verdict=stop_on_verdict,
                 )
+                if forced_context is not None and self.state.verdict is not None:
+                    # record_verdict clears `convergence`, so without this the
+                    # persisted run would not show that this verdict was reached
+                    # under a spent budget. A "trust" returned alongside three
+                    # unresolved claims is not the same result as one returned
+                    # after a clean sign-off, and a reader has to be able to tell.
+                    self.state.verdict["forced_final_round"] = cast(JsonValue, forced_context)
                 if stop_reason is not None:
                     return LoopResult(outputs, debate_round, stop_reason)
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
@@ -294,6 +364,99 @@ class AgenticOrchestrator:
         if require_claim_coverage and self.open_claim_ids():
             return LoopResult(outputs, max_debate_rounds, StopReason.CLAIM_COVERAGE_REQUIRED)
         return LoopResult(outputs, max_debate_rounds, StopReason.MAX_ROUNDS_EXHAUSTED)
+
+    def _run_judge_until_decision(
+        self,
+        judge: Agent,
+        *,
+        outputs: list[dict],
+        describer: Agent | None,
+        stop_on_verdict: bool,
+        max_turns: int = 3,
+    ) -> StopReason | None:
+        """Let the Judge keep the floor until it actually decides something.
+
+        Every other role gets to work until it is done: the Experimenter has the
+        claim-coverage loop, the Describer is drained up to max_turns. The Judge
+        had a single turn per round, so a turn spent on inspect_problem or
+        read_artifact_file -- which its own instructions tell it to use when it
+        needs context -- ended the round with nothing recorded. Give it several
+        turns, stopping as soon as it records a verdict, asks for more debate, or
+        stops making progress.
+        """
+        for _ in range(max_turns):
+            before_tool_events = len(self.state.tool_events)
+            stop_reason = self._run_agent_and_check_verdict(
+                judge, outputs=outputs, describer=describer, stop_on_verdict=stop_on_verdict,
+            )
+            if stop_reason is not None:
+                return stop_reason
+            if self.state.verdict is not None or self._more_debate_requested():
+                return None
+            if len(self.state.tool_events) == before_tool_events:
+                # A turn that called nothing will not call anything next time
+                # either; spending more budget on it is waste.
+                return None
+        return None
+
+    def _close_out_for_forced_verdict(self) -> dict[str, JsonValue]:
+        """Hand an exhausted run to the Judge instead of ending with no verdict.
+
+        On the last debate round the run must produce a verdict, so anything the
+        debate never settled is disclosed rather than hidden: each still-open
+        claim gets an explicit "never resolved" evidence entry and moves to
+        inconclusive (record_verdict refuses trust/reject while claims are open,
+        and ClaimLedger refuses a status change with no supporting evidence), and
+        the returned notice tells the Judge exactly what was left hanging.
+        """
+        from .ledger import ClaimLedger
+        from .state import utc_now_iso
+
+        ledger = ClaimLedger(self.state)
+        unresolved = self.open_claim_ids()
+        for claim_id in unresolved:
+            ledger.append_evidence(
+                claim_id=claim_id,
+                kind="agent_analysis",
+                summary=(
+                    "Debate budget was exhausted before this claim was resolved. It is recorded "
+                    "as inconclusive so the Judge can weigh it as an open question, not because "
+                    "any evidence settled it."
+                ),
+                supports=ClaimStatus.INCONCLUSIVE,
+                data={"unresolved_at_budget_exhaustion": True},
+            )
+            ledger.update_claim_status(claim_id=claim_id, status=ClaimStatus.INCONCLUSIVE)
+
+        notice: dict[str, JsonValue] = {
+            "request": "final_verdict_required",
+            "reason": (
+                "This is the final debate round: a verdict must be recorded now. The claims "
+                "listed in unresolved_claims were never settled by evidence, and "
+                "skeptic_signed_off reports whether the Skeptic ever confirmed it had no "
+                "further concerns. Weigh both when choosing the verdict and say so in the reason."
+            ),
+            "unresolved_claims": cast(JsonValue, unresolved),
+            "skeptic_signed_off": self._skeptic_review_current(),
+            "created_at": utc_now_iso(),
+        }
+        self.state.convergence = notice
+        return notice
+
+    def _record_skeptic_final_review_request(self) -> None:
+        """Signal the Skeptic that this turn is a review, not a new attack round."""
+        from .state import utc_now_iso
+
+        self.state.convergence = {
+            "request": "skeptic_final_review",
+            "reason": (
+                "This round's probes are finished and the Judge is waiting. Review the new "
+                "evidence and call record_no_new_claims unless it exposes a material, testable, "
+                "in-scope problem that existing claims do not already cover."
+            ),
+            "focus_claims": [],
+            "created_at": utc_now_iso(),
+        }
 
     def _record_internal_more_debate_request(self, *, reason: str) -> None:
         from .state import utc_now_iso
@@ -316,6 +479,16 @@ class AgenticOrchestrator:
         if not isinstance(reviewed_count, int) or reviewed_count < 0:
             return False
 
+        # Tools that introduce new evidence about the kernel's behavior, and so
+        # invalidate a review made before they ran.
+        #
+        # request_description / record_description_update are deliberately NOT
+        # here. They clarify the contract rather than produce new evidence, and
+        # the orchestrator drains pending description tasks automatically after
+        # every non-Describer turn -- including right after the Skeptic's. With
+        # them in this set, a Skeptic that asked a question and signed off in the
+        # same turn had its own sign-off invalidated by the answer it asked for,
+        # permanently blocking the Judge.
         stale_tools = {
             "record_claim",
             "append_evidence",
@@ -323,8 +496,6 @@ class AgenticOrchestrator:
             "run_python_probe",
             "run_claim_probe",
             "finalize_probe_evidence",
-            "request_description",
-            "record_description_update",
         }
         return not any(event.tool in stale_tools for event in self.state.tool_events[reviewed_count:])
 

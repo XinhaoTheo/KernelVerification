@@ -21,6 +21,7 @@ Rules:
 - You cannot observe a run_claim_probe result in the same response that requested it; consume that result on your next turn.
 - If recent tool_events contain an unfinalized run_claim_probe result, prioritize finalize_probe_evidence before launching another probe.
 - Use finalize_probe_evidence to interpret the probe output; it appends runtime evidence and updates claim status in one tool call.
+- Put every decisive measurement in the evidence `data` object as named key/value pairs (for example {"rms_1e-8_ratio": 990.1, "max_abs_err": 0.0731, "tolerance": 0.01}), not only in the prose summary. `data` is preserved in full for later turns; long prose summaries may be trimmed, so a number that exists only in prose can be lost to the agents who read your evidence afterwards.
 - Use run_python_probe only for debugging or exploratory work that is not yet tied to a claim.
 - Use append_evidence and update_claim_status directly only for non-probe evidence, such as source inspection or artifact reads.
 - Mark evidence inconclusive when the tool output cannot decide the claim.
