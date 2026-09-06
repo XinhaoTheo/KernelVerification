@@ -1,0 +1,91 @@
+{
+  "baseline": "single_llm_no_debate",
+  "model": "claude-opus-5",
+  "generated_at": "2026-09-06T07:38:00+00:00",
+  "summary": {
+    "n": 5,
+    "correct": 4,
+    "wrong": 1,
+    "inconclusive": 0,
+    "no_answer": 0,
+    "missed_bugs": [],
+    "false_alarms": [
+      "case_26"
+    ],
+    "tokens_in": 6648,
+    "tokens_out": 7542,
+    "usd": 0.2218
+  },
+  "cases": {
+    "case_26": {
+      "group": "FP",
+      "seed_class": "FP1",
+      "real_name": "fp10_topk_boundary_tie_admits_all",
+      "kernel_family": "top-k threshold selection",
+      "verdict": "reject",
+      "ground_truth": "trust",
+      "correct": false,
+      "confidence": 0.87,
+      "reason": "The bisection converges lo/hi to v_{K+1} (the condition `count(x > mid) > K` is equivalent to `mid < v_{K+1}`, off by one), and the final mask uses `x >= lo` with lo strictly below v_{K+1}, so the (k+1)-th largest element is kept even when there are no ties (e.g. row [5,4,3], k=1 keeps both 5 and 4).",
+      "input_tokens": 1340,
+      "output_tokens": 4007,
+      "attempts": 1
+    },
+    "case_27": {
+      "group": "FN",
+      "seed_class": "FN2",
+      "real_name": "fn16_masked_softmax_fully_masked_row",
+      "kernel_family": "masked softmax / attention probabilities",
+      "verdict": "reject",
+      "ground_truth": "reject",
+      "correct": true,
+      "confidence": 0.95,
+      "reason": "For a fully-masked row all entries become -inf, so the max is -inf and the sum of exponentials is 0; the final division e/sum produces 0/0 = NaN instead of the required all-zero, finite output row (no guard on an empty denominator).",
+      "input_tokens": 1244,
+      "output_tokens": 267,
+      "attempts": 1
+    },
+    "case_28": {
+      "group": "FN",
+      "seed_class": "FN5",
+      "real_name": "fn17_int8_percentile_calibration_outliers",
+      "kernel_family": "per-row calibrated symmetric INT8 quantization",
+      "verdict": "reject",
+      "ground_truth": "reject",
+      "correct": true,
+      "confidence": 0.93,
+      "reason": "The kernel calibrates the scale on the 3rd-largest absolute value (it iteratively strips the top PCTL_LEVELS=2 magnitudes) instead of the row's absmax, so the largest outlier channels are clamped to 127*scale, discarding most of their magnitude; for the heavy-tailed activations specified this makes ||y-x||/||x|| far exceed 5%.",
+      "input_tokens": 1545,
+      "output_tokens": 309,
+      "attempts": 1
+    },
+    "case_29": {
+      "group": "FP",
+      "seed_class": "FP4",
+      "real_name": "fp11_fp8_e4m3_rounding_within_format",
+      "kernel_family": "FP8 e4m3 rounding",
+      "verdict": "trust",
+      "ground_truth": "trust",
+      "correct": true,
+      "confidence": 0.76,
+      "reason": "The kernel computes the binade exponent floor(log2|x|) and quantizes to step 2^(e-3) with round-to-nearest, which is exactly the e4m3 mantissa grid (8 steps per binade); the resulting deviation from the float32 input is the intended quantization error, not a bug. Only extreme edge cases (saturation above 448, e4m3 subnormals below 2^-6, and tie-breaking half-up vs half-even) are unhandled, which are outside the contract's stated focus.",
+      "input_tokens": 1270,
+      "output_tokens": 2747,
+      "attempts": 1
+    },
+    "case_30": {
+      "group": "FN",
+      "seed_class": "FN1",
+      "real_name": "fn18_moe_top1_routing_tie",
+      "kernel_family": "MoE top-1 router",
+      "verdict": "reject",
+      "ground_truth": "reject",
+      "correct": true,
+      "confidence": 0.95,
+      "reason": "The reduction uses `take = v >= best`, so a later expert with an equal logit overwrites the earlier one, making the HIGHEST index win ties; the contract requires the lowest index (should be `v > best`).",
+      "input_tokens": 1249,
+      "output_tokens": 212,
+      "attempts": 1
+    }
+  }
+}

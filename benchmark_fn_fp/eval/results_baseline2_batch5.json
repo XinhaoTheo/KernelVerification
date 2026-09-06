@@ -1,0 +1,103 @@
+{
+  "baseline": "single_llm_no_debate",
+  "model": "claude-opus-5",
+  "generated_at": "2026-09-06T07:31:48+00:00",
+  "summary": {
+    "n": 6,
+    "correct": 6,
+    "wrong": 0,
+    "inconclusive": 0,
+    "no_answer": 0,
+    "missed_bugs": [],
+    "false_alarms": [],
+    "tokens_in": 7806,
+    "tokens_out": 3389,
+    "usd": 0.1238
+  },
+  "cases": {
+    "case_20": {
+      "group": "FN",
+      "seed_class": "FN7",
+      "real_name": "fn14_layer_norm_eps_outside_sqrt",
+      "kernel_family": "layer normalization forward",
+      "verdict": "reject",
+      "ground_truth": "reject",
+      "correct": true,
+      "confidence": 0.97,
+      "reason": "The kernel computes rstd = 1/(sqrt(var) + eps) instead of the contracted 1/sqrt(var + eps); for a constant/near-zero-variance row this gives ~1/eps (1e5) rather than ~1/sqrt(eps) (~316), and it differs numerically from the reference in general.",
+      "input_tokens": 1625,
+      "output_tokens": 184,
+      "attempts": 1
+    },
+    "case_21": {
+      "group": "FN",
+      "seed_class": "FN4",
+      "real_name": "fn13_paged_kv_block_table_homogeneous",
+      "kernel_family": "paged KV-cache gather through a block table",
+      "verdict": "reject",
+      "ground_truth": "reject",
+      "correct": true,
+      "confidence": 0.98,
+      "reason": "The kernel never loads from BlockTable; it computes the physical page as seq*max_blocks + logical_block, assuming contiguous per-sequence page allocation, which violates the block-table indirection contract (and can read out of bounds).",
+      "input_tokens": 1407,
+      "output_tokens": 153,
+      "attempts": 1
+    },
+    "case_22": {
+      "group": "FP",
+      "seed_class": "FP3",
+      "real_name": "fp8_splitk_atomic_accumulation_order",
+      "kernel_family": "split-K inner product with atomic accumulation",
+      "verdict": "trust",
+      "ground_truth": "trust",
+      "correct": true,
+      "confidence": 0.82,
+      "reason": "The split partitioning covers [0,K) exactly once (start=part*chunk, chunk=cdiv(K,SPLIT), masked by min(start+chunk,K)), inner blocks are correctly masked with other=0.0, and per-partition fp32 partials are combined via atomic_add into a zero-initialized output; only the summation order differs, which the contract permits.",
+      "input_tokens": 1211,
+      "output_tokens": 1222,
+      "attempts": 1
+    },
+    "case_23": {
+      "group": "FP",
+      "seed_class": "FP2",
+      "real_name": "fp7_nchw_nhwc_channel_scale_layout",
+      "kernel_family": "per-channel scaling under a channels-last layout",
+      "verdict": "trust",
+      "ground_truth": "trust",
+      "correct": true,
+      "confidence": 0.72,
+      "reason": "The kernel implements per-channel scaling under an NHWC (channels-contiguous) convention, which the problem statement explicitly says is an acceptable layout choice; the indexing pix*C + c and the scale lookup are consistent and correct for that layout. The only caveat is Triton's power-of-two requirement on tl.arange(0, C), which is a generic constraint rather than a violation of the stated contract.",
+      "input_tokens": 1104,
+      "output_tokens": 502,
+      "attempts": 1
+    },
+    "case_24": {
+      "group": "FP",
+      "seed_class": "FP6",
+      "real_name": "fp9_cosine_similarity_near_zero",
+      "kernel_family": "row-wise cosine similarity",
+      "verdict": "trust",
+      "ground_truth": "trust",
+      "correct": true,
+      "confidence": 0.76,
+      "reason": "The kernel correctly computes per-row dot products and norms in float32 with proper masking, and applies the eps floor to the denominator exactly as the contract states; the only assumptions (b sharing a's row stride, contiguous columns) are standard for this 2-D float32 setting and numerical accumulation matches torch's precision within absolute tolerance.",
+      "input_tokens": 1278,
+      "output_tokens": 1170,
+      "attempts": 1
+    },
+    "case_25": {
+      "group": "FN",
+      "seed_class": "FN6",
+      "real_name": "fn15_int8_requant_round_toward_zero_drift",
+      "kernel_family": "symmetric INT8 quantize-dequantize round trip",
+      "verdict": "reject",
+      "ground_truth": "reject",
+      "correct": true,
+      "confidence": 0.97,
+      "reason": "The kernel uses tl.floor(x/scale) instead of round-to-nearest, which biases every value downward by up to one quantization step (systematically toward -inf), violating the unbiased round-trip contract.",
+      "input_tokens": 1181,
+      "output_tokens": 158,
+      "attempts": 1
+    }
+  }
+}
