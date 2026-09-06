@@ -17,6 +17,10 @@ _DEFAULT_OPENAI_MODEL = "gpt-5"
 _DEFAULT_PROVIDER = "anthropic"
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _DEFAULT_OPENAI_REASONING_EFFORT = "minimal"
+# Anthropic prompt-cache TTL for the stable tools+system prefix. "1h" survives a
+# slow round (a probe run can put minutes between two turns of the same role);
+# "5m" is cheaper to write but misses across those gaps. "off" disables caching.
+_DEFAULT_PROMPT_CACHE_TTL = "1h"
 
 
 @dataclass(slots=True)
@@ -86,7 +90,7 @@ class AnthropicLLMClient:
         kwargs: dict[str, Any] = {
             "model": self.model or default_model("anthropic"),
             "max_tokens": max_tokens,
-            "system": system,
+            "system": _anthropic_system_blocks(system),
             "messages": [{"role": "user", "content": user}],
         }
         if tools:
@@ -229,6 +233,19 @@ def default_timeout_seconds() -> float:
     return max(1.0, value)
 
 
+def prompt_cache_ttl() -> str | None:
+    """Anthropic cache TTL, or None to send no cache_control at all.
+
+    AGENTIC_PROMPT_CACHE accepts "1h" (default), "5m", or "off"/"none"/"0".
+    """
+    raw = (os.getenv("AGENTIC_PROMPT_CACHE") or _DEFAULT_PROMPT_CACHE_TTL).strip().lower()
+    if raw in {"off", "none", "0", "false"}:
+        return None
+    if raw in {"5m", "1h"}:
+        return raw
+    return _DEFAULT_PROMPT_CACHE_TTL
+
+
 def default_provider() -> str:
     return os.getenv("AGENTIC_PROVIDER") or _DEFAULT_PROVIDER
 
@@ -280,6 +297,28 @@ def _serialize_tool_response(*, message: str, tool_calls: list[dict[str, Any]]) 
     which provider or calling convention produced the result.
     """
     return json.dumps({"message": message, "tool_calls": tool_calls})
+
+
+def _anthropic_system_blocks(system: str) -> Any:
+    """Render `system` as content blocks, marking the cacheable prefix.
+
+    An agent's tools and system prompt (instructions + skill documents) are
+    byte-identical on every call it makes during a run -- only the run-state
+    JSON in the user message changes. A cache breakpoint on the final system
+    block therefore caches the whole `tools` + `system` prefix, which is ~25%
+    of a typical prompt here, at 0.1x input price on every call after the first.
+
+    Returns the plain string when caching is off or the prompt is empty, so the
+    request shape is unchanged in that case.
+    """
+    ttl = prompt_cache_ttl()
+    if not ttl or not system:
+        return system
+    cache_control: dict[str, Any] = {"type": "ephemeral"}
+    if ttl != "5m":
+        # 5m is the API default and is rejected as an explicit value.
+        cache_control["ttl"] = ttl
+    return [{"type": "text", "text": system, "cache_control": cache_control}]
 
 
 def _anthropic_tool_specs(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -73,7 +73,10 @@ def test_skeptic_agent_uses_json_protocol_and_records_claim(tmp_path) -> None:
     assert orchestrator.state.claims[0].statement == "Non-contiguous inputs may be treated as contiguous."
     assert fake.calls
     assert "tool-calling mechanism" in fake.calls[0]["system"]
-    assert "Available Tools" in fake.calls[0]["user"]
+    # Tool definitions reach the model only through the provider's native
+    # tool-calling parameter; the prompt text must not carry a second copy.
+    assert "record_claim" in {t["name"] for t in fake.calls[0]["tools"]}
+    assert "input_schema" not in fake.calls[0]["user"]
 
 
 def test_experimenter_agent_updates_evidence_and_status(tmp_path) -> None:
@@ -436,7 +439,6 @@ def test_agentic_cli_runs_full_agent_chain_with_judge(tmp_path, monkeypatch, cap
                     ],
                 }
             ),
-            json.dumps({"message": "Round 2 description sees evidence.", "tool_calls": []}),
             json.dumps(
                 {
                     "message": "No new claims after reviewing c1 evidence.",
@@ -496,7 +498,6 @@ def test_agentic_cli_runs_full_agent_chain_with_judge(tmp_path, monkeypatch, cap
         "describer",
         "skeptic",
         "experimenter",
-        "describer",
         "skeptic",
         "judge",
     ]
@@ -566,7 +567,6 @@ def test_agentic_cli_workflow_runs_claim_coverage_loop_before_judge(tmp_path, mo
                     ],
                 }
             ),
-            json.dumps({"message": "Round 2 describe after evidence.", "tool_calls": []}),
             json.dumps(
                 {
                     "message": "No new claims after reviewing both covered claims.",
@@ -629,7 +629,6 @@ def test_agentic_cli_workflow_runs_claim_coverage_loop_before_judge(tmp_path, mo
         "skeptic",
         "experimenter",
         "experimenter",
-        "describer",
         "skeptic",
         "judge",
     ]
@@ -696,7 +695,6 @@ def test_agentic_cli_workflow_allows_probe_result_to_be_consumed_next_turn(tmp_p
                     ],
                 }
             ),
-            json.dumps({"message": "Round 2 describe after confirmed evidence.", "tool_calls": []}),
             json.dumps(
                 {
                     "message": "No new claims after reviewing confirmed c1.",
@@ -757,7 +755,6 @@ def test_agentic_cli_workflow_allows_probe_result_to_be_consumed_next_turn(tmp_p
         "skeptic",
         "experimenter",
         "experimenter",
-        "describer",
         "skeptic",
         "judge",
     ]
@@ -914,7 +911,6 @@ def test_agentic_cli_judge_can_request_another_debate_round(tmp_path, monkeypatc
                     ],
                 }
             ),
-            json.dumps({"message": "Round 2 describe.", "tool_calls": []}),
             json.dumps(
                 {
                     "message": "Round 2 no follow-up claims.",
@@ -1001,7 +997,6 @@ def test_agentic_cli_judge_can_request_another_debate_round(tmp_path, monkeypatc
         "describer",
         "skeptic",
         "experimenter",
-        "describer",
         "skeptic",
         "judge",
         "describer",
@@ -1164,3 +1159,90 @@ def _write_artifact(dataset_root: Path) -> None:
     (entry_dir / "problem.txt").write_text("Add one to every element.\n")
     (entry_dir / "kernel.py").write_text("def kernel(x):\n    return x + 1\n")
     (entry_dir / "test.py").write_text("features = 64\ndef test():\n    pass\n")
+
+
+def test_agentic_cli_final_round_forces_verdict_and_discloses_unresolved_claims(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The last round must end with a verdict, not a stop reason.
+
+    The Skeptic raises a claim and never signs off; the Experimenter never
+    resolves it. Before this behavior existed the run ended on a stop reason
+    with no verdict at all, which is useless to a caller. Now the leftover claim
+    is disclosed to the Judge and a verdict is recorded anyway.
+    """
+    _write_artifact(tmp_path / "dataset")
+    fake = FakeLLMClient(
+        [
+            json.dumps({"message": "Describe the kernel.", "tool_calls": []}),
+            json.dumps(
+                {
+                    "message": "Raise a claim.",
+                    "tool_calls": [
+                        {
+                            "tool": "record_claim",
+                            "args": {
+                                "statement": "Boundary sizes may be mishandled.",
+                                "rationale": "No boundary evidence is present yet.",
+                            },
+                        }
+                    ],
+                }
+            ),
+            # Experimenter turn that resolves nothing, stalling coverage.
+            json.dumps({"message": "No probe this turn.", "tool_calls": []}),
+            # Skeptic review slot: still not satisfied, so it does not sign off.
+            json.dumps({"message": "Still uneasy about c1.", "tool_calls": []}),
+            json.dumps(
+                {
+                    "message": "Judge must finalize despite the open claim.",
+                    "tool_calls": [
+                        {
+                            "tool": "record_verdict",
+                            "args": {
+                                "verdict": "needs_more_evidence",
+                                "confidence": 0.2,
+                                "decisive_claims": ["c1"],
+                                "reason": "c1 was never resolved before the debate budget ran out.",
+                            },
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    monkeypatch.setattr("verifier.agentic_run.build_llm_client", lambda provider=None, model=None: fake)
+
+    exit_code = agentic_main(
+        [
+            "toy",
+            "--dataset-dir",
+            str(tmp_path / "dataset"),
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--agents",
+            "describer,skeptic,experimenter,judge",
+            "--max-debate-rounds",
+            "1",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "stop_reason: verdict_recorded" in captured.out
+
+    run_data = json.loads((tmp_path / "run" / "run.json").read_text())
+    assert run_data["verdict"]["verdict"] == "needs_more_evidence"
+
+    # The unsettled claim is handed over, marked inconclusive rather than
+    # silently dropped, and flagged as unresolved for the Judge.
+    assert [claim["status"] for claim in run_data["claims"]] == ["inconclusive"]
+    closing_evidence = run_data["claims"][0]["evidence"][-1]
+    assert closing_evidence["data"]["unresolved_at_budget_exhaustion"] is True
+    # record_verdict clears `convergence`, so the forced-run context is kept on
+    # the verdict itself: a reader must be able to tell this verdict was reached
+    # with a spent budget and an unsettled claim.
+    assert run_data["verdict"]["forced_final_round"] == {
+        "unresolved_claims": ["c1"],
+        "skeptic_signed_off": False,
+    }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from functools import partial
 from pathlib import Path
 
@@ -14,6 +15,16 @@ from verifier.agentic.orchestrator import AgenticOrchestrator, build_context_res
 from verifier.agentic.state import Role
 
 _print = partial(print, flush=True)
+
+def _env_int(name: str, fallback: int) -> int:
+    """Read an int from the environment, ignoring unset/blank/garbage values."""
+    raw = (os.getenv(name) or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return fallback
+    return value if value >= 1 else fallback
+
 
 _AGENT_BUILDERS = {
     "describer": build_describer_agent,
@@ -43,8 +54,9 @@ def main(argv: list[str] | None = None) -> int:
         "--max-rounds",
         dest="max_debate_rounds",
         type=int,
-        default=1,
-        help="max outer debate rounds; --max-rounds is a deprecated alias",
+        default=_env_int("AGENTIC_MAX_ROUNDS", 1),
+        help="max outer debate rounds; defaults to $AGENTIC_MAX_ROUNDS when set, "
+             "else 1. --max-rounds is a deprecated alias",
     )
     parser.add_argument("--max-claim-rounds", type=int, default=3, help="minimum Experimenter rounds per debate round for claim coverage")
     parser.add_argument(
@@ -99,12 +111,16 @@ def main(argv: list[str] | None = None) -> int:
     batch_duration_s = 0.0
     batch_input_tokens = 0
     batch_output_tokens = 0
+    batch_cache_write_tokens = 0
+    batch_cache_read_tokens = 0
     for entry in entries:
         try:
             totals = _run_one_entry(entry, args, agent_names)
             batch_duration_s += totals["total_duration_s"]
             batch_input_tokens += totals["input_tokens"]
             batch_output_tokens += totals["output_tokens"]
+            batch_cache_write_tokens += totals["cache_creation_input_tokens"]
+            batch_cache_read_tokens += totals["cache_read_input_tokens"]
         except Exception as exc:
             failures += 1
             _print(f"entry: {entry}")
@@ -118,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         _print(f"llm_time_s: {round(batch_duration_s, 3)}")
         _print(f"tokens_in: {batch_input_tokens} tokens_out: {batch_output_tokens} "
                f"total: {batch_input_tokens + batch_output_tokens}")
+        _print(f"cache_write: {batch_cache_write_tokens} cache_read: {batch_cache_read_tokens}")
     return 1 if failures else 0
 
 
@@ -199,9 +216,13 @@ def _run_one_entry_unsafe(
         _print(f"stop_reason: {loop_result.stop_reason}")
     totals = usage_totals(orchestrator.state)
     if totals["llm_calls"]:
+        # tokens_in excludes cached tokens, so the cache columns are needed to
+        # read this line correctly (and to tell a cache hit from a cache miss).
         _print(
             f"llm_time_s: {totals['total_duration_s']} "
-            f"tokens_in: {totals['input_tokens']} tokens_out: {totals['output_tokens']}"
+            f"tokens_in: {totals['input_tokens']} tokens_out: {totals['output_tokens']} "
+            f"cache_write: {totals['cache_creation_input_tokens']} "
+            f"cache_read: {totals['cache_read_input_tokens']}"
         )
     _print(f"run_dir: {persisted.run_dir}")
     _print(f"run_json: {persisted.run_json}")
