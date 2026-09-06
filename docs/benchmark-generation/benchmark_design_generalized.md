@@ -31,6 +31,84 @@ These seeds are not fixed verification recipes. For each case, the agents should
 
 The named projects establish that the kernel family and numerical mechanism are real. Unless a linked source explicitly documents the defect, each **Bug** below should be read as a benchmark mutation or proposed witness, not as an allegation about the cited upstream implementation.
 
+## Familiarity Is a Confound
+
+Every seed below is drawn from a widely deployed kernel family -- Liger-Kernel,
+vLLM, AutoGPTQ, flash-attention, mamba. That is deliberate: it is what makes the
+cases realistic. It also creates a confound that only shows up once the
+benchmark is used to compare verification systems rather than tolerances.
+
+A strong model has read these repositories. When it judges such a kernel it can
+draw on recognition -- "this is the AutoGPTQ matmul, and it is correct" -- as
+well as on reasoning about the code in front of it. Recognition is a legitimate
+capability, but it is not the capability under test: a verification system is
+supposed to establish correctness from evidence, not from having seen the file
+before. A benchmark built entirely from famous kernels therefore measures
+familiarity and verification together and cannot separate them.
+
+Measured behaviour on the current seed set is consistent with this. A single
+model call, given only problem.txt and kernel.py and unable to run anything,
+resolves nearly every case; the one case it repeatedly gets wrong is the one
+where its recognition claim is false -- it asserts that the kernel "matches the
+reference AutoGPTQ implementation" and therefore handles a partial quantization
+group, which running it at an irregular shape disproves.
+
+So a portion of the set should use kernel families the model cannot have
+memorised, while still satisfying the rule that the family is real and publicly
+documented:
+
+- kernels from papers or repositories published after a model's training cutoff;
+- unusual compositions of standard operators, real in the sense that a paper or
+  project specifies the operator, but not present as a well-known reference
+  implementation;
+- kernels from smaller or newer projects that never entered the widely-scraped
+  corpus.
+
+Such cases keep the FN/FP mechanisms unchanged -- the seeds below apply exactly
+as written -- and remove the shortcut. Cases drawn from famous kernels remain
+valuable for the tolerance comparison the benchmark was built for; they are just
+not sufficient on their own for comparing verification systems to each other.
+
+**Both halves of this hypothesis have now been tested, and neither popularity
+nor recency is the explanation.**
+
+*Popularity.* A case was built on a four-star research repository, with the
+kernel body copied verbatim and a single line of its launch wrapper changed so
+that a block-alignment flag is derived from the total packed sequence length
+instead of from each sequence length. The kernel is then correct for a packed
+batch of lengths [100, 150] and wrong for [100, 156], because 256 is a multiple
+of the block size and 250 is not -- the verdict turns on the contents of an input
+tensor. The single model call identified the line and the reasoning ("total
+divisible does not imply each divisible") at 0.85 confidence. Note that a low
+star count is weak evidence at best: that repository predates the model's cutoff
+by six months and a broadly scraped corpus would still contain it.
+
+*Recency.* The stronger test used `facebookresearch/sparse-delta-memory`, whose
+first commit is 2026-07-09, after the evaluated model's training cutoff, so the
+code cannot have been memorised. Its stable bitonic argsort was copied verbatim,
+its docstrings stripped so the contract was not restated inside the source, and
+one token changed: the tie comparison `(keys == p_key) & (perm < p_perm)` became
+`perm > p_perm`, so ties are won by the higher original index and the sort is no
+longer stable. The keys still come out sorted, so an ordering check passes and
+only the permutation is wrong. The single model call identified it.
+
+Five recipes for constructing a case a strong reader cannot settle from source
+have now been falsified by measurement: a small clean kernel with a divisibility
+bug; a several-hundred-line verbatim kernel with a one-character change; a defect
+whose correctness depends on an indirection table; the obscure-repository case;
+and the post-cutoff case. Nineteen cases were built; none defeated the
+single-call baseline. The one case that does defeat it was found by accident, and
+its distinguishing feature is that the model asserts a *false factual claim*
+about upstream code it cannot check -- not that the source withholds information.
+
+The practical consequence for this benchmark: it separates a loose or strict
+tolerance from a reasoning verifier very clearly, and that is what it was built
+for. Whether it can separate a multi-agent verifier from a single strong model
+call is not settled by accuracy alone, and the evidence so far suggests such
+cases are rare rather than merely undiscovered. A case drawn from post-cutoff
+code is still worth having -- it removes a confound that would otherwise be
+untestable -- it just does not, on its own, produce the separation.
+
 ---
 
 ## FN Group: Real Bugs That Conventional Tests or Loose Tolerances Fail to Detect
