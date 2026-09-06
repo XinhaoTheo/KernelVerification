@@ -1,0 +1,21 @@
+Operation: variable-length block-sparse attention
+(zhengqigao/hbsattn, hbsattn/fwd_triton_fix_tile_size.py).
+
+A batch is packed into one flat sequence axis. `cu_q_seqlens` and `cu_k_seqlens`
+are the cumulative offsets, so sequence b occupies rows
+cu_seqlens[b] .. cu_seqlens[b+1]. Queries and keys are cut into fixed blocks of
+`q_block_size` and `k_block_size`; `block_mask[h, i, j]` says whether query
+block i attends to key block j.
+
+    out[t] = softmax over the selected keys of ( q[t] . k / sqrt(headdim) ) @ v
+
+restricted to keys that belong to the same sequence as t and that lie in a
+selected block.
+
+Input domain: sequence lengths are arbitrary and generally differ within a
+batch -- that is the point of the packed variable-length format. A sequence
+length is NOT required to be a multiple of the block size; when it is not, the
+final block of that sequence is partial and the positions past its end belong
+to the next sequence, so they must not contribute to the softmax.
+
+Does block_sparse_attention() satisfy this contract?

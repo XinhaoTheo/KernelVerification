@@ -1,0 +1,24 @@
+{
+  "name": "fn3_gptq_dequant_group_div_coverage",
+  "benchmark_version": "fn_fp_triton_v1",
+  "group": "FN",
+  "seed_class": "FN3",
+  "kernel_family": "AutoGPTQ INT4 dequant+matmul",
+  "reference": "AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel",
+  "failure_mode": "false_negative",
+  "mechanism": "The real kernel is correct; it simply gathers scales via `g_idx` per column (`scales_ptrs + g_idx[:,None]*stride_scales`). The bug lives in how the HOST builds g_idx: num_groups must be ceil(K/group_size) so the trailing partial group gets its own scale. Building it with floor division instead means columns beyond the last full group reuse the wrong group's scale -- but only when K is not divisible by group_size. On a convenient divisible K the two formulas coincide and the real kernel's output matches bit-for-bit.",
+  "default_tolerance": {
+    "rtol": 0.01,
+    "atol": 0.01
+  },
+  "expected": {
+    "ground_truth": "g_idx is built with K // group_size instead of ceil(K / group_size)",
+    "naive_allclose_verdict": "PASS on divisible K=4096, FAIL on irregular K=300",
+    "correct_verdict": "BUGGY"
+  },
+  "note": "Uses the REAL AutoGPTQ Triton dequant-matmul kernel unmodified; the bug is entirely in the g_idx construction passed to it, exactly as it would be in a real integration bug.",
+  "status": "seed_v1",
+  "source": "real_triton_kernel_adapted",
+  "requires_gpu": true,
+  "passed": null
+}

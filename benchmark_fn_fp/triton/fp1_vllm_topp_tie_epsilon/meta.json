@@ -1,0 +1,24 @@
+{
+  "name": "fp1_vllm_topp_tie_epsilon",
+  "benchmark_version": "fn_fp_triton_v1",
+  "group": "FP",
+  "seed_class": "FP1",
+  "kernel_family": "vLLM top-k/top-p sampling, near-pivot tie detection",
+  "reference": "vllm-project/vllm, vllm/v1/sample/ops/topk_topp_triton.py::_update_min_larger_stats",
+  "failure_mode": "false_positive",
+  "mechanism": "The real kernel tracks how many values are within `1e-9` of the running pivot (`tl.abs(data - tile_min) < 1e-9`) to correctly count ties at the top-p/top-k cutoff. Two equally valid implementations can use a different (but still reasonable) epsilon for this tie tolerance; when probabilities are close to -- but not exactly at -- the cutoff, the two epsilons include a different number of near-pivot candidates in the selected set, changing a downstream probability-weighted result well beyond a naive tolerance, even though neither implementation violates the (epsilon-unspecified) contract.",
+  "default_tolerance": {
+    "rtol": 0.01,
+    "atol": 0.01
+  },
+  "expected": {
+    "ground_truth": "kernel.py uses a different (still reasonable) tie epsilon than the reference",
+    "naive_allclose_verdict": "FAIL on the downstream weighted output",
+    "correct_verdict": "CORRECT (a permitted epsilon choice for an unspecified tie tolerance)"
+  },
+  "note": "kernel.py is a minimal standalone kernel built around the real _update_min_larger_stats primitive (verbatim), varying only its epsilon. Runs on GPU.",
+  "status": "seed_v1",
+  "source": "real_triton_kernel_adapted",
+  "requires_gpu": true,
+  "passed": null
+}

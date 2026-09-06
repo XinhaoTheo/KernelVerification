@@ -1,0 +1,24 @@
+{
+  "name": "fn1_nsa_bitonic_topk_tie_dilution",
+  "benchmark_version": "fn_fp_triton_v1",
+  "group": "FN",
+  "seed_class": "FN1",
+  "kernel_family": "Native Sparse Attention (NSA) top-k block-selection sort",
+  "reference": "fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py (_compare_and_swap/_bitonic_merge/argsort), real production bitonic-sort kernel; https://arxiv.org/abs/2502.11089",
+  "failure_mode": "false_negative",
+  "mechanism": "This benchmark stipulates a tie-break contract (on an exact score tie, the lower-index candidate must be kept). The REAL, unmodified fla-org comparator `cond = (left > right) != flip` resolves this bitonic-network tie differently from a `>=` comparator that enforces the contract -- verified on-device to disagree on this exact tied pair -- so kernel.py, the real kernel byte for byte, silently violates the stipulated contract. Averaging the swapped block's value with k-1 correctly selected blocks dilutes the error below the default allclose tolerance.",
+  "default_tolerance": {
+    "rtol": 0.01,
+    "atol": 0.01
+  },
+  "expected": {
+    "ground_truth": "kernel.py is the real, unmodified NSA comparator; on this tied pair it keeps a different block than a >=-based reference enforcing the stipulated tie contract",
+    "naive_allclose_verdict": "PASS at rtol=1e-2/atol=1e-2 on the k-averaged downstream output",
+    "correct_verdict": "BUGGY"
+  },
+  "note": "kernel.py is the REAL, unmodified fla-org comparator. test.py's reference uses `>=` to enforce the stipulated lower-index-wins contract; both run as real Triton kernels on an actual CUDA device. Requires GPU.",
+  "status": "seed_v1",
+  "source": "real_triton_kernel_adapted",
+  "requires_gpu": true,
+  "passed": null
+}

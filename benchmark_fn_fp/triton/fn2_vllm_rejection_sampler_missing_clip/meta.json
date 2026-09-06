@@ -1,0 +1,24 @@
+{
+  "name": "fn2_vllm_rejection_sampler_missing_clip",
+  "benchmark_version": "fn_fp_triton_v1",
+  "group": "FN",
+  "seed_class": "FN2",
+  "kernel_family": "vLLM speculative decoding rejection sampler",
+  "reference": "vllm-project/vllm, vllm/v1/sample/rejection_sampler.py::sample_recovered_tokens_kernel",
+  "failure_mode": "false_negative",
+  "mechanism": "The real kernel computes `prob = tl.maximum(target_prob - draft_prob, 0.0)` before the Gumbel-max argmax race. Dropping the clamp lets tokens where the draft over-proposed (target < draft) win the race whenever the accompanying Gumbel noise (1/q) is large enough -- a token that should have zero recovery probability can still be sampled. On mild draft/target pairs (draft never over-proposes) the clamp is a no-op and the bug is invisible.",
+  "default_tolerance": {
+    "rtol": 0.01,
+    "atol": 0.01
+  },
+  "expected": {
+    "ground_truth": "kernel.py's real kernel with the tl.maximum(...,0.0) clamp removed",
+    "naive_allclose_verdict": "matches the reference whenever draft never over-proposes; diverges once it does",
+    "correct_verdict": "BUGGY"
+  },
+  "note": "Runs the actual Gumbel-race Triton kernel on GPU with a fixed RNG seed so both reference and candidate see identical q, isolating the clamp's effect.",
+  "status": "seed_v1",
+  "source": "real_triton_kernel_adapted",
+  "requires_gpu": true,
+  "passed": null
+}

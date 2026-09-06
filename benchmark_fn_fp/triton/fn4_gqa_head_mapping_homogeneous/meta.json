@@ -1,0 +1,24 @@
+{
+  "name": "fn4_gqa_head_mapping_homogeneous",
+  "benchmark_version": "fn_fp_triton_v1",
+  "group": "FN",
+  "seed_class": "FN4",
+  "kernel_family": "GQA query-to-KV head index arithmetic (vLLM unified attention pattern)",
+  "reference": "vllm-project/vllm, vllm/v1/attention/ops/triton_unified_attention.py, lines ~330-334 (query_pos = ... + offs_m // num_queries_per_kv; query_offset_1 = kv_head_idx * num_queries_per_kv + offs_m % num_queries_per_kv)",
+  "failure_mode": "false_negative",
+  "mechanism": "The correct GQA mapping groups consecutive query heads onto the same KV head via floor division: kv_head = query_head // n_rep -- the same style of integer div/mod head-decomposition vLLM's real unified attention kernel uses to split a flattened index into (sequence position, head-in-group) via `// num_queries_per_kv` and `% num_queries_per_kv`. The bug uses modulo instead (kv_head = query_head % num_kv_heads), which is invisible when every KV head holds identical/homogeneous data.",
+  "default_tolerance": {
+    "rtol": 0.01,
+    "atol": 0.01
+  },
+  "expected": {
+    "ground_truth": "kernel.py maps query heads to KV heads with modulo instead of floor-division",
+    "naive_allclose_verdict": "PASS when KV heads carry homogeneous data, FAIL when KV heads carry distinguishable signatures",
+    "correct_verdict": "BUGGY"
+  },
+  "note": "This is a minimal standalone kernel using the same div/mod arithmetic style as vLLM's real production attention kernel, not a verbatim port of its ~1200-line full kernel (unrelated features like paging, FP8 KV-cache, sliding windows, and ALiBi are outside this mechanism). Runs on GPU.",
+  "status": "seed_v1",
+  "source": "real_triton_kernel_adapted",
+  "requires_gpu": true,
+  "passed": null
+}
