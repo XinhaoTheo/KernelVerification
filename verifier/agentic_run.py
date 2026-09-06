@@ -9,6 +9,7 @@ from pathlib import Path
 
 from verifier import dataset
 from verifier.agentic.agents import build_describer_agent, build_experimenter_agent, build_judge_agent, build_skeptic_agent
+from verifier.agentic.agents.solo import build_solo_agent
 from verifier.agentic.llm import build_llm_client, default_provider
 from verifier.agentic.persistence import load_run_state, usage_totals
 from verifier.agentic.orchestrator import AgenticOrchestrator, build_context_response
@@ -31,6 +32,7 @@ _AGENT_BUILDERS = {
     "skeptic": build_skeptic_agent,
     "experimenter": build_experimenter_agent,
     "judge": build_judge_agent,
+    "solo": build_solo_agent,
 }
 
 

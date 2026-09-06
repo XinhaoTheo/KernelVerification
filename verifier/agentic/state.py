@@ -15,6 +15,9 @@ class Role(str, Enum):
     SKEPTIC = "skeptic"
     EXPERIMENTER = "experimenter"
     JUDGE = "judge"
+    # Ablation role: one agent holding the union of the working roles' tools,
+    # so "execution + iteration" can be measured without the adversarial structure.
+    SOLO = "solo"
     ORCHESTRATOR = "orchestrator"
     TOOL = "tool"
 

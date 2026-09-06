@@ -16,6 +16,7 @@ _AGENT_ROLES = frozenset(
         Role.SKEPTIC.value,
         Role.EXPERIMENTER.value,
         Role.JUDGE.value,
+        Role.SOLO.value,
     }
 )
 _READ_ROLES = _AGENT_ROLES | {Role.ORCHESTRATOR.value}
@@ -260,7 +261,7 @@ def build_core_registry() -> ToolRegistry:
         name="record_claim",
         description="Record one concrete, testable claim in the claim ledger.",
         input_schema=record_claim_schema(),
-        allowed_roles={Role.SKEPTIC.value},
+        allowed_roles={Role.SKEPTIC.value, Role.SOLO.value},
         handler=record_claim,
     )
     registry.register(
@@ -281,42 +282,42 @@ def build_core_registry() -> ToolRegistry:
         name="append_evidence",
         description="Attach source or runtime evidence to a claim.",
         input_schema=append_evidence_schema(),
-        allowed_roles={Role.EXPERIMENTER.value},
+        allowed_roles={Role.EXPERIMENTER.value, Role.SOLO.value},
         handler=append_evidence,
     )
     registry.register(
         name="update_claim_status",
         description="Update a claim status after evidence has been recorded.",
         input_schema=update_claim_status_schema(),
-        allowed_roles={Role.EXPERIMENTER.value},
+        allowed_roles={Role.EXPERIMENTER.value, Role.SOLO.value},
         handler=update_claim_status,
     )
     registry.register(
         name="run_python_probe",
         description="Run agent-generated Python probe code locally and return captured artifacts.",
         input_schema=run_python_probe_schema(),
-        allowed_roles={Role.EXPERIMENTER.value},
+        allowed_roles={Role.EXPERIMENTER.value, Role.SOLO.value},
         handler=run_python_probe,
     )
     registry.register(
         name="run_claim_probe",
         description="Run a Python probe for one claim and return an evidence draft bound to that claim.",
         input_schema=run_claim_probe_schema(),
-        allowed_roles={Role.EXPERIMENTER.value},
+        allowed_roles={Role.EXPERIMENTER.value, Role.SOLO.value},
         handler=run_claim_probe,
     )
     registry.register(
         name="finalize_probe_evidence",
         description="Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
         input_schema=finalize_probe_evidence_schema(),
-        allowed_roles={Role.EXPERIMENTER.value},
+        allowed_roles={Role.EXPERIMENTER.value, Role.SOLO.value},
         handler=finalize_probe_evidence,
     )
     registry.register(
         name="retrieve_experiment_history",
         description="Read prior run_python_probe tool events from the current run directory.",
         input_schema=retrieve_experiment_history_schema(),
-        allowed_roles={Role.SKEPTIC.value, Role.EXPERIMENTER.value, Role.JUDGE.value},
+        allowed_roles={Role.SKEPTIC.value, Role.EXPERIMENTER.value, Role.JUDGE.value, Role.SOLO.value},
         handler=retrieve_experiment_history,
     )
     registry.register(
@@ -330,7 +331,7 @@ def build_core_registry() -> ToolRegistry:
         name="record_verdict",
         description="Record the Judge agent's final evidence-based verdict.",
         input_schema=record_verdict_schema(),
-        allowed_roles={Role.JUDGE.value},
+        allowed_roles={Role.JUDGE.value, Role.SOLO.value},
         handler=record_verdict,
     )
     return registry
