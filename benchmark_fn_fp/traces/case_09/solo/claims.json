@@ -1,0 +1,95 @@
+[
+  {
+    "created_at": "2026-09-08T14:44:25Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:45:02Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "1ef0618b14eb8d7c80a59b7cb856c68b6ca5786836b2abe51a9b6460009fcd95"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "0ad69023dfd60afb30f240fcd0b4327de77337de2818069dbeaef4dbbff5a7bf"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 10.995192,
+          "example_row2_expected_idx": 0,
+          "example_row2_kernel_idx": 2,
+          "example_row2_scores_prefix": [
+            2.0,
+            2.0,
+            2.0,
+            2.0
+          ],
+          "exit_code": 0,
+          "expected_signal": "If ties are swapped, kernel returns the higher tied index instead of the lowest; unique-max rows should match argmax.",
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "metric": "exact returned index vs lowest index attaining the row maximum (contract tie rule)",
+          "quantized_lowest_idx_mismatch": 21,
+          "quantized_selected_value_mismatch": 0,
+          "quantized_tied_rows_total": 62,
+          "random_unique_max_mismatch_vs_argmax": 0,
+          "stderr": "",
+          "stdout": "{\n \"tied_cases\": {\n  \"expected_lowest_idx\": [\n   0,\n   2,\n   0,\n   6,\n   1\n  ],\n  \"kernel\": [\n   0,\n   2,\n   4,\n   6,\n   1\n  ]\n },\n \"tie_violations\": [\n  2\n ],\n \"random_unique_mismatch\": 0,\n \"tied_rows_total\": 62,\n \"quantized_lowest_idx_mismatch\": 21,\n \"quantized_value_mismatch\": 0,\n \"examples\": [\n  {\n   \"row\": 2,\n   \"scores\": [\n    2.0,\n    2.0,\n    2.0,\n    2.0,\n    0.0,\n    0.0,\n    0.0,\n    2.0,\n    0.0,\n    2.0,\n    0.0,\n    1.0,\n    2.0,\n    0.0,\n    1.0,\n    2.0\n   ],\n   \"kernel_idx\": 2,\n   \"expected_idx\": 0\n  },\n  {\n   \"row\": 18,\n   \"scores\": [\n    2.0,\n    2.0,\n    2.0,\n    1.0,\n    2.0,\n    2.0,\n    1.0,\n    0.0,\n    1.0,\n    0.0,\n    0.0,\n    1.0,\n    0.0,\n    1.0,\n    1.0,\n    0.0\n   ],\n   \"kernel_idx\": 1,\n   \"expected_idx\": 0\n  },\n  {\n   \"row\": 20,\n   \"scores\": [\n    2.0,\n    2.0,\n    0.0,\n    0.0,\n    1.0,\n    0.0,\n    1.0,\n    0.0,\n    2.0,\n    2.0,\n    2.0,\n    2.0,\n    1.0,\n    1.0,\n    2.0,\n    1.0\n   ],\n   \"kernel_idx\": 1,\n   \"expected_idx\": 0\n  }\n ]\n}\n",
+          "tie_violations_handbuilt": [
+            2
+          ],
+          "tied_case_expected_lowest_idx": [
+            0,
+            2,
+            0,
+            6,
+            1
+          ],
+          "tied_case_kernel_idx": [
+            0,
+            2,
+            4,
+            6,
+            1
+          ],
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t6 confirms the tie-break defect. Hand-built tie rows: all-equal row returned index 4 instead of 0. Quantized inputs (64x16, values in {0,1,2}) produced 62 rows with tied maxima; the kernel returned a non-lowest maximal index in 21 of them (e.g. scores[0]=scores[1]=scores[2]=2 -> kernel 2, contract 0). Selected values were always the true maximum (0 value mismatches) and 64x16 randn rows with unique maxima matched torch.argmax exactly (0 mismatches), so the only failure mode is exactly the contract's tie rule: cond=(left>right)!=flip swaps equal elements when flip=1 in the final descending merge.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Line 24 uses strict > combined with xor against flip; with DESCENDING=True the final merge uses flip=1, making cond true for left==right and forcing a swap of tied elements and their ids.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Explicit tie contract: on exactly equal scores the LOWER index must be kept; input domain is scores with power-of-two columns."
+      },
+      {
+        "source": "kernel.py:24,56",
+        "summary": "cond = (left > right) != flip; final merge stage passes order=DESCENDING=True as flip, so equality yields cond=True (swap)."
+      }
+    ],
+    "scope_rationale": "problem.txt states an explicit required behaviour: \"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept.\" Tied scores over a power-of-two number of expert columns are exactly the admitted input domain.",
+    "statement": "For rows containing tied maximum scores, sorted_topk_indices(scores, k=1) returns an index other than the lowest index attaining the maximum, violating the contract's tie-break rule (lower index must be kept). Root cause: in _compare_and_swap, cond = (left > right) != flip evaluates True on equality when flip=1 (descending), so equal elements are swapped.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:45:02Z"
+  }
+]

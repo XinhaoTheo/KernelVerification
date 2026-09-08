@@ -1,0 +1,88 @@
+[
+  {
+    "created_at": "2026-09-08T14:49:18Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:49:41Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "3c1f49e22d12233eedec514fa7e50eb5494b19ca28df5562e8fa9af734a94ef3"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "46da33df9794341689c3602e760b8eefe67f07bdf757809774eec78ff57e9081"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 6.678014,
+          "exit_code": 0,
+          "expected_signal": "If claim true: n_cols=300,129,100 rows sum >1 (or !=1); n_cols=256 sums==1.",
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "metric": "row sum == 1 and elementwise error vs torch.softmax",
+          "n_cols_100_rowsums": [
+            "inf",
+            "inf",
+            "inf",
+            "inf"
+          ],
+          "n_cols_129_rowsums": [
+            1.0091278553009033,
+            1.0028636455535889,
+            1.0025970935821533,
+            1.0018126964569092
+          ],
+          "n_cols_256_max_abs_err": 3.725290298461914e-09,
+          "n_cols_256_rowsums": [
+            1.0,
+            0.9999998807907104,
+            1.0,
+            1.0
+          ],
+          "n_cols_300_max_abs_err": 0.010500840842723846,
+          "n_cols_300_rowsums": [
+            1.1586923599243164,
+            1.1528706550598145,
+            1.178299069404602,
+            1.1701909303665161
+          ],
+          "stderr": "",
+          "stdout": "{\n \"metric\": \"row sum == 1 and elementwise vs torch.softmax\",\n \"results\": {\n  \"256\": {\n   \"row_sums\": [\n    1.0,\n    0.9999998807907104,\n    1.0,\n    1.0\n   ],\n   \"max_abs_err\": 3.725290298461914e-09,\n   \"max_rel_err\": 3.3887883432726085e-07\n  },\n  \"300\": {\n   \"row_sums\": [\n    1.1586923599243164,\n    1.1528706550598145,\n    1.178299069404602,\n    1.1701909303665161\n   ],\n   \"max_abs_err\": 0.010500840842723846,\n   \"max_rel_err\": 0.17829950153827667\n  },\n  \"129\": {\n   \"row_sums\": [\n    1.0091278553009033,\n    1.0028636455535889,\n    1.0025970935821533,\n    1.0018126964569092\n   ],\n   \"max_abs_err\": 0.00046795979142189026,\n   \"max_rel_err\": 0.009128249250352383\n  },\n  \"100\": {\n   \"row_sums\": [\n    Infinity,\n    Infinity,\n    Infinity,\n    Infinity\n   ],\n   \"max_abs_err\": Infinity,\n   \"max_rel_err\": Infinity\n  }\n }\n}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t6 ran kernel.softmax(x, 128) on 4-row float32 CUDA inputs. Control n_cols=256 (multiple of BLOCK): row sums 1.0, max_abs_err 3.7e-09. n_cols=300: row sums 1.1587/1.1529/1.1783/1.1702, max_abs_err 1.05e-2 vs torch.softmax. n_cols=129: row sums 1.0091/1.0029/1.0026/1.0018. n_cols=100 (< BLOCK, so n_full=0 and denom=0): all outputs Infinity. Tail block is excluded from the denominator exactly as the source suggests.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Lines 20-23 loop over n_full full blocks only, while the max (line 14) and store (line 25) loops use tl.cdiv. The tail elements are exponentiated and stored but never added to denom.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Input domain: n_cols may be any positive integer, NOT required to be a multiple of block_size; trailing partial block must be normalized with the rest of the row; every output row must sum to 1."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly declares n_cols may be any positive integer and states the trailing partial block \"must be normalized with the rest of it\", and requires each output row to sum to 1.",
+    "statement": "When n_cols is not a multiple of block_size, the denominator loop (range(n_full), n_full = n_cols // BLOCK) omits the trailing partial block's exp contributions, so output rows sum to more than 1, violating the required normalization.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:49:41Z"
+  }
+]

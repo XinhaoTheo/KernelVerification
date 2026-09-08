@@ -1,0 +1,9 @@
+{
+  "confidence": 0.96,
+  "created_at": "2026-09-08T14:48:08Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "problem.txt states the required formula verbatim: rstd = 1/sqrt(mean_square + eps), and explicitly requires eps to keep the normalizer finite as the row norm approaches zero. kernel.py line 23 instead computes rstd = 1.0 / (_sqrt(mean_square) + eps), i.e. eps applied outside the sqrt. Probe t6 (finalized as evidence c1.e1 in event t7) ran the actual kernel on a GPU: on randn(8,512) float32 with eps=1e-6 the kernel matched the 'eps outside sqrt' formula to 4.77e-7 max abs err while deviating from the contract formula by 1.67e-6, identifying the implemented formula. On small-magnitude rows the deviation is catastrophic and exactly of the kind the contract forbids: a constant row of 1e-4 yields 0.9901 per element vs the contract's 0.09950 (max abs err 0.891, ~10x), and a row of 1e-8 yields 0.00990 vs the contract's 1.0e-5 (~990x). The kernel's effective normalizer reaches ~9.9e3 and ~9.9e5 instead of being bounded by 1/sqrt(eps)=1e3, so eps demonstrably fails its stated stabilizing role. This is a violation of an explicitly required formula and invariant, not a rounding/reduction-order artifact (the near-zero errors are orders of magnitude, not ulps).",
+  "verdict": "reject"
+}

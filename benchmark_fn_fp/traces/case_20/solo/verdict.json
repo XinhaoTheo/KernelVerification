@@ -1,0 +1,9 @@
+{
+  "confidence": 0.97,
+  "created_at": "2026-09-08T14:50:33Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The contract in problem.txt requires rstd = 1 / sqrt(var + eps), and explicitly stresses the epsilon semantics for vanishing row variance. kernel.py line 26 instead computes `rstd = 1.0 / (tl.sqrt(var) + eps)` \u2014 epsilon added outside the square root, which is a different function, not a reordering or precision artifact.\n\nProbe t6 (8x512 fp32, eps=1e-5, compared against both the literal contract formula and torch.nn.functional.layer_norm, which agree) confirmed this at runtime:\n- Near-constant row (var = 1.01e-12): max abs error 0.728, max rel error 372x vs the contract; the same 0.728 max abs error vs torch layer_norm. The kernel's normalizer there is ~1/eps = 1e5 instead of the contract's 1/sqrt(eps) = 316.2, i.e. the stabilizer behaviour the contract calls out by name is wrong by ~316x.\n- Ordinary randn rows show the exact algebraic signature of the misplaced epsilon: median ratio (y-b)/(ref-b) = 0.9999950, matching the predicted 1 - eps/2 = 0.999995, with max abs errors ~2-4e-5 in a systematic (not random) direction.\n- The exactly-constant row (var=0) matches only trivially because x-mean=0 makes y=b regardless of rstd, so it does not exercise the normalizer magnitude and does not exonerate the kernel.\n\nThis is a violation of a formula the contract states literally, on inputs the contract explicitly declares in-domain (constant/near-variance-zero rows and ordinary rows). Verdict: reject.",
+  "verdict": "reject"
+}

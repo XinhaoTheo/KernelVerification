@@ -1,0 +1,9 @@
+{
+  "confidence": 0.96,
+  "created_at": "2026-09-08T14:49:10Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The contract explicitly declares that n_cols may be any positive integer and that when it is not a multiple of group_size the trailing columns form a shorter final group with its own scale, and that every column must be quantized. The kernel computes n_groups = n_cols // GROUP (kernel.py line 12) and loops only over complete groups (line 14), while the host wrapper allocates the output with torch.zeros_like (line 28), so the trailing partial group is never written. Probe t7 (run_claim_probe on c1) compared group_quant_dequant(x, 64) against a per-group reference that handles the shorter final group, on rows of 4 with n_cols in {64, 65, 100, 128, 200}: for n_cols=100 (36 tail cols), 65 (1 tail col) and 200 (8 tail cols) every tail output column was exactly 0 while the reference tail had magnitudes up to 3.1298, 0.8738 and 1.3475 respectively, giving max abs errors equal to those magnitudes; columns inside complete groups matched bit-exactly (head max abs err 0.0) and the multiple-of-64 cases matched exactly. Evidence finalized in t8. The only other suspicion (c2, round-half-up via tl.floor(x/scale+0.5) vs torch.round half-to-even) was left inconclusive since the contract does not specify a tie-break and no divergence appeared on complete groups; it is not part of the reject basis. The confirmed in-scope failure on the explicitly admitted non-multiple n_cols domain is decisive.",
+  "verdict": "reject"
+}

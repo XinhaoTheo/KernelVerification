@@ -1,0 +1,9 @@
+{
+  "confidence": 0.95,
+  "created_at": "2026-09-08T14:50:44Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The contract requires predicted[i] = argmax with the LOWEST index among tied row maxima, and explicitly admits n_cols exceeding the block size so a tie can straddle blocks. Source inspection (t5/t7) shows the wrapper sets BLOCK_SIZE = min(32768, next_pow2(n_cols)) and the kernel's cross-block argmax update at line 160 uses `is_new_max = block_max >= m`, i.e. it overwrites the running argmax on an equal (not strictly greater) block max, preferring the later/higher index. Runtime probe t8 confirmed this on a case the contract admits: n_cols=40000 (BLOCK_SIZE=32768), exact ties placed at column 100 (block 0) and column 35000 (block 1); the kernel returned predicted=[35000,35000,35000,35000] while the required lowest tied index is 100 for every row. A single-block control (n_cols=1024, ties at 10 and 900) returned 10, showing intra-block tie handling via tl.min is correct and the defect is specifically the cross-block `>=` update. Since predicted feeds a downstream embedding gather, this changes the continuous output as the contract notes. (Additionally, t8 showed loss/ref_per_row = 0.25 exactly, since the wrapper passes reduction=\"mean\" with n_non_ignore=4, deviating from the contract's per-row loss[i] = -log softmax(logits[i])[target[i]]; this was not the decisive claim but reinforces the reject.)",
+  "verdict": "reject"
+}

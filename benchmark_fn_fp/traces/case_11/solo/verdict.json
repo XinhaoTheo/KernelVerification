@@ -1,0 +1,10 @@
+{
+  "confidence": 0.85,
+  "created_at": "2026-09-08T14:48:53Z",
+  "decisive_claims": [
+    "c1",
+    "c2"
+  ],
+  "reason": "The contract requires apply_rotary to apply the RoPE rotation with two selectable pairings: interleaved=False pairs dim i with i+headdim/2, interleaved=True pairs dim 2i with 2i+1. I tested each branch against an independent fp32 PyTorch reference on a GPU.\\n\\nProbe t7 (claim c1, interleaved=False, reference o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos) over (S,H,D) = (8,4,64), (3,2,8), (5,3,6), (4,2,48), (1,1,2), (16,8,128) in fp32 and fp16: worst max abs error 2.38e-7 in fp32 and 9.74e-4 in fp16 (consistent with fp16 storage rounding of the output). Probe t8 (claim c2, interleaved=True, reference out[...,0::2]=xe*cos-xo*sin, out[...,1::2]=xe*sin+xo*cos) on the same grid: worst max abs error 2.38e-7 fp32 / 9.72e-4 fp16. Both grids deliberately included non-power-of-two headdims 6 and 48, the case where BLOCK_K=next_pow2(headdim) padding could have misaligned the masked loads (non-interleaved branch) or the reshape/split/join even-odd pairing (interleaved branch); no misalignment appeared, so the padded lanes are correctly masked. Both claims were therefore rebutted (evidence c1.e1, c2.e1).\\n\\nRemaining untested generalizations are outside the stated contract: odd headdim (the contract describes cos/sin as headdim//2 and speaks of rotating pairs, leaving any leftover odd dimension unspecified) and exotic strides/dtypes. Nothing established contradicts a required behaviour, so the implementation satisfies the contract.",
+  "verdict": "trust"
+}

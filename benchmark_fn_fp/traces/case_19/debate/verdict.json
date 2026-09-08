@@ -1,0 +1,9 @@
+{
+  "confidence": 0.94,
+  "created_at": "2026-09-08T15:05:50Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "problem.txt is the operative contract here (the artifact contains only kernel.py, meta.json, problem.txt; no test.py narrows the domain), and it explicitly requires two things: `predicted[i]` must be the LOWEST index attaining the row maximum, and the input domain explicitly includes `n_cols` exceeding the kernel block size so \"a tie may fall in different blocks\". Claim c1 is confirmed by source and two GPU probes. Source (kernel.py:152-161) handles within-block ties correctly via tl.min(masked_offsets) but updates the accumulator with the non-strict guard `is_new_max = block_max >= m`, so a later block that merely ties the running max overwrites argmax_idx with the later, higher index. Probe t8 (V=65536, BLOCK_SIZE=32768, bitwise-equal max 5.0 at indices 100 and 32868) returned predicted=32868 instead of the contractually required 100, while control rows with unique maxima matched torch.argmax exactly. Probe t10 characterized the boundary: 3/3 within-block or single-block tie cases correct; 4/4 cross-block exact-tie cases wrong (2-block, adjacent boundary 32767/32768, 3-block, and ragged last-block vocab), each returning an index from the last block containing the max. This is not a permitted-unspecified tie-break, a reduction-order artifact, or a precision issue: the tied values are bitwise equal in fp32 and the contract fixes the tie rule and states the downstream embedding gather changes with the reported index. The only other anomaly (t8's factor-of-3 loss gap) was explained as reduction=\"mean\" normalization by n_non_ignore and rebutted as a separate defect by t10's single-row cases (ref/kernel loss ratio exactly 1.0), so it does not affect this verdict. No unresolved claims remain; skeptic_review (t11) confirms review of the latest evidence with no new claims.",
+  "verdict": "reject"
+}

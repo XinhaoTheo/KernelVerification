@@ -1,0 +1,340 @@
+[
+  {
+    "created_at": "2026-09-08T15:00:44Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T15:01:58Z",
+        "data": {
+          "allclose_atol_1e-3": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "fe50e1c19481232b60883a14dbe9e91b903c86f33a907ae8ad32839cfc013aab"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "8a12da777feba9cb5f997e9b4f5093a30eb4f4177c17ddb4c2903eee0337bacd"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "a0c9303cf4efa022731cc9a934eb893f1fc0086b3b06cca56b83d316c924ede5"
+            }
+          ],
+          "dtype": "float32",
+          "duration_s": 6.796496,
+          "exit_code": 0,
+          "expected_signal": "Tail columns 64:100 of output are exactly 0.0 while reference partial-group quant-dequant is nonzero; large max abs error on tail, ~0 error on head.",
+          "group_size": 64,
+          "head_max_abs_err": 0.0,
+          "json_parse_error": null,
+          "json_result": {
+            "group_size": 64,
+            "head_max_abs_err": 0.0,
+            "overall_allclose_atol1e-3": false,
+            "shape": [
+              4,
+              100
+            ],
+            "tail_exact_zero_count": 144,
+            "tail_input_nonzero_count": 144,
+            "tail_max_abs_err": 3.12982439994812,
+            "tail_ref_max_abs": 3.12982439994812,
+            "tail_total": 144
+          },
+          "shape": [
+            4,
+            100
+          ],
+          "stderr": "",
+          "stdout": "{\"shape\": [4, 100], \"group_size\": 64, \"head_max_abs_err\": 0.0, \"tail_max_abs_err\": 3.12982439994812, \"tail_exact_zero_count\": 144, \"tail_total\": 144, \"tail_input_nonzero_count\": 144, \"tail_ref_max_abs\": 3.12982439994812, \"overall_allclose_atol1e-3\": false}\n",
+          "tail_exact_zero_count": 144,
+          "tail_input_nonzero_count": 144,
+          "tail_max_abs_err": 3.12982439994812,
+          "tail_ref_max_abs": 3.12982439994812,
+          "tail_total": 144,
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "x=(4,100) fp32, group_size=64: head columns 0:63 match the reference exactly (max abs err 0.0), but all 144 tail entries (cols 64:100) are exactly 0.0 while the input there is nonzero in all 144 positions and the partial-group reference is nonzero. Tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the kernel output is identically zero over the trailing partial group. allclose(atol=1e-3) False. Confirms the truncated loop bound n_groups = n_cols // GROUP leaves the trailing partial group unwritten.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "kernel.py:12 computes n_groups by floor division and kernel.py:14 loops only over complete groups; there is no remainder epilogue. out is torch.zeros_like(x) (kernel.py:28), so unwritten columns silently stay 0.0. Probe metric: max abs error on the tail slice x[:, 64:100] versus a reference that computes scale = max|x| over the shorter final group / 127 and y = round(x/scale)*scale; also report the fraction of exactly-zero tail entries where x != 0.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale.\""
+      },
+      {
+        "source": "problem.txt",
+        "summary": "\"Every column of the input must be quantized under the scale of the group it belongs to.\""
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly places non-multiple n_cols in the input domain and states the trailing shorter group \"is still a group with its own scale\". n_cols=100 with the wrapper's default group_size=64 is a representative admitted input; no test.py exists to narrow the domain, so problem.txt is the operative contract.",
+    "statement": "For n_cols not a multiple of group_size (e.g. x of shape (4, 100), group_size=64), the trailing n_cols % group_size columns are never loaded or stored because the loop bound is n_groups = n_cols // GROUP, so group_quant_dequant returns 0.0 in those columns instead of the required partial-group quantize-dequantize values.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T15:01:58Z"
+  },
+  {
+    "created_at": "2026-09-08T15:00:44Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T15:01:58Z",
+        "data": {
+          "allclose_atol_1e-3": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "f5c31f8fa744895ab570ac4080738fc9f7f5703aad4d56ebe2b0c36926d98f5f"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "65b28c122f294338d960af482aa05c246a0fc5ddd079bb5cf00ab9523fea928b"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "5c6ee1ea1d30c4ddd206c6c439793456d74803e0663d3d9e2c10df759377e044"
+            }
+          ],
+          "dtype": "float32",
+          "duration_s": 5.125774,
+          "exit_code": 0,
+          "expected_signal": "Output for (4,40) with group_size=64 is entirely zero (nonzero count 0) while reference is nonzero.",
+          "group_size": 64,
+          "json_parse_error": null,
+          "json_result": {
+            "allclose_atol1e-3": false,
+            "group_size": 64,
+            "max_abs_err": 2.78844952583313,
+            "out_nonzero_count": 0,
+            "out_total": 160,
+            "ref_max_abs": 2.78844952583313,
+            "ref_nonzero_count": 160,
+            "shape": [
+              4,
+              40
+            ]
+          },
+          "max_abs_err": 2.78844952583313,
+          "out_nonzero_count": 0,
+          "out_total": 160,
+          "ref_max_abs": 2.78844952583313,
+          "ref_nonzero_count": 160,
+          "shape": [
+            4,
+            40
+          ],
+          "stderr": "",
+          "stdout": "{\"shape\": [4, 40], \"group_size\": 64, \"out_nonzero_count\": 0, \"out_total\": 160, \"ref_nonzero_count\": 160, \"max_abs_err\": 2.78844952583313, \"ref_max_abs\": 2.78844952583313, \"allclose_atol1e-3\": false}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "x=(4,40) fp32, group_size=64: kernel output has 0 nonzero entries out of 160, while the single-shorter-group reference has 160 nonzero entries. Max abs err 2.7884 equals the reference max magnitude, i.e. output is identically zero. Confirms that n_cols &lt; group_size yields n_groups = 0 and the entire output stays at the zeros_like initialization.",
+        "supports": "confirmed",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "Same floor-division loop bound (kernel.py:12,14) degenerates to zero iterations; zeros_like output (kernel.py:28) makes the failure silent. Metric: count of nonzero output entries (expected ~all nonzero for random input) and max abs error versus the single-group reference.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Input domain clause: n_cols may be any positive integer and need not be a multiple of group_size; the shorter final group is still a group with its own scale."
+      }
+    ],
+    "scope_rationale": "problem.txt says n_cols may be any positive integer, which admits n_cols smaller than group_size; the trailing (here only) shorter group must still be quantized with its own scale.",
+    "statement": "When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quantizing the single shorter group.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T15:01:58Z"
+  },
+  {
+    "created_at": "2026-09-08T15:00:44Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T15:02:23Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t14_probe.py",
+              "sha256": "c1b7ab0842f3c70f0ea95d4f537e197603fbea59123565b956f1272d27ad75fe"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t14_stdout.txt",
+              "sha256": "efc17f7b345bba53583d25372744b4d3ee8d7cba0e6f4d295e3b84562585fafe"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t14_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t14_json_result.json",
+              "sha256": "754db32af907d9118eb98a397793306f76d52b70fd7290b06ec7880eaa8c3ef3"
+            }
+          ],
+          "dtype": "float32",
+          "duration_s": 6.162171,
+          "exact_tie_count": 63,
+          "exit_code": 0,
+          "expected_signal": "On exact-multiple shape (1,64) with values on exact .5 ticks (scale exactly 0.125), counts of elements differing by one quantization step from torch.round (half-even) and from half-away-from-zero, split by sign of the input.",
+          "group_size": 64,
+          "json_parse_error": null,
+          "json_result": {
+            "exact_tie_count": 63,
+            "max_abs_err_vs_half_away": 0.125,
+            "max_abs_err_vs_half_even": 0.125,
+            "max_err_in_steps_vs_half_even": 1.0,
+            "mismatch_negative_ties_vs_half_away": 31,
+            "mismatch_negative_ties_vs_half_even": 15,
+            "mismatch_positive_ties_vs_half_even": 16,
+            "mismatch_vs_half_away_from_zero": 31,
+            "mismatch_vs_half_up_floor_kernel_semantics": 0,
+            "mismatch_vs_torch_round_half_even": 31,
+            "n_elems": 64,
+            "sample_half_away_first8": [
+              0.125,
+              -0.125,
+              0.25,
+              -0.25,
+              0.375,
+              -0.375,
+              0.5,
+              -0.5
+            ],
+            "sample_half_even_first8": [
+              0.0,
+              -0.0,
+              0.25,
+              -0.25,
+              0.25,
+              -0.25,
+              0.5,
+              -0.5
+            ],
+            "sample_out_first8": [
+              0.125,
+              0.0,
+              0.25,
+              -0.125,
+              0.375,
+              -0.25,
+              0.5,
+              -0.375
+            ],
+            "scale": 0.125,
+            "scale_is_exactly_0.125": true
+          },
+          "max_abs_err_vs_half_away": 0.125,
+          "max_abs_err_vs_half_even": 0.125,
+          "max_err_in_steps_vs_half_even": 1.0,
+          "mismatch_negative_ties_vs_half_away": 31,
+          "mismatch_negative_ties_vs_half_even": 15,
+          "mismatch_positive_ties_vs_half_even": 16,
+          "mismatch_vs_half_away_from_zero": 31,
+          "mismatch_vs_half_up_floor_kernel_semantics": 0,
+          "mismatch_vs_torch_round_half_even": 31,
+          "n_elems": 64,
+          "quantization_step": 0.125,
+          "sample_half_away_first8": [
+            0.125,
+            -0.125,
+            0.25,
+            -0.25,
+            0.375,
+            -0.375,
+            0.5,
+            -0.5
+          ],
+          "sample_half_even_first8": [
+            0.0,
+            -0.0,
+            0.25,
+            -0.25,
+            0.25,
+            -0.25,
+            0.5,
+            -0.5
+          ],
+          "sample_out_first8": [
+            0.125,
+            0.0,
+            0.25,
+            -0.125,
+            0.375,
+            -0.25,
+            0.5,
+            -0.375
+          ],
+          "scale": 0.125,
+          "scale_is_exactly_0.125": true,
+          "shape": [
+            1,
+            64
+          ],
+          "stderr": "",
+          "stdout": "{\"scale\": 0.125, \"scale_is_exactly_0.125\": true, \"exact_tie_count\": 63, \"n_elems\": 64, \"mismatch_vs_torch_round_half_even\": 31, \"mismatch_vs_half_away_from_zero\": 31, \"mismatch_vs_half_up_floor_kernel_semantics\": 0, \"max_abs_err_vs_half_even\": 0.125, \"max_err_in_steps_vs_half_even\": 1.0, \"max_abs_err_vs_half_away\": 0.125, \"mismatch_positive_ties_vs_half_even\": 16, \"mismatch_negative_ties_vs_half_even\": 15, \"mismatch_negative_ties_vs_half_away\": 31, \"sample_out_first8\": [0.125, 0.0, 0.25, -0.125, 0.375, -0.25, 0.5, -0.375], \"sample_half_even_first8\": [0.0, -0.0, 0.25, -0.25, 0.25, -0.25, 0.5, -0.5], \"sample_half_away_first8\": [0.125, -0.125, 0.25, -0.25, 0.375, -0.375, 0.5, -0.5]}\n",
+          "timed_out": false,
+          "timeout_s": 120
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "x=(1,64) fp32 with 63 values placed on exact .5 ticks and one element at 127*0.125=15.875 so scale is exactly 0.125 (scale_is_exactly_0.125=true, exact_tie_count=63). Kernel output matches the half-up reference floor(r+0.5)*scale on ALL elements (mismatch_vs_half_up_floor=0), confirming kernel.py:20 implements round-half-up. Against torch.round (half-to-even) 31/63 ties differ, each by exactly one quantization step (max_abs_err 0.125 = 1.0 step), split 16 positive / 15 negative. Against half-away-from-zero, all 31 negative ties differ (positives agree), e.g. x=-0.0625 -> kernel 0.0 vs -0.125, x=-0.1875 -> kernel -0.125 vs -0.25: the kernel biases negative ties toward +inf. Mechanism confirmed; magnitude is bounded at one LSB and only occurs on exactly representable ties, and problem.txt does not specify a tie-break rule, so scope stays unknown (weaker than c1/c2).",
+        "supports": "confirmed",
+        "tool_event_id": "t14"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "floor(-1.5+0.5) = -1 while torch.round(-1.5) = -2; floor(2.5+0.5) = 3 while torch.round(2.5) = 2. Testable by constructing a group with absmax = 127*s and other elements at exact half-multiples of s. Metric: number of elements differing by exactly one step (scale) from the torch.round reference, reported separately for positive and negative ties.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt only writes `round(x / scale)` without specifying the tie-break rule, so a half-up vs half-even difference may be permitted freedom rather than a contract violation; it also only arises on exactly-representable ties, which random inputs rarely produce.",
+    "statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T15:02:23Z"
+  }
+]

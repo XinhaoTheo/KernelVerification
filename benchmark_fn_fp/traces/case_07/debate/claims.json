@@ -1,0 +1,282 @@
+[
+  {
+    "created_at": "2026-09-08T15:23:54Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T15:26:31Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "e7f3ed0903f32b8a8283d82bdc4cd142162aaf5b0edc461cf7e2a2c342fae75b"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "3f730e28c4a2cec3e2f35576c8dca0d66addd2fc78ba80a5a1f77f2de75c8f83"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "2054187eae624774f6face2a14d441266ad638a4b676729f9766b7bbbc0ca3a4"
+            }
+          ],
+          "duration_s": 9.096744,
+          "exit_code": 0,
+          "expected_signal": "If kernel matches the zp+1 (GPTQ) convention, max abs err vs ref_plus ~0 and vs ref_bare large (~sum_k A*scale). Reports both.",
+          "group_size": 32,
+          "json_parse_error": null,
+          "json_result": {
+            "group_size": 32,
+            "kernel_matches": "zp_plus1",
+            "max_abs_err_vs_bare_zp_ref": 0.7163703925054219,
+            "max_abs_err_vs_zp_plus1_ref": 1.3525163371497229e-06,
+            "max_rel_err_vs_bare_zp": 0.17107712218497226,
+            "max_rel_err_vs_zp_plus1": 3.254707524977362e-07,
+            "predicted_convention_offset_max_abs": 0.7163700357795296,
+            "ref_bare_max_abs": 4.187411989142925,
+            "ref_plus_max_abs": 4.155569515141396,
+            "shape": [
+              32,
+              64,
+              64
+            ]
+          },
+          "kernel_matches": "zp_plus1_upstream_gptq_convention",
+          "max_abs_err_vs_bare_zp_ref": 0.7163703925054219,
+          "max_abs_err_vs_zp_plus1_ref": 1.3525163371497229e-06,
+          "max_rel_err_vs_bare_zp": 0.17107712218497226,
+          "max_rel_err_vs_zp_plus1": 3.254707524977362e-07,
+          "predicted_convention_offset_max_abs": 0.7163700357795296,
+          "ref_bare_max_abs": 4.187411989142925,
+          "ref_plus_max_abs": 4.155569515141396,
+          "shape": [
+            32,
+            64,
+            64
+          ],
+          "stderr": "",
+          "stdout": "{\"shape\": [32, 64, 64], \"group_size\": 32, \"max_abs_err_vs_zp_plus1_ref\": 1.3525163371497229e-06, \"max_abs_err_vs_bare_zp_ref\": 0.7163703925054219, \"ref_plus_max_abs\": 4.155569515141396, \"ref_bare_max_abs\": 4.187411989142925, \"max_rel_err_vs_zp_plus1\": 3.254707524977362e-07, \"max_rel_err_vs_bare_zp\": 0.17107712218497226, \"predicted_convention_offset_max_abs\": 0.7163700357795296, \"kernel_matches\": \"zp_plus1\"}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe with hand-packed 4-bit B (K=64,N=64,group=32) shows the kernel reproduces the (q - (qzeros+1)) * scale convention to fp32 rounding: max abs err 1.35e-6 (max rel 3.25e-7) against the zp+1 reference, versus max abs err 0.716 (max rel 0.171) against a bare-qzeros reference, exactly matching the predicted systematic offset max|A @ scale| = 0.71637. So the `+1` is not a rounding-level discrepancy but a convention: the packed-qzeros-plus-one form is the upstream AutoGPTQ semantics that problem.txt names as the operation being implemented (auto_gptq .../kernels.py::quant_matmul_248_kernel), where `zero[g,n]` denotes the true zero-point = stored qzeros + 1. The kernel therefore matches the referenced reference implementation; no arithmetic defect. Note for Judge: this claim is only a defect if the acceptance harness dequantizes with raw qzeros, and test_code is empty so that cannot be checked from the artifact.",
+        "supports": "rebutted",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The GPTQ packed format conventionally stores zero_point-1, which makes the `+1` correct, but the problem text writes the dequant formula with a bare `zero` term. Only a two-convention probe can show which one the kernel matches and by how much they differ; an off-by-one zero-point is the single largest-magnitude candidate error in this kernel.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "States the required numeric behavior: dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], with per-(group,column) scale and zero-point."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly states the dequantization formula the kernel must evaluate, so a claim that the kernel's arithmetic deviates from that stated formula is in scope even without a test.py. Representative inputs (4-bit packed B, fp32 A, per-group scales/zeros, g_idx) are exactly what the contract describes.",
+    "statement": "The kernel adds 1 to the unpacked zero-point (kernel.py:46, `zeros = zeros + 1`), so it computes (q - (zp_packed + 1)) * scale, whereas problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]. If the reference dequantization uses the unpacked qzeros value directly as `zero`, every output element is off by exactly (sum_k A[m,k] * scale[g_idx[k],n]), a large systematic error, not a rounding artifact. Testable: build packed 4-bit B, per-group scales/zeros, compare gptq_matmul against both conventions (zp and zp+1) and report max abs/rel error for each.",
+    "status": "rebutted",
+    "updated_at": "2026-09-08T15:26:31Z"
+  },
+  {
+    "created_at": "2026-09-08T15:23:54Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T15:26:31Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "6be83a0073afb679536541f46bd56421d4e65ce2eeea67717c13c450d31daa21"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "017b4966c84c1c7a3e85e6e02fe9cbceb4c86e5cf180b7b68bf7fada6c214d0c"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "a398c2276fa4c56541f5d624190e9b0533311836704bd33e2e19edd7ece4e60d"
+            }
+          ],
+          "device": "Tesla T4",
+          "duration_s": 5.50949,
+          "exit_code": 0,
+          "expected_signal": "max rel err of kernel vs fp64 ref ~1e-3 (TF32-like, matching torch allow_tf32=True) rather than ~1e-7 (matching allow_tf32=False)",
+          "json_parse_error": null,
+          "json_result": {
+            "device": "Tesla T4",
+            "kernel_closer_to": "fp32",
+            "kernel_max_abs_err_vs_fp64": 3.4923409302223263e-06,
+            "kernel_max_rel_err": 4.694003264441183e-07,
+            "ref_max_abs": 7.4400053290931965,
+            "shape": [
+              64,
+              256,
+              64
+            ],
+            "torch_fp32_max_abs_err": 1.377726111417843e-06,
+            "torch_fp32_max_rel_err": 1.8517810814333961e-07,
+            "torch_tf32_max_abs_err": 1.377726111417843e-06,
+            "torch_tf32_max_rel_err": 1.8517810814333961e-07
+          },
+          "kernel_max_abs_err_vs_fp64": 3.4923409302223263e-06,
+          "kernel_max_rel_err": 4.694003264441183e-07,
+          "predicted_tf32_rel_err_signature": 0.001,
+          "ref_max_abs": 7.4400053290931965,
+          "shape": [
+            64,
+            256,
+            64
+          ],
+          "sm_generation": "Turing_SM75_no_TF32_hardware",
+          "stderr": "",
+          "stdout": "{\"device\": \"Tesla T4\", \"shape\": [64, 256, 64], \"kernel_max_abs_err_vs_fp64\": 3.4923409302223263e-06, \"kernel_max_rel_err\": 4.694003264441183e-07, \"torch_fp32_max_abs_err\": 1.377726111417843e-06, \"torch_fp32_max_rel_err\": 1.8517810814333961e-07, \"torch_tf32_max_abs_err\": 1.377726111417843e-06, \"torch_tf32_max_rel_err\": 1.8517810814333961e-07, \"ref_max_abs\": 7.4400053290931965, \"kernel_closer_to\": \"fp32\"}\n",
+          "tf32_flag_had_no_effect": true,
+          "timed_out": false,
+          "timeout_s": 60,
+          "torch_fp32_max_abs_err": 1.377726111417843e-06,
+          "torch_fp32_max_rel_err": 1.8517810814333961e-07,
+          "torch_tf32_max_abs_err": 1.377726111417843e-06,
+          "torch_tf32_max_rel_err": 1.8517810814333961e-07
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "At M=64,K=256,N=64 with group=64 the kernel's max abs err vs an fp64 reference of A @ dequant(B) is 3.49e-6, max rel err 4.69e-7 \u2014 the same order as torch's own fp32 matmul (1.38e-6 abs, 1.85e-7 rel), i.e. plain fp32 accumulation accuracy, roughly 3 orders of magnitude better than the ~1e-3 TF32 signature the claim predicted. Important environment caveat: the GPU is a Tesla T4 (Turing, SM75), which has no TF32 tensor cores, so torch allow_tf32=True and allow_tf32=False produced bit-identical errors (both 1.377726e-6). The TF32-truncation hypothesis is therefore rebutted for this verification environment, but this probe cannot exclude TF32 use by tl.dot on Ampere+ hardware; that variant is untestable here.",
+        "supports": "rebutted",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The declared 4-bit format makes the weight side exact, so any observed error must come from the accumulation path. TF32 inside tl.dot is the most likely source and would be invisible under a loose tolerance but visible under a fp32-appropriate one; the probe must separate \"lossy format\" from \"lossy accumulation\".",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Requires the kernel to evaluate C = A @ dequant(B) faithfully in the declared 4-bit weight format, which bounds error to the weight quantization and not the accumulation."
+      },
+      {
+        "source": "kernel.py:65",
+        "summary": "Wrapper allocates the output as torch.float32, indicating fp32 accumulation/output is the intended numeric path."
+      }
+    ],
+    "scope_rationale": "problem.txt says the kernel's job is to \"evaluate the matmul faithfully in that declared format\", i.e. the weights are 4-bit but the product/accumulation is expected to be a faithful matmul; fp32 activations are the dtype the wrapper itself produces (c is torch.float32) and are the natural contract inputs.",
+    "statement": "`accumulator += tl.dot(a, b)` (kernel.py:51) is executed with fp32 `a` and fp32 dequantized `b`; Triton's tl.dot defaults to TF32 for fp32 operands, so on Ampere+ the products are truncated to 10-bit mantissas. Against an exact fp32 reference A @ dequant(B) the max relative error should be ~1e-3 rather than ~1e-6, i.e. the matmul is not evaluated faithfully at fp32 even though the 4-bit weights themselves are exactly representable. Testable: compare gptq_matmul against torch.matmul(a.double(), dequant.double()).float() and report max abs error, max rel error, and the same metrics for a reference computed with torch.backends.cuda.matmul.allow_tf32=True.",
+    "status": "rebutted",
+    "updated_at": "2026-09-08T15:26:31Z"
+  },
+  {
+    "created_at": "2026-09-08T15:23:54Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T15:26:31Z",
+        "data": {
+          "M": 32,
+          "N": 64,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "917d083fb800810f0cee0b4c9316d88fc5f2c64b5241db7d36e1093a809fa7a9"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "58f8e6a8c5f607fa14b231c3cbe1ea11ab1f1369af5f6fa31d569fa01876d90d"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "ed47d5e893ec615ba3e41f39d62c4535fe2e64fd5f709c3b0a76fdf2d461493d"
+            }
+          ],
+          "block_size_k": 16,
+          "control_K32_max_abs_err": 4.0202052087323636e-07,
+          "control_K32_max_rel_err": 1.5165758651548456e-07,
+          "control_K32_ref_max_abs": 2.650843456698351,
+          "duration_s": 5.995404,
+          "exit_code": 0,
+          "expected_signal": "With K=24 (multiple of 8, not 16) the unmasked K tail yields large max abs err vs reference, or a CUDA fault; K=32 control should be clean.",
+          "group_size": 8,
+          "json_parse_error": null,
+          "json_result": {
+            "control_K32": {
+              "K": 32,
+              "group_size": 8,
+              "max_abs_err": 4.0202052087323636e-07,
+              "max_rel_err": 1.5165758651548456e-07,
+              "ref_max_abs": 2.650843456698351
+            },
+            "tail_K24": {
+              "K": 24,
+              "group_size": 8,
+              "max_abs_err": Infinity,
+              "max_rel_err": Infinity,
+              "ref_max_abs": 2.3319915821238406
+            }
+          },
+          "pack_values_per_int32": 8,
+          "scope": "unknown_no_test_py",
+          "stderr": "",
+          "stdout": "{\"control_K32\": {\"K\": 32, \"group_size\": 8, \"max_abs_err\": 4.0202052087323636e-07, \"ref_max_abs\": 2.650843456698351, \"max_rel_err\": 1.5165758651548456e-07}, \"tail_K24\": {\"K\": 24, \"group_size\": 8, \"max_abs_err\": Infinity, \"ref_max_abs\": 2.3319915821238406, \"max_rel_err\": Infinity}}\n",
+          "tail_K24_max_abs_err": "Infinity",
+          "tail_K24_ref_max_abs": 2.3319915821238406,
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "The unmasked K-tail behavior is reproduced: with K=24 (a legal 8-per-int32 packing size but not a multiple of BLOCK_SIZE_K=16) the kernel returns values whose max abs error vs the fp64 reference is Infinity, i.e. the third loop iteration reads past the ends of A, the 3 packed B rows, and g_idx and folds non-finite/garbage OOB data into the accumulator (the g_idx OOB read also indexes scales/zeros with an arbitrary group id). The K=32 control on the identical construction is clean (max abs err 4.02e-7, max rel 1.52e-7), isolating the failure to the K%16!=0 tail rather than the packing or reference code. Scope caveat unchanged: the artifact has no test.py/get_inputs, so whether K%16!=0 is inside the verification domain is still unknown; behaviorally the defect is real, contractually its decisiveness is not established.",
+        "supports": "confirmed",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "Packing is 8 values per int32, so K only needs to be a multiple of 8 for a well-formed input, but the tiling assumes a multiple of 16; the wrapper performs no divisibility check or padding, so a contract-legal K=24 silently exercises the unmasked tail.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt places no divisibility constraint on K and the artifact has no test.py or get_inputs to pin the tested shapes, so it is unclear whether a K that is a multiple of 8 but not 16 is inside the verification domain; upstream AutoGPTQ is only ever called with group-aligned K. Marking unknown until the input domain is clarified.",
+    "statement": "The K loop runs cdiv(K, BLOCK_SIZE_K=16) iterations with no K-dimension mask on the `a`, `b`, or `g_idx` loads (kernel.py:41-54; a_mask only bounds M, b/g loads are unmasked). For a K that is a legal 4-bit packing size but not a multiple of 16 (e.g. K=24, packed rows = 3), the final iteration reads past the ends of A, the packed B rows, and g_idx, and adds those out-of-bounds products into the accumulator, producing wrong C values (or a memory fault) rather than the contract's C = A @ dequant(B).",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T15:26:31Z"
+  }
+]

@@ -1,0 +1,74 @@
+[
+  {
+    "created_at": "2026-09-08T14:49:52Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:50:22Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "70c41ad9257635fcd580376bf15021944e6ca00a98f18fa64a3a82b4d345bda4"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "d63287ba92f435056ab8544c432d252d468c2f7c469be91df839b970af7a90b9"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "contract_rstd_var0": 316.2277660168379,
+          "duration_s": 6.95323,
+          "eps": 1e-05,
+          "exit_code": 0,
+          "expected_signal": "If the epsilon is misplaced, constant row (var=0) gets rstd=1/eps=1e5 vs contract 1/sqrt(eps)=316, giving huge errors; normal rows show ~5e-6 relative bias.",
+          "implied_rstd_var0_kernel": 100000.0,
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "max_abs_err_vs_torch_layer_norm": 0.7276179194450378,
+          "ordinary_row_ratio_kernel_over_contract": 0.9999949932098389,
+          "predicted_ratio_1_minus_eps_over_2": 0.999995,
+          "row1_max_abs_err_vs_contract": 0.7276179194450378,
+          "row1_max_rel_err": 372.2176513671875,
+          "row1_var": 1.01108010852613e-12,
+          "stderr": "",
+          "stdout": "{\n \"metric\": \"max abs / rel error per row vs contract formula rstd=1/sqrt(var+eps)\",\n \"row_var\": [\n  0.0,\n  1.01108010852613e-12,\n  1.0203042030334473,\n  1.0612149238586426,\n  0.8857662081718445,\n  1.0262154340744019,\n  0.8921656608581543,\n  1.0279327630996704\n ],\n \"row_max_abs_err\": [\n  0.0,\n  0.7276179194450378,\n  2.86102294921875e-05,\n  2.193450927734375e-05,\n  2.7179718017578125e-05,\n  2.4318695068359375e-05,\n  3.814697265625e-05,\n  2.4318695068359375e-05\n ],\n \"row_max_rel_err\": [\n  0.0,\n  372.2176513671875,\n  0.00039870539330877364,\n  0.0009881483856588602,\n  0.0011319597251713276,\n  0.0012742168037220836,\n  0.006653366610407829,\n  0.0018414197256788611\n ],\n \"max_abs_err_vs_torch_LN\": 0.7276179194450378,\n \"constant_row_y_absmax\": 3.8595376014709473,\n \"constant_row_ref_absmax\": 3.8595376014709473,\n \"kernel_rstd_row0_implied\": null,\n \"kernel_rstd_row0_expected_wrong\": 99999.99999999999,\n \"contract_rstd_row0\": 316.2277660168379,\n \"row3_ratio_kernel_over_contract_median\": 0.9999949932098389\n}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Kernel output vs contract formula rstd=1/sqrt(var+eps) (eps=1e-5, 8x512 fp32): near-constant row with var=1.01e-12 has max abs err 0.728 and max rel err 372x (also 0.728 vs torch.nn.functional.layer_norm, which agrees with the contract). Ordinary randn rows show a systematic multiplicative bias: median ratio (y-b)/(ref-b) = 0.9999950 = 1 - eps/2, exactly the signature of rstd=1/(sqrt(var)+eps). The exactly-constant row happens to match only because x-mean=0 makes y=b regardless of rstd, so it does not exercise the normalizer magnitude; the implied rstd there would be 1e5 vs the contract's 316.2.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Line 26 of kernel.py: `rstd = 1.0 / (tl.sqrt(var) + eps)`. The epsilon is added outside the sqrt instead of inside. For var=0 this gives 1/eps = 1e5 instead of 1/sqrt(eps) \u2248 316, a 316x error; for var\u22481 it gives a relative error of about eps/2.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract states per-row: mean=sum(x)/N, var=sum((x-mean)^2)/N, rstd=1/sqrt(var+eps), y=(x-mean)*rstd*weight+bias."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Contract explicitly calls out epsilon behavior for vanishing variance: a constant row must not blow the output up, making constant/near-constant rows an in-domain input."
+      }
+    ],
+    "scope_rationale": "problem.txt states the required formula literally as `rstd = 1 / sqrt(var + eps)` and additionally emphasizes the epsilon semantics (\"it must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up\"), explicitly naming the constant-row case as in-domain. Testing ordinary randn rows plus a constant row is therefore squarely inside the declared contract.",
+    "statement": "layer_norm computes rstd = 1/(sqrt(var) + eps) instead of the contract's rstd = 1/sqrt(var + eps), producing wrong outputs (grossly wrong for near-constant / small-variance rows, and a small but systematic error for ordinary rows).",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:50:22Z"
+  }
+]

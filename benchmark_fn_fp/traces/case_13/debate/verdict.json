@@ -1,0 +1,9 @@
+{
+  "confidence": 0.95,
+  "created_at": "2026-09-08T15:00:30Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "problem.txt is the sole and therefore operative contract here (artifact_files = kernel.py, meta.json, problem.txt; test_code is empty), and it explicitly requires the CONSECUTIVE grouping kv_head = q_head // n_rep with n_rep = num_q_heads // num_kv_heads (\"query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1\"). kernel.py:9 instead computes kv_head = q_head % num_kv_heads and never derives n_rep at all. Claim c1 is confirmed by probe t8 using the correct order-sensitive metric (per-row exact equality vs torch.repeat_interleave): for (num_kv_heads=2, dim=64, num_q_heads=4) the output source rows are [0,1,0,1] versus the required [0,0,1,1] (2/4 rows wrong, first mismatch at row 1), and for (4,128,32) 24/32 rows are wrong; in both cases the output exactly matches the interleaved kv.repeat(n_rep,1) mapping. These are ordinary, contract-admitted GQA configurations (num_q_heads a multiple of num_kv_heads, contiguous fp32, power-of-two head dim) requiring no stride, dtype, rank, or degenerate-size deviation, so the claim is in_scope with scope evidence tied to the stated contract. This is an exact integer index mapping with no tolerance, tie-breaking, precision-format, or unspecified-ordering allowance the contract could excuse it under; degenerate shapes (num_kv_heads=1 or n_rep=1) pass only because the two formulas coincide there. c2 (Triton CompilationError for non-power-of-two head_dim) is confirmed behaviorally but its scope is unknown since no artifact file pins head_dim; I set it aside as a generalization/robustness note and it plays no part in this verdict.",
+  "verdict": "reject"
+}

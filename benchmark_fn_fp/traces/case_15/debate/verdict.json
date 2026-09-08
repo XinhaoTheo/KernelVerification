@@ -1,0 +1,10 @@
+{
+  "confidence": 0.96,
+  "created_at": "2026-09-08T15:02:48Z",
+  "decisive_claims": [
+    "c1",
+    "c2"
+  ],
+  "reason": "The artifact contains only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs to narrow the domain, so problem.txt is the operative contract. It explicitly states: \\\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale,\\\" and \\\"Every column of the input must be quantized under the scale of the group it belongs to.\\\" The kernel's loop bound n_groups = n_cols // GROUP (kernel.py:12,14) has no remainder epilogue, and the output is torch.zeros_like(x) (kernel.py:28), so trailing columns are silently left at zero.\\n\\nc1 (confirmed, in_scope): probe t9 with x=(4,100) fp32, group_size=64 shows head columns 0:63 exact (max abs err 0.0) but all 144 tail entries exactly 0.0 while the input is nonzero in all 144 positions; tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the trailing partial group is never written. c2 (confirmed, in_scope): probe t10 with x=(4,40) < group_size yields 0/160 nonzero outputs against a 160/160-nonzero reference \u2014 the entire result is zero. Both cases sit squarely inside the input domain the contract explicitly admits, and both are gross failures, not tolerance artifacts; the reference is finite and well-defined in each.\\n\\nc3 (round-half-up vs torch.round half-to-even) is confirmed only at the mechanism level and its scope remains unknown: problem.txt writes only `round(x/scale)` without fixing a tie-break rule, and the deviation is bounded at one quantization step on exactly-representable ties. I set c3 aside as a non-decisive note; it neither supports nor is needed for this verdict. Unexplored surfaces (non-power-of-two group_size compile behavior, fp16/bf16, non-contiguous strides, missing explicit clamp) are likewise set aside as they cannot change the already-decisive tail-truncation failure.",
+  "verdict": "reject"
+}

@@ -1,51 +1,79 @@
 
-import importlib.util, json
-import numpy as np, torch
+import json, subprocess, sys, textwrap
 
+child = textwrap.dedent('''
+import json, importlib.util, torch
 spec = importlib.util.spec_from_file_location("kmod", "/root/cases/case_33/kernel.py")
 kmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(kmod)
 
-def build(M,K,N,gs,seed=0):
-    g = torch.Generator().manual_seed(seed)
-    ng = (K+gs-1)//gs
-    q = torch.randint(0,16,(K,N),generator=g,dtype=torch.int64)
-    z = torch.randint(1,17,(ng,N),generator=g,dtype=torch.int64)
-    s = torch.rand((ng,N),generator=g)*0.1+0.01
-    a = torch.randn((M,K),generator=g)
-    qn = q.numpy().astype(np.uint32)
-    bp = np.zeros((K//8,N),dtype=np.uint32)
-    for k in range(K):
-        bp[k//8] |= qn[k] << (4*(k%8))
-    b = torch.from_numpy(bp.view(np.int32).copy()).cuda()
-    zn = (z.numpy()-1).astype(np.uint32)
-    qz = np.zeros((ng,N//8),dtype=np.uint32)
-    for n in range(N):
-        qz[:,n//8] |= zn[:,n] << (4*(n%8))
-    qzp = torch.from_numpy(qz.view(np.int32).copy()).cuda()
-    return dict(a=a.cuda(), b=b, s=s.cuda(), qzp=qzp, q=q, z=z, sc=s, ac=a, ng=ng)
+def to_i32(x64):
+    return ((x64 + 2**31) % 2**32 - 2**31).to(torch.int32)
 
-def ref_with(d,K,gidx):
-    deq = (d["q"].double() - d["z"][gidx].double()) * d["sc"][gidx].double()
-    return d["ac"].double() @ deq
+def pack_k(q):
+    K, N = q.shape
+    out = torch.zeros(K//8, N, dtype=torch.int64, device=q.device)
+    for r in range(K//8):
+        for j in range(8):
+            out[r] |= (q[r*8+j] & 15) << (4*j)
+    return to_i32(out)
+
+def pack_n(z):
+    G, N = z.shape
+    out = torch.zeros(G, N//8, dtype=torch.int64, device=z.device)
+    for c in range(N//8):
+        for j in range(8):
+            out[:, c] |= (z[:, c*8+j] & 15) << (4*j)
+    return to_i32(out)
 
 res = {}
-for tag,(M,K,N,gs) in {"target":(64,96,64,64), "control":(64,128,64,32)}.items():
-    d = build(M,K,N,gs,seed=7)
-    ng_true = (K+gs-1)//gs
-    gidx_true = torch.arange(K)//gs
-    ng_floor = K//gs
-    gidx_clamp = torch.clamp(torch.arange(K)//gs, max=ng_floor-1)
-    R_true = ref_with(d,K,gidx_true)
-    R_clamp = ref_with(d,K,gidx_clamp)
-    out = kmod.gptq_matmul(d["a"], d["b"], d["s"], d["qzp"], gs, 4).double().cpu()
-    res[tag] = {
-      "config": {"M":M,"K":K,"N":N,"group_size":gs,"ceil_groups":ng_true,"floor_groups":ng_floor,
-                 "K_mult_of_16":K%16==0,"K_mult_of_gs":K%gs==0},
-      "ref_max_abs": R_true.abs().max().item(),
-      "max_abs_err_vs_contract_ref": (out-R_true).abs().max().item(),
-      "rel_err_vs_contract_ref": ((out-R_true).abs().max()/R_true.abs().max()).item(),
-      "max_abs_err_vs_clamped_ref": (out-R_clamp).abs().max().item(),
-      "n_gidx_mismatched_cols": int((gidx_true!=gidx_clamp).sum().item()),
-    }
-res["metric_reason"] = "continuous matmul output; max-abs error vs contract reference (ceil groups) and vs clamped-group reference identifies which mapping the kernel implements"
+M, N, K, gs = 32, 32, 16, 32
+ng = -(-K//gs)
+res["contract_groups"] = ng
+res["wrapper_num_groups"] = K // gs
+ar = torch.arange(K)
+gw = torch.clamp(ar // gs, max=(K // gs) - 1)
+res["wrapper_g_idx_unique"] = sorted(set(gw.tolist()))
+res["contract_g_idx_unique"] = sorted(set((ar // gs).tolist()))
+
+torch.manual_seed(0)
+q = torch.randint(0, 16, (K, N), device='cuda', dtype=torch.int64)
+zq = torch.randint(0, 16, (ng, N), device='cuda', dtype=torch.int64)
+scales = (0.05 * (1.0 + torch.rand(ng, N, device='cuda'))).float()
+bp = pack_k(q); zp = pack_n(zq)
+a = torch.randn(M, K, device='cuda', dtype=torch.float32)
+
+gmap = (torch.arange(K, device='cuda') // gs)
+deq = (q.float() - (zq[gmap].float() + 1.0)) * scales[gmap]
+C_ref = a @ deq
+
+try:
+    C_k = kmod.gptq_matmul(a, bp, scales, zp, gs, 4)
+    torch.cuda.synchronize()
+    e = (C_k - C_ref).abs().max().item()
+    res["launched"] = True
+    res["error"] = None
+    res["max_abs_err_vs_contract_ref"] = e
+    res["max_abs_contract_ref"] = C_ref.abs().max().item()
+    res["rel_err"] = e / max(C_ref.abs().max().item(), 1e-30)
+    res["allclose_contract"] = bool(torch.allclose(C_k, C_ref, rtol=1e-3, atol=1e-3))
+    res["out_finite"] = bool(torch.isfinite(C_k).all().item())
+    res["out_sample"] = C_k[0, :4].tolist()
+    res["ref_sample"] = C_ref[0, :4].tolist()
+except Exception as ex:
+    res["launched"] = False
+    res["error"] = type(ex).__name__ + ": " + str(ex)[:400]
+
 print(json.dumps(res))
+''')
+
+p = subprocess.run([sys.executable, "-c", child], capture_output=True, text=True, timeout=300)
+lines = [l for l in p.stdout.strip().splitlines() if l.strip()]
+try:
+    inner = json.loads(lines[-1]) if lines else {}
+except Exception:
+    inner = {}
+out = {"child_returncode": p.returncode,
+       "child_crashed": p.returncode != 0,
+       "stderr_tail": p.stderr.strip()[-600:],
+       "result": inner}
+print(json.dumps(out))

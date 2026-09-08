@@ -1,50 +1,43 @@
 
-import torch, json, importlib.util
+import torch, json, importlib.util, math
 spec = importlib.util.spec_from_file_location("k", "/root/cases/case_04/kernel.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
 def ref(X, eps):
-    x = X.double()
+    x = X.float()
     ms = (x*x).sum(-1, keepdim=True)/x.shape[-1]
-    return (x * torch.rsqrt(ms+eps)).float()
+    return x*torch.rsqrt(ms+eps)
 
-res = {}
-torch.manual_seed(1)
-eps = 1e-6
-for n in [1,2,3,17,64,4096,8192,16384,32768]:
-    X = torch.randn(4,n, device='cuda')
-    try:
+torch.manual_seed(3)
+rows, cols = 4, 512
+base = torch.randn(rows, cols, device='cuda')
+
+out = []
+# scan scales and eps values, including sub-normal-triggering scales
+for scale in [1e-1, 1e-5, 1e-10, 1e-18, 1e-20, 1e-22, 1e-25, 1e-30, 1e-38, 0.0]:
+    for eps in [1e-6, 1e-5, 1e-8, 1e-12, 1e-20, 1e-30, 1e-38, 1e-42, 0.0]:
+        X = base*scale
         Y = m.rms_norm_forward(X, eps)
         R = ref(X, eps)
-        err = (Y.float()-R).abs()
-        res[f"fp32_n{n}"] = dict(max_abs=err.max().item(),
-            max_rel=(err/R.abs().clamp_min(1e-30)).max().item(),
-            out_dtype=str(Y.dtype))
-    except Exception as e:
-        res[f"fp32_n{n}"] = dict(error=repr(e)[:200])
+        fy = bool(torch.isfinite(Y).all()); fr = bool(torch.isfinite(R).all())
+        d = (Y-R).abs()
+        den = R.abs().clamp_min(1e-30)
+        mr = float((d/den).max()) if fy and fr else float('nan')
+        if (not fy) or fy != fr or (fy and fr and mr > 1e-4):
+            out.append(dict(scale=scale, eps=eps, fin_y=fy, fin_r=fr, max_rel=mr))
 
-# bf16 near-zero rows
-for scale in [1e-3, 1e-6, 1e-20]:
-    X = (torch.randn(8,256, device='cuda')*scale).bfloat16()
-    try:
-        Y = m.rms_norm_forward(X, eps)
-        R = ref(X, eps)
-        err = (Y.float()-R).abs()
-        res[f"bf16_scale_{scale}"] = dict(max_abs=err.max().item(),
-            ref_absmax=R.abs().max().item(),
-            max_rel=(err/R.abs().clamp_min(1e-30)).max().item(),
-            nan=int(torch.isnan(Y).sum()))
-    except Exception as e:
-        res[f"bf16_scale_{scale}"] = dict(error=repr(e)[:200])
+# boundary: smallest eps>0 that keeps kernel finite at scale 1e-22
+bnd = []
+X = base*1e-22
+for eps in [0.0, 1e-45, 1e-42, 1e-40, 1e-38, 1e-36, 1e-30, 1e-20, 1e-12, 1e-6]:
+    Y = m.rms_norm_forward(X, eps)
+    bnd.append(dict(eps=eps, fin=bool(torch.isfinite(Y).all())))
 
-# non-contiguous-ish: slice of wider tensor (row stride != n_cols) -- note kernel calls X.float() which makes contiguous
-big = torch.randn(8, 512, device='cuda')
-Xv = big[:, :300]
-try:
-    Y = m.rms_norm_forward(Xv, eps)
-    R = ref(Xv, eps)
-    res["sliced_view_300"] = dict(max_abs=(Y.float()-R).abs().max().item())
-except Exception as e:
-    res["sliced_view_300"] = dict(error=repr(e)[:200])
+# also: bf16 round-trip tiny rows with realistic eps
+Xb = (base*1e-20).bfloat16()
+Yb = m.rms_norm_forward(Xb, 1e-6); Rb = ref(Xb, 1e-6)
+bf = dict(fin=bool(torch.isfinite(Yb).all()),
+          max_abs=float((Yb-Rb).abs().max()))
 
-print(json.dumps(res))
+print(json.dumps(dict(metric="finiteness + max rel err vs fp32 ref over eps x scale grid",
+                      failures=out, n_fail=len(out), boundary_scale_1e_22=bnd, bf16_tiny=bf)))

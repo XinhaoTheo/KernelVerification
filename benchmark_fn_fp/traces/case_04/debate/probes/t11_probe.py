@@ -1,40 +1,62 @@
 
-import importlib.util, torch, json
+import json, importlib.util, torch
 spec = importlib.util.spec_from_file_location("k", "/root/cases/case_04/kernel.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
-torch.manual_seed(2)
-eps = 1e-6
-res = {"eps": eps, "cases": {}}
-EPS32 = 1.1920929e-7  # 2^-23, 1 fp32 ULP relative step
+torch.manual_seed(0)
+dev = "cuda"
+rows, cols, eps = 8, 512, 1e-6
 
-for (R, C, scale, tag) in [(16, 1024, 1.0, "randn_1024"),
-                           (16, 64, 1.0, "randn_64"),
-                           (8, 4096, 1e3, "randn_4096_scale1e3"),
-                           (8, 128, 1e-2, "randn_128_scale1e-2")]:
-    X = (torch.randn(R, C, device='cuda', dtype=torch.float32) * scale).contiguous()
-    Y = m.rms_norm_forward(X, eps)
-    Xd = X.double()
-    msd = (Xd*Xd).sum(dim=1, keepdim=True)/C
-    rstd_ref = 1.0/torch.sqrt(msd + eps)
-    Yref = Xd * rstd_ref
-    # least-squares implied rstd per row (fp64), averages out elementwise fp32 rounding
-    implied = ((Y.double()*Xd).sum(dim=1, keepdim=True)/(Xd*Xd).sum(dim=1, keepdim=True))
-    rstd_rel = ((implied - rstd_ref).abs()/rstd_ref.abs())
-    yrel = ((Y.double()-Yref).abs()/Yref.abs().clamp_min(1e-300))
-    # torch fp32 reference (divide+sqrt in fp32)
-    ms32 = (X*X).sum(dim=1, keepdim=True)/C
-    ytorch = X * (1.0/torch.sqrt(ms32 + eps))
-    yrel32 = ((Y.double()-ytorch.double()).abs()/ytorch.double().abs().clamp_min(1e-300))
-    res["cases"][tag] = {
-        "shape": [R, C],
-        "max_rstd_rel_err": rstd_rel.max().item(),
-        "max_rstd_rel_err_in_ulps": rstd_rel.max().item()/EPS32,
-        "max_y_rel_err_vs_fp64": yrel.max().item(),
-        "max_y_rel_err_vs_fp64_in_ulps": yrel.max().item()/EPS32,
-        "max_y_rel_err_vs_torch_fp32": yrel32.max().item(),
-        "max_y_rel_err_vs_torch_fp32_in_ulps": yrel32.max().item()/EPS32,
-        "allclose_torch_fp32_rtol1e-5": bool(torch.allclose(Y, ytorch, rtol=1e-5, atol=1e-6)),
-        "allclose_torch_fp32_rtol1e-6": bool(torch.allclose(Y, ytorch, rtol=1e-6, atol=0.0)),
-    }
+X32 = torch.randn(rows, cols, device=dev, dtype=torch.float32).contiguous()
+Xb  = X32.to(torch.bfloat16).contiguous()
+
+def ref(X, eps):
+    # Liger behavior: fp32 accumulation, store Y in the INPUT storage dtype
+    x = X.float()
+    ms = (x*x).sum(-1, keepdim=True)/x.shape[-1]
+    y = x * torch.rsqrt(ms + eps)
+    return y.to(X.dtype)
+
+res = {}
+
+# --- bf16 storage path ---
+out_b   = m.rms_norm_forward(Xb, eps)
+ref_b   = ref(Xb, eps)            # bf16-rounded output (Liger-like)
+ref_b32 = ref(Xb.float(), eps)    # fp32 output, same numeric values
+res["bf16_in_out_dtype"] = str(out_b.dtype)
+res["bf16_ref_dtype"]    = str(ref_b.dtype)
+res["dtype_mismatch_bf16"] = str(out_b.dtype) != str(ref_b.dtype)
+d_b = (out_b.float() - ref_b.float()).abs()
+res["max_abs_err_bf16_vs_bf16ref"] = float(d_b.max())
+res["max_rel_err_bf16_vs_bf16ref"] = float((d_b / ref_b.float().abs().clamp_min(1e-30)).max())
+res["max_abs_err_bf16_vs_fp32ref"] = float((out_b - ref_b32).abs().max())
+res["bf16_half_ulp_rel_approx"] = 2**-9
+res["allclose_bf16_vals_rtol1e-2"] = bool(torch.allclose(out_b.float(), ref_b.float(), rtol=1e-2, atol=1e-2))
+res["allclose_bf16_vals_rtol1e-5"] = bool(torch.allclose(out_b.float(), ref_b.float(), rtol=1e-5, atol=1e-6))
+res["n_elems_differing_bf16"] = int((out_b.float() != ref_b.float()).sum())
+res["n_elems_total"] = int(out_b.numel())
+
+# --- fp32 contiguous control ---
+out_f = m.rms_norm_forward(X32, eps)
+ref_f = ref(X32, eps)
+d_f = (out_f - ref_f).abs()
+res["fp32_in_out_dtype"] = str(out_f.dtype)
+res["max_abs_err_fp32"] = float(d_f.max())
+res["max_rel_err_fp32"] = float((d_f / ref_f.abs().clamp_min(1e-30)).max())
+
+# --- near-zero-magnitude rows (problem.txt calls these out) ---
+Z32 = torch.zeros(4, cols, device=dev, dtype=torch.float32)
+Z32[1] = 1e-20; Z32[2] = 1e-8; Z32[3] = torch.randn(cols, device=dev)*1e-6
+o_z = m.rms_norm_forward(Z32, eps); r_z = ref(Z32, eps)
+res["max_abs_err_fp32_nearzero"] = float((o_z - r_z).abs().max())
+res["nearzero_out_finite"] = bool(torch.isfinite(o_z).all())
+res["nearzero_row0_out_max"] = float(o_z[0].abs().max())
+res["nearzero_row2_out_max"] = float(o_z[2].abs().max())
+
+Zb = Z32.to(torch.bfloat16)
+o_zb = m.rms_norm_forward(Zb, eps); r_zb = ref(Zb, eps)
+res["nearzero_bf16_out_dtype"] = str(o_zb.dtype)
+res["max_abs_err_bf16_nearzero_vs_bf16ref"] = float((o_zb.float() - r_zb.float()).abs().max())
+res["nearzero_bf16_out_finite"] = bool(torch.isfinite(o_zb).all())
+
 print(json.dumps(res))

@@ -1,0 +1,1343 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_31",
+    "has_error": null,
+    "kernel_code": "import torch\nimport math \nimport triton\nimport triton.language as tl\nimport torch.nn.functional as F\n\n__all__ = ['_forward_fix_tile_size']\n\n@triton.autotune(\n    configs=[\n        triton.Config({}, num_warps=4, num_stages=1),\n        triton.Config({}, num_warps=4, num_stages=2),\n        triton.Config({}, num_warps=8, num_stages=1),\n        triton.Config({}, num_warps=8, num_stages=2),\n    ],\n    key=['BLOCK_M', 'BLOCK_N'],\n)\n@triton.jit\ndef _fwd_kernel(\n    q,\n    k,\n    v,\n    cu_q_seqlens,\n    cu_k_seqlens,\n    causal,\n    softmax_scale,\n    cu_q_block, \n    cu_k_block,\n    q_block_to_batch,\n    cu_num_k_block,\n    head_q_to_k_ratio,\n    block_mask,\n    out,\n    lse,\n    tmp, # See flash_attn_trion.py and flash_attn_triton_og.py \n    stride_q_s,\n    stride_q_h,\n    stride_q_d,\n    stride_k_s,\n    stride_k_h,\n    stride_k_d,\n    stride_v_s,\n    stride_v_h,\n    stride_v_d,\n    stride_b_nh,\n    stride_b_nq,\n    stride_b_nk,\n    stride_o_s,\n    stride_o_h,\n    stride_o_d,\n    stride_lse_s,\n    stride_lse_h,\n    headdim,\n    BLOCK_M: tl.constexpr,\n    BLOCK_N: tl.constexpr,\n    BLOCK_DIM: tl.constexpr,\n    EVEN_HEADDIM: tl.constexpr,\n    EVEN_SEQ_QBLOCK: tl.constexpr,\n    EVEN_SEQ_KBLOCK: tl.constexpr,\n):\n    off_head_q = tl.program_id(1)\n    off_head_k = off_head_q // head_q_to_k_ratio\n    \n    off_q_block = tl.program_id(0)\n    off_dim = tl.arange(0, BLOCK_DIM)\n    \n    start_m = tl.load(cu_q_block + off_q_block)\n    end_m = tl.load(cu_q_block + off_q_block + 1)\n    off_m = start_m + tl.arange(0, BLOCK_M)\n    \n    # load the q block\n    q_ptr = q + off_m[:, None] * stride_q_s + off_head_q * stride_q_h + off_dim[None, :] * stride_q_d\n    if EVEN_SEQ_QBLOCK:\n        if EVEN_HEADDIM:\n            q_block = tl.load(q_ptr)\n        else:\n            q_block = tl.load(q_ptr, mask=off_dim[None, :] < headdim, other=0.0)\n    else:\n        if EVEN_HEADDIM:\n            q_block = tl.load(q_ptr, mask=off_m[:, None] < end_m, other=0.0)\n        else:\n            q_block = tl.load(q_ptr, mask=(off_m[:, None] < end_m) & (off_dim[None, :] < headdim), other=0.0)\n    \n\n    # accumulator\n    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')\n    l_i = tl.zeros([BLOCK_M], dtype=tl.float32)\n    acc = tl.zeros([BLOCK_M, BLOCK_DIM], dtype=tl.float32)\n    \n    # tmp_ptr = tmp + off_head_q * stride_lse_h + off_m * stride_lse_s\n    \n    # batch index \n    batch_idx = tl.load(q_block_to_batch + off_q_block)\n    \n    # get offset and q and k start/end indices in seq\n    batch_q_start_idx = tl.load(cu_q_seqlens + batch_idx)\n    batch_q_end_idx = tl.load(cu_q_seqlens + batch_idx + 1)\n    batch_k_start_idx = tl.load(cu_k_seqlens + batch_idx)\n    batch_k_end_idx = tl.load(cu_k_seqlens + batch_idx + 1)\n    offset = batch_k_end_idx - batch_k_start_idx - (batch_q_end_idx - batch_q_start_idx)\n\n    # k block loop, start from the same batch as the q block, and end at the last k block in the same batch.\n    k_block_start = tl.load(cu_num_k_block + batch_idx)\n    k_block_end = tl.load(cu_num_k_block + batch_idx + 1)\n\n    for off_k_block in range(k_block_start, k_block_end):\n        start_n = tl.load(cu_k_block + off_k_block)\n        \n        # We only need to enter the calulcation if two conditions are met:\n        # 1. the block mask is True\n        # 2. causal = False; or when causal = True && the end of the q block is after the start of the k block.\n        if tl.load(block_mask + off_head_k * stride_b_nh + off_q_block * stride_b_nq + off_k_block * stride_b_nk) and (not causal or end_m - batch_q_start_idx + offset >= start_n - batch_k_start_idx):\n            \n            end_n = tl.load(cu_k_block + off_k_block + 1)\n            off_n = start_n + tl.arange(0, BLOCK_N)\n            \n            if EVEN_SEQ_KBLOCK:\n                if EVEN_HEADDIM:\n                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d)\n                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d)\n                else:\n                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d, \n                                    mask =off_dim[:, None] < headdim, \n                                    other=0.0)\n                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d, \n                                    mask = off_dim[None, :] < headdim, \n                                    other=0.0)\n            else:\n                if EVEN_HEADDIM:\n                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d, \n                                    mask = off_n[None,:] < end_n, \n                                    other=0.0)\n                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d, \n                                    mask = off_n[:,None] < end_n, \n                                    other=0.0)\n                else:\n                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d, \n                                    mask = (off_n[None,:] < end_n) & (off_dim[:, None] < headdim), \n                                    other=0.0)\n                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d, \n                                    mask = (off_n[:,None] < end_n) & (off_dim[None, :] < headdim), \n                                    other=0.0)\n            \n            # Core part: online Softmax\n            qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)\n            qk += tl.dot(q_block, k_block, allow_tf32=False) # Provdie allow_tf32=False can achieve better accuracy for float32. \n            qk *= softmax_scale\n\n            m_ij = tl.maximum(m_i, tl.max(qk, 1))\n            qk -= m_ij[:, None]\n            \n            if causal:\n                qk += tl.where(off_m[:, None] - batch_q_start_idx + offset >= off_n[None, :] - batch_k_start_idx, 0, float('-inf'))\n            \n            if not EVEN_SEQ_KBLOCK and start_n + BLOCK_N > end_n: \n                qk += tl.where(off_n[None,:] < end_n, 0, float('-inf'))\n            \n            p = tl.exp(qk)\n            \n            l_ij = tl.sum(p, 1)\n            alpha = tl.exp(m_i - m_ij)\n            \n            # Original flashattention here stores and immediately loads, but it seems not necessary in my testing.\n            # tl.store(tmp_ptr, alpha, mask = off_m < end_m)\n            # alpha = tl.load(tmp_ptr, mask = off_m < end_m)\n            # \n            l_i = l_i * alpha + l_ij\n            acc = acc * alpha[:, None]\n            p = p.to(v.type.element_ty)\n            \n            \n            acc += tl.dot(p, v_block, allow_tf32=False) # Provdie allow_tf32=False can achieve better accuracy for float32. \n            m_i = m_ij\n\n    l_i = tl.where(l_i == 0, 1, l_i) # might be a working trick for the case when l_i is not updated at all. \n    l_recip = 1 / l_i\n    # tl.store(tmp_ptr, l_recip, mask = off_m < end_m)\n    # l_recip = tl.load(tmp_ptr, mask = off_m < end_m)\n    acc = acc * l_recip[:,None]\n    acc = acc.to(out.dtype.element_ty)\n    \n    off_o = off_m[:, None] * stride_o_s + off_head_q * stride_o_h + off_dim[None, :] * stride_o_d\n    out_ptr = out + off_o\n    if EVEN_SEQ_QBLOCK:\n        if EVEN_HEADDIM:\n            tl.store(out_ptr, acc)\n        else:\n            tl.store(out_ptr, acc, mask=off_dim[None, :] < headdim)\n    else:\n        if EVEN_HEADDIM:\n            tl.store(out_ptr, acc, mask=off_m[:, None] < end_m)\n        else:\n            tl.store(out_ptr, acc, mask=(off_m[:, None] < end_m) & (off_dim[None, :] < headdim))\n\n    off_lse = off_head_q * stride_lse_h + off_m * stride_lse_s\n\n    if EVEN_SEQ_QBLOCK:\n        tl.store(lse + off_lse, tl.log(l_i))\n    else:\n        tl.store(lse + off_lse, tl.log(l_i), mask = off_m < end_m)\n\n\n\ndef _forward_fix_tile_size(q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask, q_block_size, k_block_size, causal, softmax_scale, num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block, num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block):\n    \n\n    seq_len_q = q.shape[0]\n    nhead_q = q.shape[1]\n    nhead_k = k.shape[1]\n    assert nhead_q % nhead_k == 0, \"nhead_q must be divisible by nhead_k (for GQA)\"\n    head_q_to_k_ratio = nhead_q // nhead_k\n\n    headdim = q.shape[2]\n    assert (q_block_size & (q_block_size - 1) == 0) and (k_block_size & (k_block_size - 1) == 0), \"q_block_size and k_block_size must be powers of 2\"\n    BLOCK_M = q_block_size\n    BLOCK_N = k_block_size\n    BLOCK_DIM = max(triton.next_power_of_2(headdim), 16)\n    \n    softmax_scale = softmax_scale if softmax_scale is not None else headdim ** -0.5\n    \n    \n    out = torch.empty_like(q).contiguous()\n    lse = torch.empty((seq_len_q, nhead_q), device=q.device, dtype=torch.float32)\n    tmp = torch.empty((seq_len_q, nhead_q), device=q.device, dtype=torch.float32)\n    \n    EVEN_SEQ_KBLOCK = ((cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0).item()\n    EVEN_SEQ_QBLOCK = torch.all((cu_q_seqlens[1:] - cu_q_seqlens[:-1]) % q_block_size == 0).item()\n    even_headdim = headdim == BLOCK_DIM\n    # launch kernel\n    grid = (num_q_block, nhead_q)\n\n    _fwd_kernel[grid](\n        q,\n        k,\n        v,\n        cu_q_seqlens,\n        cu_k_seqlens,\n        causal,\n        softmax_scale,\n        cu_q_block, \n        cu_k_block,\n        q_block_to_batch,\n        cu_num_k_block,\n        head_q_to_k_ratio,\n        block_mask,\n        out,\n        lse,\n        tmp,\n        *q.stride(),\n        *k.stride(),\n        *v.stride(),\n        *block_mask.stride(),\n        *out.stride(),\n        *lse.stride(),\n        headdim,\n        BLOCK_M,\n        BLOCK_N,\n        BLOCK_DIM,        \n        EVEN_HEADDIM = even_headdim,\n        EVEN_SEQ_QBLOCK = EVEN_SEQ_QBLOCK,\n        EVEN_SEQ_KBLOCK = EVEN_SEQ_KBLOCK,\n    )\n    \n    return out\n\n\n\ndef calculate_blocks(cu_seqlen: torch.Tensor, block_size: int) -> tuple[int, torch.Tensor, torch.Tensor]:\n    \"\"\"calculate cu_block and block_to_batch\"\"\"\n\n    # batch_sizes[batch_idx] = batch size ( seqlen ) of batch idx\n    batch_sizes = cu_seqlen[1:] - cu_seqlen[:-1]\n\n    # batch_num_block[batch_idx] = how many block in batch idx\n    batch_num_block = (batch_sizes + (block_size - 1)) // block_size\n    \n    # cu_num_block[batch_idx] = first block id of this batch\n    cu_num_block = torch.zeros(\n        batch_num_block.numel() + 1,\n        device=cu_seqlen.device,\n        dtype=batch_num_block.dtype,\n    )\n    \n    \n    cu_num_block[1:] = batch_num_block.cumsum(dim=0)\n    \n    # total block ( for all batch )\n    num_block = cu_num_block[-1].item()\n    # block_sizes[block_idx] = block_size of block idx\n    block_sizes = torch.full(\n        (num_block + 1,), block_size, dtype=torch.int32, device=cu_seqlen.device\n    )\n    \n    block_sizes[0] = 0 \n    batch_last_block_size = batch_sizes - (batch_num_block - 1) * block_size\n    block_sizes[cu_num_block[1:]] = batch_last_block_size\n    # cu_block[block_idx] = the start block offset of block idx\n    cu_block = block_sizes.cumsum(dim=-1, dtype=torch.int32)\n    # block_to_batch[block_idx] = batch idx of the block idx\n    block_to_batch = torch.zeros(\n        (num_block,), dtype=torch.int32, device=cu_seqlen.device\n    )\n    block_to_batch[cu_num_block[1:-1]] = 1\n    block_to_batch = block_to_batch.cumsum(dim=0, dtype=torch.int32)\n    \n    return (\n        num_block, # the total number of blocks \n        cu_block, # the start and end (sequence) index of each block\n        block_to_batch, # block_to_batch[block_idx] represents the batch index of block_idx\n        cu_num_block, # cu_num_block[batch_idx+1] - cu_num_block[batch_idx] = batch_num_block[batch_idx]\n    )\n\n\ndef block_sparse_attention(q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask,\n                           q_block_size, k_block_size, causal=False, softmax_scale=None):\n    \"\"\"Variable-length block-sparse attention over the blocks the mask selects.\"\"\"\n    num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block = calculate_blocks(cu_q_seqlens, q_block_size)\n    num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block = calculate_blocks(cu_k_seqlens, k_block_size)\n    return _forward_fix_tile_size(\n        q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask, q_block_size, k_block_size,\n        causal, softmax_scale,\n        num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block,\n        num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block)\n",
+    "passed": null,
+    "problem_text": "Operation: variable-length block-sparse attention\n(zhengqigao/hbsattn, hbsattn/fwd_triton_fix_tile_size.py).\n\nA batch is packed into one flat sequence axis. `cu_q_seqlens` and `cu_k_seqlens`\nare the cumulative offsets, so sequence b occupies rows\ncu_seqlens[b] .. cu_seqlens[b+1]. Queries and keys are cut into fixed blocks of\n`q_block_size` and `k_block_size`; `block_mask[h, i, j]` says whether query\nblock i attends to key block j.\n\n    out[t] = softmax over the selected keys of ( q[t] . k / sqrt(headdim) ) @ v\n\nrestricted to keys that belong to the same sequence as t and that lie in a\nselected block.\n\nInput domain: sequence lengths are arbitrary and generally differ within a\nbatch -- that is the point of the packed variable-length format. A sequence\nlength is NOT required to be a multiple of the block size; when it is not, the\nfinal block of that sequence is partial and the positions past its end belong\nto the next sequence, so they must not contribute to the softmax.\n\nDoes block_sparse_attention() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_31",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T14:53:35Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:54:46Z",
+          "data": {
+            "EVEN_SEQ_KBLOCK_flag": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "56544c56df701da3d7e3c41106089b56fc73e03dac2b6c1ec23d167b1c25a6a7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "6622e363dfa27b695f5f2f0cc46ef2a3d43ae0a41dc5c9297ce3af197ae2a378"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "6c678bae6f128a01f2dab9f3c82d01ecc6ad9e75eeba5eba5e9a755eeaac408a"
+              }
+            ],
+            "cu_k_block": [
+              0,
+              8,
+              24,
+              32
+            ],
+            "duration_s": 7.315763,
+            "exit_code": 0,
+            "expected_signal": "If EVEN_SEQ_KBLOCK is wrongly True, seq0 rows (0-7) differ largely from the contract ref but match the leaky ref that includes keys 8..15.",
+            "json_parse_error": null,
+            "json_result": {
+              "EVEN_SEQ_KBLOCK_flag": true,
+              "info": {
+                "cu_kb": [
+                  0,
+                  8,
+                  24,
+                  32
+                ],
+                "cu_nkb": [
+                  0,
+                  1,
+                  3
+                ],
+                "cu_nqb": [
+                  0,
+                  1,
+                  3
+                ],
+                "cu_qb": [
+                  0,
+                  8,
+                  24,
+                  32
+                ],
+                "nkb": 3,
+                "nqb": 3
+              },
+              "max_abs_err_vs_contract_ref": 1.7364459037780762,
+              "max_err_seq0_rows(0-7)": 1.7364459037780762,
+              "max_err_seq0_vs_LEAKY_ref(keys0..15)": 2.384185791015625e-07,
+              "max_err_seq1_rows(8-31)": 0.4278389513492584,
+              "metric": "elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention",
+              "per_seq_k_lens": [
+                8,
+                24
+              ]
+            },
+            "k_block_size": 16,
+            "k_seqlens": [
+              8,
+              24
+            ],
+            "max_abs_err_vs_contract_ref": 1.7364459,
+            "max_err_seq0_rows_0_7": 1.7364459,
+            "max_err_seq0_vs_leaky_ref_keys0_15": 2.384e-07,
+            "max_err_seq1_rows_8_31": 0.427839,
+            "metric": "elementwise max abs error vs per-sequence-restricted softmax reference, plus match against cross-sequence leaky reference",
+            "stderr": "",
+            "stdout": "{\"info\": {\"nqb\": 3, \"cu_qb\": [0, 8, 24, 32], \"cu_nqb\": [0, 1, 3], \"nkb\": 3, \"cu_kb\": [0, 8, 24, 32], \"cu_nkb\": [0, 1, 3]}, \"EVEN_SEQ_KBLOCK_flag\": true, \"per_seq_k_lens\": [8, 24], \"max_abs_err_vs_contract_ref\": 1.7364459037780762, \"max_err_seq0_rows(0-7)\": 1.7364459037780762, \"max_err_seq1_rows(8-31)\": 0.4278389513492584, \"max_err_seq0_vs_LEAKY_ref(keys0..15)\": 2.384185791015625e-07, \"metric\": \"elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention\"}\n",
+            "timed_out": false,
+            "timeout_s": 120
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "With k/q seqlens [8,24] (total 32, block size 16), EVEN_SEQ_KBLOCK evaluated True even though neither sequence length is a multiple of 16. Kernel output for sequence-0 rows (0-7) deviates from the per-sequence-restricted softmax reference by max abs 1.736, but matches a 'leaky' reference that lets sequence-0 queries attend to keys 0..15 (i.e. including sequence-1 keys 8..15) to within 2.4e-7 -- exactly the cross-sequence contamination the contract forbids. Sequence-1 rows also deviate (max abs 0.428), consistent with the final k block (off_n = 24..39) being loaded unmasked and reading past the end of the 32-row K/V tensors.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Line 226 uses cu_k_seqlens[-1]-cu_k_seqlens[0] (total) rather than per-sequence differences, unlike line 227 for queries. When True, lines 117-127 load K/V without a sequence-bound mask and line 155's -inf masking is compiled out entirely, so out-of-sequence keys enter the softmax (and the last block can even read past the tensor).",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "'A sequence length is NOT required to be a multiple of the block size; when it is not, the final block of that sequence is partial and the positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
+        },
+        {
+          "source": "kernel.py:226-227",
+          "summary": "EVEN_SEQ_KBLOCK uses the global total length modulo block size while EVEN_SEQ_QBLOCK correctly checks every sequence."
+        }
+      ],
+      "scope_rationale": "problem.txt is the operative contract and explicitly declares the input domain: sequence lengths are arbitrary, differ within a batch, and are NOT required to be multiples of the block size; positions past a sequence's end \"must not contribute to the softmax\". k seqlens [2,6] with block size 4 is a representative admitted input.",
+      "statement": "EVEN_SEQ_KBLOCK is computed from the total packed key length modulo k_block_size (kernel.py:226) instead of per-sequence, so for a batch whose individual k sequence lengths are not multiples of k_block_size but whose total is (e.g. k seqlens [2,6], k_block_size=4), the kernel skips partial-block masking and lets keys from the following sequence contribute to the softmax, producing outputs different from the contract's per-sequence restriction.",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T14:54:46Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_31",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_31"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_31"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_31"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_31",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 2.7724238729999797,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll read the truncated tail of kernel.py to see the rest (calculate_blocks and any wrapper like block_sparse_attention).",
+      "tool_calls": [
+        {
+          "args": {
+            "end_line": 400,
+            "entry": "case_31",
+            "start_line": 260
+          },
+          "tool": "inspect_kernel_source"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 2.772,
+        "input_tokens": 10934,
+        "output_tokens": 148
+      }
+    },
+    {
+      "duration_s": 40.75639333000004,
+      "role": "solo",
+      "round": 3,
+      "text": "Two claims stand out from the source: line 226 computes `EVEN_SEQ_KBLOCK` from the *total* packed length (`cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size`) rather than per-sequence, so a batch whose per-sequence lengths are partial but whose total is a multiple of the block size will skip all key-side partial-block masking. Recording that and probing it.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Line 226 uses cu_k_seqlens[-1]-cu_k_seqlens[0] (total) rather than per-sequence differences, unlike line 227 for queries. When True, lines 117-127 load K/V without a sequence-bound mask and line 155's -inf masking is compiled out entirely, so out-of-sequence keys enter the softmax (and the last block can even read past the tensor).",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "'A sequence length is NOT required to be a multiple of the block size; when it is not, the final block of that sequence is partial and the positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
+              },
+              {
+                "source": "kernel.py:226-227",
+                "summary": "EVEN_SEQ_KBLOCK uses the global total length modulo block size while EVEN_SEQ_QBLOCK correctly checks every sequence."
+              }
+            ],
+            "scope_rationale": "problem.txt is the operative contract and explicitly declares the input domain: sequence lengths are arbitrary, differ within a batch, and are NOT required to be multiples of the block size; positions past a sequence's end \"must not contribute to the softmax\". k seqlens [2,6] with block size 4 is a representative admitted input.",
+            "statement": "EVEN_SEQ_KBLOCK is computed from the total packed key length modulo k_block_size (kernel.py:226) instead of per-sequence, so for a batch whose individual k sequence lengths are not multiples of k_block_size but whose total is (e.g. k seqlens [2,6], k_block_size=4), the kernel skips partial-block masking and lets keys from the following sequence contribute to the softmax, producing outputs different from the contract's per-sequence restriction."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 40.756,
+        "input_tokens": 14620,
+        "output_tokens": 2600
+      }
+    },
+    {
+      "duration_s": 13.450721037000108,
+      "role": "solo",
+      "round": 4,
+      "text": "I'll run a probe with k seqlens [2,6] (total 8, k_block_size=4) against a per-sequence reference to see whether keys from the next sequence leak into the softmax.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_31/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\ndev='cuda'\nd=16\n# q seqlens [2,6] too so q blocks align; use q_block_size=4 too\nq_seqlens=[2,6]; k_seqlens=[2,6]\nqbs=4; kbs=4\ncu_q=torch.tensor([0,2,8],device=dev,dtype=torch.int32)\ncu_k=torch.tensor([0,2,8],device=dev,dtype=torch.int32)\nH=1\nq=torch.randn(8,H,d,device=dev,dtype=torch.float32)\nk=torch.randn(8,H,d,device=dev,dtype=torch.float32)\nv=torch.randn(8,H,d,device=dev,dtype=torch.float32)\n\nnqb,cu_qb,qb2b,cu_nqb = m.calculate_blocks(cu_q,qbs)\nnkb,cu_kb,kb2b,cu_nkb = m.calculate_blocks(cu_k,kbs)\nprint(\"nqb\",nqb,\"cu_qb\",cu_qb.tolist(),\"qb2b\",qb2b.tolist(),\"cu_nqb\",cu_nqb.tolist())\nprint(\"nkb\",nkb,\"cu_kb\",cu_kb.tolist(),\"kb2b\",kb2b.tolist(),\"cu_nkb\",cu_nkb.tolist())\n\nblock_mask=torch.ones((H,nqb,nkb),device=dev,dtype=torch.bool)\nout=m.block_sparse_attention(q,k,v,cu_q,cu_k,block_mask,qbs,kbs,causal=False,softmax_scale=None)\n\n# reference: dense per-sequence full attention (all blocks selected)\nref=torch.zeros_like(out)\nscale=d**-0.5\nfor b in range(2):\n    qs,qe=cu_q[b].item(),cu_q[b+1].item()\n    ks,ke=cu_k[b].item(),cu_k[b+1].item()\n    for h in range(H):\n        s=(q[qs:qe,h]@k[ks:ke,h].T)*scale\n        p=torch.softmax(s,dim=-1)\n        ref[qs:qe,h]=p@v[ks:ke,h]\n\nerr=(out-ref).abs()\nprint(json.dumps({\n \"max_abs_err\": err.max().item(),\n \"per_row_max_err\": err.amax(dim=(1,2)).tolist(),\n \"EVEN_SEQ_KBLOCK_flag\": bool(((cu_k[-1]-cu_k[0])%kbs==0).item()),\n \"per_seq_even\": [ (l%kbs==0) for l in k_seqlens],\n}))\n",
+            "expected_signal": "If EVEN_SEQ_KBLOCK is wrongly True, rows of sequence 0 (rows 0-1) will attend to keys 2-3 of sequence 1 and differ from ref."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 13.451,
+        "input_tokens": 17617,
+        "output_tokens": 1227
+      }
+    },
+    {
+      "duration_s": 22.553470270000048,
+      "role": "solo",
+      "round": 5,
+      "text": "The first probe hit a Triton `tl.dot` constraint (K\u22658) because block size 4 is too small. Re-running with q/k block size 16 and k seqlens [8,24] (total 32 \u2261 0 mod 16, but neither sequence is a multiple of 16) \u2014 exactly the case where `EVEN_SEQ_KBLOCK` is wrongly True.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_31/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\ndev='cuda'; d=16; H=1\nqbs=16; kbs=16\ncu_q=torch.tensor([0,8,32],device=dev,dtype=torch.int32)\ncu_k=torch.tensor([0,8,32],device=dev,dtype=torch.int32)\nS=32\nq=torch.randn(S,H,d,device=dev,dtype=torch.float32)\nk=torch.randn(S,H,d,device=dev,dtype=torch.float32)\nv=torch.randn(S,H,d,device=dev,dtype=torch.float32)\n\nnqb,cu_qb,qb2b,cu_nqb = m.calculate_blocks(cu_q,qbs)\nnkb,cu_kb,kb2b,cu_nkb = m.calculate_blocks(cu_k,kbs)\ninfo={\"nqb\":int(nqb),\"cu_qb\":cu_qb.tolist(),\"cu_nqb\":cu_nqb.tolist(),\n      \"nkb\":int(nkb),\"cu_kb\":cu_kb.tolist(),\"cu_nkb\":cu_nkb.tolist()}\n\nblock_mask=torch.ones((H,nqb,nkb),device=dev,dtype=torch.bool)\nout=m.block_sparse_attention(q,k,v,cu_q,cu_k,block_mask,qbs,kbs,causal=False,softmax_scale=None)\n\nref=torch.zeros_like(out); scale=d**-0.5\nfor b in range(2):\n    qs,qe=cu_q[b].item(),cu_q[b+1].item()\n    ks,ke=cu_k[b].item(),cu_k[b+1].item()\n    for h in range(H):\n        s=(q[qs:qe,h]@k[ks:ke,h].T)*scale\n        ref[qs:qe,h]=torch.softmax(s,dim=-1)@v[ks:ke,h]\n\nerr=(out-ref).abs()\nper_row=err.amax(dim=(1,2))\n\n# \"leaky\" reference for seq0 rows: attends to keys 0..15 (crossing into seq1)\nleak=torch.zeros(8,d,device=dev)\ns=(q[0:8,0]@k[0:16,0].T)*scale\nleak=torch.softmax(s,dim=-1)@v[0:16,0]\nleak_err=(out[0:8,0]-leak).abs().max().item()\n\n# second-sequence last partial block: keys 24..31 is exactly end of tensor -> no leak there\nres={\n \"info\":info,\n \"EVEN_SEQ_KBLOCK_flag\": bool(((cu_k[-1]-cu_k[0])%kbs==0).item()),\n \"per_seq_k_lens\":[8,24],\n \"max_abs_err_vs_contract_ref\": err.max().item(),\n \"max_err_seq0_rows(0-7)\": per_row[0:8].max().item(),\n \"max_err_seq1_rows(8-31)\": per_row[8:].max().item(),\n \"max_err_seq0_vs_LEAKY_ref(keys0..15)\": leak_err,\n \"metric\":\"elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention\"\n}\nprint(json.dumps(res))\n",
+            "expected_signal": "If EVEN_SEQ_KBLOCK is wrongly True, seq0 rows (0-7) differ largely from the contract ref but match the leaky ref that includes keys 8..15.",
+            "timeout_s": 120
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 22.553,
+        "input_tokens": 26172,
+        "output_tokens": 2047
+      }
+    },
+    {
+      "duration_s": 21.9989713839999,
+      "role": "solo",
+      "round": 6,
+      "text": "Probe t8 gives the decisive numbers: with k seqlens [8,24] (total 32 \u2261 0 mod 16), `EVEN_SEQ_KBLOCK` was True, and sequence-0 rows match a *cross-sequence* leaky reference to within 2.4e-7 while differing from the contract's per-sequence reference by 1.74. Recording that as confirming evidence.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "EVEN_SEQ_KBLOCK_flag": true,
+              "cu_k_block": [
+                0,
+                8,
+                24,
+                32
+              ],
+              "k_block_size": 16,
+              "k_seqlens": [
+                8,
+                24
+              ],
+              "max_abs_err_vs_contract_ref": 1.7364459,
+              "max_err_seq0_rows_0_7": 1.7364459,
+              "max_err_seq0_vs_leaky_ref_keys0_15": 2.384e-07,
+              "max_err_seq1_rows_8_31": 0.427839,
+              "metric": "elementwise max abs error vs per-sequence-restricted softmax reference, plus match against cross-sequence leaky reference"
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "With k/q seqlens [8,24] (total 32, block size 16), EVEN_SEQ_KBLOCK evaluated True even though neither sequence length is a multiple of 16. Kernel output for sequence-0 rows (0-7) deviates from the per-sequence-restricted softmax reference by max abs 1.736, but matches a 'leaky' reference that lets sequence-0 queries attend to keys 0..15 (i.e. including sequence-1 keys 8..15) to within 2.4e-7 -- exactly the cross-sequence contamination the contract forbids. Sequence-1 rows also deviate (max abs 0.428), consistent with the final k block (off_n = 24..39) being loaded unmasked and reading past the end of the 32-row K/V tensors.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 21.999,
+        "input_tokens": 32294,
+        "output_tokens": 1642
+      }
+    },
+    {
+      "duration_s": 15.384740879999981,
+      "role": "solo",
+      "round": 7,
+      "text": "Claim c1 is confirmed with decisive runtime numbers and is scoped directly to the contract's declared input domain. No further probe would change the verdict, so I'm recording it.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.93,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The contract (problem.txt) explicitly declares that sequence lengths are arbitrary, need not be multiples of the block size, and that positions past a sequence's end \"must not contribute to the softmax\". kernel.py:226 computes the key-side partial-block flag globally, EVEN_SEQ_KBLOCK = ((cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0), instead of per-sequence as the query side correctly does at line 227. When that flag is True the kernel compiles out both the K/V bound mask (lines 117-127) and the -inf tail masking at lines 155-156, so a partial final key block silently absorbs rows belonging to the next sequence (and can read past the tensor).\n\nProbe t8 (evidence c1.e1) ran the real kernel with q/k seqlens [8,24] (total 32, block size 16, headdim 16, all blocks selected, causal=False) - an input the contract admits, since neither 8 nor 24 is a multiple of 16 while the total is. EVEN_SEQ_KBLOCK evaluated True. Sequence-0 output rows (0-7) differ from the per-sequence-restricted softmax reference by max abs 1.7364, but match a \"leaky\" reference in which sequence-0 queries attend to keys 0..15 (i.e. including sequence-1 keys 8..15) to within 2.4e-7 - i.e. the kernel is exactly computing the cross-sequence attention the contract forbids, not merely a rounding-level deviation. Sequence-1 rows (8-31) also deviate by max abs 0.4278, consistent with the last k block (off_n = 24..39) being loaded unmasked past the end of the 32-row K/V tensors. An earlier attempt at the same claim with block size 4 (t7) only failed on a Triton tl.dot K>=8 constraint, which is why block size 16 was used.\n\nThis is a violation of a behaviour the contract explicitly requires, on an input the contract explicitly declares in scope, so the verdict is reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 15.385,
+        "input_tokens": 40202,
+        "output_tokens": 984
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_31"
+      },
+      "created_at": "2026-09-08T14:52:51Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_31",
+        "has_error": null,
+        "kernel_code": "import torch\nimport math \nimport triton\nimport triton.language as tl\nimport torch.nn.functional as F\n\n__all__ = ['_forward_fix_tile_size']\n\n@triton.autotune(\n    configs=[\n        triton.Config({}, num_warps=4, num_stages=1),\n        triton.Config({}, num_warps=4, num_stages=2),\n        triton.Config({}, num_warps=8, num_stages=1),\n        triton.Config({}, num_warps=8, num_stages=2),\n    ],\n    key=['BLOCK_M', 'BLOCK_N'],\n)\n@triton.jit\ndef _fwd_kernel(\n    q,\n    k,\n    v,\n    cu_q_seqlens,\n    cu_k_seqlens,\n    causal,\n    softmax_scale,\n    cu_q_block, \n    cu_k_block,\n    q_block_to_batch,\n    cu_num_k_block,\n    head_q_to_k_ratio,\n    block_mask,\n    out,\n    lse,\n    tmp, # See flash_attn_trion.py and flash_attn_triton_og.py \n    stride_q_s,\n    stride_q_h,\n    stride_q_d,\n    stride_k_s,\n    stride_k_h,\n    stride_k_d,\n    stride_v_s,\n    stride_v_h,\n    stride_v_d,\n    stride_b_nh,\n    stride_b_nq,\n    stride_b_nk,\n    stride_o_s,\n    stride_o_h,\n    stride_o_d,\n    stride_lse_s,\n    stride_lse_h,\n    headdim,\n    BLOCK_M: tl.constexpr,\n    BLOCK_N: tl.constexpr,\n    BLOCK_DIM: tl.constexpr,\n    EVEN_HEADDIM: tl.constexpr,\n    EVEN_SEQ_QBLOCK: tl.constexpr,\n    EVEN_SEQ_KBLOCK: tl.constexpr,\n):\n    off_head_q = tl.program_id(1)\n    off_head_k = off_head_q // head_q_to_k_ratio\n    \n    off_q_block = tl.program_id(0)\n    off_dim = tl.arange(0, BLOCK_DIM)\n    \n    start_m = tl.load(cu_q_block + off_q_block)\n    end_m = tl.load(cu_q_block + off_q_block + 1)\n    off_m = start_m + tl.arange(0, BLOCK_M)\n    \n    # load the q block\n    q_ptr = q + off_m[:, None] * stride_q_s + off_head_q * stride_q_h + off_dim[None, :] * stride_q_d\n    if EVEN_SEQ_QBLOCK:\n        if EVEN_HEADDIM:\n            q_block = tl.load(q_ptr)\n        else:\n            q_block = tl.load(q_ptr, mask=off_dim[None, :] < headdim, other=0.0)\n    else:\n        if EVEN_HEADDIM:\n            q_block = tl.load(q_ptr, mask=off_m[:, None] < end_m, other=0.0)\n        else:\n            q_block = tl.load(q_ptr, mask=(off_m[:, None] < end_m) & (off_dim[None, :] < headdim), other=0.0)\n    \n\n    # accumulator\n    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')\n    l_i = tl.zeros([BLOCK_M], dtype=tl.float32)\n    acc = tl.zeros([BLOCK_M, BLOCK_DIM], dtype=tl.float32)\n    \n    # tmp_ptr = tmp + off_head_q * stride_lse_h + off_m * stride_lse_s\n    \n    # batch index \n    batch_idx = tl.load(q_block_to_batch + off_q_block)\n    \n    # get offset and q and k start/end indices in seq\n    batch_q_start_idx = tl.load(cu_q_seqlens + batch_idx)\n    batch_q_end_idx = tl.load(cu_q_seqlens + batch_idx + 1)\n    batch_k_start_idx = tl.load(cu_k_seqlens + batch_idx)\n    batch_k_end_idx = tl.load(cu_k_seqlens + batch_idx + 1)\n    offset = batch_k_end_idx - batch_k_start_idx - (batch_q_end_idx - batch_q_start_idx)\n\n    # k block loop, start from the same batch as the q block, and end at the last k block in the same batch.\n    k_block_start = tl.load(cu_num_k_block + batch_idx)\n    k_block_end = tl.load(cu_num_k_block + batch_idx + 1)\n\n    for off_k_block in range(k_block_start, k_block_end):\n        start_n = tl.load(cu_k_block + off_k_block)\n        \n        # We only need to enter the calulcation if two conditions are met:\n        # 1. the block mask is True\n        # 2. causal = False; or when causal = True && the end of the q block is after the start of the k block.\n        if tl.load(block_mask + off_head_k * stride_b_nh + off_q_block * stride_b_nq + off_k_block * stride_b_nk) and (not causal or end_m - batch_q_start_idx + offset >= start_n - batch_k_start_idx):\n            \n            end_n = tl.load(cu_k_block + off_k_block + 1)\n            off_n = start_n + tl.arange(0, BLOCK_N)\n            \n            if EVEN_SEQ_KBLOCK:\n                if EVEN_HEADDIM:\n                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d)\n                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d)\n                else:\n                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d, \n                                    mask =off_dim[:, None] < headdim, \n                                    other=0.0)\n                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d, \n                                    mask = off_dim[None, :] < headdim, \n                                    other=0.0)\n            else:\n                if EVEN_HEADDIM:\n                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d, \n                                    mask = off_n[None,:] < end_n, \n                                    other=0.0)\n                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d, \n                                    mask = off_n[:,None] < end_n, \n                                    other=0.0)\n                else:\n                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d, \n                                    mask = (off_n[None,:] < end_n) & (off_dim[:, None] < headdim), \n                                    other=0.0)\n                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d, \n                                    mask = (off_n[:,None] < end_n) & (off_dim[None, :] < headdim), \n                                    other=0.0)\n            \n            # Core part: online Softmax\n            qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)\n            qk += tl.dot(q_block, k_block, allow_tf32=False) # Provdie allow_tf32=False can achieve better accuracy for float32. \n            qk *= softmax_scale\n\n            m_ij = tl.maximum(m_i, tl.max(qk, 1))\n            qk -= m_ij[:, None]\n            \n            if causal:\n                qk += tl.where(off_m[:, None] - batch_q_start_idx + offset >= off_n[None, :] - batch_k_start_idx, 0, float('-inf'))\n            \n            if not EVEN_SEQ_KBLOCK and start_n + BLOCK_N > end_n: \n                qk += tl.where(off_n[None,:] < end_n, 0, float('-inf'))\n            \n            p = tl.exp(qk)\n            \n            l_ij = tl.sum(p, 1)\n            alpha = tl.exp(m_i - m_ij)\n            \n            # Original flashattention here stores and immediately loads, but it seems not necessary in my testing.\n            # tl.store(tmp_ptr, alpha, mask = off_m < end_m)\n            # alpha = tl.load(tmp_ptr, mask = off_m < end_m)\n            # \n            l_i = l_i * alpha + l_ij\n            acc = acc * alpha[:, None]\n            p = p.to(v.type.element_ty)\n            \n            \n            acc += tl.dot(p, v_block, allow_tf32=False) # Provdie allow_tf32=False can achieve better accuracy for float32. \n            m_i = m_ij\n\n    l_i = tl.where(l_i == 0, 1, l_i) # might be a working trick for the case when l_i is not updated at all. \n    l_recip = 1 / l_i\n    # tl.store(tmp_ptr, l_recip, mask = off_m < end_m)\n    # l_recip = tl.load(tmp_ptr, mask = off_m < end_m)\n    acc = acc * l_recip[:,None]\n    acc = acc.to(out.dtype.element_ty)\n    \n    off_o = off_m[:, None] * stride_o_s + off_head_q * stride_o_h + off_dim[None, :] * stride_o_d\n    out_ptr = out + off_o\n    if EVEN_SEQ_QBLOCK:\n        if EVEN_HEADDIM:\n            tl.store(out_ptr, acc)\n        else:\n            tl.store(out_ptr, acc, mask=off_dim[None, :] < headdim)\n    else:\n        if EVEN_HEADDIM:\n            tl.store(out_ptr, acc, mask=off_m[:, None] < end_m)\n        else:\n            tl.store(out_ptr, acc, mask=(off_m[:, None] < end_m) & (off_dim[None, :] < headdim))\n\n    off_lse = off_head_q * stride_lse_h + off_m * stride_lse_s\n\n    if EVEN_SEQ_QBLOCK:\n        tl.store(lse + off_lse, tl.log(l_i))\n    else:\n        tl.store(lse + off_lse, tl.log(l_i), mask = off_m < end_m)\n\n\n\ndef _forward_fix_tile_size(q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask, q_block_size, k_block_size, causal, softmax_scale, num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block, num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block):\n    \n\n    seq_len_q = q.shape[0]\n    nhead_q = q.shape[1]\n    nhead_k = k.shape[1]\n    assert nhead_q % nhead_k == 0, \"nhead_q must be divisible by nhead_k (for GQA)\"\n    head_q_to_k_ratio = nhead_q // nhead_k\n\n    headdim = q.shape[2]\n    assert (q_block_size & (q_block_size - 1) == 0) and (k_block_size & (k_block_size - 1) == 0), \"q_block_size and k_block_size must be powers of 2\"\n    BLOCK_M = q_block_size\n    BLOCK_N = k_block_size\n    BLOCK_DIM = max(triton.next_power_of_2(headdim), 16)\n    \n    softmax_scale = softmax_scale if softmax_scale is not None else headdim ** -0.5\n    \n    \n    out = torch.empty_like(q).contiguous()\n    lse = torch.empty((seq_len_q, nhead_q), device=q.device, dtype=torch.float32)\n    tmp = torch.empty((seq_len_q, nhead_q), device=q.device, dtype=torch.float32)\n    \n    EVEN_SEQ_KBLOCK = ((cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0).item()\n    EVEN_SEQ_QBLOCK = torch.all((cu_q_seqlens[1:] - cu_q_seqlens[:-1]) % q_block_size == 0).item()\n    even_headdim = headdim == BLOCK_DIM\n    # launch kernel\n    grid = (num_q_block, nhead_q)\n\n    _fwd_kernel[grid](\n        q,\n        k,\n        v,\n        cu_q_seqlens,\n        cu_k_seqlens,\n        causal,\n        softmax_scale,\n        cu_q_block, \n        cu_k_block,\n        q_block_to_batch,\n        cu_num_k_block,\n        head_q_to_k_ratio,\n        block_mask,\n        out,\n        lse,\n        tmp,\n        *q.stride(),\n        *k.stride(),\n        *v.stride(),\n        *block_mask.stride(),\n        *out.stride(),\n        *lse.stride(),\n        headdim,\n        BLOCK_M,\n        BLOCK_N,\n        BLOCK_DIM,        \n        EVEN_HEADDIM = even_headdim,\n        EVEN_SEQ_QBLOCK = EVEN_SEQ_QBLOCK,\n        EVEN_SEQ_KBLOCK = EVEN_SEQ_KBLOCK,\n    )\n    \n    return out\n\n\n\ndef calculate_blocks(cu_seqlen: torch.Tensor, block_size: int) -> tuple[int, torch.Tensor, torch.Tensor]:\n    \"\"\"calculate cu_block and block_to_batch\"\"\"\n\n    # batch_sizes[batch_idx] = batch size ( seqlen ) of batch idx\n    batch_sizes = cu_seqlen[1:] - cu_seqlen[:-1]\n\n    # batch_num_block[batch_idx] = how many block in batch idx\n    batch_num_block = (batch_sizes + (block_size - 1)) // block_size\n    \n    # cu_num_block[batch_idx] = first block id of this batch\n    cu_num_block = torch.zeros(\n        batch_num_block.numel() + 1,\n        device=cu_seqlen.device,\n        dtype=batch_num_block.dtype,\n    )\n    \n    \n    cu_num_block[1:] = batch_num_block.cumsum(dim=0)\n    \n    # total block ( for all batch )\n    num_block = cu_num_block[-1].item()\n    # block_sizes[block_idx] = block_size of block idx\n    block_sizes = torch.full(\n        (num_block + 1,), block_size, dtype=torch.int32, device=cu_seqlen.device\n    )\n    \n    block_sizes[0] = 0 \n    batch_last_block_size = batch_sizes - (batch_num_block - 1) * block_size\n    block_sizes[cu_num_block[1:]] = batch_last_block_size\n    # cu_block[block_idx] = the start block offset of block idx\n    cu_block = block_sizes.cumsum(dim=-1, dtype=torch.int32)\n    # block_to_batch[block_idx] = batch idx of the block idx\n    block_to_batch = torch.zeros(\n        (num_block,), dtype=torch.int32, device=cu_seqlen.device\n    )\n    block_to_batch[cu_num_block[1:-1]] = 1\n    block_to_batch = block_to_batch.cumsum(dim=0, dtype=torch.int32)\n    \n    return (\n        num_block, # the total number of blocks \n        cu_block, # the start and end (sequence) index of each block\n        block_to_batch, # block_to_batch[block_idx] represents the batch index of block_idx\n        cu_num_block, # cu_num_block[batch_idx+1] - cu_num_block[batch_idx] = batch_num_block[batch_idx]\n    )\n\n\ndef block_sparse_attention(q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask,\n                           q_block_size, k_block_size, causal=False, softmax_scale=None):\n    \"\"\"Variable-length block-sparse attention over the blocks the mask selects.\"\"\"\n    num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block = calculate_blocks(cu_q_seqlens, q_block_size)\n    num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block = calculate_blocks(cu_k_seqlens, k_block_size)\n    return _forward_fix_tile_size(\n        q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask, q_block_size, k_block_size,\n        causal, softmax_scale,\n        num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block,\n        num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block)\n",
+        "passed": null,
+        "problem_text": "Operation: variable-length block-sparse attention\n(zhengqigao/hbsattn, hbsattn/fwd_triton_fix_tile_size.py).\n\nA batch is packed into one flat sequence axis. `cu_q_seqlens` and `cu_k_seqlens`\nare the cumulative offsets, so sequence b occupies rows\ncu_seqlens[b] .. cu_seqlens[b+1]. Queries and keys are cut into fixed blocks of\n`q_block_size` and `k_block_size`; `block_mask[h, i, j]` says whether query\nblock i attends to key block j.\n\n    out[t] = softmax over the selected keys of ( q[t] . k / sqrt(headdim) ) @ v\n\nrestricted to keys that belong to the same sequence as t and that lie in a\nselected block.\n\nInput domain: sequence lengths are arbitrary and generally differ within a\nbatch -- that is the point of the packed variable-length format. A sequence\nlength is NOT required to be a multiple of the block size; when it is not, the\nfinal block of that sequence is partial and the positions past its end belong\nto the next sequence, so they must not contribute to the softmax.\n\nDoes block_sparse_attention() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_31",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_31"
+      },
+      "created_at": "2026-09-08T14:52:51Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: variable-length block-sparse attention\n(zhengqigao/hbsattn, hbsattn/fwd_triton_fix_tile_size.py).\n\nA batch is packed into one flat sequence axis. `cu_q_seqlens` and `cu_k_seqlens`\nare the cumulative offsets, so sequence b occupies rows\ncu_seqlens[b] .. cu_seqlens[b+1]. Queries and keys are cut into fixed blocks of\n`q_block_size` and `k_block_size`; `block_mask[h, i, j]` says whether query\nblock i attends to key block j.\n\n    out[t] = softmax over the selected keys of ( q[t] . k / sqrt(headdim) ) @ v\n\nrestricted to keys that belong to the same sequence as t and that lie in a\nselected block.\n\nInput domain: sequence lengths are arbitrary and generally differ within a\nbatch -- that is the point of the packed variable-length format. A sequence\nlength is NOT required to be a multiple of the block size; when it is not, the\nfinal block of that sequence is partial and the positions past its end belong\nto the next sequence, so they must not contribute to the softmax.\n\nDoes block_sparse_attention() satisfy this contract?\n",
+        "entry": "case_31",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_31"
+      },
+      "created_at": "2026-09-08T14:52:51Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_31",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 12669
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1037
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_31",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T14:52:51Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_31\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_31",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "end_line": 400,
+        "entry": "case_31",
+        "start_line": 260
+      },
+      "created_at": "2026-09-08T14:52:54Z",
+      "id": "t5",
+      "output": {
+        "content": "260:         EVEN_SEQ_QBLOCK = EVEN_SEQ_QBLOCK,\n261:         EVEN_SEQ_KBLOCK = EVEN_SEQ_KBLOCK,\n262:     )\n263:     \n264:     return out\n265: \n266: \n267: \n268: def calculate_blocks(cu_seqlen: torch.Tensor, block_size: int) -> tuple[int, torch.Tensor, torch.Tensor]:\n269:     \"\"\"calculate cu_block and block_to_batch\"\"\"\n270: \n271:     # batch_sizes[batch_idx] = batch size ( seqlen ) of batch idx\n272:     batch_sizes = cu_seqlen[1:] - cu_seqlen[:-1]\n273: \n274:     # batch_num_block[batch_idx] = how many block in batch idx\n275:     batch_num_block = (batch_sizes + (block_size - 1)) // block_size\n276:     \n277:     # cu_num_block[batch_idx] = first block id of this batch\n278:     cu_num_block = torch.zeros(\n279:         batch_num_block.numel() + 1,\n280:         device=cu_seqlen.device,\n281:         dtype=batch_num_block.dtype,\n282:     )\n283:     \n284:     \n285:     cu_num_block[1:] = batch_num_block.cumsum(dim=0)\n286:     \n287:     # total block ( for all batch )\n288:     num_block = cu_num_block[-1].item()\n289:     # block_sizes[block_idx] = block_size of block idx\n290:     block_sizes = torch.full(\n291:         (num_block + 1,), block_size, dtype=torch.int32, device=cu_seqlen.device\n292:     )\n293:     \n294:     block_sizes[0] = 0 \n295:     batch_last_block_size = batch_sizes - (batch_num_block - 1) * block_size\n296:     block_sizes[cu_num_block[1:]] = batch_last_block_size\n297:     # cu_block[block_idx] = the start block offset of block idx\n298:     cu_block = block_sizes.cumsum(dim=-1, dtype=torch.int32)\n299:     # block_to_batch[block_idx] = batch idx of the block idx\n300:     block_to_batch = torch.zeros(\n301:         (num_block,), dtype=torch.int32, device=cu_seqlen.device\n302:     )\n303:     block_to_batch[cu_num_block[1:-1]] = 1\n304:     block_to_batch = block_to_batch.cumsum(dim=0, dtype=torch.int32)\n305:     \n306:     return (\n307:         num_block, # the total number of blocks \n308:         cu_block, # the start and end (sequence) index of each block\n309:         block_to_batch, # block_to_batch[block_idx] represents the batch index of block_idx\n310:         cu_num_block, # cu_num_block[batch_idx+1] - cu_num_block[batch_idx] = batch_num_block[batch_idx]\n311:     )\n312: \n313: \n314: def block_sparse_attention(q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask,\n315:                            q_block_size, k_block_size, causal=False, softmax_scale=None):\n316:     \"\"\"Variable-length block-sparse attention over the blocks the mask selects.\"\"\"\n317:     num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block = calculate_blocks(cu_q_seqlens, q_block_size)\n318:     num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block = calculate_blocks(cu_k_seqlens, k_block_size)\n319:     return _forward_fix_tile_size(\n320:         q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask, q_block_size, k_block_size,\n321:         causal, softmax_scale,\n322:         num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block,\n323:         num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block)",
+        "end_line": 323,
+        "entry": "case_31",
+        "lines": [
+          {
+            "line": 260,
+            "text": "        EVEN_SEQ_QBLOCK = EVEN_SEQ_QBLOCK,"
+          },
+          {
+            "line": 261,
+            "text": "        EVEN_SEQ_KBLOCK = EVEN_SEQ_KBLOCK,"
+          },
+          {
+            "line": 262,
+            "text": "    )"
+          },
+          {
+            "line": 263,
+            "text": "    "
+          },
+          {
+            "line": 264,
+            "text": "    return out"
+          },
+          {
+            "line": 265,
+            "text": ""
+          },
+          {
+            "line": 266,
+            "text": ""
+          },
+          {
+            "line": 267,
+            "text": ""
+          },
+          {
+            "line": 268,
+            "text": "def calculate_blocks(cu_seqlen: torch.Tensor, block_size: int) -> tuple[int, torch.Tensor, torch.Tensor]:"
+          },
+          {
+            "line": 269,
+            "text": "    \"\"\"calculate cu_block and block_to_batch\"\"\""
+          },
+          {
+            "line": 270,
+            "text": ""
+          },
+          {
+            "line": 271,
+            "text": "    # batch_sizes[batch_idx] = batch size ( seqlen ) of batch idx"
+          },
+          {
+            "line": 272,
+            "text": "    batch_sizes = cu_seqlen[1:] - cu_seqlen[:-1]"
+          },
+          {
+            "line": 273,
+            "text": ""
+          },
+          {
+            "line": 274,
+            "text": "    # batch_num_block[batch_idx] = how many block in batch idx"
+          },
+          {
+            "line": 275,
+            "text": "    batch_num_block = (batch_sizes + (block_size - 1)) // block_size"
+          },
+          {
+            "line": 276,
+            "text": "    "
+          },
+          {
+            "line": 277,
+            "text": "    # cu_num_block[batch_idx] = first block id of this batch"
+          },
+          {
+            "line": 278,
+            "text": "    cu_num_block = torch.zeros("
+          },
+          {
+            "line": 279,
+            "text": "        batch_num_block.numel() + 1,"
+          },
+          {
+            "line": 280,
+            "text": "        device=cu_seqlen.device,"
+          },
+          {
+            "line": 281,
+            "text": "        dtype=batch_num_block.dtype,"
+          },
+          {
+            "line": 282,
+            "text": "    )"
+          },
+          {
+            "line": 283,
+            "text": "    "
+          },
+          {
+            "line": 284,
+            "text": "    "
+          },
+          {
+            "line": 285,
+            "text": "    cu_num_block[1:] = batch_num_block.cumsum(dim=0)"
+          },
+          {
+            "line": 286,
+            "text": "    "
+          },
+          {
+            "line": 287,
+            "text": "    # total block ( for all batch )"
+          },
+          {
+            "line": 288,
+            "text": "    num_block = cu_num_block[-1].item()"
+          },
+          {
+            "line": 289,
+            "text": "    # block_sizes[block_idx] = block_size of block idx"
+          },
+          {
+            "line": 290,
+            "text": "    block_sizes = torch.full("
+          },
+          {
+            "line": 291,
+            "text": "        (num_block + 1,), block_size, dtype=torch.int32, device=cu_seqlen.device"
+          },
+          {
+            "line": 292,
+            "text": "    )"
+          },
+          {
+            "line": 293,
+            "text": "    "
+          },
+          {
+            "line": 294,
+            "text": "    block_sizes[0] = 0 "
+          },
+          {
+            "line": 295,
+            "text": "    batch_last_block_size = batch_sizes - (batch_num_block - 1) * block_size"
+          },
+          {
+            "line": 296,
+            "text": "    block_sizes[cu_num_block[1:]] = batch_last_block_size"
+          },
+          {
+            "line": 297,
+            "text": "    # cu_block[block_idx] = the start block offset of block idx"
+          },
+          {
+            "line": 298,
+            "text": "    cu_block = block_sizes.cumsum(dim=-1, dtype=torch.int32)"
+          },
+          {
+            "line": 299,
+            "text": "    # block_to_batch[block_idx] = batch idx of the block idx"
+          },
+          {
+            "line": 300,
+            "text": "    block_to_batch = torch.zeros("
+          },
+          {
+            "line": 301,
+            "text": "        (num_block,), dtype=torch.int32, device=cu_seqlen.device"
+          },
+          {
+            "line": 302,
+            "text": "    )"
+          },
+          {
+            "line": 303,
+            "text": "    block_to_batch[cu_num_block[1:-1]] = 1"
+          },
+          {
+            "line": 304,
+            "text": "    block_to_batch = block_to_batch.cumsum(dim=0, dtype=torch.int32)"
+          },
+          {
+            "line": 305,
+            "text": "    "
+          },
+          {
+            "line": 306,
+            "text": "    return ("
+          },
+          {
+            "line": 307,
+            "text": "        num_block, # the total number of blocks "
+          },
+          {
+            "line": 308,
+            "text": "        cu_block, # the start and end (sequence) index of each block"
+          },
+          {
+            "line": 309,
+            "text": "        block_to_batch, # block_to_batch[block_idx] represents the batch index of block_idx"
+          },
+          {
+            "line": 310,
+            "text": "        cu_num_block, # cu_num_block[batch_idx+1] - cu_num_block[batch_idx] = batch_num_block[batch_idx]"
+          },
+          {
+            "line": 311,
+            "text": "    )"
+          },
+          {
+            "line": 312,
+            "text": ""
+          },
+          {
+            "line": 313,
+            "text": ""
+          },
+          {
+            "line": 314,
+            "text": "def block_sparse_attention(q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask,"
+          },
+          {
+            "line": 315,
+            "text": "                           q_block_size, k_block_size, causal=False, softmax_scale=None):"
+          },
+          {
+            "line": 316,
+            "text": "    \"\"\"Variable-length block-sparse attention over the blocks the mask selects.\"\"\""
+          },
+          {
+            "line": 317,
+            "text": "    num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block = calculate_blocks(cu_q_seqlens, q_block_size)"
+          },
+          {
+            "line": 318,
+            "text": "    num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block = calculate_blocks(cu_k_seqlens, k_block_size)"
+          },
+          {
+            "line": 319,
+            "text": "    return _forward_fix_tile_size("
+          },
+          {
+            "line": 320,
+            "text": "        q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask, q_block_size, k_block_size,"
+          },
+          {
+            "line": 321,
+            "text": "        causal, softmax_scale,"
+          },
+          {
+            "line": 322,
+            "text": "        num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block,"
+          },
+          {
+            "line": 323,
+            "text": "        num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block)"
+          }
+        ],
+        "path": "kernel.py",
+        "start_line": 260,
+        "total_lines": 323
+      },
+      "status": "ok",
+      "tool": "inspect_kernel_source"
+    },
+    {
+      "args": {
+        "rationale": "Line 226 uses cu_k_seqlens[-1]-cu_k_seqlens[0] (total) rather than per-sequence differences, unlike line 227 for queries. When True, lines 117-127 load K/V without a sequence-bound mask and line 155's -inf masking is compiled out entirely, so out-of-sequence keys enter the softmax (and the last block can even read past the tensor).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'A sequence length is NOT required to be a multiple of the block size; when it is not, the final block of that sequence is partial and the positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
+          },
+          {
+            "source": "kernel.py:226-227",
+            "summary": "EVEN_SEQ_KBLOCK uses the global total length modulo block size while EVEN_SEQ_QBLOCK correctly checks every sequence."
+          }
+        ],
+        "scope_rationale": "problem.txt is the operative contract and explicitly declares the input domain: sequence lengths are arbitrary, differ within a batch, and are NOT required to be multiples of the block size; positions past a sequence's end \"must not contribute to the softmax\". k seqlens [2,6] with block size 4 is a representative admitted input.",
+        "statement": "EVEN_SEQ_KBLOCK is computed from the total packed key length modulo k_block_size (kernel.py:226) instead of per-sequence, so for a batch whose individual k sequence lengths are not multiples of k_block_size but whose total is (e.g. k seqlens [2,6], k_block_size=4), the kernel skips partial-block masking and lets keys from the following sequence contribute to the softmax, producing outputs different from the contract's per-sequence restriction."
+      },
+      "created_at": "2026-09-08T14:53:35Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-08T14:53:35Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Line 226 uses cu_k_seqlens[-1]-cu_k_seqlens[0] (total) rather than per-sequence differences, unlike line 227 for queries. When True, lines 117-127 load K/V without a sequence-bound mask and line 155's -inf masking is compiled out entirely, so out-of-sequence keys enter the softmax (and the last block can even read past the tensor).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'A sequence length is NOT required to be a multiple of the block size; when it is not, the final block of that sequence is partial and the positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
+          },
+          {
+            "source": "kernel.py:226-227",
+            "summary": "EVEN_SEQ_KBLOCK uses the global total length modulo block size while EVEN_SEQ_QBLOCK correctly checks every sequence."
+          }
+        ],
+        "scope_rationale": "problem.txt is the operative contract and explicitly declares the input domain: sequence lengths are arbitrary, differ within a batch, and are NOT required to be multiples of the block size; positions past a sequence's end \"must not contribute to the softmax\". k seqlens [2,6] with block size 4 is a representative admitted input.",
+        "statement": "EVEN_SEQ_KBLOCK is computed from the total packed key length modulo k_block_size (kernel.py:226) instead of per-sequence, so for a batch whose individual k sequence lengths are not multiples of k_block_size but whose total is (e.g. k seqlens [2,6], k_block_size=4), the kernel skips partial-block masking and lets keys from the following sequence contribute to the softmax, producing outputs different from the contract's per-sequence restriction.",
+        "status": "open",
+        "updated_at": "2026-09-08T14:53:35Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_31/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\ndev='cuda'\nd=16\n# q seqlens [2,6] too so q blocks align; use q_block_size=4 too\nq_seqlens=[2,6]; k_seqlens=[2,6]\nqbs=4; kbs=4\ncu_q=torch.tensor([0,2,8],device=dev,dtype=torch.int32)\ncu_k=torch.tensor([0,2,8],device=dev,dtype=torch.int32)\nH=1\nq=torch.randn(8,H,d,device=dev,dtype=torch.float32)\nk=torch.randn(8,H,d,device=dev,dtype=torch.float32)\nv=torch.randn(8,H,d,device=dev,dtype=torch.float32)\n\nnqb,cu_qb,qb2b,cu_nqb = m.calculate_blocks(cu_q,qbs)\nnkb,cu_kb,kb2b,cu_nkb = m.calculate_blocks(cu_k,kbs)\nprint(\"nqb\",nqb,\"cu_qb\",cu_qb.tolist(),\"qb2b\",qb2b.tolist(),\"cu_nqb\",cu_nqb.tolist())\nprint(\"nkb\",nkb,\"cu_kb\",cu_kb.tolist(),\"kb2b\",kb2b.tolist(),\"cu_nkb\",cu_nkb.tolist())\n\nblock_mask=torch.ones((H,nqb,nkb),device=dev,dtype=torch.bool)\nout=m.block_sparse_attention(q,k,v,cu_q,cu_k,block_mask,qbs,kbs,causal=False,softmax_scale=None)\n\n# reference: dense per-sequence full attention (all blocks selected)\nref=torch.zeros_like(out)\nscale=d**-0.5\nfor b in range(2):\n    qs,qe=cu_q[b].item(),cu_q[b+1].item()\n    ks,ke=cu_k[b].item(),cu_k[b+1].item()\n    for h in range(H):\n        s=(q[qs:qe,h]@k[ks:ke,h].T)*scale\n        p=torch.softmax(s,dim=-1)\n        ref[qs:qe,h]=p@v[ks:ke,h]\n\nerr=(out-ref).abs()\nprint(json.dumps({\n \"max_abs_err\": err.max().item(),\n \"per_row_max_err\": err.amax(dim=(1,2)).tolist(),\n \"EVEN_SEQ_KBLOCK_flag\": bool(((cu_k[-1]-cu_k[0])%kbs==0).item()),\n \"per_seq_even\": [ (l%kbs==0) for l in k_seqlens],\n}))\n",
+        "expected_signal": "If EVEN_SEQ_KBLOCK is wrongly True, rows of sequence 0 (rows 0-1) will attend to keys 2-3 of sequence 1 and differ from ref."
+      },
+      "created_at": "2026-09-08T14:53:54Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "e5ec410686e6f64b96c10f32462fe70bce7092c7aeda96aece7232397d49bee5"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "ddb56d6232adfbfd583a8e57b6972db14d75b5d06c8691a18bcd99c35b37792f"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "1f5395c429a67758a3b36f91581618366bfd28a76e6840c4bcb0642cbdb12b0f"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "EVEN_SEQ_KBLOCK is computed from the total packed key length modulo k_block_size (kernel.py:226) instead of per-sequence, so for a batch whose individual k sequence lengths are not multiples of k_block_size but whose total is (e.g. k seqlens [2,6], k_block_size=4), the kernel skips partial-block masking and lets keys from the following sequence contribute to the softmax, producing outputs different from the contract's per-sequence restriction.",
+        "cwd": "/root/cases/case_31",
+        "duration_s": 5.77129,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "e5ec410686e6f64b96c10f32462fe70bce7092c7aeda96aece7232397d49bee5"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "ddb56d6232adfbfd583a8e57b6972db14d75b5d06c8691a18bcd99c35b37792f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "1f5395c429a67758a3b36f91581618366bfd28a76e6840c4bcb0642cbdb12b0f"
+              }
+            ],
+            "duration_s": 5.77129,
+            "exit_code": 1,
+            "expected_signal": "If EVEN_SEQ_KBLOCK is wrongly True, rows of sequence 0 (rows 0-1) will attend to keys 2-3 of sequence 1 and differ from ref.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.11/site-packages/triton/language/core.py\", line 43, in wrapper\n    return fn(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/language/core.py\", line 2417, in dot\n    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/language/semantic.py\", line 1480, in dot\n    assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: Input shapes should have M >= 1, N >= 1 and K >= 8\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/root/cases/case_31/agentic_runs/solo/probes/t7_probe.py\", line 25, in <module>\n    out=m.block_sparse_attention(q,k,v,cu_q,cu_k,block_mask,qbs,kbs,causal=False,softmax_scale=None)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_31/kernel.py\", line 319, in block_sparse_attention\n    return _forward_fix_tile_size(\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_31/kernel.py\", line 232, in _forward_fix_tile_size\n    _fwd_kernel[grid](\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 374, in <lambda>\n    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)\n                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/autotuner.py\", line 251, in run\n    benchmark()\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/autotuner.py\", line 240, in benchmark\n    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/autotuner.py\", line 240, in <dictcomp>\n    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/autotuner.py\", line 169, in _bench\n    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/testing.py\", line 272, in do_bench\n    fn()\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/autotuner.py\", line 155, in kernel_call\n    self.fn.run(\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 757, in run\n    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 902, in _do_compile\n    kernel = self.compile(src, target=target, options=options.__dict__)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/compiler/compiler.py\", line 307, in compile\n    module = src.make_ir(target, options, codegen_fns, module_map, context)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/compiler/compiler.py\", line 80, in make_ir\n    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntriton.compiler.errors.CompilationError: at 154:19:\n            alpha = tl.exp(m_i - m_ij)\n\n            # Original flashattention here stores and immediately loads, but it seems not necessary in my testing.\n            # tl.store(tmp_ptr, alpha, mask = off_m < end_m)\n            # alpha = tl.load(tmp_ptr, mask = off_m < end_m)\n            # \n            l_i = l_i * alpha + l_ij\n            acc = acc * alpha[:, None]\n            p = p.to(v.type.element_ty)\n\n\n            acc += tl.dot(p, v_block, allow_tf32=False) # Provdie allow_tf32=False can achieve better accuracy for float32. \n                   ^\nInput shapes should have M >= 1, N >= 1 and K >= 8\n",
+            "stdout": "nqb 3 cu_qb [0, 2, 6, 8] qb2b [0, 1, 1] cu_nqb [0, 1, 3]\nnkb 3 cu_kb [0, 2, 6, 8] kb2b [0, 1, 1] cu_nkb [0, 1, 3]\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 1,
+        "expected_signal": "If EVEN_SEQ_KBLOCK is wrongly True, rows of sequence 0 (rows 0-1) will attend to keys 2-3 of sequence 1 and differ from ref.",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.11/site-packages/triton/language/core.py\", line 43, in wrapper\n    return fn(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/language/core.py\", line 2417, in dot\n    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/language/semantic.py\", line 1480, in dot\n    assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \\\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: Input shapes should have M >= 1, N >= 1 and K >= 8\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/root/cases/case_31/agentic_runs/solo/probes/t7_probe.py\", line 25, in <module>\n    out=m.block_sparse_attention(q,k,v,cu_q,cu_k,block_mask,qbs,kbs,causal=False,softmax_scale=None)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_31/kernel.py\", line 319, in block_sparse_attention\n    return _forward_fix_tile_size(\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_31/kernel.py\", line 232, in _forward_fix_tile_size\n    _fwd_kernel[grid](\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 374, in <lambda>\n    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)\n                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/autotuner.py\", line 251, in run\n    benchmark()\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/autotuner.py\", line 240, in benchmark\n    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/autotuner.py\", line 240, in <dictcomp>\n    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/autotuner.py\", line 169, in _bench\n    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/testing.py\", line 272, in do_bench\n    fn()\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/autotuner.py\", line 155, in kernel_call\n    self.fn.run(\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 757, in run\n    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 902, in _do_compile\n    kernel = self.compile(src, target=target, options=options.__dict__)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/compiler/compiler.py\", line 307, in compile\n    module = src.make_ir(target, options, codegen_fns, module_map, context)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/compiler/compiler.py\", line 80, in make_ir\n    return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntriton.compiler.errors.CompilationError: at 154:19:\n            alpha = tl.exp(m_i - m_ij)\n\n            # Original flashattention here stores and immediately loads, but it seems not necessary in my testing.\n            # tl.store(tmp_ptr, alpha, mask = off_m < end_m)\n            # alpha = tl.load(tmp_ptr, mask = off_m < end_m)\n            # \n            l_i = l_i * alpha + l_ij\n            acc = acc * alpha[:, None]\n            p = p.to(v.type.element_ty)\n\n\n            acc += tl.dot(p, v_block, allow_tf32=False) # Provdie allow_tf32=False can achieve better accuracy for float32. \n                   ^\nInput shapes should have M >= 1, N >= 1 and K >= 8\n",
+        "stdout": "nqb 3 cu_qb [0, 2, 6, 8] qb2b [0, 1, 1] cu_nqb [0, 1, 3]\nnkb 3 cu_kb [0, 2, 6, 8] kb2b [0, 1, 1] cu_nkb [0, 1, 3]\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_31/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\ndev='cuda'; d=16; H=1\nqbs=16; kbs=16\ncu_q=torch.tensor([0,8,32],device=dev,dtype=torch.int32)\ncu_k=torch.tensor([0,8,32],device=dev,dtype=torch.int32)\nS=32\nq=torch.randn(S,H,d,device=dev,dtype=torch.float32)\nk=torch.randn(S,H,d,device=dev,dtype=torch.float32)\nv=torch.randn(S,H,d,device=dev,dtype=torch.float32)\n\nnqb,cu_qb,qb2b,cu_nqb = m.calculate_blocks(cu_q,qbs)\nnkb,cu_kb,kb2b,cu_nkb = m.calculate_blocks(cu_k,kbs)\ninfo={\"nqb\":int(nqb),\"cu_qb\":cu_qb.tolist(),\"cu_nqb\":cu_nqb.tolist(),\n      \"nkb\":int(nkb),\"cu_kb\":cu_kb.tolist(),\"cu_nkb\":cu_nkb.tolist()}\n\nblock_mask=torch.ones((H,nqb,nkb),device=dev,dtype=torch.bool)\nout=m.block_sparse_attention(q,k,v,cu_q,cu_k,block_mask,qbs,kbs,causal=False,softmax_scale=None)\n\nref=torch.zeros_like(out); scale=d**-0.5\nfor b in range(2):\n    qs,qe=cu_q[b].item(),cu_q[b+1].item()\n    ks,ke=cu_k[b].item(),cu_k[b+1].item()\n    for h in range(H):\n        s=(q[qs:qe,h]@k[ks:ke,h].T)*scale\n        ref[qs:qe,h]=torch.softmax(s,dim=-1)@v[ks:ke,h]\n\nerr=(out-ref).abs()\nper_row=err.amax(dim=(1,2))\n\n# \"leaky\" reference for seq0 rows: attends to keys 0..15 (crossing into seq1)\nleak=torch.zeros(8,d,device=dev)\ns=(q[0:8,0]@k[0:16,0].T)*scale\nleak=torch.softmax(s,dim=-1)@v[0:16,0]\nleak_err=(out[0:8,0]-leak).abs().max().item()\n\n# second-sequence last partial block: keys 24..31 is exactly end of tensor -> no leak there\nres={\n \"info\":info,\n \"EVEN_SEQ_KBLOCK_flag\": bool(((cu_k[-1]-cu_k[0])%kbs==0).item()),\n \"per_seq_k_lens\":[8,24],\n \"max_abs_err_vs_contract_ref\": err.max().item(),\n \"max_err_seq0_rows(0-7)\": per_row[0:8].max().item(),\n \"max_err_seq1_rows(8-31)\": per_row[8:].max().item(),\n \"max_err_seq0_vs_LEAKY_ref(keys0..15)\": leak_err,\n \"metric\":\"elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention\"\n}\nprint(json.dumps(res))\n",
+        "expected_signal": "If EVEN_SEQ_KBLOCK is wrongly True, seq0 rows (0-7) differ largely from the contract ref but match the leaky ref that includes keys 8..15.",
+        "timeout_s": 120
+      },
+      "created_at": "2026-09-08T14:54:24Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "56544c56df701da3d7e3c41106089b56fc73e03dac2b6c1ec23d167b1c25a6a7"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "6622e363dfa27b695f5f2f0cc46ef2a3d43ae0a41dc5c9297ce3af197ae2a378"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "6c678bae6f128a01f2dab9f3c82d01ecc6ad9e75eeba5eba5e9a755eeaac408a"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "EVEN_SEQ_KBLOCK is computed from the total packed key length modulo k_block_size (kernel.py:226) instead of per-sequence, so for a batch whose individual k sequence lengths are not multiples of k_block_size but whose total is (e.g. k seqlens [2,6], k_block_size=4), the kernel skips partial-block masking and lets keys from the following sequence contribute to the softmax, producing outputs different from the contract's per-sequence restriction.",
+        "cwd": "/root/cases/case_31",
+        "duration_s": 7.315763,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "56544c56df701da3d7e3c41106089b56fc73e03dac2b6c1ec23d167b1c25a6a7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "6622e363dfa27b695f5f2f0cc46ef2a3d43ae0a41dc5c9297ce3af197ae2a378"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "6c678bae6f128a01f2dab9f3c82d01ecc6ad9e75eeba5eba5e9a755eeaac408a"
+              }
+            ],
+            "duration_s": 7.315763,
+            "exit_code": 0,
+            "expected_signal": "If EVEN_SEQ_KBLOCK is wrongly True, seq0 rows (0-7) differ largely from the contract ref but match the leaky ref that includes keys 8..15.",
+            "json_parse_error": null,
+            "json_result": {
+              "EVEN_SEQ_KBLOCK_flag": true,
+              "info": {
+                "cu_kb": [
+                  0,
+                  8,
+                  24,
+                  32
+                ],
+                "cu_nkb": [
+                  0,
+                  1,
+                  3
+                ],
+                "cu_nqb": [
+                  0,
+                  1,
+                  3
+                ],
+                "cu_qb": [
+                  0,
+                  8,
+                  24,
+                  32
+                ],
+                "nkb": 3,
+                "nqb": 3
+              },
+              "max_abs_err_vs_contract_ref": 1.7364459037780762,
+              "max_err_seq0_rows(0-7)": 1.7364459037780762,
+              "max_err_seq0_vs_LEAKY_ref(keys0..15)": 2.384185791015625e-07,
+              "max_err_seq1_rows(8-31)": 0.4278389513492584,
+              "metric": "elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention",
+              "per_seq_k_lens": [
+                8,
+                24
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"info\": {\"nqb\": 3, \"cu_qb\": [0, 8, 24, 32], \"cu_nqb\": [0, 1, 3], \"nkb\": 3, \"cu_kb\": [0, 8, 24, 32], \"cu_nkb\": [0, 1, 3]}, \"EVEN_SEQ_KBLOCK_flag\": true, \"per_seq_k_lens\": [8, 24], \"max_abs_err_vs_contract_ref\": 1.7364459037780762, \"max_err_seq0_rows(0-7)\": 1.7364459037780762, \"max_err_seq1_rows(8-31)\": 0.4278389513492584, \"max_err_seq0_vs_LEAKY_ref(keys0..15)\": 2.384185791015625e-07, \"metric\": \"elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention\"}\n",
+            "timed_out": false,
+            "timeout_s": 120
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "If EVEN_SEQ_KBLOCK is wrongly True, seq0 rows (0-7) differ largely from the contract ref but match the leaky ref that includes keys 8..15.",
+        "json_parse_error": null,
+        "json_result": {
+          "EVEN_SEQ_KBLOCK_flag": true,
+          "info": {
+            "cu_kb": [
+              0,
+              8,
+              24,
+              32
+            ],
+            "cu_nkb": [
+              0,
+              1,
+              3
+            ],
+            "cu_nqb": [
+              0,
+              1,
+              3
+            ],
+            "cu_qb": [
+              0,
+              8,
+              24,
+              32
+            ],
+            "nkb": 3,
+            "nqb": 3
+          },
+          "max_abs_err_vs_contract_ref": 1.7364459037780762,
+          "max_err_seq0_rows(0-7)": 1.7364459037780762,
+          "max_err_seq0_vs_LEAKY_ref(keys0..15)": 2.384185791015625e-07,
+          "max_err_seq1_rows(8-31)": 0.4278389513492584,
+          "metric": "elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention",
+          "per_seq_k_lens": [
+            8,
+            24
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 150,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"info\": {\"nqb\": 3, \"cu_qb\": [0, 8, 24, 32], \"cu_nqb\": [0, 1, 3], \"nkb\": 3, \"cu_kb\": [0, 8, 24, 32], \"cu_nkb\": [0, 1, 3]}, \"EVEN_SEQ_KBLOCK_flag\": true, \"per_seq_k_lens\": [8, 24], \"max_abs_err_vs_contract_ref\": 1.7364459037780762, \"max_err_seq0_rows(0-7)\": 1.7364459037780762, \"max_err_seq1_rows(8-31)\": 0.4278389513492584, \"max_err_seq0_vs_LEAKY_ref(keys0..15)\": 2.384185791015625e-07, \"metric\": \"elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention\"}\n",
+        "timed_out": false,
+        "timeout_s": 120,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "EVEN_SEQ_KBLOCK_flag": true,
+          "cu_k_block": [
+            0,
+            8,
+            24,
+            32
+          ],
+          "k_block_size": 16,
+          "k_seqlens": [
+            8,
+            24
+          ],
+          "max_abs_err_vs_contract_ref": 1.7364459,
+          "max_err_seq0_rows_0_7": 1.7364459,
+          "max_err_seq0_vs_leaky_ref_keys0_15": 2.384e-07,
+          "max_err_seq1_rows_8_31": 0.427839,
+          "metric": "elementwise max abs error vs per-sequence-restricted softmax reference, plus match against cross-sequence leaky reference"
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "With k/q seqlens [8,24] (total 32, block size 16), EVEN_SEQ_KBLOCK evaluated True even though neither sequence length is a multiple of 16. Kernel output for sequence-0 rows (0-7) deviates from the per-sequence-restricted softmax reference by max abs 1.736, but matches a 'leaky' reference that lets sequence-0 queries attend to keys 0..15 (i.e. including sequence-1 keys 8..15) to within 2.4e-7 -- exactly the cross-sequence contamination the contract forbids. Sequence-1 rows also deviate (max abs 0.428), consistent with the final k block (off_n = 24..39) being loaded unmasked and reading past the end of the 32-row K/V tensors.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T14:54:46Z",
+      "id": "t9",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:53:35Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:54:46Z",
+              "data": {
+                "EVEN_SEQ_KBLOCK_flag": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "56544c56df701da3d7e3c41106089b56fc73e03dac2b6c1ec23d167b1c25a6a7"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "6622e363dfa27b695f5f2f0cc46ef2a3d43ae0a41dc5c9297ce3af197ae2a378"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "6c678bae6f128a01f2dab9f3c82d01ecc6ad9e75eeba5eba5e9a755eeaac408a"
+                  }
+                ],
+                "cu_k_block": [
+                  0,
+                  8,
+                  24,
+                  32
+                ],
+                "duration_s": 7.315763,
+                "exit_code": 0,
+                "expected_signal": "If EVEN_SEQ_KBLOCK is wrongly True, seq0 rows (0-7) differ largely from the contract ref but match the leaky ref that includes keys 8..15.",
+                "json_parse_error": null,
+                "json_result": {
+                  "EVEN_SEQ_KBLOCK_flag": true,
+                  "info": {
+                    "cu_kb": [
+                      0,
+                      8,
+                      24,
+                      32
+                    ],
+                    "cu_nkb": [
+                      0,
+                      1,
+                      3
+                    ],
+                    "cu_nqb": [
+                      0,
+                      1,
+                      3
+                    ],
+                    "cu_qb": [
+                      0,
+                      8,
+                      24,
+                      32
+                    ],
+                    "nkb": 3,
+                    "nqb": 3
+                  },
+                  "max_abs_err_vs_contract_ref": 1.7364459037780762,
+                  "max_err_seq0_rows(0-7)": 1.7364459037780762,
+                  "max_err_seq0_vs_LEAKY_ref(keys0..15)": 2.384185791015625e-07,
+                  "max_err_seq1_rows(8-31)": 0.4278389513492584,
+                  "metric": "elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention",
+                  "per_seq_k_lens": [
+                    8,
+                    24
+                  ]
+                },
+                "k_block_size": 16,
+                "k_seqlens": [
+                  8,
+                  24
+                ],
+                "max_abs_err_vs_contract_ref": 1.7364459,
+                "max_err_seq0_rows_0_7": 1.7364459,
+                "max_err_seq0_vs_leaky_ref_keys0_15": 2.384e-07,
+                "max_err_seq1_rows_8_31": 0.427839,
+                "metric": "elementwise max abs error vs per-sequence-restricted softmax reference, plus match against cross-sequence leaky reference",
+                "stderr": "",
+                "stdout": "{\"info\": {\"nqb\": 3, \"cu_qb\": [0, 8, 24, 32], \"cu_nqb\": [0, 1, 3], \"nkb\": 3, \"cu_kb\": [0, 8, 24, 32], \"cu_nkb\": [0, 1, 3]}, \"EVEN_SEQ_KBLOCK_flag\": true, \"per_seq_k_lens\": [8, 24], \"max_abs_err_vs_contract_ref\": 1.7364459037780762, \"max_err_seq0_rows(0-7)\": 1.7364459037780762, \"max_err_seq1_rows(8-31)\": 0.4278389513492584, \"max_err_seq0_vs_LEAKY_ref(keys0..15)\": 2.384185791015625e-07, \"metric\": \"elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention\"}\n",
+                "timed_out": false,
+                "timeout_s": 120
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "With k/q seqlens [8,24] (total 32, block size 16), EVEN_SEQ_KBLOCK evaluated True even though neither sequence length is a multiple of 16. Kernel output for sequence-0 rows (0-7) deviates from the per-sequence-restricted softmax reference by max abs 1.736, but matches a 'leaky' reference that lets sequence-0 queries attend to keys 0..15 (i.e. including sequence-1 keys 8..15) to within 2.4e-7 -- exactly the cross-sequence contamination the contract forbids. Sequence-1 rows also deviate (max abs 0.428), consistent with the final k block (off_n = 24..39) being loaded unmasked and reading past the end of the 32-row K/V tensors.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Line 226 uses cu_k_seqlens[-1]-cu_k_seqlens[0] (total) rather than per-sequence differences, unlike line 227 for queries. When True, lines 117-127 load K/V without a sequence-bound mask and line 155's -inf masking is compiled out entirely, so out-of-sequence keys enter the softmax (and the last block can even read past the tensor).",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "'A sequence length is NOT required to be a multiple of the block size; when it is not, the final block of that sequence is partial and the positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
+            },
+            {
+              "source": "kernel.py:226-227",
+              "summary": "EVEN_SEQ_KBLOCK uses the global total length modulo block size while EVEN_SEQ_QBLOCK correctly checks every sequence."
+            }
+          ],
+          "scope_rationale": "problem.txt is the operative contract and explicitly declares the input domain: sequence lengths are arbitrary, differ within a batch, and are NOT required to be multiples of the block size; positions past a sequence's end \"must not contribute to the softmax\". k seqlens [2,6] with block size 4 is a representative admitted input.",
+          "statement": "EVEN_SEQ_KBLOCK is computed from the total packed key length modulo k_block_size (kernel.py:226) instead of per-sequence, so for a batch whose individual k sequence lengths are not multiples of k_block_size but whose total is (e.g. k seqlens [2,6], k_block_size=4), the kernel skips partial-block masking and lets keys from the following sequence contribute to the softmax, producing outputs different from the contract's per-sequence restriction.",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T14:54:46Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:54:46Z",
+          "data": {
+            "EVEN_SEQ_KBLOCK_flag": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "56544c56df701da3d7e3c41106089b56fc73e03dac2b6c1ec23d167b1c25a6a7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "6622e363dfa27b695f5f2f0cc46ef2a3d43ae0a41dc5c9297ce3af197ae2a378"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "6c678bae6f128a01f2dab9f3c82d01ecc6ad9e75eeba5eba5e9a755eeaac408a"
+              }
+            ],
+            "cu_k_block": [
+              0,
+              8,
+              24,
+              32
+            ],
+            "duration_s": 7.315763,
+            "exit_code": 0,
+            "expected_signal": "If EVEN_SEQ_KBLOCK is wrongly True, seq0 rows (0-7) differ largely from the contract ref but match the leaky ref that includes keys 8..15.",
+            "json_parse_error": null,
+            "json_result": {
+              "EVEN_SEQ_KBLOCK_flag": true,
+              "info": {
+                "cu_kb": [
+                  0,
+                  8,
+                  24,
+                  32
+                ],
+                "cu_nkb": [
+                  0,
+                  1,
+                  3
+                ],
+                "cu_nqb": [
+                  0,
+                  1,
+                  3
+                ],
+                "cu_qb": [
+                  0,
+                  8,
+                  24,
+                  32
+                ],
+                "nkb": 3,
+                "nqb": 3
+              },
+              "max_abs_err_vs_contract_ref": 1.7364459037780762,
+              "max_err_seq0_rows(0-7)": 1.7364459037780762,
+              "max_err_seq0_vs_LEAKY_ref(keys0..15)": 2.384185791015625e-07,
+              "max_err_seq1_rows(8-31)": 0.4278389513492584,
+              "metric": "elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention",
+              "per_seq_k_lens": [
+                8,
+                24
+              ]
+            },
+            "k_block_size": 16,
+            "k_seqlens": [
+              8,
+              24
+            ],
+            "max_abs_err_vs_contract_ref": 1.7364459,
+            "max_err_seq0_rows_0_7": 1.7364459,
+            "max_err_seq0_vs_leaky_ref_keys0_15": 2.384e-07,
+            "max_err_seq1_rows_8_31": 0.427839,
+            "metric": "elementwise max abs error vs per-sequence-restricted softmax reference, plus match against cross-sequence leaky reference",
+            "stderr": "",
+            "stdout": "{\"info\": {\"nqb\": 3, \"cu_qb\": [0, 8, 24, 32], \"cu_nqb\": [0, 1, 3], \"nkb\": 3, \"cu_kb\": [0, 8, 24, 32], \"cu_nkb\": [0, 1, 3]}, \"EVEN_SEQ_KBLOCK_flag\": true, \"per_seq_k_lens\": [8, 24], \"max_abs_err_vs_contract_ref\": 1.7364459037780762, \"max_err_seq0_rows(0-7)\": 1.7364459037780762, \"max_err_seq1_rows(8-31)\": 0.4278389513492584, \"max_err_seq0_vs_LEAKY_ref(keys0..15)\": 2.384185791015625e-07, \"metric\": \"elementwise max abs error of output vs per-sequence-restricted softmax reference; leaky ref shows kernel matches cross-sequence attention\"}\n",
+            "timed_out": false,
+            "timeout_s": 120
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "With k/q seqlens [8,24] (total 32, block size 16), EVEN_SEQ_KBLOCK evaluated True even though neither sequence length is a multiple of 16. Kernel output for sequence-0 rows (0-7) deviates from the per-sequence-restricted softmax reference by max abs 1.736, but matches a 'leaky' reference that lets sequence-0 queries attend to keys 0..15 (i.e. including sequence-1 keys 8..15) to within 2.4e-7 -- exactly the cross-sequence contamination the contract forbids. Sequence-1 rows also deviate (max abs 0.428), consistent with the final k block (off_n = 24..39) being loaded unmasked and reading past the end of the 32-row K/V tensors.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.93,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract (problem.txt) explicitly declares that sequence lengths are arbitrary, need not be multiples of the block size, and that positions past a sequence's end \"must not contribute to the softmax\". kernel.py:226 computes the key-side partial-block flag globally, EVEN_SEQ_KBLOCK = ((cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0), instead of per-sequence as the query side correctly does at line 227. When that flag is True the kernel compiles out both the K/V bound mask (lines 117-127) and the -inf tail masking at lines 155-156, so a partial final key block silently absorbs rows belonging to the next sequence (and can read past the tensor).\n\nProbe t8 (evidence c1.e1) ran the real kernel with q/k seqlens [8,24] (total 32, block size 16, headdim 16, all blocks selected, causal=False) - an input the contract admits, since neither 8 nor 24 is a multiple of 16 while the total is. EVEN_SEQ_KBLOCK evaluated True. Sequence-0 output rows (0-7) differ from the per-sequence-restricted softmax reference by max abs 1.7364, but match a \"leaky\" reference in which sequence-0 queries attend to keys 0..15 (i.e. including sequence-1 keys 8..15) to within 2.4e-7 - i.e. the kernel is exactly computing the cross-sequence attention the contract forbids, not merely a rounding-level deviation. Sequence-1 rows (8-31) also deviate by max abs 0.4278, consistent with the last k block (off_n = 24..39) being loaded unmasked past the end of the 32-row K/V tensors. An earlier attempt at the same claim with block size 4 (t7) only failed on a Triton tl.dot K>=8 constraint, which is why block size 16 was used.\n\nThis is a violation of a behaviour the contract explicitly requires, on an input the contract explicitly declares in scope, so the verdict is reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-08T14:55:01Z",
+      "id": "t10",
+      "output": {
+        "confidence": 0.93,
+        "created_at": "2026-09-08T14:55:01Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract (problem.txt) explicitly declares that sequence lengths are arbitrary, need not be multiples of the block size, and that positions past a sequence's end \"must not contribute to the softmax\". kernel.py:226 computes the key-side partial-block flag globally, EVEN_SEQ_KBLOCK = ((cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0), instead of per-sequence as the query side correctly does at line 227. When that flag is True the kernel compiles out both the K/V bound mask (lines 117-127) and the -inf tail masking at lines 155-156, so a partial final key block silently absorbs rows belonging to the next sequence (and can read past the tensor).\n\nProbe t8 (evidence c1.e1) ran the real kernel with q/k seqlens [8,24] (total 32, block size 16, headdim 16, all blocks selected, causal=False) - an input the contract admits, since neither 8 nor 24 is a multiple of 16 while the total is. EVEN_SEQ_KBLOCK evaluated True. Sequence-0 output rows (0-7) differ from the per-sequence-restricted softmax reference by max abs 1.7364, but match a \"leaky\" reference in which sequence-0 queries attend to keys 0..15 (i.e. including sequence-1 keys 8..15) to within 2.4e-7 - i.e. the kernel is exactly computing the cross-sequence attention the contract forbids, not merely a rounding-level deviation. Sequence-1 rows (8-31) also deviate by max abs 0.4278, consistent with the last k block (off_n = 24..39) being loaded unmasked past the end of the 32-row K/V tensors. An earlier attempt at the same claim with block size 4 (t7) only failed on a Triton tl.dot K>=8 constraint, which is why block size 16 was used.\n\nThis is a violation of a behaviour the contract explicitly requires, on an input the contract explicitly declares in scope, so the verdict is reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.93,
+    "created_at": "2026-09-08T14:55:01Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The contract (problem.txt) explicitly declares that sequence lengths are arbitrary, need not be multiples of the block size, and that positions past a sequence's end \"must not contribute to the softmax\". kernel.py:226 computes the key-side partial-block flag globally, EVEN_SEQ_KBLOCK = ((cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0), instead of per-sequence as the query side correctly does at line 227. When that flag is True the kernel compiles out both the K/V bound mask (lines 117-127) and the -inf tail masking at lines 155-156, so a partial final key block silently absorbs rows belonging to the next sequence (and can read past the tensor).\n\nProbe t8 (evidence c1.e1) ran the real kernel with q/k seqlens [8,24] (total 32, block size 16, headdim 16, all blocks selected, causal=False) - an input the contract admits, since neither 8 nor 24 is a multiple of 16 while the total is. EVEN_SEQ_KBLOCK evaluated True. Sequence-0 output rows (0-7) differ from the per-sequence-restricted softmax reference by max abs 1.7364, but match a \"leaky\" reference in which sequence-0 queries attend to keys 0..15 (i.e. including sequence-1 keys 8..15) to within 2.4e-7 - i.e. the kernel is exactly computing the cross-sequence attention the contract forbids, not merely a rounding-level deviation. Sequence-1 rows (8-31) also deviate by max abs 0.4278, consistent with the last k block (off_n = 24..39) being loaded unmasked past the end of the 32-row K/V tensors. An earlier attempt at the same claim with block size 4 (t7) only failed on a Triton tl.dot K>=8 constraint, which is why block size 16 was used.\n\nThis is a violation of a behaviour the contract explicitly requires, on an input the contract explicitly declares in scope, so the verdict is reject.",
+    "verdict": "reject"
+  }
+}

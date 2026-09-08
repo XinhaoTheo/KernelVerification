@@ -1,51 +1,45 @@
 
-import torch, math, json, importlib.util, sys
+import torch, importlib.util, json
 spec = importlib.util.spec_from_file_location("k", "/root/cases/case_33/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 torch.manual_seed(0)
 dev='cuda'
-bits=4; maxq=15; ipw=32//bits
 
-def ref(a, b_packed, scales, zeros, group_size, K, N):
-    # unpack q
-    q = torch.zeros((K,N), device=dev, dtype=torch.int32)
-    for kk in range(K):
-        word = b_packed[kk//ipw]
-        q[kk] = (word >> ((kk % ipw)*bits)) & maxq
-    z = torch.zeros((K,N), device=dev, dtype=torch.int32)
-    for kk in range(K):
-        g = kk//group_size
-        zrow = zeros[g]
-        for n in range(N):
-            z[kk,n] = ((zrow[n//ipw].item() >> ((n % ipw)*bits)) & maxq) + 1
-    s = torch.zeros((K,N), device=dev, dtype=torch.float32)
-    for kk in range(K):
-        s[kk] = scales[kk//group_size]
-    w = (q.float()-z.float())*s
-    return a @ w
+def build(M,K,N,gs,bits=4):
+    per=32//bits; maxq=(1<<bits)-1
+    ng=-(-K//gs)  # ceil per contract
+    q=torch.randint(0,maxq+1,(K,N),device=dev,dtype=torch.int32)
+    bp=torch.zeros((K//per,N),device=dev,dtype=torch.int32)
+    for k in range(K):
+        bp[k//per]|= (q[k]&maxq)<<((k%per)*bits)
+    zq=torch.randint(0,maxq+1,(ng,N),device=dev,dtype=torch.int32)
+    zp=torch.zeros((ng,N//per),device=dev,dtype=torch.int32)
+    for n in range(N):
+        zp[:,n//per]|=(zq[:,n]&maxq)<<((n%per)*bits)
+    sc=(torch.rand((ng,N),device=dev)*0.1+0.01).float()
+    a=torch.randn((M,K),device=dev)
+    gidx=torch.arange(K,device=dev)//gs   # true grouping, ceil rows
+    W=(q.float()-(zq[gidx].float()+1))*sc[gidx]   # kernel's zero+1 convention
+    ref=a@W
+    return a,bp,sc,zp,ref,gidx,q,zq,sc
 
-def run(K, group_size, M=32, N=32):
-    ng = math.ceil(K/group_size)
-    a = torch.randn(M,K, device=dev, dtype=torch.float32)
-    b_packed = torch.randint(-2**31, 2**31-1, (K//ipw, N), device=dev, dtype=torch.int32)
-    scales = (torch.rand(ng, N, device=dev, dtype=torch.float32)*0.1+0.01).contiguous()
-    zeros = torch.randint(-2**31, 2**31-1, (ng, N//ipw), device=dev, dtype=torch.int32)
-    out = k.gptq_matmul(a, b_packed, scales, zeros, group_size, bits)
-    r = ref(a, b_packed, scales, zeros, group_size, K, N)
-    err = (out-r).abs()
-    return dict(K=K, gs=group_size, num_groups=ng, max_abs=err.max().item(),
-                ref_absmax=r.abs().max().item(),
-                rel=(err.max()/(r.abs().max()+1e-9)).item())
-
-res = {}
-res['control_K64_gs32'] = run(64, 32)
-res['partial_K48_gs32'] = run(48, 32)
-res['partial_K96_gs64'] = run(96, 64)
-# also show g_idx computed by wrapper for K=48,gs=32
-import torch as t
-K=48; gs=32; ngf=K//gs
-gidx = t.clamp(t.arange(K)//gs, max=ngf-1)
-res['g_idx_K48_gs32_unique'] = sorted(set(gidx.tolist()))
-res['g_idx_correct_unique'] = sorted(set((t.arange(K)//gs).tolist()))
-print(json.dumps(res, indent=2))
+out={}
+for (M,K,N,gs) in [(32,64,32,32),(32,48,32,32)]:
+    a,bp,sc,zp,ref,gidx,q,zq,scs=build(M,K,N,gs)
+    c=m.gptq_matmul(a,bp,sc,zp,gs,bits=4)
+    err=(c-ref).abs()
+    # error attributable only to tail columns?
+    ng_floor=K//gs
+    tail=torch.arange(K,device=dev)>=ng_floor*gs
+    key=f"M{M}_K{K}_N{N}_gs{gs}"
+    out[key]={"scales_rows":sc.shape[0],"max_abs_err":err.max().item(),
+              "ref_absmax":ref.abs().max().item(),
+              "rel":(err.max()/ref.abs().max()).item(),
+              "num_tail_cols":int(tail.sum().item())}
+    if tail.any():
+        # reference if tail cols wrongly used group ng_floor-1 (kernel's clamp)
+        gbad=torch.clamp(torch.arange(K,device=dev)//gs,max=ng_floor-1)
+        Wbad=(q.float()-(zq[gbad].float()+1))*scs[gbad]
+        refbad=a@Wbad
+        out[key]["max_abs_err_vs_clamped_ref"]=(c-refbad).abs().max().item()
+print(json.dumps(out,indent=1))

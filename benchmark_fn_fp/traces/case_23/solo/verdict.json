@@ -1,0 +1,10 @@
+{
+  "confidence": 0.82,
+  "created_at": "2026-09-08T14:51:49Z",
+  "decisive_claims": [
+    "c1",
+    "c2"
+  ],
+  "reason": "The contract (problem.txt) explicitly states that layout convention is a property of the pipeline, not the arithmetic: \\\"A kernel is correct if, once its own layout convention is honored, it produces the specified per-channel scaling.\\\" The kernel's comment declares channels-contiguous (NHWC) storage, and its indexing X + pix*C + offs is the correct linear traversal for that layout.\\n\\nProbe t7 (claim c1): with channels_last inputs, scale_channels matches x*scale.view(1,C,1,1) with max_abs_err = 0.0 for (2,64,8,8), (1,32,4,4) and (3,128,5,7); the returned tensor is itself channels_last (torch.empty_like preserves memory format), so the output view is indexed consistently with the input. The mismatch seen when feeding a plain NCHW-contiguous tensor (max_abs_err ~8-12) is exactly the case the contract says does not make the kernel wrong, since the kernel's declared convention was not honored.\\n\\nProbe t8 (claim c2): tl.arange(0, C) forces a power-of-two channel count; C=3, 48, 96 raise triton CompilationError \\\"arange's range must be a power of 2\\\", while C=64 is exact (max_abs_err 0.0). This is a real generality limitation and I record it as a note, but the artifact contains no test.py, get_inputs, or metadata pinning the channel counts of the verification domain (meta.json only carries name/status/passed), so per scope policy it cannot be the in-scope decisive basis for a reject; the claim remains scoped unknown.\\n\\nNo defect against a behaviour the contract requires was demonstrated, so the verdict is trust.",
+  "verdict": "trust"
+}

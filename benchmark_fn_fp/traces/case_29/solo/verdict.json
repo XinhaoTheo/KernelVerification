@@ -1,0 +1,9 @@
+{
+  "confidence": 0.88,
+  "created_at": "2026-09-08T14:53:45Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The contract requires that \"every value is rounded to the nearest representable e4m3 value\". The kernel (kernel.py:14-18) applies an unconditional 1/8-binade step, step = 2^(floor(log2|x|)-3), which is only correct inside e4m3's normal range (|x| >= 2^-6). e4m3 has 4 exponent bits, so below 2^-6 the format's values lie on a fixed grid of multiples of 2^-9; the kernel instead keeps shrinking the step, producing outputs that are not e4m3 values at all.\n\nProbe t7 (finalized as evidence c1.e1) compared the kernel against the true e4m3 grid via torch.float8_e4m3fn: on 200,000 randn(float32) elements, 1,661 elements mismatch the e4m3 reference, all of them with |x| < 2^-6 (0 mismatches above), and only 99.17% of the kernel's own outputs are e4m3-representable \u2014 0.83% are values the format cannot hold. Targeted cases: x=0.001 -> kernel 0.0009765625 vs nearest e4m3 0.001953125; x=0.005 -> 0.0048828125 vs 0.005859375; x=0.015 -> 0.0146484375 vs 0.015625; x=1e-4 -> 9.918e-05 vs 0.0 (below half the minimum subnormal 2^-9). These are ordinary float32 inputs the contract admits (\"a float32 tensor\", no magnitude restriction) and arise in ~1.2% of standard-normal samples, so the failure is in-scope, not a stress-only artifact.\n\nSecondary, non-decisive note (c2, scope unknown): there is also no saturation to the max finite e4m3 value 448, so e.g. x=500 yields 512, which is likewise not representable; overflow semantics are not stated by the contract, so this did not drive the verdict.\n\nVerdict: reject, on the confirmed in-scope violation of the stated \"nearest representable e4m3 value\" requirement in the subnormal range (tool events t7/t8).",
+  "verdict": "reject"
+}

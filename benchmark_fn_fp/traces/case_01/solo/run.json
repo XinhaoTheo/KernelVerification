@@ -1,0 +1,2719 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_01",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef sample_recovered_tokens_kernel(\n    output_token_ids_ptr,\n    draft_probs_ptr,\n    target_probs_ptr,\n    inv_q_ptr,\n    vocab_size,\n    BLOCK_SIZE: tl.constexpr,\n):\n    req_idx = tl.program_id(0)\n    max_val = tl.full((), float(\"-inf\"), tl.float32)\n    recovered_id = 0\n    for v in range(0, vocab_size, BLOCK_SIZE):\n        vocab_offset = v + tl.arange(0, BLOCK_SIZE)\n        vocab_mask = vocab_offset < vocab_size\n        draft_prob = tl.load(draft_probs_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        target_prob = tl.load(target_probs_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        prob = target_prob - draft_prob\n        inv_q = tl.load(inv_q_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        score = prob * inv_q\n        score = tl.where(vocab_mask, score, float(\"-inf\"))\n        local_max, local_id = tl.max(score, axis=0, return_indices=True)\n        if local_max > max_val:\n            max_val = local_max\n            recovered_id = v + local_id\n    recovered_id = tl.minimum(recovered_id, vocab_size - 1)\n    tl.store(output_token_ids_ptr + req_idx, recovered_id)\n\n\ndef sample_recovered_tokens(target_probs, draft_probs, inv_q):\n    batch_size, vocab_size = target_probs.shape\n    out = torch.empty(batch_size, dtype=torch.int64, device=target_probs.device)\n    BLOCK_SIZE = triton.next_power_of_2(vocab_size)\n    sample_recovered_tokens_kernel[(batch_size,)](out, draft_probs, target_probs, inv_q, vocab_size, BLOCK_SIZE=BLOCK_SIZE)\n    return out\n",
+    "passed": null,
+    "problem_text": "Operation: the recovered-token sampler used by speculative decoding\n(vllm-project/vllm, vllm/v1/sample/rejection_sampler.py::sample_recovered_tokens_kernel).\n\nAfter a draft token is rejected, a replacement token must be sampled from the\nresidual distribution\n\n    p_residual(v)  proportional to  max(target_prob[v] - draft_prob[v], 0)\n\ni.e. a token the draft over-proposed (target_prob < draft_prob) carries zero\nresidual probability and must never be returned as the recovered token.\n\nThe kernel samples from that distribution with the exponential-race\n(Gumbel-max) trick: given q[v] ~ Exponential(1) supplied as inv_q = 1/q, it\nreturns argmax_v( p_residual(v) * inv_q[v] ).\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_01",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T14:40:42Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:42:50Z",
+          "data": {
+            "adv_nearequal_mismatch": 5,
+            "adv_rows_with_no_positive_residual": 5,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "f0cc27d948387586f0c4cefd710a5fa18ab1ca8b6664610c872fa78ec99ba3d4"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "6d36e6437a16cb446d7a874635197b94cb44ddbd4fee929e1434cf2fa000b6e6"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 9.287631,
+            "exit_code": 0,
+            "expected_signal": "If the missing clamp is observable, some trial yields kernel token != reference argmax(max(t-d,0)*inv_q) with a non-tied score gap, or a returned token with target<draft.",
+            "identical_mismatch": 0,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "mismatch": 0,
+            "neg_residual_returned": 0,
+            "stderr": "",
+            "stdout": "{\n \"trials\": [],\n \"violations\": 0,\n \"mismatch\": 0,\n \"total_rows\": 768,\n \"adv_nearequal\": {\n  \"mismatch\": 5,\n  \"neg_resid_returned\": 5,\n  \"rows_with_no_positive_residual\": 5\n },\n \"identical\": {\n  \"kernel_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"ref_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"mismatch\": 0\n }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "total_rows": 768
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Across 768 rows of proper softmax distributions at V=16..4096 and temperatures 0.3/1.0/5.0, kernel output matched argmax(max(t-d,0)*inv_q) exactly (mismatch=0) and never returned a token with negative residual (violations=0). The only mismatches (5) came from a hand-built near-equal case, and in exactly those 5 rows there were zero positive residuals (rows_with_no_positive_residual=5), a configuration impossible for two normalized distributions (sum(t-d)=0). Identical-distribution case matched too. So the missing clamp was not yet shown to matter on admissible inputs.",
+          "supports": "inconclusive",
+          "tool_event_id": "t7"
+        },
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:44:44Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "e1e5cb4e31e05aa8177051c21294dde5cf4b28306230027c7e5bafda060e5aa7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "30c43c123a5624c5c60613cc86b52a492dc8905cc5be5a21efa9d81e79c7bcbe"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "9be38c2025796e4b7a683957327231de49025deaefd034b40f999289e757cfc1"
+              }
+            ],
+            "cases": 4,
+            "duration_s": 5.641108,
+            "exit_code": 0,
+            "expected_signal": "If the missing clamp matters on admissible inputs, case A/B/C shows mismatch>0 with neg_resid_returned>0 while rows_no_positive_resid==0. If all cases show mismatch=0, the clamp is a provable no-op and c1 is rebutted.",
+            "json_parse_error": null,
+            "json_result": {
+              "A_peaked_draft_huge_invq_on_neg": {
+                "min_row_sum_d": 1.0,
+                "min_row_sum_t": 1.0,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              },
+              "B_invq_biased_to_negatives": {
+                "min_row_sum_d": 0.9999997615814209,
+                "min_row_sum_t": 0.9999997615814209,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              },
+              "C_single_tiny_positive_residual": {
+                "min_row_sum_d": 0.9999998807907104,
+                "min_row_sum_t": 0.9999998807907104,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              },
+              "D_ties": {
+                "min_row_sum_d": 0.9991999864578247,
+                "min_row_sum_t": 0.9991999864578247,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              }
+            },
+            "min_row_sum_d_min": 0.9992,
+            "min_row_sum_t_min": 0.9992,
+            "mismatch_all_cases": 0,
+            "neg_resid_returned_all_cases": 0,
+            "rows_no_positive_resid": 0,
+            "rows_per_case": 256,
+            "stderr": "",
+            "stdout": "{\"A_peaked_draft_huge_invq_on_neg\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 1.0, \"min_row_sum_d\": 1.0}, \"B_invq_biased_to_negatives\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9999997615814209, \"min_row_sum_d\": 0.9999997615814209}, \"C_single_tiny_positive_residual\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9999998807907104, \"min_row_sum_d\": 0.9999998807907104}, \"D_ties\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9991999864578247, \"min_row_sum_d\": 0.9991999864578247}}\n",
+            "timed_out": false,
+            "timeout_s": 120
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Four adversarial configurations (256 rows each, all rows proper normalized distributions, row sums ~1.0) designed specifically to expose the missing max(.,0) clamp: (A) uniform target vs draft peaked 0.99 on token 0 with inv_q=1e6 placed exactly on that hugely-negative-residual token; (B) inv_q scaled x1e5 on every negative-residual token and x1e-3 on positive ones; (C) target==draft except a single +1e-6 residual, with inv_q=1e6 everywhere except that token; (D) exact-tie stress. In all four: mismatch=0 vs argmax(max(t-d,0)*inv_q), neg_resid_returned=0, rows_no_positive_resid=0. This matches the mathematical argument: for two normalized rows sum(t-d)=0, so either some residual is strictly positive (and with inv_q>0 any positive-residual score strictly exceeds every negative-residual score, making the clamp a no-op for the argmax) or t==d exactly, in which case all clamped scores are 0 and both kernel and reference return index 0 (verified in t7). The omitted clamp is therefore unobservable on contract-admissible inputs.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Line 23 computes prob = target_prob - draft_prob without clamping to 0; contract states over-proposed tokens carry zero residual probability and must never be returned. Need to determine whether unclamped argmax can actually differ from clamped argmax on admissible inputs.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Requires p_residual = max(target-draft,0), returns argmax(p_residual*inv_q), and explicitly forbids returning a token with target_prob<draft_prob."
+        }
+      ],
+      "scope_rationale": "problem.txt states the residual distribution is p_residual(v) \u221d max(target_prob[v]-draft_prob[v],0) and that the kernel must return argmax_v(p_residual(v)*inv_q[v]), with over-proposed tokens never returned. Any input consisting of two per-row probability distributions plus positive inv_q is admissible.",
+      "statement": "The kernel omits the required max(target_prob - draft_prob, 0) clamp, so for inputs the contract admits (target_probs/draft_probs rows that are probability distributions, inv_q>0) it can return a token v with target_prob[v] < draft_prob[v], i.e. a zero-residual token, disagreeing with argmax_v(max(t-d,0)*inv_q).",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T14:44:44Z"
+    },
+    {
+      "created_at": "2026-09-08T14:40:42Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:44:44Z",
+          "data": {
+            "V_tested": [
+              4096,
+              8192,
+              32000,
+              32768,
+              50257,
+              128256
+            ],
+            "all_ok": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "449e27253d640822b0c7eb50b7020fc5879014f337cfa999b4afa59373032b87"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "de6b78b5af84382dcf0953c8bc9ce15a5dac6fd09a5e74c8aebd1f50a46652ac"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "67b641ea51903ff2a8d80d3de8fdb80da357142e81e7f8dfdb9a40317e46dcb1"
+              }
+            ],
+            "duration_s": 22.425928,
+            "exit_code": 0,
+            "expected_signal": "If BLOCK_SIZE=next_power_of_2(V) breaks at realistic vocab sizes, some case has ok=false with a compile/out-of-resource error; if all ok with mismatch=0, c2 is rebutted.",
+            "gpu": "Tesla T4",
+            "json_parse_error": null,
+            "json_result": {
+              "cases": [
+                {
+                  "V": 4096,
+                  "block": 4096,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 8192,
+                  "block": 8192,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 32000,
+                  "block": 32768,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 32768,
+                  "block": 32768,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 50257,
+                  "block": 65536,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 128256,
+                  "block": 131072,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                }
+              ],
+              "gpu": "Tesla T4"
+            },
+            "mismatch_all": 0,
+            "neg_resid_returned_all": 0,
+            "stderr": "",
+            "stdout": "{\"gpu\": \"Tesla T4\", \"cases\": [{\"V\": 4096, \"block\": 4096, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 8192, \"block\": 8192, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 32000, \"block\": 32768, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 32768, \"block\": 32768, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 50257, \"block\": 65536, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 128256, \"block\": 131072, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}]}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "On a Tesla T4, vocab sizes 4096, 8192, 32000, 32768, 50257 and 128256 (BLOCK_SIZE up to 131072) all compiled and ran without error, and every case matched the clamped reference argmax exactly (mismatch=0) with no negative-residual token returned. Non-power-of-two vocab sizes (32000, 50257, 128256) exercise the masking path correctly. The BLOCK_SIZE=next_power_of_2(vocab_size) choice does not break at realistic vocabularies.",
+          "supports": "rebutted",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "Line 38 makes the block cover the whole vocab in one iteration, so three fp32 tensors of up to 131072 lanes are materialized per program; this may exceed Triton resource limits.",
+      "scope": "unknown",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Operation is vllm's sample_recovered_tokens over a vocabulary, but no concrete vocab_size is specified in any artifact file."
+        }
+      ],
+      "scope_rationale": "problem.txt describes an LLM vocabulary sampler (vllm rejection sampler) but no test.py or meta.json fixes the vocab size, so the required shape domain is not pinned.",
+      "statement": "With BLOCK_SIZE = triton.next_power_of_2(vocab_size), the kernel fails (compile/resource error) or returns wrong results for realistic vocabulary sizes (e.g. 32000, 128256).",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T14:44:44Z"
+    },
+    {
+      "created_at": "2026-09-08T14:45:41Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:46:31Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t14_probe.py",
+                "sha256": "d49adfdce7c16745fcb5ea18102df2700b479b0ef27fe86bf4e48bc7a5b7ec88"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t14_stdout.txt",
+                "sha256": "9bf4590d1ac005e346de63d74f69eacee17c13b96183e31b478269e5aeedf54c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t14_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t14_json_result.json",
+                "sha256": "411aa93beb0f6e3a5854f747f67b54eeaf94c844f9e0a13b12515e85e55d7fb7"
+              }
+            ],
+            "duration_s": 6.086027,
+            "exit_code": 0,
+            "expected_signal": "If the kernel violates the invariant at scale, mismatch>0 / neg_resid_returned>0 with rows_no_positive_resid==0. All-zero counts rebut c3.",
+            "json_parse_error": null,
+            "json_result": {
+              "realistic_V128256": {
+                "dtype_out": "torch.int64",
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 64,
+                "shape_out": [
+                  64
+                ]
+              },
+              "realistic_V32000": {
+                "dtype_out": "torch.int64",
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 64,
+                "shape_out": [
+                  64
+                ]
+              },
+              "single_tiny_pos_V128256": {
+                "V": 128256,
+                "idx0": 103074,
+                "kernel_tok0": 103074,
+                "median_npos": 1,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "ref_tok0": 103074,
+                "row_sum_d_range": [
+                  0.9999999403953552,
+                  1.0
+                ],
+                "row_sum_t_range": [
+                  0.9999999403953552,
+                  1.0000001192092896
+                ],
+                "rows": 16,
+                "rows_no_positive_resid": 0
+              },
+              "single_tiny_pos_V32000": {
+                "V": 32000,
+                "idx0": 17954,
+                "kernel_tok0": 17954,
+                "median_npos": 1,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "ref_tok0": 17954,
+                "row_sum_d_range": [
+                  0.9999998807907104,
+                  1.0
+                ],
+                "row_sum_t_range": [
+                  0.9999998807907104,
+                  1.0
+                ],
+                "rows": 16,
+                "rows_no_positive_resid": 0
+              }
+            },
+            "realistic_V128256": {
+              "dtype_out": "torch.int64",
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "rows": 64
+            },
+            "realistic_V32000": {
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "rows": 64
+            },
+            "single_tiny_pos_V128256": {
+              "kernel_tok0": 103074,
+              "median_npos": 1,
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "ref_tok0": 103074,
+              "rows": 16
+            },
+            "single_tiny_pos_V32000": {
+              "median_npos": 1,
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "rows": 16
+            },
+            "stderr": "",
+            "stdout": "{\"single_tiny_pos_V32000\": {\"V\": 32000, \"rows\": 16, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"median_npos\": 1, \"row_sum_t_range\": [0.9999998807907104, 1.0], \"row_sum_d_range\": [0.9999998807907104, 1.0], \"kernel_tok0\": 17954, \"ref_tok0\": 17954, \"idx0\": 17954}, \"single_tiny_pos_V128256\": {\"V\": 128256, \"rows\": 16, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"median_npos\": 1, \"row_sum_t_range\": [0.9999999403953552, 1.0000001192092896], \"row_sum_d_range\": [0.9999999403953552, 1.0], \"kernel_tok0\": 103074, \"ref_tok0\": 103074, \"idx0\": 103074}, \"realistic_V32000\": {\"rows\": 64, \"mismatch\": 0, \"neg_resid_returned\": 0, \"dtype_out\": \"torch.int64\", \"shape_out\": [64]}, \"realistic_V128256\": {\"rows\": 64, \"mismatch\": 0, \"neg_resid_returned\": 0, \"dtype_out\": \"torch.int64\", \"shape_out\": [64]}}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "At V=32000 and V=128256 with normalized rows (row sums 0.9999999-1.0000001) engineered to contain exactly one positive residual (median_npos=1) and inv_q scaled x1e6 on every negative-residual token while the single positive-residual token got inv_q=1e-6, the kernel returned exactly the reference argmax(max(t-d,0)*inv_q) in all 32 rows (mismatch=0, neg_resid_returned=0, rows_no_positive_resid=0); e.g. at V=128256 kernel_tok0=ref_tok0=idx0=103074, and at V=32000 kernel_tok0=ref_tok0=idx0=17954. Two additional realistic batches (B=64, plain Exponential(1) inv_q, sharper softmax) at V=32000 and V=128256 also matched exactly with int64 output of shape [B]. c3 is rebutted: the kernel recovers the correct token even when the race is maximally biased toward forbidden tokens at full-vocabulary scale.",
+          "supports": "rebutted",
+          "tool_event_id": "t14"
+        }
+      ],
+      "id": "c3",
+      "raised_by": "solo",
+      "rationale": "This is the hardest admissible configuration for the unclamped score: the correct token's score is ~1e-6 * small inv_q while 32k negative-residual tokens carry inv_q up to 1e6. It simultaneously exercises the boundary masking at non-power-of-two V and any fp32 cancellation in target-draft. Confirmation would reject; rebuttal, combined with the c1/c2 evidence, supports trust.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract fixes the output as argmax_v(p_residual(v)*inv_q[v]) with p_residual = max(target-draft,0) and forbids returning any token with target_prob < draft_prob."
+        },
+        {
+          "source": "problem.txt",
+          "summary": "Operation is vllm's sample_recovered_tokens over an LLM vocabulary, so vocab sizes such as 32000/128256 are representative of the declared domain."
+        }
+      ],
+      "scope_rationale": "problem.txt states the kernel must return argmax_v(max(target-draft,0)*inv_q) and that an over-proposed token (target<draft) must never be returned. Rows that are proper probability distributions with a single small positive residual, plus inv_q = 1/Exponential(1) values, are exactly the input class the contract declares; vocabulary size is chosen from the LLM vocab sizes the cited vllm operator operates on.",
+      "statement": "At realistic vocabulary sizes (32000, 128256) with normalized target/draft rows containing exactly one tiny positive residual among tens of thousands of negative residuals, and inv_q biased heavily toward the negative-residual tokens, the kernel returns a token with target_prob < draft_prob (violating the contract invariant) or disagrees with argmax(max(t-d,0)*inv_q).",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T14:46:31Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_01",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_01"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_01"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_01"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_01",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 79.047910887,
+      "role": "solo",
+      "round": 2,
+      "text": "I have the contract and source. Key suspicion: the kernel computes `prob = target_prob - draft_prob` with no `max(\u00b7, 0)` clamp, which the contract explicitly requires; also `BLOCK_SIZE = next_power_of_2(vocab_size)` for realistic vocab sizes. Let me record both hypotheses.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Line 23 computes prob = target_prob - draft_prob without clamping to 0; contract states over-proposed tokens carry zero residual probability and must never be returned. Need to determine whether unclamped argmax can actually differ from clamped argmax on admissible inputs.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Requires p_residual = max(target-draft,0), returns argmax(p_residual*inv_q), and explicitly forbids returning a token with target_prob<draft_prob."
+              }
+            ],
+            "scope_rationale": "problem.txt states the residual distribution is p_residual(v) \u221d max(target_prob[v]-draft_prob[v],0) and that the kernel must return argmax_v(p_residual(v)*inv_q[v]), with over-proposed tokens never returned. Any input consisting of two per-row probability distributions plus positive inv_q is admissible.",
+            "statement": "The kernel omits the required max(target_prob - draft_prob, 0) clamp, so for inputs the contract admits (target_probs/draft_probs rows that are probability distributions, inv_q>0) it can return a token v with target_prob[v] < draft_prob[v], i.e. a zero-residual token, disagreeing with argmax_v(max(t-d,0)*inv_q)."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Line 38 makes the block cover the whole vocab in one iteration, so three fp32 tensors of up to 131072 lanes are materialized per program; this may exceed Triton resource limits.",
+            "scope": "unknown",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Operation is vllm's sample_recovered_tokens over a vocabulary, but no concrete vocab_size is specified in any artifact file."
+              }
+            ],
+            "scope_rationale": "problem.txt describes an LLM vocabulary sampler (vllm rejection sampler) but no test.py or meta.json fixes the vocab size, so the required shape domain is not pinned.",
+            "statement": "With BLOCK_SIZE = triton.next_power_of_2(vocab_size), the kernel fails (compile/resource error) or returns wrong results for realistic vocabulary sizes (e.g. 32000, 128256)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 79.048,
+        "input_tokens": 4185,
+        "output_tokens": 6079
+      }
+    },
+    {
+      "duration_s": 68.84135217100001,
+      "role": "solo",
+      "round": 3,
+      "text": "Both claims are recorded; now I need runtime evidence. My first probe targets c1: I'll search for any admissible input (proper probability rows, inv_q>0) where the unclamped argmax differs from the clamped reference, and separately check whether any returned token has target<draft.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_01/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\ndev='cuda'\nres={\"trials\":[], \"violations\":0, \"mismatch\":0, \"total_rows\":0}\ndef ref(t,d,inv_q):\n    p=torch.clamp(t-d,min=0)\n    s=p*inv_q\n    return torch.argmax(s,dim=1)\nconfigs=[]\nfor V in [16,128,1000,4096]:\n    for temp in [0.3,1.0,5.0]:\n        configs.append((V,temp))\nfor V,temp in configs:\n    B=64\n    t=torch.softmax(torch.randn(B,V,device=dev)/temp,dim=1)\n    d=torch.softmax(torch.randn(B,V,device=dev)/temp,dim=1)\n    q=torch.empty(B,V,device=dev).exponential_(1.0)\n    inv_q=1.0/q\n    out=k.sample_recovered_tokens(t,d,inv_q)\n    r=ref(t,d,inv_q)\n    mism=(out!=r)\n    resid=(t-d).gather(1,out.view(-1,1)).squeeze(1)\n    viol=(resid<0)\n    res[\"total_rows\"]+=B\n    res[\"mismatch\"]+=int(mism.sum())\n    res[\"violations\"]+=int(viol.sum())\n    if mism.any():\n        i=int(mism.nonzero()[0])\n        sk=((t-d)*inv_q)[i,out[i]].item(); sr=(torch.clamp(t-d,min=0)*inv_q)[i,r[i]].item()\n        res[\"trials\"].append({\"V\":V,\"temp\":temp,\"row\":i,\"kernel_tok\":int(out[i]),\"ref_tok\":int(r[i]),\n                              \"kernel_resid\":float((t-d)[i,out[i]]),\"ref_resid\":float((t-d)[i,r[i]]),\n                              \"kernel_score\":sk,\"ref_score\":sr})\n# adversarial: draft dominates target almost everywhere (still proper distributions)\nB,V=32,512\nbase=torch.softmax(torch.randn(B,V,device=dev),dim=1)\nt=base.clone()\nd=base.clone()\n# move mass: make d nearly equal t but slightly larger on all but one token\neps=1e-7\nd=d*(1+eps); d[:,0]-= (d.sum(1)-1.0)  # renormalize by adjusting token 0\nd=d.clamp(min=0); d=d/d.sum(1,keepdim=True)\nq=torch.empty(B,V,device=dev).exponential_(1.0); inv_q=1.0/q\nout=k.sample_recovered_tokens(t,d,inv_q); r=ref(t,d,inv_q)\nres[\"adv_nearequal\"]={\"mismatch\":int((out!=r).sum()),\n                      \"neg_resid_returned\":int(((t-d).gather(1,out.view(-1,1)).squeeze(1)<0).sum()),\n                      \"rows_with_no_positive_residual\":int((((t-d)>0).sum(1)==0).sum())}\n# identical distributions (all residuals exactly zero)\nt2=base.clone(); d2=base.clone()\nout2=k.sample_recovered_tokens(t2,d2,inv_q); r2=ref(t2,d2,inv_q)\nres[\"identical\"]={\"kernel_first5\":out2[:5].tolist(),\"ref_first5\":r2[:5].tolist(),\"mismatch\":int((out2!=r2).sum())}\nprint(json.dumps(res,indent=1))\n",
+            "expected_signal": "If the missing clamp is observable, some trial yields kernel token != reference argmax(max(t-d,0)*inv_q) with a non-tied score gap, or a returned token with target<draft."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 68.841,
+        "input_tokens": 8100,
+        "output_tokens": 5474
+      }
+    },
+    {
+      "duration_s": 50.46114021899999,
+      "role": "solo",
+      "round": 4,
+      "text": "Probe t7 showed zero mismatches on 768 random proper-distribution rows; the only mismatches were rows with *no* positive residual (impossible for two normalized distributions). I'll record that interpretation, then run a harder c1 probe restricted to proper distributions (peaked/tied/near-equal), and in parallel test c2 at realistic vocab sizes.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "adv_nearequal_mismatch": 5,
+              "adv_rows_with_no_positive_residual": 5,
+              "identical_mismatch": 0,
+              "mismatch": 0,
+              "neg_residual_returned": 0,
+              "total_rows": 768
+            },
+            "event_id": "t7",
+            "status": "open",
+            "summary": "Across 768 rows of proper softmax distributions at V=16..4096 and temperatures 0.3/1.0/5.0, kernel output matched argmax(max(t-d,0)*inv_q) exactly (mismatch=0) and never returned a token with negative residual (violations=0). The only mismatches (5) came from a hand-built near-equal case, and in exactly those 5 rows there were zero positive residuals (rows_with_no_positive_residual=5), a configuration impossible for two normalized distributions (sum(t-d)=0). Identical-distribution case matched too. So the missing clamp was not yet shown to matter on admissible inputs.",
+            "supports": "inconclusive"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 50.461,
+        "input_tokens": 12936,
+        "output_tokens": 3830
+      }
+    },
+    {
+      "duration_s": 52.82463402799999,
+      "role": "solo",
+      "round": 5,
+      "text": "Probe t7 left c1 open. I now believe c1 is mathematically benign (whenever any positive residual exists, the unclamped argmax necessarily lands on a positive-residual token, so the clamp is a no-op), but I want an adversarial probe that stresses exactly that: huge-magnitude negative residuals paired with huge inv_q. In parallel I'll test c2 at realistic vLLM vocab sizes.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_01/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(1)\ndev='cuda'\ndef ref(t,d,inv_q):\n    return torch.argmax(torch.clamp(t-d,min=0)*inv_q, dim=1)\nout_res={}\n\ndef check(name,t,d,inv_q):\n    o=k.sample_recovered_tokens(t,d,inv_q)\n    r=ref(t,d,inv_q)\n    resid=(t-d).gather(1,o.view(-1,1)).squeeze(1)\n    npos=((t-d)>0).sum(1)\n    mm=(o!=r)\n    entry={\"rows\":int(t.shape[0]),\"mismatch\":int(mm.sum()),\n           \"neg_resid_returned\":int((resid<0).sum()),\n           \"rows_no_positive_resid\":int((npos==0).sum()),\n           \"min_row_sum_t\":float(t.sum(1).min()),\"min_row_sum_d\":float(d.sum(1).min())}\n    if mm.any():\n        i=int(mm.nonzero()[0])\n        entry[\"example\"]={\"row\":i,\"kernel_tok\":int(o[i]),\"ref_tok\":int(r[i]),\n            \"kernel_resid\":float((t-d)[i,o[i]]),\"ref_resid\":float((t-d)[i,r[i]]),\n            \"kernel_score_unclamped\":float(((t-d)*inv_q)[i,o[i]]),\n            \"ref_score_clamped\":float((torch.clamp(t-d,min=0)*inv_q)[i,r[i]]),\n            \"npos_in_row\":int(npos[i])}\n    out_res[name]=entry\n\nB,V=256,1024\n# A: draft extremely peaked on token 0, target uniform -> token 0 residual hugely negative\nt=torch.full((B,V),1.0/V,device=dev)\nd=torch.full((B,V),0.01/(V-1),device=dev); d[:,0]=0.99\nq=torch.empty(B,V,device=dev).exponential_(1.0); inv_q=1.0/q\ninv_q[:,0]=1e6   # enormous inv_q exactly on the forbidden token\ncheck(\"A_peaked_draft_huge_invq_on_neg\", t,d,inv_q)\n\n# B: many strongly negative residuals with large inv_q, few tiny positives\nt=torch.softmax(torch.randn(B,V,device=dev)*3,dim=1)\nd=torch.softmax(torch.randn(B,V,device=dev)*3,dim=1)\ninv_q=1.0/torch.empty(B,V,device=dev).exponential_(1.0)\nneg=(t-d)<0\ninv_q=torch.where(neg, inv_q*1e5, inv_q*1e-3)  # bias race hugely toward negative-residual tokens\ncheck(\"B_invq_biased_to_negatives\", t,d,inv_q)\n\n# C: target == draft except one token pair (minimal positive residual), inv_q huge elsewhere\nbase=torch.softmax(torch.randn(B,V,device=dev),dim=1)\nt=base.clone(); d=base.clone()\nidx=torch.randint(1,V,(B,),device=dev)\ndelta=1e-6\nt.scatter_add_(1, idx.view(-1,1), torch.full((B,1),delta,device=dev))\nt[:,0]-=delta\ninv_q=torch.full((B,V),1e6,device=dev); inv_q.scatter_(1, idx.view(-1,1), torch.ones(B,1,device=dev))\ncheck(\"C_single_tiny_positive_residual\", t,d,inv_q)\n\n# D: exact-tie stress: several tokens with identical max score\nt=torch.full((B,V),1.0/V,device=dev)\nd=torch.full((B,V),1.0/V,device=dev)\nd[:,:8]=1.0/V - 1e-4\nt[:,8:16]=1.0/V - 1e-4\ninv_q=torch.ones(B,V,device=dev)\ncheck(\"D_ties\", t,d,inv_q)\nprint(json.dumps(out_res))\n",
+            "expected_signal": "If the missing clamp matters on admissible inputs, case A/B/C shows mismatch>0 with neg_resid_returned>0 while rows_no_positive_resid==0. If all cases show mismatch=0, the clamp is a provable no-op and c1 is rebutted.",
+            "timeout_s": 120
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport torch, json, importlib.util, traceback\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_01/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(2)\ndev='cuda'\nres={\"gpu\":torch.cuda.get_device_name(0),\"cases\":[]}\nfor V in [4096, 8192, 32000, 32768, 50257, 128256]:\n    B=8\n    entry={\"V\":V,\"block\":1<<(V-1).bit_length()}\n    try:\n        t=torch.softmax(torch.randn(B,V,device=dev),dim=1)\n        d=torch.softmax(torch.randn(B,V,device=dev),dim=1)\n        inv_q=1.0/torch.empty(B,V,device=dev).exponential_(1.0)\n        o=k.sample_recovered_tokens(t,d,inv_q)\n        torch.cuda.synchronize()\n        r=torch.argmax(torch.clamp(t-d,min=0)*inv_q,dim=1)\n        entry[\"ok\"]=True\n        entry[\"mismatch\"]=int((o!=r).sum())\n        entry[\"neg_resid_returned\"]=int(((t-d).gather(1,o.view(-1,1)).squeeze(1)<0).sum())\n    except Exception as e:\n        entry[\"ok\"]=False\n        entry[\"error_type\"]=type(e).__name__\n        entry[\"error\"]=str(e)[:600]\n    res[\"cases\"].append(entry)\nprint(json.dumps(res))\n",
+            "expected_signal": "If BLOCK_SIZE=next_power_of_2(V) breaks at realistic vocab sizes, some case has ok=false with a compile/out-of-resource error; if all ok with mismatch=0, c2 is rebutted.",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 52.825,
+        "input_tokens": 17972,
+        "output_tokens": 4444
+      }
+    },
+    {
+      "duration_s": 33.35905369200003,
+      "role": "solo",
+      "round": 6,
+      "text": "Both adversarial probes came back clean. I'll finalize evidence for c1 (t9) and c2 (t10) and resolve both claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "cases": 4,
+              "min_row_sum_d_min": 0.9992,
+              "min_row_sum_t_min": 0.9992,
+              "mismatch_all_cases": 0,
+              "neg_resid_returned_all_cases": 0,
+              "rows_no_positive_resid": 0,
+              "rows_per_case": 256
+            },
+            "event_id": "t9",
+            "status": "rebutted",
+            "summary": "Four adversarial configurations (256 rows each, all rows proper normalized distributions, row sums ~1.0) designed specifically to expose the missing max(.,0) clamp: (A) uniform target vs draft peaked 0.99 on token 0 with inv_q=1e6 placed exactly on that hugely-negative-residual token; (B) inv_q scaled x1e5 on every negative-residual token and x1e-3 on positive ones; (C) target==draft except a single +1e-6 residual, with inv_q=1e6 everywhere except that token; (D) exact-tie stress. In all four: mismatch=0 vs argmax(max(t-d,0)*inv_q), neg_resid_returned=0, rows_no_positive_resid=0. This matches the mathematical argument: for two normalized rows sum(t-d)=0, so either some residual is strictly positive (and with inv_q>0 any positive-residual score strictly exceeds every negative-residual score, making the clamp a no-op for the argmax) or t==d exactly, in which case all clamped scores are 0 and both kernel and reference return index 0 (verified in t7). The omitted clamp is therefore unobservable on contract-admissible inputs.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "V_tested": [
+                4096,
+                8192,
+                32000,
+                32768,
+                50257,
+                128256
+              ],
+              "all_ok": true,
+              "gpu": "Tesla T4",
+              "mismatch_all": 0,
+              "neg_resid_returned_all": 0
+            },
+            "event_id": "t10",
+            "status": "rebutted",
+            "summary": "On a Tesla T4, vocab sizes 4096, 8192, 32000, 32768, 50257 and 128256 (BLOCK_SIZE up to 131072) all compiled and ran without error, and every case matched the clamped reference argmax exactly (mismatch=0) with no negative-residual token returned. Non-power-of-two vocab sizes (32000, 50257, 128256) exercise the masking path correctly. The BLOCK_SIZE=next_power_of_2(vocab_size) choice does not break at realistic vocabularies.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 33.359,
+        "input_tokens": 29300,
+        "output_tokens": 2420
+      }
+    },
+    {
+      "duration_s": 56.16487740800005,
+      "role": "solo",
+      "round": 7,
+      "text": "Both original claims are rebutted. Before deciding, one last decisive test combining scale, the masking path, and the missing-clamp equivalence: a realistic vocabulary (32000/128256) where each normalized row has exactly one tiny positive residual buried among tens of thousands of negative ones, with inv_q biased against it. If the kernel can't recover that token, the contract's \"must never return an over-proposed token\" invariant is violated at realistic scale.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "This is the hardest admissible configuration for the unclamped score: the correct token's score is ~1e-6 * small inv_q while 32k negative-residual tokens carry inv_q up to 1e6. It simultaneously exercises the boundary masking at non-power-of-two V and any fp32 cancellation in target-draft. Confirmation would reject; rebuttal, combined with the c1/c2 evidence, supports trust.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract fixes the output as argmax_v(p_residual(v)*inv_q[v]) with p_residual = max(target-draft,0) and forbids returning any token with target_prob < draft_prob."
+              },
+              {
+                "source": "problem.txt",
+                "summary": "Operation is vllm's sample_recovered_tokens over an LLM vocabulary, so vocab sizes such as 32000/128256 are representative of the declared domain."
+              }
+            ],
+            "scope_rationale": "problem.txt states the kernel must return argmax_v(max(target-draft,0)*inv_q) and that an over-proposed token (target<draft) must never be returned. Rows that are proper probability distributions with a single small positive residual, plus inv_q = 1/Exponential(1) values, are exactly the input class the contract declares; vocabulary size is chosen from the LLM vocab sizes the cited vllm operator operates on.",
+            "statement": "At realistic vocabulary sizes (32000, 128256) with normalized target/draft rows containing exactly one tiny positive residual among tens of thousands of negative residuals, and inv_q biased heavily toward the negative-residual tokens, the kernel returns a token with target_prob < draft_prob (violating the contract invariant) or disagrees with argmax(max(t-d,0)*inv_q)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 56.165,
+        "input_tokens": 44771,
+        "output_tokens": 4196
+      }
+    },
+    {
+      "duration_s": 25.218977392,
+      "role": "solo",
+      "round": 8,
+      "text": "Both prior claims are rebutted. I'll now run the final decisive probe for c3 at realistic vocab sizes with a single tiny positive residual buried among tens of thousands of negative residuals, with inv_q heavily biased toward the forbidden tokens.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c3",
+            "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_01/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(7)\ndev='cuda'\nres={}\ndef ref(t,d,inv_q):\n    return torch.argmax(torch.clamp(t-d,min=0)*inv_q, dim=1)\n\nfor V in [32000, 128256]:\n    B=16\n    base=torch.softmax(torch.randn(B,V,device=dev),dim=1)\n    t=base.clone(); d=base.clone()\n    # give draft slightly more mass everywhere except one token -> exactly one positive residual\n    idx=torch.randint(0,V,(B,),device=dev)\n    delta=torch.full((B,1),1e-7,device=dev)\n    t.scatter_add_(1, idx.view(-1,1), delta)\n    # remove that mass from t spread over all others: subtract tiny uniform amount\n    t = t - (delta/ V)\n    t.scatter_add_(1, idx.view(-1,1), delta/V)\n    t = t.clamp(min=0)\n    # inv_q: huge on every token except the positive-residual one\n    inv_q=1.0/torch.empty(B,V,device=dev).exponential_(1.0)\n    inv_q = inv_q*1e6\n    inv_q.scatter_(1, idx.view(-1,1), torch.full((B,1),1e-6,device=dev))\n    o=k.sample_recovered_tokens(t,d,inv_q)\n    r=ref(t,d,inv_q)\n    resid=(t-d)\n    npos=(resid>0).sum(1)\n    sel=resid.gather(1,o.view(-1,1)).squeeze(1)\n    entry={\"V\":V,\"rows\":B,\"mismatch\":int((o!=r).sum()),\n           \"neg_resid_returned\":int((sel<0).sum()),\n           \"rows_no_positive_resid\":int((npos==0).sum()),\n           \"median_npos\":int(npos.median()),\n           \"row_sum_t_range\":[float(t.sum(1).min()),float(t.sum(1).max())],\n           \"row_sum_d_range\":[float(d.sum(1).min()),float(d.sum(1).max())],\n           \"kernel_tok0\":int(o[0]),\"ref_tok0\":int(r[0]),\"idx0\":int(idx[0])}\n    res[\"single_tiny_pos_V%d\"%V]=entry\n\n# also a fully realistic case at V=128256 with plain exponential inv_q, larger batch\nfor V in [32000,128256]:\n    B=64\n    t=torch.softmax(torch.randn(B,V,device=dev)*1.5,dim=1)\n    d=torch.softmax(torch.randn(B,V,device=dev)*1.5,dim=1)\n    inv_q=1.0/torch.empty(B,V,device=dev).exponential_(1.0)\n    o=k.sample_recovered_tokens(t,d,inv_q)\n    r=ref(t,d,inv_q)\n    sel=(t-d).gather(1,o.view(-1,1)).squeeze(1)\n    res[\"realistic_V%d\"%V]={\"rows\":B,\"mismatch\":int((o!=r).sum()),\n        \"neg_resid_returned\":int((sel<0).sum()),\n        \"dtype_out\":str(o.dtype),\"shape_out\":list(o.shape)}\nprint(json.dumps(res))\n",
+            "expected_signal": "If the kernel violates the invariant at scale, mismatch>0 / neg_resid_returned>0 with rows_no_positive_resid==0. All-zero counts rebut c3.",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 25.219,
+        "input_tokens": 46226,
+        "output_tokens": 2093
+      }
+    },
+    {
+      "duration_s": 19.256183609000004,
+      "role": "solo",
+      "round": 9,
+      "text": "Probe t14 came back clean across both realistic vocab sizes. I'll finalize c3's evidence, then record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "realistic_V128256": {
+                "dtype_out": "torch.int64",
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 64
+              },
+              "realistic_V32000": {
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 64
+              },
+              "single_tiny_pos_V128256": {
+                "kernel_tok0": 103074,
+                "median_npos": 1,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "ref_tok0": 103074,
+                "rows": 16
+              },
+              "single_tiny_pos_V32000": {
+                "median_npos": 1,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 16
+              }
+            },
+            "event_id": "t14",
+            "status": "rebutted",
+            "summary": "At V=32000 and V=128256 with normalized rows (row sums 0.9999999-1.0000001) engineered to contain exactly one positive residual (median_npos=1) and inv_q scaled x1e6 on every negative-residual token while the single positive-residual token got inv_q=1e-6, the kernel returned exactly the reference argmax(max(t-d,0)*inv_q) in all 32 rows (mismatch=0, neg_resid_returned=0, rows_no_positive_resid=0); e.g. at V=128256 kernel_tok0=ref_tok0=idx0=103074, and at V=32000 kernel_tok0=ref_tok0=idx0=17954. Two additional realistic batches (B=64, plain Exponential(1) inv_q, sharper softmax) at V=32000 and V=128256 also matched exactly with int64 output of shape [B]. c3 is rebutted: the kernel recovers the correct token even when the race is maximally biased toward forbidden tokens at full-vocabulary scale.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 19.256,
+        "input_tokens": 51440,
+        "output_tokens": 1465
+      }
+    },
+    {
+      "duration_s": 47.43822768199999,
+      "role": "solo",
+      "round": 10,
+      "text": "All three claims I opened are resolved (rebutted) with runtime evidence; nothing remains that would change the outcome, so I'll decide now.\n\nKey reasoning recap: the only real deviation from the stated formula is the missing `max(\u00b7,0)` clamp on `target-draft` (line 23). Mathematically, for two normalized rows `sum(t-d)=0`, so either some residual is strictly positive \u2014 in which case with `inv_q>0` every positive-residual score is `>0` and every negative-residual score is `<0`, making the clamp a no-op for the argmax \u2014 or `t==d` exactly, where all scores are 0 and both kernel and reference return index 0. Probes t7 (768 random rows, V=16..4096, temps 0.3/1/5), t9 (four adversarial configurations placing `inv_q=1e6` exactly on hugely-negative-residual tokens), t14 (V=32000/128256 rows with a single ~1e-7 positive residual and `inv_q` biased x1e6 toward forbidden tokens) all showed mismatch=0 and zero over-proposed tokens returned. t10 confirmed compilation/correctness up to BLOCK_SIZE=131072 including non-power-of-two vocabularies.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.83,
+            "decisive_claims": [
+              "c1",
+              "c2",
+              "c3"
+            ],
+            "reason": "Contract requires output = argmax_v(max(target-draft,0)*inv_q) with over-proposed tokens (target<draft) never returned. The kernel computes the unclamped score (target-draft)*inv_q (line 23, no tl.maximum), which is the only substantive deviation from the written formula. I tested whether that deviation is observable on the input class the contract declares (per-row probability distributions, inv_q = 1/Exponential(1) > 0). Evidence: (t7) 768 rows of softmax distributions at V=16..4096, temperatures 0.3/1.0/5.0 -> mismatch=0 vs clamped reference argmax, 0 rows returning a negative-residual token; the only 5 mismatches came from a hand-built case whose rows had zero positive residuals, which is impossible for two normalized rows since sum(t-d)=0. (t9) four adversarial configurations, 256 rows each, all rows normalized (row sums 0.9992-1.0): uniform target vs draft peaked at 0.99 with inv_q=1e6 placed exactly on that hugely-negative-residual token; inv_q scaled x1e5 on every negative-residual token and x1e-3 on positive ones; a single +1e-6 residual with inv_q=1e6 everywhere else; and an exact-tie stress -> mismatch=0, neg_resid_returned=0, rows_no_positive_resid=0 in all four. (t14) realistic vocabularies V=32000 and V=128256 with rows engineered to hold exactly one ~1e-7 positive residual among tens of thousands of negative ones and inv_q x1e6 on the forbidden tokens versus 1e-6 on the correct one -> kernel matched reference exactly in all 32 rows (e.g. kernel_tok0=ref_tok0=idx0=103074 at V=128256), plus two B=64 realistic batches matching exactly with int64 output of shape [B]. (t10) V=4096/8192/32000/32768/50257/128256 (BLOCK_SIZE up to 131072) all compiled and ran on a Tesla T4 with mismatch=0, exercising the non-power-of-two masking path. This matches the analytic argument that for normalized rows the clamp cannot change the argmax: any strictly positive residual yields a positive score that dominates every negative-residual score, and if t==d all scores are 0 and both kernel and reference return index 0 (observed in t7). Since BLOCK_SIZE=next_power_of_2(V) >= V, the vocab loop always runs exactly once, so the cross-block max/index bookkeeping and the minimum() guard are never exercised and cannot misbehave. Remaining unverified generalization notes (not defects under the contract): the wrapper's Python argument order (target_probs, draft_probs, inv_q) is not pinned by any artifact file, and multi-block behaviour is unreachable as written. No in-scope contract violation was found.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 47.438,
+        "input_tokens": 58989,
+        "output_tokens": 3591
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_01"
+      },
+      "created_at": "2026-09-08T14:39:21Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_01",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef sample_recovered_tokens_kernel(\n    output_token_ids_ptr,\n    draft_probs_ptr,\n    target_probs_ptr,\n    inv_q_ptr,\n    vocab_size,\n    BLOCK_SIZE: tl.constexpr,\n):\n    req_idx = tl.program_id(0)\n    max_val = tl.full((), float(\"-inf\"), tl.float32)\n    recovered_id = 0\n    for v in range(0, vocab_size, BLOCK_SIZE):\n        vocab_offset = v + tl.arange(0, BLOCK_SIZE)\n        vocab_mask = vocab_offset < vocab_size\n        draft_prob = tl.load(draft_probs_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        target_prob = tl.load(target_probs_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        prob = target_prob - draft_prob\n        inv_q = tl.load(inv_q_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        score = prob * inv_q\n        score = tl.where(vocab_mask, score, float(\"-inf\"))\n        local_max, local_id = tl.max(score, axis=0, return_indices=True)\n        if local_max > max_val:\n            max_val = local_max\n            recovered_id = v + local_id\n    recovered_id = tl.minimum(recovered_id, vocab_size - 1)\n    tl.store(output_token_ids_ptr + req_idx, recovered_id)\n\n\ndef sample_recovered_tokens(target_probs, draft_probs, inv_q):\n    batch_size, vocab_size = target_probs.shape\n    out = torch.empty(batch_size, dtype=torch.int64, device=target_probs.device)\n    BLOCK_SIZE = triton.next_power_of_2(vocab_size)\n    sample_recovered_tokens_kernel[(batch_size,)](out, draft_probs, target_probs, inv_q, vocab_size, BLOCK_SIZE=BLOCK_SIZE)\n    return out\n",
+        "passed": null,
+        "problem_text": "Operation: the recovered-token sampler used by speculative decoding\n(vllm-project/vllm, vllm/v1/sample/rejection_sampler.py::sample_recovered_tokens_kernel).\n\nAfter a draft token is rejected, a replacement token must be sampled from the\nresidual distribution\n\n    p_residual(v)  proportional to  max(target_prob[v] - draft_prob[v], 0)\n\ni.e. a token the draft over-proposed (target_prob < draft_prob) carries zero\nresidual probability and must never be returned as the recovered token.\n\nThe kernel samples from that distribution with the exponential-race\n(Gumbel-max) trick: given q[v] ~ Exponential(1) supplied as inv_q = 1/q, it\nreturns argmax_v( p_residual(v) * inv_q[v] ).\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_01",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_01"
+      },
+      "created_at": "2026-09-08T14:39:21Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: the recovered-token sampler used by speculative decoding\n(vllm-project/vllm, vllm/v1/sample/rejection_sampler.py::sample_recovered_tokens_kernel).\n\nAfter a draft token is rejected, a replacement token must be sampled from the\nresidual distribution\n\n    p_residual(v)  proportional to  max(target_prob[v] - draft_prob[v], 0)\n\ni.e. a token the draft over-proposed (target_prob < draft_prob) carries zero\nresidual probability and must never be returned as the recovered token.\n\nThe kernel samples from that distribution with the exponential-race\n(Gumbel-max) trick: given q[v] ~ Exponential(1) supplied as inv_q = 1/q, it\nreturns argmax_v( p_residual(v) * inv_q[v] ).\n",
+        "entry": "case_01",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_01"
+      },
+      "created_at": "2026-09-08T14:39:21Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_01",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1626
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 676
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_01",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T14:39:21Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_01\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_01",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Line 23 computes prob = target_prob - draft_prob without clamping to 0; contract states over-proposed tokens carry zero residual probability and must never be returned. Need to determine whether unclamped argmax can actually differ from clamped argmax on admissible inputs.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Requires p_residual = max(target-draft,0), returns argmax(p_residual*inv_q), and explicitly forbids returning a token with target_prob<draft_prob."
+          }
+        ],
+        "scope_rationale": "problem.txt states the residual distribution is p_residual(v) \u221d max(target_prob[v]-draft_prob[v],0) and that the kernel must return argmax_v(p_residual(v)*inv_q[v]), with over-proposed tokens never returned. Any input consisting of two per-row probability distributions plus positive inv_q is admissible.",
+        "statement": "The kernel omits the required max(target_prob - draft_prob, 0) clamp, so for inputs the contract admits (target_probs/draft_probs rows that are probability distributions, inv_q>0) it can return a token v with target_prob[v] < draft_prob[v], i.e. a zero-residual token, disagreeing with argmax_v(max(t-d,0)*inv_q)."
+      },
+      "created_at": "2026-09-08T14:40:42Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-08T14:40:42Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Line 23 computes prob = target_prob - draft_prob without clamping to 0; contract states over-proposed tokens carry zero residual probability and must never be returned. Need to determine whether unclamped argmax can actually differ from clamped argmax on admissible inputs.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Requires p_residual = max(target-draft,0), returns argmax(p_residual*inv_q), and explicitly forbids returning a token with target_prob<draft_prob."
+          }
+        ],
+        "scope_rationale": "problem.txt states the residual distribution is p_residual(v) \u221d max(target_prob[v]-draft_prob[v],0) and that the kernel must return argmax_v(p_residual(v)*inv_q[v]), with over-proposed tokens never returned. Any input consisting of two per-row probability distributions plus positive inv_q is admissible.",
+        "statement": "The kernel omits the required max(target_prob - draft_prob, 0) clamp, so for inputs the contract admits (target_probs/draft_probs rows that are probability distributions, inv_q>0) it can return a token v with target_prob[v] < draft_prob[v], i.e. a zero-residual token, disagreeing with argmax_v(max(t-d,0)*inv_q).",
+        "status": "open",
+        "updated_at": "2026-09-08T14:40:42Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Line 38 makes the block cover the whole vocab in one iteration, so three fp32 tensors of up to 131072 lanes are materialized per program; this may exceed Triton resource limits.",
+        "scope": "unknown",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Operation is vllm's sample_recovered_tokens over a vocabulary, but no concrete vocab_size is specified in any artifact file."
+          }
+        ],
+        "scope_rationale": "problem.txt describes an LLM vocabulary sampler (vllm rejection sampler) but no test.py or meta.json fixes the vocab size, so the required shape domain is not pinned.",
+        "statement": "With BLOCK_SIZE = triton.next_power_of_2(vocab_size), the kernel fails (compile/resource error) or returns wrong results for realistic vocabulary sizes (e.g. 32000, 128256)."
+      },
+      "created_at": "2026-09-08T14:40:42Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-08T14:40:42Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Line 38 makes the block cover the whole vocab in one iteration, so three fp32 tensors of up to 131072 lanes are materialized per program; this may exceed Triton resource limits.",
+        "scope": "unknown",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Operation is vllm's sample_recovered_tokens over a vocabulary, but no concrete vocab_size is specified in any artifact file."
+          }
+        ],
+        "scope_rationale": "problem.txt describes an LLM vocabulary sampler (vllm rejection sampler) but no test.py or meta.json fixes the vocab size, so the required shape domain is not pinned.",
+        "statement": "With BLOCK_SIZE = triton.next_power_of_2(vocab_size), the kernel fails (compile/resource error) or returns wrong results for realistic vocabulary sizes (e.g. 32000, 128256).",
+        "status": "open",
+        "updated_at": "2026-09-08T14:40:42Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_01/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\ndev='cuda'\nres={\"trials\":[], \"violations\":0, \"mismatch\":0, \"total_rows\":0}\ndef ref(t,d,inv_q):\n    p=torch.clamp(t-d,min=0)\n    s=p*inv_q\n    return torch.argmax(s,dim=1)\nconfigs=[]\nfor V in [16,128,1000,4096]:\n    for temp in [0.3,1.0,5.0]:\n        configs.append((V,temp))\nfor V,temp in configs:\n    B=64\n    t=torch.softmax(torch.randn(B,V,device=dev)/temp,dim=1)\n    d=torch.softmax(torch.randn(B,V,device=dev)/temp,dim=1)\n    q=torch.empty(B,V,device=dev).exponential_(1.0)\n    inv_q=1.0/q\n    out=k.sample_recovered_tokens(t,d,inv_q)\n    r=ref(t,d,inv_q)\n    mism=(out!=r)\n    resid=(t-d).gather(1,out.view(-1,1)).squeeze(1)\n    viol=(resid<0)\n    res[\"total_rows\"]+=B\n    res[\"mismatch\"]+=int(mism.sum())\n    res[\"violations\"]+=int(viol.sum())\n    if mism.any():\n        i=int(mism.nonzero()[0])\n        sk=((t-d)*inv_q)[i,out[i]].item(); sr=(torch.clamp(t-d,min=0)*inv_q)[i,r[i]].item()\n        res[\"trials\"].append({\"V\":V,\"temp\":temp,\"row\":i,\"kernel_tok\":int(out[i]),\"ref_tok\":int(r[i]),\n                              \"kernel_resid\":float((t-d)[i,out[i]]),\"ref_resid\":float((t-d)[i,r[i]]),\n                              \"kernel_score\":sk,\"ref_score\":sr})\n# adversarial: draft dominates target almost everywhere (still proper distributions)\nB,V=32,512\nbase=torch.softmax(torch.randn(B,V,device=dev),dim=1)\nt=base.clone()\nd=base.clone()\n# move mass: make d nearly equal t but slightly larger on all but one token\neps=1e-7\nd=d*(1+eps); d[:,0]-= (d.sum(1)-1.0)  # renormalize by adjusting token 0\nd=d.clamp(min=0); d=d/d.sum(1,keepdim=True)\nq=torch.empty(B,V,device=dev).exponential_(1.0); inv_q=1.0/q\nout=k.sample_recovered_tokens(t,d,inv_q); r=ref(t,d,inv_q)\nres[\"adv_nearequal\"]={\"mismatch\":int((out!=r).sum()),\n                      \"neg_resid_returned\":int(((t-d).gather(1,out.view(-1,1)).squeeze(1)<0).sum()),\n                      \"rows_with_no_positive_residual\":int((((t-d)>0).sum(1)==0).sum())}\n# identical distributions (all residuals exactly zero)\nt2=base.clone(); d2=base.clone()\nout2=k.sample_recovered_tokens(t2,d2,inv_q); r2=ref(t2,d2,inv_q)\nres[\"identical\"]={\"kernel_first5\":out2[:5].tolist(),\"ref_first5\":r2[:5].tolist(),\"mismatch\":int((out2!=r2).sum())}\nprint(json.dumps(res,indent=1))\n",
+        "expected_signal": "If the missing clamp is observable, some trial yields kernel token != reference argmax(max(t-d,0)*inv_q) with a non-tied score gap, or a returned token with target<draft."
+      },
+      "created_at": "2026-09-08T14:42:00Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "f0cc27d948387586f0c4cefd710a5fa18ab1ca8b6664610c872fa78ec99ba3d4"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "6d36e6437a16cb446d7a874635197b94cb44ddbd4fee929e1434cf2fa000b6e6"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel omits the required max(target_prob - draft_prob, 0) clamp, so for inputs the contract admits (target_probs/draft_probs rows that are probability distributions, inv_q>0) it can return a token v with target_prob[v] < draft_prob[v], i.e. a zero-residual token, disagreeing with argmax_v(max(t-d,0)*inv_q).",
+        "cwd": "/root/cases/case_01",
+        "duration_s": 9.287631,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "f0cc27d948387586f0c4cefd710a5fa18ab1ca8b6664610c872fa78ec99ba3d4"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "6d36e6437a16cb446d7a874635197b94cb44ddbd4fee929e1434cf2fa000b6e6"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 9.287631,
+            "exit_code": 0,
+            "expected_signal": "If the missing clamp is observable, some trial yields kernel token != reference argmax(max(t-d,0)*inv_q) with a non-tied score gap, or a returned token with target<draft.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n \"trials\": [],\n \"violations\": 0,\n \"mismatch\": 0,\n \"total_rows\": 768,\n \"adv_nearequal\": {\n  \"mismatch\": 5,\n  \"neg_resid_returned\": 5,\n  \"rows_with_no_positive_residual\": 5\n },\n \"identical\": {\n  \"kernel_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"ref_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"mismatch\": 0\n }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "If the missing clamp is observable, some trial yields kernel token != reference argmax(max(t-d,0)*inv_q) with a non-tied score gap, or a returned token with target<draft.",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n \"trials\": [],\n \"violations\": 0,\n \"mismatch\": 0,\n \"total_rows\": 768,\n \"adv_nearequal\": {\n  \"mismatch\": 5,\n  \"neg_resid_returned\": 5,\n  \"rows_with_no_positive_residual\": 5\n },\n \"identical\": {\n  \"kernel_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"ref_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"mismatch\": 0\n }\n}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "adv_nearequal_mismatch": 5,
+          "adv_rows_with_no_positive_residual": 5,
+          "identical_mismatch": 0,
+          "mismatch": 0,
+          "neg_residual_returned": 0,
+          "total_rows": 768
+        },
+        "event_id": "t7",
+        "status": "open",
+        "summary": "Across 768 rows of proper softmax distributions at V=16..4096 and temperatures 0.3/1.0/5.0, kernel output matched argmax(max(t-d,0)*inv_q) exactly (mismatch=0) and never returned a token with negative residual (violations=0). The only mismatches (5) came from a hand-built near-equal case, and in exactly those 5 rows there were zero positive residuals (rows_with_no_positive_residual=5), a configuration impossible for two normalized distributions (sum(t-d)=0). Identical-distribution case matched too. So the missing clamp was not yet shown to matter on admissible inputs.",
+        "supports": "inconclusive"
+      },
+      "created_at": "2026-09-08T14:42:50Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:40:42Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:42:50Z",
+              "data": {
+                "adv_nearequal_mismatch": 5,
+                "adv_rows_with_no_positive_residual": 5,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "f0cc27d948387586f0c4cefd710a5fa18ab1ca8b6664610c872fa78ec99ba3d4"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "6d36e6437a16cb446d7a874635197b94cb44ddbd4fee929e1434cf2fa000b6e6"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "duration_s": 9.287631,
+                "exit_code": 0,
+                "expected_signal": "If the missing clamp is observable, some trial yields kernel token != reference argmax(max(t-d,0)*inv_q) with a non-tied score gap, or a returned token with target<draft.",
+                "identical_mismatch": 0,
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "mismatch": 0,
+                "neg_residual_returned": 0,
+                "stderr": "",
+                "stdout": "{\n \"trials\": [],\n \"violations\": 0,\n \"mismatch\": 0,\n \"total_rows\": 768,\n \"adv_nearequal\": {\n  \"mismatch\": 5,\n  \"neg_resid_returned\": 5,\n  \"rows_with_no_positive_residual\": 5\n },\n \"identical\": {\n  \"kernel_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"ref_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"mismatch\": 0\n }\n}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "total_rows": 768
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Across 768 rows of proper softmax distributions at V=16..4096 and temperatures 0.3/1.0/5.0, kernel output matched argmax(max(t-d,0)*inv_q) exactly (mismatch=0) and never returned a token with negative residual (violations=0). The only mismatches (5) came from a hand-built near-equal case, and in exactly those 5 rows there were zero positive residuals (rows_with_no_positive_residual=5), a configuration impossible for two normalized distributions (sum(t-d)=0). Identical-distribution case matched too. So the missing clamp was not yet shown to matter on admissible inputs.",
+              "supports": "inconclusive",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Line 23 computes prob = target_prob - draft_prob without clamping to 0; contract states over-proposed tokens carry zero residual probability and must never be returned. Need to determine whether unclamped argmax can actually differ from clamped argmax on admissible inputs.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Requires p_residual = max(target-draft,0), returns argmax(p_residual*inv_q), and explicitly forbids returning a token with target_prob<draft_prob."
+            }
+          ],
+          "scope_rationale": "problem.txt states the residual distribution is p_residual(v) \u221d max(target_prob[v]-draft_prob[v],0) and that the kernel must return argmax_v(p_residual(v)*inv_q[v]), with over-proposed tokens never returned. Any input consisting of two per-row probability distributions plus positive inv_q is admissible.",
+          "statement": "The kernel omits the required max(target_prob - draft_prob, 0) clamp, so for inputs the contract admits (target_probs/draft_probs rows that are probability distributions, inv_q>0) it can return a token v with target_prob[v] < draft_prob[v], i.e. a zero-residual token, disagreeing with argmax_v(max(t-d,0)*inv_q).",
+          "status": "open",
+          "updated_at": "2026-09-08T14:42:50Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:42:50Z",
+          "data": {
+            "adv_nearequal_mismatch": 5,
+            "adv_rows_with_no_positive_residual": 5,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "f0cc27d948387586f0c4cefd710a5fa18ab1ca8b6664610c872fa78ec99ba3d4"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "6d36e6437a16cb446d7a874635197b94cb44ddbd4fee929e1434cf2fa000b6e6"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 9.287631,
+            "exit_code": 0,
+            "expected_signal": "If the missing clamp is observable, some trial yields kernel token != reference argmax(max(t-d,0)*inv_q) with a non-tied score gap, or a returned token with target<draft.",
+            "identical_mismatch": 0,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "mismatch": 0,
+            "neg_residual_returned": 0,
+            "stderr": "",
+            "stdout": "{\n \"trials\": [],\n \"violations\": 0,\n \"mismatch\": 0,\n \"total_rows\": 768,\n \"adv_nearequal\": {\n  \"mismatch\": 5,\n  \"neg_resid_returned\": 5,\n  \"rows_with_no_positive_residual\": 5\n },\n \"identical\": {\n  \"kernel_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"ref_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"mismatch\": 0\n }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "total_rows": 768
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Across 768 rows of proper softmax distributions at V=16..4096 and temperatures 0.3/1.0/5.0, kernel output matched argmax(max(t-d,0)*inv_q) exactly (mismatch=0) and never returned a token with negative residual (violations=0). The only mismatches (5) came from a hand-built near-equal case, and in exactly those 5 rows there were zero positive residuals (rows_with_no_positive_residual=5), a configuration impossible for two normalized distributions (sum(t-d)=0). Identical-distribution case matched too. So the missing clamp was not yet shown to matter on admissible inputs.",
+          "supports": "inconclusive",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_01/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(1)\ndev='cuda'\ndef ref(t,d,inv_q):\n    return torch.argmax(torch.clamp(t-d,min=0)*inv_q, dim=1)\nout_res={}\n\ndef check(name,t,d,inv_q):\n    o=k.sample_recovered_tokens(t,d,inv_q)\n    r=ref(t,d,inv_q)\n    resid=(t-d).gather(1,o.view(-1,1)).squeeze(1)\n    npos=((t-d)>0).sum(1)\n    mm=(o!=r)\n    entry={\"rows\":int(t.shape[0]),\"mismatch\":int(mm.sum()),\n           \"neg_resid_returned\":int((resid<0).sum()),\n           \"rows_no_positive_resid\":int((npos==0).sum()),\n           \"min_row_sum_t\":float(t.sum(1).min()),\"min_row_sum_d\":float(d.sum(1).min())}\n    if mm.any():\n        i=int(mm.nonzero()[0])\n        entry[\"example\"]={\"row\":i,\"kernel_tok\":int(o[i]),\"ref_tok\":int(r[i]),\n            \"kernel_resid\":float((t-d)[i,o[i]]),\"ref_resid\":float((t-d)[i,r[i]]),\n            \"kernel_score_unclamped\":float(((t-d)*inv_q)[i,o[i]]),\n            \"ref_score_clamped\":float((torch.clamp(t-d,min=0)*inv_q)[i,r[i]]),\n            \"npos_in_row\":int(npos[i])}\n    out_res[name]=entry\n\nB,V=256,1024\n# A: draft extremely peaked on token 0, target uniform -> token 0 residual hugely negative\nt=torch.full((B,V),1.0/V,device=dev)\nd=torch.full((B,V),0.01/(V-1),device=dev); d[:,0]=0.99\nq=torch.empty(B,V,device=dev).exponential_(1.0); inv_q=1.0/q\ninv_q[:,0]=1e6   # enormous inv_q exactly on the forbidden token\ncheck(\"A_peaked_draft_huge_invq_on_neg\", t,d,inv_q)\n\n# B: many strongly negative residuals with large inv_q, few tiny positives\nt=torch.softmax(torch.randn(B,V,device=dev)*3,dim=1)\nd=torch.softmax(torch.randn(B,V,device=dev)*3,dim=1)\ninv_q=1.0/torch.empty(B,V,device=dev).exponential_(1.0)\nneg=(t-d)<0\ninv_q=torch.where(neg, inv_q*1e5, inv_q*1e-3)  # bias race hugely toward negative-residual tokens\ncheck(\"B_invq_biased_to_negatives\", t,d,inv_q)\n\n# C: target == draft except one token pair (minimal positive residual), inv_q huge elsewhere\nbase=torch.softmax(torch.randn(B,V,device=dev),dim=1)\nt=base.clone(); d=base.clone()\nidx=torch.randint(1,V,(B,),device=dev)\ndelta=1e-6\nt.scatter_add_(1, idx.view(-1,1), torch.full((B,1),delta,device=dev))\nt[:,0]-=delta\ninv_q=torch.full((B,V),1e6,device=dev); inv_q.scatter_(1, idx.view(-1,1), torch.ones(B,1,device=dev))\ncheck(\"C_single_tiny_positive_residual\", t,d,inv_q)\n\n# D: exact-tie stress: several tokens with identical max score\nt=torch.full((B,V),1.0/V,device=dev)\nd=torch.full((B,V),1.0/V,device=dev)\nd[:,:8]=1.0/V - 1e-4\nt[:,8:16]=1.0/V - 1e-4\ninv_q=torch.ones(B,V,device=dev)\ncheck(\"D_ties\", t,d,inv_q)\nprint(json.dumps(out_res))\n",
+        "expected_signal": "If the missing clamp matters on admissible inputs, case A/B/C shows mismatch>0 with neg_resid_returned>0 while rows_no_positive_resid==0. If all cases show mismatch=0, the clamp is a provable no-op and c1 is rebutted.",
+        "timeout_s": 120
+      },
+      "created_at": "2026-09-08T14:43:49Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "e1e5cb4e31e05aa8177051c21294dde5cf4b28306230027c7e5bafda060e5aa7"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "30c43c123a5624c5c60613cc86b52a492dc8905cc5be5a21efa9d81e79c7bcbe"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "9be38c2025796e4b7a683957327231de49025deaefd034b40f999289e757cfc1"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel omits the required max(target_prob - draft_prob, 0) clamp, so for inputs the contract admits (target_probs/draft_probs rows that are probability distributions, inv_q>0) it can return a token v with target_prob[v] < draft_prob[v], i.e. a zero-residual token, disagreeing with argmax_v(max(t-d,0)*inv_q).",
+        "cwd": "/root/cases/case_01",
+        "duration_s": 5.641108,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "e1e5cb4e31e05aa8177051c21294dde5cf4b28306230027c7e5bafda060e5aa7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "30c43c123a5624c5c60613cc86b52a492dc8905cc5be5a21efa9d81e79c7bcbe"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "9be38c2025796e4b7a683957327231de49025deaefd034b40f999289e757cfc1"
+              }
+            ],
+            "duration_s": 5.641108,
+            "exit_code": 0,
+            "expected_signal": "If the missing clamp matters on admissible inputs, case A/B/C shows mismatch>0 with neg_resid_returned>0 while rows_no_positive_resid==0. If all cases show mismatch=0, the clamp is a provable no-op and c1 is rebutted.",
+            "json_parse_error": null,
+            "json_result": {
+              "A_peaked_draft_huge_invq_on_neg": {
+                "min_row_sum_d": 1.0,
+                "min_row_sum_t": 1.0,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              },
+              "B_invq_biased_to_negatives": {
+                "min_row_sum_d": 0.9999997615814209,
+                "min_row_sum_t": 0.9999997615814209,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              },
+              "C_single_tiny_positive_residual": {
+                "min_row_sum_d": 0.9999998807907104,
+                "min_row_sum_t": 0.9999998807907104,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              },
+              "D_ties": {
+                "min_row_sum_d": 0.9991999864578247,
+                "min_row_sum_t": 0.9991999864578247,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"A_peaked_draft_huge_invq_on_neg\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 1.0, \"min_row_sum_d\": 1.0}, \"B_invq_biased_to_negatives\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9999997615814209, \"min_row_sum_d\": 0.9999997615814209}, \"C_single_tiny_positive_residual\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9999998807907104, \"min_row_sum_d\": 0.9999998807907104}, \"D_ties\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9991999864578247, \"min_row_sum_d\": 0.9991999864578247}}\n",
+            "timed_out": false,
+            "timeout_s": 120
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "If the missing clamp matters on admissible inputs, case A/B/C shows mismatch>0 with neg_resid_returned>0 while rows_no_positive_resid==0. If all cases show mismatch=0, the clamp is a provable no-op and c1 is rebutted.",
+        "json_parse_error": null,
+        "json_result": {
+          "A_peaked_draft_huge_invq_on_neg": {
+            "min_row_sum_d": 1.0,
+            "min_row_sum_t": 1.0,
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "rows": 256,
+            "rows_no_positive_resid": 0
+          },
+          "B_invq_biased_to_negatives": {
+            "min_row_sum_d": 0.9999997615814209,
+            "min_row_sum_t": 0.9999997615814209,
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "rows": 256,
+            "rows_no_positive_resid": 0
+          },
+          "C_single_tiny_positive_residual": {
+            "min_row_sum_d": 0.9999998807907104,
+            "min_row_sum_t": 0.9999998807907104,
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "rows": 256,
+            "rows_no_positive_resid": 0
+          },
+          "D_ties": {
+            "min_row_sum_d": 0.9991999864578247,
+            "min_row_sum_t": 0.9991999864578247,
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "rows": 256,
+            "rows_no_positive_resid": 0
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 150,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"A_peaked_draft_huge_invq_on_neg\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 1.0, \"min_row_sum_d\": 1.0}, \"B_invq_biased_to_negatives\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9999997615814209, \"min_row_sum_d\": 0.9999997615814209}, \"C_single_tiny_positive_residual\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9999998807907104, \"min_row_sum_d\": 0.9999998807907104}, \"D_ties\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9991999864578247, \"min_row_sum_d\": 0.9991999864578247}}\n",
+        "timed_out": false,
+        "timeout_s": 120,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport torch, json, importlib.util, traceback\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_01/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(2)\ndev='cuda'\nres={\"gpu\":torch.cuda.get_device_name(0),\"cases\":[]}\nfor V in [4096, 8192, 32000, 32768, 50257, 128256]:\n    B=8\n    entry={\"V\":V,\"block\":1<<(V-1).bit_length()}\n    try:\n        t=torch.softmax(torch.randn(B,V,device=dev),dim=1)\n        d=torch.softmax(torch.randn(B,V,device=dev),dim=1)\n        inv_q=1.0/torch.empty(B,V,device=dev).exponential_(1.0)\n        o=k.sample_recovered_tokens(t,d,inv_q)\n        torch.cuda.synchronize()\n        r=torch.argmax(torch.clamp(t-d,min=0)*inv_q,dim=1)\n        entry[\"ok\"]=True\n        entry[\"mismatch\"]=int((o!=r).sum())\n        entry[\"neg_resid_returned\"]=int(((t-d).gather(1,o.view(-1,1)).squeeze(1)<0).sum())\n    except Exception as e:\n        entry[\"ok\"]=False\n        entry[\"error_type\"]=type(e).__name__\n        entry[\"error\"]=str(e)[:600]\n    res[\"cases\"].append(entry)\nprint(json.dumps(res))\n",
+        "expected_signal": "If BLOCK_SIZE=next_power_of_2(V) breaks at realistic vocab sizes, some case has ok=false with a compile/out-of-resource error; if all ok with mismatch=0, c2 is rebutted.",
+        "timeout_s": 300
+      },
+      "created_at": "2026-09-08T14:44:11Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "449e27253d640822b0c7eb50b7020fc5879014f337cfa999b4afa59373032b87"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "de6b78b5af84382dcf0953c8bc9ce15a5dac6fd09a5e74c8aebd1f50a46652ac"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t10_json_result.json",
+            "sha256": "67b641ea51903ff2a8d80d3de8fdb80da357142e81e7f8dfdb9a40317e46dcb1"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "With BLOCK_SIZE = triton.next_power_of_2(vocab_size), the kernel fails (compile/resource error) or returns wrong results for realistic vocabulary sizes (e.g. 32000, 128256).",
+        "cwd": "/root/cases/case_01",
+        "duration_s": 22.425928,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "449e27253d640822b0c7eb50b7020fc5879014f337cfa999b4afa59373032b87"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "de6b78b5af84382dcf0953c8bc9ce15a5dac6fd09a5e74c8aebd1f50a46652ac"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "67b641ea51903ff2a8d80d3de8fdb80da357142e81e7f8dfdb9a40317e46dcb1"
+              }
+            ],
+            "duration_s": 22.425928,
+            "exit_code": 0,
+            "expected_signal": "If BLOCK_SIZE=next_power_of_2(V) breaks at realistic vocab sizes, some case has ok=false with a compile/out-of-resource error; if all ok with mismatch=0, c2 is rebutted.",
+            "json_parse_error": null,
+            "json_result": {
+              "cases": [
+                {
+                  "V": 4096,
+                  "block": 4096,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 8192,
+                  "block": 8192,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 32000,
+                  "block": 32768,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 32768,
+                  "block": 32768,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 50257,
+                  "block": 65536,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 128256,
+                  "block": 131072,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                }
+              ],
+              "gpu": "Tesla T4"
+            },
+            "stderr": "",
+            "stdout": "{\"gpu\": \"Tesla T4\", \"cases\": [{\"V\": 4096, \"block\": 4096, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 8192, \"block\": 8192, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 32000, \"block\": 32768, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 32768, \"block\": 32768, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 50257, \"block\": 65536, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 128256, \"block\": 131072, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}]}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": "If BLOCK_SIZE=next_power_of_2(V) breaks at realistic vocab sizes, some case has ok=false with a compile/out-of-resource error; if all ok with mismatch=0, c2 is rebutted.",
+        "json_parse_error": null,
+        "json_result": {
+          "cases": [
+            {
+              "V": 4096,
+              "block": 4096,
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "ok": true
+            },
+            {
+              "V": 8192,
+              "block": 8192,
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "ok": true
+            },
+            {
+              "V": 32000,
+              "block": 32768,
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "ok": true
+            },
+            {
+              "V": 32768,
+              "block": 32768,
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "ok": true
+            },
+            {
+              "V": 50257,
+              "block": 65536,
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "ok": true
+            },
+            {
+              "V": 128256,
+              "block": 131072,
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "ok": true
+            }
+          ],
+          "gpu": "Tesla T4"
+        },
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"gpu\": \"Tesla T4\", \"cases\": [{\"V\": 4096, \"block\": 4096, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 8192, \"block\": 8192, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 32000, \"block\": 32768, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 32768, \"block\": 32768, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 50257, \"block\": 65536, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 128256, \"block\": 131072, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}]}\n",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "cases": 4,
+          "min_row_sum_d_min": 0.9992,
+          "min_row_sum_t_min": 0.9992,
+          "mismatch_all_cases": 0,
+          "neg_resid_returned_all_cases": 0,
+          "rows_no_positive_resid": 0,
+          "rows_per_case": 256
+        },
+        "event_id": "t9",
+        "status": "rebutted",
+        "summary": "Four adversarial configurations (256 rows each, all rows proper normalized distributions, row sums ~1.0) designed specifically to expose the missing max(.,0) clamp: (A) uniform target vs draft peaked 0.99 on token 0 with inv_q=1e6 placed exactly on that hugely-negative-residual token; (B) inv_q scaled x1e5 on every negative-residual token and x1e-3 on positive ones; (C) target==draft except a single +1e-6 residual, with inv_q=1e6 everywhere except that token; (D) exact-tie stress. In all four: mismatch=0 vs argmax(max(t-d,0)*inv_q), neg_resid_returned=0, rows_no_positive_resid=0. This matches the mathematical argument: for two normalized rows sum(t-d)=0, so either some residual is strictly positive (and with inv_q>0 any positive-residual score strictly exceeds every negative-residual score, making the clamp a no-op for the argmax) or t==d exactly, in which case all clamped scores are 0 and both kernel and reference return index 0 (verified in t7). The omitted clamp is therefore unobservable on contract-admissible inputs.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T14:44:44Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:40:42Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:42:50Z",
+              "data": {
+                "adv_nearequal_mismatch": 5,
+                "adv_rows_with_no_positive_residual": 5,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "f0cc27d948387586f0c4cefd710a5fa18ab1ca8b6664610c872fa78ec99ba3d4"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "6d36e6437a16cb446d7a874635197b94cb44ddbd4fee929e1434cf2fa000b6e6"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "duration_s": 9.287631,
+                "exit_code": 0,
+                "expected_signal": "If the missing clamp is observable, some trial yields kernel token != reference argmax(max(t-d,0)*inv_q) with a non-tied score gap, or a returned token with target<draft.",
+                "identical_mismatch": 0,
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "mismatch": 0,
+                "neg_residual_returned": 0,
+                "stderr": "",
+                "stdout": "{\n \"trials\": [],\n \"violations\": 0,\n \"mismatch\": 0,\n \"total_rows\": 768,\n \"adv_nearequal\": {\n  \"mismatch\": 5,\n  \"neg_resid_returned\": 5,\n  \"rows_with_no_positive_residual\": 5\n },\n \"identical\": {\n  \"kernel_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"ref_first5\": [\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"mismatch\": 0\n }\n}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "total_rows": 768
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Across 768 rows of proper softmax distributions at V=16..4096 and temperatures 0.3/1.0/5.0, kernel output matched argmax(max(t-d,0)*inv_q) exactly (mismatch=0) and never returned a token with negative residual (violations=0). The only mismatches (5) came from a hand-built near-equal case, and in exactly those 5 rows there were zero positive residuals (rows_with_no_positive_residual=5), a configuration impossible for two normalized distributions (sum(t-d)=0). Identical-distribution case matched too. So the missing clamp was not yet shown to matter on admissible inputs.",
+              "supports": "inconclusive",
+              "tool_event_id": "t7"
+            },
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:44:44Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "e1e5cb4e31e05aa8177051c21294dde5cf4b28306230027c7e5bafda060e5aa7"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "30c43c123a5624c5c60613cc86b52a492dc8905cc5be5a21efa9d81e79c7bcbe"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "9be38c2025796e4b7a683957327231de49025deaefd034b40f999289e757cfc1"
+                  }
+                ],
+                "cases": 4,
+                "duration_s": 5.641108,
+                "exit_code": 0,
+                "expected_signal": "If the missing clamp matters on admissible inputs, case A/B/C shows mismatch>0 with neg_resid_returned>0 while rows_no_positive_resid==0. If all cases show mismatch=0, the clamp is a provable no-op and c1 is rebutted.",
+                "json_parse_error": null,
+                "json_result": {
+                  "A_peaked_draft_huge_invq_on_neg": {
+                    "min_row_sum_d": 1.0,
+                    "min_row_sum_t": 1.0,
+                    "mismatch": 0,
+                    "neg_resid_returned": 0,
+                    "rows": 256,
+                    "rows_no_positive_resid": 0
+                  },
+                  "B_invq_biased_to_negatives": {
+                    "min_row_sum_d": 0.9999997615814209,
+                    "min_row_sum_t": 0.9999997615814209,
+                    "mismatch": 0,
+                    "neg_resid_returned": 0,
+                    "rows": 256,
+                    "rows_no_positive_resid": 0
+                  },
+                  "C_single_tiny_positive_residual": {
+                    "min_row_sum_d": 0.9999998807907104,
+                    "min_row_sum_t": 0.9999998807907104,
+                    "mismatch": 0,
+                    "neg_resid_returned": 0,
+                    "rows": 256,
+                    "rows_no_positive_resid": 0
+                  },
+                  "D_ties": {
+                    "min_row_sum_d": 0.9991999864578247,
+                    "min_row_sum_t": 0.9991999864578247,
+                    "mismatch": 0,
+                    "neg_resid_returned": 0,
+                    "rows": 256,
+                    "rows_no_positive_resid": 0
+                  }
+                },
+                "min_row_sum_d_min": 0.9992,
+                "min_row_sum_t_min": 0.9992,
+                "mismatch_all_cases": 0,
+                "neg_resid_returned_all_cases": 0,
+                "rows_no_positive_resid": 0,
+                "rows_per_case": 256,
+                "stderr": "",
+                "stdout": "{\"A_peaked_draft_huge_invq_on_neg\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 1.0, \"min_row_sum_d\": 1.0}, \"B_invq_biased_to_negatives\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9999997615814209, \"min_row_sum_d\": 0.9999997615814209}, \"C_single_tiny_positive_residual\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9999998807907104, \"min_row_sum_d\": 0.9999998807907104}, \"D_ties\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9991999864578247, \"min_row_sum_d\": 0.9991999864578247}}\n",
+                "timed_out": false,
+                "timeout_s": 120
+              },
+              "id": "c1.e2",
+              "kind": "runtime_probe",
+              "summary": "Four adversarial configurations (256 rows each, all rows proper normalized distributions, row sums ~1.0) designed specifically to expose the missing max(.,0) clamp: (A) uniform target vs draft peaked 0.99 on token 0 with inv_q=1e6 placed exactly on that hugely-negative-residual token; (B) inv_q scaled x1e5 on every negative-residual token and x1e-3 on positive ones; (C) target==draft except a single +1e-6 residual, with inv_q=1e6 everywhere except that token; (D) exact-tie stress. In all four: mismatch=0 vs argmax(max(t-d,0)*inv_q), neg_resid_returned=0, rows_no_positive_resid=0. This matches the mathematical argument: for two normalized rows sum(t-d)=0, so either some residual is strictly positive (and with inv_q>0 any positive-residual score strictly exceeds every negative-residual score, making the clamp a no-op for the argmax) or t==d exactly, in which case all clamped scores are 0 and both kernel and reference return index 0 (verified in t7). The omitted clamp is therefore unobservable on contract-admissible inputs.",
+              "supports": "rebutted",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Line 23 computes prob = target_prob - draft_prob without clamping to 0; contract states over-proposed tokens carry zero residual probability and must never be returned. Need to determine whether unclamped argmax can actually differ from clamped argmax on admissible inputs.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Requires p_residual = max(target-draft,0), returns argmax(p_residual*inv_q), and explicitly forbids returning a token with target_prob<draft_prob."
+            }
+          ],
+          "scope_rationale": "problem.txt states the residual distribution is p_residual(v) \u221d max(target_prob[v]-draft_prob[v],0) and that the kernel must return argmax_v(p_residual(v)*inv_q[v]), with over-proposed tokens never returned. Any input consisting of two per-row probability distributions plus positive inv_q is admissible.",
+          "statement": "The kernel omits the required max(target_prob - draft_prob, 0) clamp, so for inputs the contract admits (target_probs/draft_probs rows that are probability distributions, inv_q>0) it can return a token v with target_prob[v] < draft_prob[v], i.e. a zero-residual token, disagreeing with argmax_v(max(t-d,0)*inv_q).",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:44:44Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:44:44Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "e1e5cb4e31e05aa8177051c21294dde5cf4b28306230027c7e5bafda060e5aa7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "30c43c123a5624c5c60613cc86b52a492dc8905cc5be5a21efa9d81e79c7bcbe"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "9be38c2025796e4b7a683957327231de49025deaefd034b40f999289e757cfc1"
+              }
+            ],
+            "cases": 4,
+            "duration_s": 5.641108,
+            "exit_code": 0,
+            "expected_signal": "If the missing clamp matters on admissible inputs, case A/B/C shows mismatch>0 with neg_resid_returned>0 while rows_no_positive_resid==0. If all cases show mismatch=0, the clamp is a provable no-op and c1 is rebutted.",
+            "json_parse_error": null,
+            "json_result": {
+              "A_peaked_draft_huge_invq_on_neg": {
+                "min_row_sum_d": 1.0,
+                "min_row_sum_t": 1.0,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              },
+              "B_invq_biased_to_negatives": {
+                "min_row_sum_d": 0.9999997615814209,
+                "min_row_sum_t": 0.9999997615814209,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              },
+              "C_single_tiny_positive_residual": {
+                "min_row_sum_d": 0.9999998807907104,
+                "min_row_sum_t": 0.9999998807907104,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              },
+              "D_ties": {
+                "min_row_sum_d": 0.9991999864578247,
+                "min_row_sum_t": 0.9991999864578247,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 256,
+                "rows_no_positive_resid": 0
+              }
+            },
+            "min_row_sum_d_min": 0.9992,
+            "min_row_sum_t_min": 0.9992,
+            "mismatch_all_cases": 0,
+            "neg_resid_returned_all_cases": 0,
+            "rows_no_positive_resid": 0,
+            "rows_per_case": 256,
+            "stderr": "",
+            "stdout": "{\"A_peaked_draft_huge_invq_on_neg\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 1.0, \"min_row_sum_d\": 1.0}, \"B_invq_biased_to_negatives\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9999997615814209, \"min_row_sum_d\": 0.9999997615814209}, \"C_single_tiny_positive_residual\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9999998807907104, \"min_row_sum_d\": 0.9999998807907104}, \"D_ties\": {\"rows\": 256, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"min_row_sum_t\": 0.9991999864578247, \"min_row_sum_d\": 0.9991999864578247}}\n",
+            "timed_out": false,
+            "timeout_s": 120
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Four adversarial configurations (256 rows each, all rows proper normalized distributions, row sums ~1.0) designed specifically to expose the missing max(.,0) clamp: (A) uniform target vs draft peaked 0.99 on token 0 with inv_q=1e6 placed exactly on that hugely-negative-residual token; (B) inv_q scaled x1e5 on every negative-residual token and x1e-3 on positive ones; (C) target==draft except a single +1e-6 residual, with inv_q=1e6 everywhere except that token; (D) exact-tie stress. In all four: mismatch=0 vs argmax(max(t-d,0)*inv_q), neg_resid_returned=0, rows_no_positive_resid=0. This matches the mathematical argument: for two normalized rows sum(t-d)=0, so either some residual is strictly positive (and with inv_q>0 any positive-residual score strictly exceeds every negative-residual score, making the clamp a no-op for the argmax) or t==d exactly, in which case all clamped scores are 0 and both kernel and reference return index 0 (verified in t7). The omitted clamp is therefore unobservable on contract-admissible inputs.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "V_tested": [
+            4096,
+            8192,
+            32000,
+            32768,
+            50257,
+            128256
+          ],
+          "all_ok": true,
+          "gpu": "Tesla T4",
+          "mismatch_all": 0,
+          "neg_resid_returned_all": 0
+        },
+        "event_id": "t10",
+        "status": "rebutted",
+        "summary": "On a Tesla T4, vocab sizes 4096, 8192, 32000, 32768, 50257 and 128256 (BLOCK_SIZE up to 131072) all compiled and ran without error, and every case matched the clamped reference argmax exactly (mismatch=0) with no negative-residual token returned. Non-power-of-two vocab sizes (32000, 50257, 128256) exercise the masking path correctly. The BLOCK_SIZE=next_power_of_2(vocab_size) choice does not break at realistic vocabularies.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T14:44:44Z",
+      "id": "t12",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:40:42Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:44:44Z",
+              "data": {
+                "V_tested": [
+                  4096,
+                  8192,
+                  32000,
+                  32768,
+                  50257,
+                  128256
+                ],
+                "all_ok": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "449e27253d640822b0c7eb50b7020fc5879014f337cfa999b4afa59373032b87"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "de6b78b5af84382dcf0953c8bc9ce15a5dac6fd09a5e74c8aebd1f50a46652ac"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t10_json_result.json",
+                    "sha256": "67b641ea51903ff2a8d80d3de8fdb80da357142e81e7f8dfdb9a40317e46dcb1"
+                  }
+                ],
+                "duration_s": 22.425928,
+                "exit_code": 0,
+                "expected_signal": "If BLOCK_SIZE=next_power_of_2(V) breaks at realistic vocab sizes, some case has ok=false with a compile/out-of-resource error; if all ok with mismatch=0, c2 is rebutted.",
+                "gpu": "Tesla T4",
+                "json_parse_error": null,
+                "json_result": {
+                  "cases": [
+                    {
+                      "V": 4096,
+                      "block": 4096,
+                      "mismatch": 0,
+                      "neg_resid_returned": 0,
+                      "ok": true
+                    },
+                    {
+                      "V": 8192,
+                      "block": 8192,
+                      "mismatch": 0,
+                      "neg_resid_returned": 0,
+                      "ok": true
+                    },
+                    {
+                      "V": 32000,
+                      "block": 32768,
+                      "mismatch": 0,
+                      "neg_resid_returned": 0,
+                      "ok": true
+                    },
+                    {
+                      "V": 32768,
+                      "block": 32768,
+                      "mismatch": 0,
+                      "neg_resid_returned": 0,
+                      "ok": true
+                    },
+                    {
+                      "V": 50257,
+                      "block": 65536,
+                      "mismatch": 0,
+                      "neg_resid_returned": 0,
+                      "ok": true
+                    },
+                    {
+                      "V": 128256,
+                      "block": 131072,
+                      "mismatch": 0,
+                      "neg_resid_returned": 0,
+                      "ok": true
+                    }
+                  ],
+                  "gpu": "Tesla T4"
+                },
+                "mismatch_all": 0,
+                "neg_resid_returned_all": 0,
+                "stderr": "",
+                "stdout": "{\"gpu\": \"Tesla T4\", \"cases\": [{\"V\": 4096, \"block\": 4096, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 8192, \"block\": 8192, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 32000, \"block\": 32768, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 32768, \"block\": 32768, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 50257, \"block\": 65536, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 128256, \"block\": 131072, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}]}\n",
+                "timed_out": false,
+                "timeout_s": 300
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "On a Tesla T4, vocab sizes 4096, 8192, 32000, 32768, 50257 and 128256 (BLOCK_SIZE up to 131072) all compiled and ran without error, and every case matched the clamped reference argmax exactly (mismatch=0) with no negative-residual token returned. Non-power-of-two vocab sizes (32000, 50257, 128256) exercise the masking path correctly. The BLOCK_SIZE=next_power_of_2(vocab_size) choice does not break at realistic vocabularies.",
+              "supports": "rebutted",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "solo",
+          "rationale": "Line 38 makes the block cover the whole vocab in one iteration, so three fp32 tensors of up to 131072 lanes are materialized per program; this may exceed Triton resource limits.",
+          "scope": "unknown",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Operation is vllm's sample_recovered_tokens over a vocabulary, but no concrete vocab_size is specified in any artifact file."
+            }
+          ],
+          "scope_rationale": "problem.txt describes an LLM vocabulary sampler (vllm rejection sampler) but no test.py or meta.json fixes the vocab size, so the required shape domain is not pinned.",
+          "statement": "With BLOCK_SIZE = triton.next_power_of_2(vocab_size), the kernel fails (compile/resource error) or returns wrong results for realistic vocabulary sizes (e.g. 32000, 128256).",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:44:44Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:44:44Z",
+          "data": {
+            "V_tested": [
+              4096,
+              8192,
+              32000,
+              32768,
+              50257,
+              128256
+            ],
+            "all_ok": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "449e27253d640822b0c7eb50b7020fc5879014f337cfa999b4afa59373032b87"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "de6b78b5af84382dcf0953c8bc9ce15a5dac6fd09a5e74c8aebd1f50a46652ac"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "67b641ea51903ff2a8d80d3de8fdb80da357142e81e7f8dfdb9a40317e46dcb1"
+              }
+            ],
+            "duration_s": 22.425928,
+            "exit_code": 0,
+            "expected_signal": "If BLOCK_SIZE=next_power_of_2(V) breaks at realistic vocab sizes, some case has ok=false with a compile/out-of-resource error; if all ok with mismatch=0, c2 is rebutted.",
+            "gpu": "Tesla T4",
+            "json_parse_error": null,
+            "json_result": {
+              "cases": [
+                {
+                  "V": 4096,
+                  "block": 4096,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 8192,
+                  "block": 8192,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 32000,
+                  "block": 32768,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 32768,
+                  "block": 32768,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 50257,
+                  "block": 65536,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                },
+                {
+                  "V": 128256,
+                  "block": 131072,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ok": true
+                }
+              ],
+              "gpu": "Tesla T4"
+            },
+            "mismatch_all": 0,
+            "neg_resid_returned_all": 0,
+            "stderr": "",
+            "stdout": "{\"gpu\": \"Tesla T4\", \"cases\": [{\"V\": 4096, \"block\": 4096, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 8192, \"block\": 8192, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 32000, \"block\": 32768, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 32768, \"block\": 32768, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 50257, \"block\": 65536, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}, {\"V\": 128256, \"block\": 131072, \"ok\": true, \"mismatch\": 0, \"neg_resid_returned\": 0}]}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "On a Tesla T4, vocab sizes 4096, 8192, 32000, 32768, 50257 and 128256 (BLOCK_SIZE up to 131072) all compiled and ran without error, and every case matched the clamped reference argmax exactly (mismatch=0) with no negative-residual token returned. Non-power-of-two vocab sizes (32000, 50257, 128256) exercise the masking path correctly. The BLOCK_SIZE=next_power_of_2(vocab_size) choice does not break at realistic vocabularies.",
+          "supports": "rebutted",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "rationale": "This is the hardest admissible configuration for the unclamped score: the correct token's score is ~1e-6 * small inv_q while 32k negative-residual tokens carry inv_q up to 1e6. It simultaneously exercises the boundary masking at non-power-of-two V and any fp32 cancellation in target-draft. Confirmation would reject; rebuttal, combined with the c1/c2 evidence, supports trust.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract fixes the output as argmax_v(p_residual(v)*inv_q[v]) with p_residual = max(target-draft,0) and forbids returning any token with target_prob < draft_prob."
+          },
+          {
+            "source": "problem.txt",
+            "summary": "Operation is vllm's sample_recovered_tokens over an LLM vocabulary, so vocab sizes such as 32000/128256 are representative of the declared domain."
+          }
+        ],
+        "scope_rationale": "problem.txt states the kernel must return argmax_v(max(target-draft,0)*inv_q) and that an over-proposed token (target<draft) must never be returned. Rows that are proper probability distributions with a single small positive residual, plus inv_q = 1/Exponential(1) values, are exactly the input class the contract declares; vocabulary size is chosen from the LLM vocab sizes the cited vllm operator operates on.",
+        "statement": "At realistic vocabulary sizes (32000, 128256) with normalized target/draft rows containing exactly one tiny positive residual among tens of thousands of negative residuals, and inv_q biased heavily toward the negative-residual tokens, the kernel returns a token with target_prob < draft_prob (violating the contract invariant) or disagrees with argmax(max(t-d,0)*inv_q)."
+      },
+      "created_at": "2026-09-08T14:45:41Z",
+      "id": "t13",
+      "output": {
+        "created_at": "2026-09-08T14:45:41Z",
+        "evidence": [],
+        "id": "c3",
+        "raised_by": "solo",
+        "rationale": "This is the hardest admissible configuration for the unclamped score: the correct token's score is ~1e-6 * small inv_q while 32k negative-residual tokens carry inv_q up to 1e6. It simultaneously exercises the boundary masking at non-power-of-two V and any fp32 cancellation in target-draft. Confirmation would reject; rebuttal, combined with the c1/c2 evidence, supports trust.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract fixes the output as argmax_v(p_residual(v)*inv_q[v]) with p_residual = max(target-draft,0) and forbids returning any token with target_prob < draft_prob."
+          },
+          {
+            "source": "problem.txt",
+            "summary": "Operation is vllm's sample_recovered_tokens over an LLM vocabulary, so vocab sizes such as 32000/128256 are representative of the declared domain."
+          }
+        ],
+        "scope_rationale": "problem.txt states the kernel must return argmax_v(max(target-draft,0)*inv_q) and that an over-proposed token (target<draft) must never be returned. Rows that are proper probability distributions with a single small positive residual, plus inv_q = 1/Exponential(1) values, are exactly the input class the contract declares; vocabulary size is chosen from the LLM vocab sizes the cited vllm operator operates on.",
+        "statement": "At realistic vocabulary sizes (32000, 128256) with normalized target/draft rows containing exactly one tiny positive residual among tens of thousands of negative residuals, and inv_q biased heavily toward the negative-residual tokens, the kernel returns a token with target_prob < draft_prob (violating the contract invariant) or disagrees with argmax(max(t-d,0)*inv_q).",
+        "status": "open",
+        "updated_at": "2026-09-08T14:45:41Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c3",
+        "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_01/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(7)\ndev='cuda'\nres={}\ndef ref(t,d,inv_q):\n    return torch.argmax(torch.clamp(t-d,min=0)*inv_q, dim=1)\n\nfor V in [32000, 128256]:\n    B=16\n    base=torch.softmax(torch.randn(B,V,device=dev),dim=1)\n    t=base.clone(); d=base.clone()\n    # give draft slightly more mass everywhere except one token -> exactly one positive residual\n    idx=torch.randint(0,V,(B,),device=dev)\n    delta=torch.full((B,1),1e-7,device=dev)\n    t.scatter_add_(1, idx.view(-1,1), delta)\n    # remove that mass from t spread over all others: subtract tiny uniform amount\n    t = t - (delta/ V)\n    t.scatter_add_(1, idx.view(-1,1), delta/V)\n    t = t.clamp(min=0)\n    # inv_q: huge on every token except the positive-residual one\n    inv_q=1.0/torch.empty(B,V,device=dev).exponential_(1.0)\n    inv_q = inv_q*1e6\n    inv_q.scatter_(1, idx.view(-1,1), torch.full((B,1),1e-6,device=dev))\n    o=k.sample_recovered_tokens(t,d,inv_q)\n    r=ref(t,d,inv_q)\n    resid=(t-d)\n    npos=(resid>0).sum(1)\n    sel=resid.gather(1,o.view(-1,1)).squeeze(1)\n    entry={\"V\":V,\"rows\":B,\"mismatch\":int((o!=r).sum()),\n           \"neg_resid_returned\":int((sel<0).sum()),\n           \"rows_no_positive_resid\":int((npos==0).sum()),\n           \"median_npos\":int(npos.median()),\n           \"row_sum_t_range\":[float(t.sum(1).min()),float(t.sum(1).max())],\n           \"row_sum_d_range\":[float(d.sum(1).min()),float(d.sum(1).max())],\n           \"kernel_tok0\":int(o[0]),\"ref_tok0\":int(r[0]),\"idx0\":int(idx[0])}\n    res[\"single_tiny_pos_V%d\"%V]=entry\n\n# also a fully realistic case at V=128256 with plain exponential inv_q, larger batch\nfor V in [32000,128256]:\n    B=64\n    t=torch.softmax(torch.randn(B,V,device=dev)*1.5,dim=1)\n    d=torch.softmax(torch.randn(B,V,device=dev)*1.5,dim=1)\n    inv_q=1.0/torch.empty(B,V,device=dev).exponential_(1.0)\n    o=k.sample_recovered_tokens(t,d,inv_q)\n    r=ref(t,d,inv_q)\n    sel=(t-d).gather(1,o.view(-1,1)).squeeze(1)\n    res[\"realistic_V%d\"%V]={\"rows\":B,\"mismatch\":int((o!=r).sum()),\n        \"neg_resid_returned\":int((sel<0).sum()),\n        \"dtype_out\":str(o.dtype),\"shape_out\":list(o.shape)}\nprint(json.dumps(res))\n",
+        "expected_signal": "If the kernel violates the invariant at scale, mismatch>0 / neg_resid_returned>0 with rows_no_positive_resid==0. All-zero counts rebut c3.",
+        "timeout_s": 300
+      },
+      "created_at": "2026-09-08T14:46:12Z",
+      "id": "t14",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t14_probe.py",
+            "sha256": "d49adfdce7c16745fcb5ea18102df2700b479b0ef27fe86bf4e48bc7a5b7ec88"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t14_stdout.txt",
+            "sha256": "9bf4590d1ac005e346de63d74f69eacee17c13b96183e31b478269e5aeedf54c"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t14_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t14_json_result.json",
+            "sha256": "411aa93beb0f6e3a5854f747f67b54eeaf94c844f9e0a13b12515e85e55d7fb7"
+          }
+        ],
+        "claim_id": "c3",
+        "claim_statement": "At realistic vocabulary sizes (32000, 128256) with normalized target/draft rows containing exactly one tiny positive residual among tens of thousands of negative residuals, and inv_q biased heavily toward the negative-residual tokens, the kernel returns a token with target_prob < draft_prob (violating the contract invariant) or disagrees with argmax(max(t-d,0)*inv_q).",
+        "cwd": "/root/cases/case_01",
+        "duration_s": 6.086027,
+        "event_id": "t14",
+        "evidence_draft": {
+          "claim_id": "c3",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t14_probe.py",
+                "sha256": "d49adfdce7c16745fcb5ea18102df2700b479b0ef27fe86bf4e48bc7a5b7ec88"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t14_stdout.txt",
+                "sha256": "9bf4590d1ac005e346de63d74f69eacee17c13b96183e31b478269e5aeedf54c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t14_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t14_json_result.json",
+                "sha256": "411aa93beb0f6e3a5854f747f67b54eeaf94c844f9e0a13b12515e85e55d7fb7"
+              }
+            ],
+            "duration_s": 6.086027,
+            "exit_code": 0,
+            "expected_signal": "If the kernel violates the invariant at scale, mismatch>0 / neg_resid_returned>0 with rows_no_positive_resid==0. All-zero counts rebut c3.",
+            "json_parse_error": null,
+            "json_result": {
+              "realistic_V128256": {
+                "dtype_out": "torch.int64",
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 64,
+                "shape_out": [
+                  64
+                ]
+              },
+              "realistic_V32000": {
+                "dtype_out": "torch.int64",
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 64,
+                "shape_out": [
+                  64
+                ]
+              },
+              "single_tiny_pos_V128256": {
+                "V": 128256,
+                "idx0": 103074,
+                "kernel_tok0": 103074,
+                "median_npos": 1,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "ref_tok0": 103074,
+                "row_sum_d_range": [
+                  0.9999999403953552,
+                  1.0
+                ],
+                "row_sum_t_range": [
+                  0.9999999403953552,
+                  1.0000001192092896
+                ],
+                "rows": 16,
+                "rows_no_positive_resid": 0
+              },
+              "single_tiny_pos_V32000": {
+                "V": 32000,
+                "idx0": 17954,
+                "kernel_tok0": 17954,
+                "median_npos": 1,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "ref_tok0": 17954,
+                "row_sum_d_range": [
+                  0.9999998807907104,
+                  1.0
+                ],
+                "row_sum_t_range": [
+                  0.9999998807907104,
+                  1.0
+                ],
+                "rows": 16,
+                "rows_no_positive_resid": 0
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"single_tiny_pos_V32000\": {\"V\": 32000, \"rows\": 16, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"median_npos\": 1, \"row_sum_t_range\": [0.9999998807907104, 1.0], \"row_sum_d_range\": [0.9999998807907104, 1.0], \"kernel_tok0\": 17954, \"ref_tok0\": 17954, \"idx0\": 17954}, \"single_tiny_pos_V128256\": {\"V\": 128256, \"rows\": 16, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"median_npos\": 1, \"row_sum_t_range\": [0.9999999403953552, 1.0000001192092896], \"row_sum_d_range\": [0.9999999403953552, 1.0], \"kernel_tok0\": 103074, \"ref_tok0\": 103074, \"idx0\": 103074}, \"realistic_V32000\": {\"rows\": 64, \"mismatch\": 0, \"neg_resid_returned\": 0, \"dtype_out\": \"torch.int64\", \"shape_out\": [64]}, \"realistic_V128256\": {\"rows\": 64, \"mismatch\": 0, \"neg_resid_returned\": 0, \"dtype_out\": \"torch.int64\", \"shape_out\": [64]}}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t14"
+        },
+        "exit_code": 0,
+        "expected_signal": "If the kernel violates the invariant at scale, mismatch>0 / neg_resid_returned>0 with rows_no_positive_resid==0. All-zero counts rebut c3.",
+        "json_parse_error": null,
+        "json_result": {
+          "realistic_V128256": {
+            "dtype_out": "torch.int64",
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "rows": 64,
+            "shape_out": [
+              64
+            ]
+          },
+          "realistic_V32000": {
+            "dtype_out": "torch.int64",
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "rows": 64,
+            "shape_out": [
+              64
+            ]
+          },
+          "single_tiny_pos_V128256": {
+            "V": 128256,
+            "idx0": 103074,
+            "kernel_tok0": 103074,
+            "median_npos": 1,
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "ref_tok0": 103074,
+            "row_sum_d_range": [
+              0.9999999403953552,
+              1.0
+            ],
+            "row_sum_t_range": [
+              0.9999999403953552,
+              1.0000001192092896
+            ],
+            "rows": 16,
+            "rows_no_positive_resid": 0
+          },
+          "single_tiny_pos_V32000": {
+            "V": 32000,
+            "idx0": 17954,
+            "kernel_tok0": 17954,
+            "median_npos": 1,
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "ref_tok0": 17954,
+            "row_sum_d_range": [
+              0.9999998807907104,
+              1.0
+            ],
+            "row_sum_t_range": [
+              0.9999998807907104,
+              1.0
+            ],
+            "rows": 16,
+            "rows_no_positive_resid": 0
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"single_tiny_pos_V32000\": {\"V\": 32000, \"rows\": 16, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"median_npos\": 1, \"row_sum_t_range\": [0.9999998807907104, 1.0], \"row_sum_d_range\": [0.9999998807907104, 1.0], \"kernel_tok0\": 17954, \"ref_tok0\": 17954, \"idx0\": 17954}, \"single_tiny_pos_V128256\": {\"V\": 128256, \"rows\": 16, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"median_npos\": 1, \"row_sum_t_range\": [0.9999999403953552, 1.0000001192092896], \"row_sum_d_range\": [0.9999999403953552, 1.0], \"kernel_tok0\": 103074, \"ref_tok0\": 103074, \"idx0\": 103074}, \"realistic_V32000\": {\"rows\": 64, \"mismatch\": 0, \"neg_resid_returned\": 0, \"dtype_out\": \"torch.int64\", \"shape_out\": [64]}, \"realistic_V128256\": {\"rows\": 64, \"mismatch\": 0, \"neg_resid_returned\": 0, \"dtype_out\": \"torch.int64\", \"shape_out\": [64]}}\n",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "realistic_V128256": {
+            "dtype_out": "torch.int64",
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "rows": 64
+          },
+          "realistic_V32000": {
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "rows": 64
+          },
+          "single_tiny_pos_V128256": {
+            "kernel_tok0": 103074,
+            "median_npos": 1,
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "ref_tok0": 103074,
+            "rows": 16
+          },
+          "single_tiny_pos_V32000": {
+            "median_npos": 1,
+            "mismatch": 0,
+            "neg_resid_returned": 0,
+            "rows": 16
+          }
+        },
+        "event_id": "t14",
+        "status": "rebutted",
+        "summary": "At V=32000 and V=128256 with normalized rows (row sums 0.9999999-1.0000001) engineered to contain exactly one positive residual (median_npos=1) and inv_q scaled x1e6 on every negative-residual token while the single positive-residual token got inv_q=1e-6, the kernel returned exactly the reference argmax(max(t-d,0)*inv_q) in all 32 rows (mismatch=0, neg_resid_returned=0, rows_no_positive_resid=0); e.g. at V=128256 kernel_tok0=ref_tok0=idx0=103074, and at V=32000 kernel_tok0=ref_tok0=idx0=17954. Two additional realistic batches (B=64, plain Exponential(1) inv_q, sharper softmax) at V=32000 and V=128256 also matched exactly with int64 output of shape [B]. c3 is rebutted: the kernel recovers the correct token even when the race is maximally biased toward forbidden tokens at full-vocabulary scale.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T14:46:31Z",
+      "id": "t15",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:45:41Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:46:31Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t14_probe.py",
+                    "sha256": "d49adfdce7c16745fcb5ea18102df2700b479b0ef27fe86bf4e48bc7a5b7ec88"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t14_stdout.txt",
+                    "sha256": "9bf4590d1ac005e346de63d74f69eacee17c13b96183e31b478269e5aeedf54c"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t14_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t14_json_result.json",
+                    "sha256": "411aa93beb0f6e3a5854f747f67b54eeaf94c844f9e0a13b12515e85e55d7fb7"
+                  }
+                ],
+                "duration_s": 6.086027,
+                "exit_code": 0,
+                "expected_signal": "If the kernel violates the invariant at scale, mismatch>0 / neg_resid_returned>0 with rows_no_positive_resid==0. All-zero counts rebut c3.",
+                "json_parse_error": null,
+                "json_result": {
+                  "realistic_V128256": {
+                    "dtype_out": "torch.int64",
+                    "mismatch": 0,
+                    "neg_resid_returned": 0,
+                    "rows": 64,
+                    "shape_out": [
+                      64
+                    ]
+                  },
+                  "realistic_V32000": {
+                    "dtype_out": "torch.int64",
+                    "mismatch": 0,
+                    "neg_resid_returned": 0,
+                    "rows": 64,
+                    "shape_out": [
+                      64
+                    ]
+                  },
+                  "single_tiny_pos_V128256": {
+                    "V": 128256,
+                    "idx0": 103074,
+                    "kernel_tok0": 103074,
+                    "median_npos": 1,
+                    "mismatch": 0,
+                    "neg_resid_returned": 0,
+                    "ref_tok0": 103074,
+                    "row_sum_d_range": [
+                      0.9999999403953552,
+                      1.0
+                    ],
+                    "row_sum_t_range": [
+                      0.9999999403953552,
+                      1.0000001192092896
+                    ],
+                    "rows": 16,
+                    "rows_no_positive_resid": 0
+                  },
+                  "single_tiny_pos_V32000": {
+                    "V": 32000,
+                    "idx0": 17954,
+                    "kernel_tok0": 17954,
+                    "median_npos": 1,
+                    "mismatch": 0,
+                    "neg_resid_returned": 0,
+                    "ref_tok0": 17954,
+                    "row_sum_d_range": [
+                      0.9999998807907104,
+                      1.0
+                    ],
+                    "row_sum_t_range": [
+                      0.9999998807907104,
+                      1.0
+                    ],
+                    "rows": 16,
+                    "rows_no_positive_resid": 0
+                  }
+                },
+                "realistic_V128256": {
+                  "dtype_out": "torch.int64",
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "rows": 64
+                },
+                "realistic_V32000": {
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "rows": 64
+                },
+                "single_tiny_pos_V128256": {
+                  "kernel_tok0": 103074,
+                  "median_npos": 1,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "ref_tok0": 103074,
+                  "rows": 16
+                },
+                "single_tiny_pos_V32000": {
+                  "median_npos": 1,
+                  "mismatch": 0,
+                  "neg_resid_returned": 0,
+                  "rows": 16
+                },
+                "stderr": "",
+                "stdout": "{\"single_tiny_pos_V32000\": {\"V\": 32000, \"rows\": 16, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"median_npos\": 1, \"row_sum_t_range\": [0.9999998807907104, 1.0], \"row_sum_d_range\": [0.9999998807907104, 1.0], \"kernel_tok0\": 17954, \"ref_tok0\": 17954, \"idx0\": 17954}, \"single_tiny_pos_V128256\": {\"V\": 128256, \"rows\": 16, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"median_npos\": 1, \"row_sum_t_range\": [0.9999999403953552, 1.0000001192092896], \"row_sum_d_range\": [0.9999999403953552, 1.0], \"kernel_tok0\": 103074, \"ref_tok0\": 103074, \"idx0\": 103074}, \"realistic_V32000\": {\"rows\": 64, \"mismatch\": 0, \"neg_resid_returned\": 0, \"dtype_out\": \"torch.int64\", \"shape_out\": [64]}, \"realistic_V128256\": {\"rows\": 64, \"mismatch\": 0, \"neg_resid_returned\": 0, \"dtype_out\": \"torch.int64\", \"shape_out\": [64]}}\n",
+                "timed_out": false,
+                "timeout_s": 300
+              },
+              "id": "c3.e1",
+              "kind": "runtime_probe",
+              "summary": "At V=32000 and V=128256 with normalized rows (row sums 0.9999999-1.0000001) engineered to contain exactly one positive residual (median_npos=1) and inv_q scaled x1e6 on every negative-residual token while the single positive-residual token got inv_q=1e-6, the kernel returned exactly the reference argmax(max(t-d,0)*inv_q) in all 32 rows (mismatch=0, neg_resid_returned=0, rows_no_positive_resid=0); e.g. at V=128256 kernel_tok0=ref_tok0=idx0=103074, and at V=32000 kernel_tok0=ref_tok0=idx0=17954. Two additional realistic batches (B=64, plain Exponential(1) inv_q, sharper softmax) at V=32000 and V=128256 also matched exactly with int64 output of shape [B]. c3 is rebutted: the kernel recovers the correct token even when the race is maximally biased toward forbidden tokens at full-vocabulary scale.",
+              "supports": "rebutted",
+              "tool_event_id": "t14"
+            }
+          ],
+          "id": "c3",
+          "raised_by": "solo",
+          "rationale": "This is the hardest admissible configuration for the unclamped score: the correct token's score is ~1e-6 * small inv_q while 32k negative-residual tokens carry inv_q up to 1e6. It simultaneously exercises the boundary masking at non-power-of-two V and any fp32 cancellation in target-draft. Confirmation would reject; rebuttal, combined with the c1/c2 evidence, supports trust.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract fixes the output as argmax_v(p_residual(v)*inv_q[v]) with p_residual = max(target-draft,0) and forbids returning any token with target_prob < draft_prob."
+            },
+            {
+              "source": "problem.txt",
+              "summary": "Operation is vllm's sample_recovered_tokens over an LLM vocabulary, so vocab sizes such as 32000/128256 are representative of the declared domain."
+            }
+          ],
+          "scope_rationale": "problem.txt states the kernel must return argmax_v(max(target-draft,0)*inv_q) and that an over-proposed token (target<draft) must never be returned. Rows that are proper probability distributions with a single small positive residual, plus inv_q = 1/Exponential(1) values, are exactly the input class the contract declares; vocabulary size is chosen from the LLM vocab sizes the cited vllm operator operates on.",
+          "statement": "At realistic vocabulary sizes (32000, 128256) with normalized target/draft rows containing exactly one tiny positive residual among tens of thousands of negative residuals, and inv_q biased heavily toward the negative-residual tokens, the kernel returns a token with target_prob < draft_prob (violating the contract invariant) or disagrees with argmax(max(t-d,0)*inv_q).",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:46:31Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:46:31Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t14_probe.py",
+                "sha256": "d49adfdce7c16745fcb5ea18102df2700b479b0ef27fe86bf4e48bc7a5b7ec88"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t14_stdout.txt",
+                "sha256": "9bf4590d1ac005e346de63d74f69eacee17c13b96183e31b478269e5aeedf54c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t14_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t14_json_result.json",
+                "sha256": "411aa93beb0f6e3a5854f747f67b54eeaf94c844f9e0a13b12515e85e55d7fb7"
+              }
+            ],
+            "duration_s": 6.086027,
+            "exit_code": 0,
+            "expected_signal": "If the kernel violates the invariant at scale, mismatch>0 / neg_resid_returned>0 with rows_no_positive_resid==0. All-zero counts rebut c3.",
+            "json_parse_error": null,
+            "json_result": {
+              "realistic_V128256": {
+                "dtype_out": "torch.int64",
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 64,
+                "shape_out": [
+                  64
+                ]
+              },
+              "realistic_V32000": {
+                "dtype_out": "torch.int64",
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "rows": 64,
+                "shape_out": [
+                  64
+                ]
+              },
+              "single_tiny_pos_V128256": {
+                "V": 128256,
+                "idx0": 103074,
+                "kernel_tok0": 103074,
+                "median_npos": 1,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "ref_tok0": 103074,
+                "row_sum_d_range": [
+                  0.9999999403953552,
+                  1.0
+                ],
+                "row_sum_t_range": [
+                  0.9999999403953552,
+                  1.0000001192092896
+                ],
+                "rows": 16,
+                "rows_no_positive_resid": 0
+              },
+              "single_tiny_pos_V32000": {
+                "V": 32000,
+                "idx0": 17954,
+                "kernel_tok0": 17954,
+                "median_npos": 1,
+                "mismatch": 0,
+                "neg_resid_returned": 0,
+                "ref_tok0": 17954,
+                "row_sum_d_range": [
+                  0.9999998807907104,
+                  1.0
+                ],
+                "row_sum_t_range": [
+                  0.9999998807907104,
+                  1.0
+                ],
+                "rows": 16,
+                "rows_no_positive_resid": 0
+              }
+            },
+            "realistic_V128256": {
+              "dtype_out": "torch.int64",
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "rows": 64
+            },
+            "realistic_V32000": {
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "rows": 64
+            },
+            "single_tiny_pos_V128256": {
+              "kernel_tok0": 103074,
+              "median_npos": 1,
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "ref_tok0": 103074,
+              "rows": 16
+            },
+            "single_tiny_pos_V32000": {
+              "median_npos": 1,
+              "mismatch": 0,
+              "neg_resid_returned": 0,
+              "rows": 16
+            },
+            "stderr": "",
+            "stdout": "{\"single_tiny_pos_V32000\": {\"V\": 32000, \"rows\": 16, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"median_npos\": 1, \"row_sum_t_range\": [0.9999998807907104, 1.0], \"row_sum_d_range\": [0.9999998807907104, 1.0], \"kernel_tok0\": 17954, \"ref_tok0\": 17954, \"idx0\": 17954}, \"single_tiny_pos_V128256\": {\"V\": 128256, \"rows\": 16, \"mismatch\": 0, \"neg_resid_returned\": 0, \"rows_no_positive_resid\": 0, \"median_npos\": 1, \"row_sum_t_range\": [0.9999999403953552, 1.0000001192092896], \"row_sum_d_range\": [0.9999999403953552, 1.0], \"kernel_tok0\": 103074, \"ref_tok0\": 103074, \"idx0\": 103074}, \"realistic_V32000\": {\"rows\": 64, \"mismatch\": 0, \"neg_resid_returned\": 0, \"dtype_out\": \"torch.int64\", \"shape_out\": [64]}, \"realistic_V128256\": {\"rows\": 64, \"mismatch\": 0, \"neg_resid_returned\": 0, \"dtype_out\": \"torch.int64\", \"shape_out\": [64]}}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "At V=32000 and V=128256 with normalized rows (row sums 0.9999999-1.0000001) engineered to contain exactly one positive residual (median_npos=1) and inv_q scaled x1e6 on every negative-residual token while the single positive-residual token got inv_q=1e-6, the kernel returned exactly the reference argmax(max(t-d,0)*inv_q) in all 32 rows (mismatch=0, neg_resid_returned=0, rows_no_positive_resid=0); e.g. at V=128256 kernel_tok0=ref_tok0=idx0=103074, and at V=32000 kernel_tok0=ref_tok0=idx0=17954. Two additional realistic batches (B=64, plain Exponential(1) inv_q, sharper softmax) at V=32000 and V=128256 also matched exactly with int64 output of shape [B]. c3 is rebutted: the kernel recovers the correct token even when the race is maximally biased toward forbidden tokens at full-vocabulary scale.",
+          "supports": "rebutted",
+          "tool_event_id": "t14"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.83,
+        "decisive_claims": [
+          "c1",
+          "c2",
+          "c3"
+        ],
+        "reason": "Contract requires output = argmax_v(max(target-draft,0)*inv_q) with over-proposed tokens (target<draft) never returned. The kernel computes the unclamped score (target-draft)*inv_q (line 23, no tl.maximum), which is the only substantive deviation from the written formula. I tested whether that deviation is observable on the input class the contract declares (per-row probability distributions, inv_q = 1/Exponential(1) > 0). Evidence: (t7) 768 rows of softmax distributions at V=16..4096, temperatures 0.3/1.0/5.0 -> mismatch=0 vs clamped reference argmax, 0 rows returning a negative-residual token; the only 5 mismatches came from a hand-built case whose rows had zero positive residuals, which is impossible for two normalized rows since sum(t-d)=0. (t9) four adversarial configurations, 256 rows each, all rows normalized (row sums 0.9992-1.0): uniform target vs draft peaked at 0.99 with inv_q=1e6 placed exactly on that hugely-negative-residual token; inv_q scaled x1e5 on every negative-residual token and x1e-3 on positive ones; a single +1e-6 residual with inv_q=1e6 everywhere else; and an exact-tie stress -> mismatch=0, neg_resid_returned=0, rows_no_positive_resid=0 in all four. (t14) realistic vocabularies V=32000 and V=128256 with rows engineered to hold exactly one ~1e-7 positive residual among tens of thousands of negative ones and inv_q x1e6 on the forbidden tokens versus 1e-6 on the correct one -> kernel matched reference exactly in all 32 rows (e.g. kernel_tok0=ref_tok0=idx0=103074 at V=128256), plus two B=64 realistic batches matching exactly with int64 output of shape [B]. (t10) V=4096/8192/32000/32768/50257/128256 (BLOCK_SIZE up to 131072) all compiled and ran on a Tesla T4 with mismatch=0, exercising the non-power-of-two masking path. This matches the analytic argument that for normalized rows the clamp cannot change the argmax: any strictly positive residual yields a positive score that dominates every negative-residual score, and if t==d all scores are 0 and both kernel and reference return index 0 (observed in t7). Since BLOCK_SIZE=next_power_of_2(V) >= V, the vocab loop always runs exactly once, so the cross-block max/index bookkeeping and the minimum() guard are never exercised and cannot misbehave. Remaining unverified generalization notes (not defects under the contract): the wrapper's Python argument order (target_probs, draft_probs, inv_q) is not pinned by any artifact file, and multi-block behaviour is unreachable as written. No in-scope contract violation was found.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-08T14:47:19Z",
+      "id": "t16",
+      "output": {
+        "confidence": 0.83,
+        "created_at": "2026-09-08T14:47:19Z",
+        "decisive_claims": [
+          "c1",
+          "c2",
+          "c3"
+        ],
+        "reason": "Contract requires output = argmax_v(max(target-draft,0)*inv_q) with over-proposed tokens (target<draft) never returned. The kernel computes the unclamped score (target-draft)*inv_q (line 23, no tl.maximum), which is the only substantive deviation from the written formula. I tested whether that deviation is observable on the input class the contract declares (per-row probability distributions, inv_q = 1/Exponential(1) > 0). Evidence: (t7) 768 rows of softmax distributions at V=16..4096, temperatures 0.3/1.0/5.0 -> mismatch=0 vs clamped reference argmax, 0 rows returning a negative-residual token; the only 5 mismatches came from a hand-built case whose rows had zero positive residuals, which is impossible for two normalized rows since sum(t-d)=0. (t9) four adversarial configurations, 256 rows each, all rows normalized (row sums 0.9992-1.0): uniform target vs draft peaked at 0.99 with inv_q=1e6 placed exactly on that hugely-negative-residual token; inv_q scaled x1e5 on every negative-residual token and x1e-3 on positive ones; a single +1e-6 residual with inv_q=1e6 everywhere else; and an exact-tie stress -> mismatch=0, neg_resid_returned=0, rows_no_positive_resid=0 in all four. (t14) realistic vocabularies V=32000 and V=128256 with rows engineered to hold exactly one ~1e-7 positive residual among tens of thousands of negative ones and inv_q x1e6 on the forbidden tokens versus 1e-6 on the correct one -> kernel matched reference exactly in all 32 rows (e.g. kernel_tok0=ref_tok0=idx0=103074 at V=128256), plus two B=64 realistic batches matching exactly with int64 output of shape [B]. (t10) V=4096/8192/32000/32768/50257/128256 (BLOCK_SIZE up to 131072) all compiled and ran on a Tesla T4 with mismatch=0, exercising the non-power-of-two masking path. This matches the analytic argument that for normalized rows the clamp cannot change the argmax: any strictly positive residual yields a positive score that dominates every negative-residual score, and if t==d all scores are 0 and both kernel and reference return index 0 (observed in t7). Since BLOCK_SIZE=next_power_of_2(V) >= V, the vocab loop always runs exactly once, so the cross-block max/index bookkeeping and the minimum() guard are never exercised and cannot misbehave. Remaining unverified generalization notes (not defects under the contract): the wrapper's Python argument order (target_probs, draft_probs, inv_q) is not pinned by any artifact file, and multi-block behaviour is unreachable as written. No in-scope contract violation was found.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.83,
+    "created_at": "2026-09-08T14:47:19Z",
+    "decisive_claims": [
+      "c1",
+      "c2",
+      "c3"
+    ],
+    "reason": "Contract requires output = argmax_v(max(target-draft,0)*inv_q) with over-proposed tokens (target<draft) never returned. The kernel computes the unclamped score (target-draft)*inv_q (line 23, no tl.maximum), which is the only substantive deviation from the written formula. I tested whether that deviation is observable on the input class the contract declares (per-row probability distributions, inv_q = 1/Exponential(1) > 0). Evidence: (t7) 768 rows of softmax distributions at V=16..4096, temperatures 0.3/1.0/5.0 -> mismatch=0 vs clamped reference argmax, 0 rows returning a negative-residual token; the only 5 mismatches came from a hand-built case whose rows had zero positive residuals, which is impossible for two normalized rows since sum(t-d)=0. (t9) four adversarial configurations, 256 rows each, all rows normalized (row sums 0.9992-1.0): uniform target vs draft peaked at 0.99 with inv_q=1e6 placed exactly on that hugely-negative-residual token; inv_q scaled x1e5 on every negative-residual token and x1e-3 on positive ones; a single +1e-6 residual with inv_q=1e6 everywhere else; and an exact-tie stress -> mismatch=0, neg_resid_returned=0, rows_no_positive_resid=0 in all four. (t14) realistic vocabularies V=32000 and V=128256 with rows engineered to hold exactly one ~1e-7 positive residual among tens of thousands of negative ones and inv_q x1e6 on the forbidden tokens versus 1e-6 on the correct one -> kernel matched reference exactly in all 32 rows (e.g. kernel_tok0=ref_tok0=idx0=103074 at V=128256), plus two B=64 realistic batches matching exactly with int64 output of shape [B]. (t10) V=4096/8192/32000/32768/50257/128256 (BLOCK_SIZE up to 131072) all compiled and ran on a Tesla T4 with mismatch=0, exercising the non-power-of-two masking path. This matches the analytic argument that for normalized rows the clamp cannot change the argmax: any strictly positive residual yields a positive score that dominates every negative-residual score, and if t==d all scores are 0 and both kernel and reference return index 0 (observed in t7). Since BLOCK_SIZE=next_power_of_2(V) >= V, the vocab loop always runs exactly once, so the cross-block max/index bookkeeping and the minimum() guard are never exercised and cannot misbehave. Remaining unverified generalization notes (not defects under the contract): the wrapper's Python argument order (target_probs, draft_probs, inv_q) is not pinned by any artifact file, and multi-block behaviour is unreachable as written. No in-scope contract violation was found.",
+    "verdict": "trust"
+  }
+}

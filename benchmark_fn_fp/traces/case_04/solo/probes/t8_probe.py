@@ -1,49 +1,43 @@
 
-import torch, json, importlib.util, math
+import torch, json, importlib.util
 spec = importlib.util.spec_from_file_location("k", "/root/cases/case_04/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
 def ref(X, eps):
-    X32 = X.float()
-    ms = (X32*X32).sum(dim=1, keepdim=True)/X32.shape[1]
-    return X32 * torch.rsqrt(ms + eps)
+    x = X.float()
+    ms = (x*x).sum(-1, keepdim=True)/x.shape[-1]
+    return x*torch.rsqrt(ms+eps)
 
-torch.manual_seed(0)
-res = {}
-cases = {}
-cases["fp32_randn_4096x1024"] = torch.randn(4096,1024, device="cuda")
-cases["fp32_nonpow2_ncols_777"] = torch.randn(64,777, device="cuda")
-x = torch.randn(64,1024, device="cuda")
-cases["bf16_roundtrip"] = x.to(torch.bfloat16).float()
-cases["bf16_native_input"] = x.to(torch.bfloat16)
-cases["near_zero_1e-3"] = torch.randn(64,1024, device="cuda")*1e-3
-cases["near_zero_1e-8"] = torch.randn(64,1024, device="cuda")*1e-8
-cases["near_zero_1e-20"] = torch.randn(64,1024, device="cuda")*1e-20
-cases["exact_zero_rows"] = torch.zeros(8,1024, device="cuda")
-cases["large_1e18"] = torch.randn(16,1024, device="cuda")*1e18
-cases["mixed_rows"] = torch.cat([torch.zeros(2,512,device="cuda"),
-                                 torch.randn(2,512,device="cuda")*1e-25,
-                                 torch.randn(2,512,device="cuda")*1e5], 0)
+torch.manual_seed(1)
+out=[]
+worst=0.0
+for rows, cols in [(1,1),(2,3),(3,17),(7,127),(4,4096),(2,8192),(64,2048),(129,769)]:
+    for eps in [1e-6, 1e-5, 0.0, 1e-2]:
+        for scale, tag in [(1.0,'unit'),(1e-20,'tiny'),(1e8,'huge')]:
+            X = (torch.randn(rows, cols, device='cuda')*scale)
+            Y = m.rms_norm_forward(X, eps)
+            R = ref(X, eps)
+            d = (Y-R).abs()
+            den = R.abs().clamp_min(1e-30)
+            ma=float(d.max()); mr=float((d/den).max())
+            fin_y=bool(torch.isfinite(Y).all()); fin_r=bool(torch.isfinite(R).all())
+            if (ma>0 and mr>1e-5) or fin_y!=fin_r:
+                out.append(dict(rows=rows,cols=cols,eps=eps,tag=tag,max_abs=ma,max_rel=mr,fin_y=fin_y,fin_r=fin_r))
+            worst=max(worst,mr if ma>0 else 0.0)
 
-eps = 1e-6
-for name, X in cases.items():
-    try:
-        Y = k.rms_norm_forward(X, eps)
-        R = ref(X, eps)
-        d = (Y.float()-R).abs()
-        denom = R.abs().clamp_min(1e-30)
-        res[name] = dict(shape=list(X.shape), in_dtype=str(X.dtype), out_dtype=str(Y.dtype),
-                         max_abs=float(d.max()), max_rel=float((d/denom).max()),
-                         ref_absmax=float(R.abs().max()),
-                         y_nan=int(torch.isnan(Y).sum()), y_inf=int(torch.isinf(Y).sum()),
-                         ref_nan=int(torch.isnan(R).sum()), ref_inf=int(torch.isinf(R).sum()))
-    except Exception as e:
-        res[name] = dict(error=repr(e))
+# bf16 round-trip consistency, sweeping widths
+bf=[]
+for cols in [1,15,64,1000,4096]:
+    Xb = torch.randn(6, cols, device='cuda').bfloat16()
+    Y = m.rms_norm_forward(Xb, 1e-6); R = ref(Xb, 1e-6)
+    bf.append(dict(cols=cols, max_abs=float((Y-R).abs().max()),
+                   max_rel=float(((Y-R).abs()/R.abs().clamp_min(1e-30)).max()),
+                   out_dtype=str(Y.dtype)))
 
-# eps variation
-for eps2 in [0.0, 1e-12, 1e-5, 1e-2]:
-    X = torch.randn(32,512, device="cuda")
-    Y = k.rms_norm_forward(X, eps2); R = ref(X, eps2)
-    res[f"eps_{eps2}"] = dict(max_abs=float((Y-R).abs().max()), max_rel=float(((Y-R).abs()/R.abs().clamp_min(1e-30)).max()))
+# repeated-call determinism
+Xd = torch.randn(8, 3000, device='cuda')
+Y1 = m.rms_norm_forward(Xd, 1e-6); Y2 = m.rms_norm_forward(Xd, 1e-6)
+det = bool(torch.equal(Y1, Y2))
 
-print(json.dumps(res, indent=1))
+print(json.dumps(dict(metric="max rel err vs fp32 ref over shape/eps/scale sweep",
+                      mismatches=out, worst_rel=worst, bf16=bf, deterministic=det)))

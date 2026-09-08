@@ -1,0 +1,214 @@
+[
+  {
+    "created_at": "2026-09-08T16:30:57Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T16:32:41Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "be1e2eb2b1cc93f3ebecbc39895bd839739e778998656e7c5824c2af202c0d13"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "769b1e28b6546d8394495e847b3fe751952fdac3bdf8285b838b2c375d49eef6"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "d2a39948203caf3cb2457ffa8d3467c770fc7b0be728d42954a7a829e0d48807"
+            }
+          ],
+          "config": "num_seqs=4, max_blocks=8, page_size=16, head_dim=64, num_pages=32, fp32",
+          "duration_s": 8.370098,
+          "exit_code": 0,
+          "expected_signal": "With a random permutation block table (num_pages == num_seqs*max_blocks, so no OOB), kernel output should differ bit-exactly from the reference for most tokens; with the identity/contiguous table it should match exactly.",
+          "identity_len100_mismatched_tokens": 0,
+          "identity_len100_total_tokens": 400,
+          "identity_len128_mismatched_tokens": 0,
+          "identity_len128_total_tokens": 512,
+          "identity_max_abs_err": 0.0,
+          "json_parse_error": null,
+          "json_result": {
+            "block_table_permutation_sample": [],
+            "identity_len100": {
+              "exact_match_all": true,
+              "frac_tokens_wrong": 0.0,
+              "max_abs_err": 0.0,
+              "mismatched_tokens": 0,
+              "shape_ok": true,
+              "total_tokens": 400
+            },
+            "identity_len128": {
+              "exact_match_all": true,
+              "frac_tokens_wrong": 0.0,
+              "max_abs_err": 0.0,
+              "mismatched_tokens": 0,
+              "shape_ok": true,
+              "total_tokens": 512
+            },
+            "permutation_len100": {
+              "exact_match_all": false,
+              "frac_tokens_wrong": 0.96,
+              "max_abs_err": 6.279704570770264,
+              "mismatched_tokens": 384,
+              "shape_ok": true,
+              "total_tokens": 400
+            },
+            "permutation_len128": {
+              "exact_match_all": false,
+              "frac_tokens_wrong": 0.9688,
+              "max_abs_err": 6.279704570770264,
+              "mismatched_tokens": 496,
+              "shape_ok": true,
+              "total_tokens": 512
+            }
+          },
+          "metric": "bit-exact equality vs kv_cache[block_table[s,t//PS], t%PS]",
+          "oob_possible": false,
+          "permutation_len100_frac_wrong": 0.96,
+          "permutation_len100_mismatched_tokens": 384,
+          "permutation_len100_total_tokens": 400,
+          "permutation_len128_frac_wrong": 0.9688,
+          "permutation_len128_mismatched_tokens": 496,
+          "permutation_len128_total_tokens": 512,
+          "permutation_max_abs_err": 6.279704570770264,
+          "shape_ok_all_cases": true,
+          "stderr": "",
+          "stdout": "{\"identity_len128\": {\"shape_ok\": true, \"exact_match_all\": true, \"mismatched_tokens\": 0, \"total_tokens\": 512, \"frac_tokens_wrong\": 0.0, \"max_abs_err\": 0.0}, \"identity_len100\": {\"shape_ok\": true, \"exact_match_all\": true, \"mismatched_tokens\": 0, \"total_tokens\": 400, \"frac_tokens_wrong\": 0.0, \"max_abs_err\": 0.0}, \"permutation_len128\": {\"shape_ok\": true, \"exact_match_all\": false, \"mismatched_tokens\": 496, \"total_tokens\": 512, \"frac_tokens_wrong\": 0.9688, \"max_abs_err\": 6.279704570770264}, \"permutation_len100\": {\"shape_ok\": true, \"exact_match_all\": false, \"mismatched_tokens\": 384, \"total_tokens\": 400, \"frac_tokens_wrong\": 0.96, \"max_abs_err\": 6.279704570770264}, \"block_table_permutation_sample\": []}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Bit-exact gather comparison with num_pages=32==num_seqs*max_blocks (no OOB possible). With the contiguous/identity block table the kernel matches the reference exactly (0/512 and 0/400 tokens wrong), but with a random permutation block table \u2014 explicitly admitted by problem.txt (\"the block table may map any sequence to any physical page\") \u2014 496/512 tokens (96.9%) are wrong at seq_len=128 and 384/400 (96.0%) at seq_len=100, max abs err 6.28. This is the signature of block_table being ignored: correct only for the one mapping that coincides with physical = seq*max_blocks + logical_block. Shapes are correct in all cases.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The kernel body contains no tl.load from BlockTable; the physical page index is synthesized arithmetically from program ids. That hardcodes an identity/contiguous page allocation, which the problem explicitly says does not hold (\"physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences\").",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Specifies result[s, t] = kv_cache[block_table[s, t // page_size], t % page_size] and states the input domain allows the block table to map any sequence to any physical page, with pages interleaved across sequences."
+      },
+      {
+        "source": "kernel.py:7,15",
+        "summary": "BlockTable is a kernel parameter but is never loaded; physical page is computed as seq*max_blocks + logical_block."
+      }
+    ],
+    "scope_rationale": "problem.txt is the only contract source (no test.py) and it states the output formula requires indexing through block_table, and explicitly widens the input domain: \"the block table may map any sequence to any physical page\". A random permutation table with num_pages == num_seqs*max_blocks is therefore an admitted, indeed typical, input; it keeps all page ids in range so no out-of-bounds confound is introduced. Metric is bit-exact equality (pure data movement, no arithmetic).",
+    "statement": "paged_gather ignores block_table entirely (the BlockTable pointer is never dereferenced; kernel.py:15 computes physical = seq*max_blocks + logical_block), so for any block table other than the exact contiguous mapping block_table[s,b] == s*max_blocks + b, the output rows differ from the reference kv_cache[block_table[s, t//page_size], t % page_size]. Concretely, with num_seqs=4, max_blocks=8, page_size=16, head_dim=64, num_pages=32 and block_table a random permutation of 0..31 reshaped to (4,8) (int32), the returned tensor should be bit-exactly unequal to the reference for a large fraction of tokens.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T16:32:41Z"
+  },
+  {
+    "created_at": "2026-09-08T16:30:57Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T16:32:41Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "b334646430d42ab95ad1cd7629e07cd483909530ab1c049b8be29fe82bf7cb3d"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "d5a68107acd29d2cb1ad94a71dacf2dd113f02e58994b7d3f4cbfd56567a8e64"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "2db32ce22fd21c12c6b6832425cf61374da33730238e4fedc903ff91f6655711"
+            }
+          ],
+          "block_table_max_entry": 15,
+          "child_returncode": 0,
+          "confound": "mismatch also predicted by c1 (block_table ignored), so mismatch alone does not evidence an OOB read",
+          "cuda_error": null,
+          "duration_s": 5.940723,
+          "exit_code": 0,
+          "expected_signal": "With num_pages=16 < num_seqs*max_blocks=32 and every block_table entry < 16 (all legal page ids), the kernel synthesizes page indices up to 31 and should either raise a CUDA illegal memory access / device assert or return garbage far off the reference. Run inside a subprocess so a fatal CUDA fault is captured.",
+          "json_parse_error": null,
+          "json_result": {
+            "block_table_max": 15,
+            "child_returncode": 0,
+            "child_stderr_tail": "",
+            "cuda_error": null,
+            "exact_match_all": false,
+            "launched": "ok",
+            "max_abs_err": 7.093972206115723,
+            "mismatched_tokens": 496,
+            "nonfinite_out": 0,
+            "num_pages": 16,
+            "seq_max_physical_touched": 31,
+            "total_tokens": 512
+          },
+          "max_abs_err": 7.093972206115723,
+          "max_synthesized_physical_index": 31,
+          "mismatched_tokens": 496,
+          "nonfinite_out": 0,
+          "num_pages": 16,
+          "num_seqs_x_max_blocks": 32,
+          "stderr": "",
+          "stdout": "{\"num_pages\": 16, \"seq_max_physical_touched\": 31, \"block_table_max\": 15, \"launched\": \"ok\", \"cuda_error\": null, \"exact_match_all\": false, \"mismatched_tokens\": 496, \"total_tokens\": 512, \"max_abs_err\": 7.093972206115723, \"nonfinite_out\": 0, \"child_returncode\": 0, \"child_stderr_tail\": \"\"}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "total_tokens": 512
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Oversubscribed pool (num_pages=16 &lt; num_seqs*max_blocks=32, all block_table entries &lt;=15) ran to completion with no CUDA error (child returncode 0, empty stderr) and produced 496/512 wrong tokens, max abs err 7.09, no non-finite values. The wrong-output signal does not discriminate c2 from c1: with block_table ignored the output would be wrong for this table even if every synthesized index were in bounds. No crash and no value-level proof that memory past kv_cache's 16 pages was actually read, so the out-of-bounds mechanism itself remains untested. Follow-up probe launched using a sentinel backing buffer and a far-out-of-range index configuration.",
+        "supports": "inconclusive",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "There is no bounds check on the synthesized page index and no mask on tl.load/tl.store; the wrapper never compares num_seqs*max_blocks against num_pages, so an oversubscribed page pool (the realistic paged-cache configuration) walks off the allocation.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Declares kv_cache as [num_pages, page_size, head_dim] with pages allocated on demand and interleaved across sequences; imposes no requirement that num_pages >= num_seqs*max_blocks."
+      },
+      {
+        "source": "kernel.py:15-19",
+        "summary": "physical index is derived from program ids with no clamp/mask, and tl.load/tl.store are issued without a validity mask."
+      }
+    ],
+    "scope_rationale": "problem.txt places no coupling between num_pages and num_seqs*max_blocks, and states pages are \"allocated on demand\" and shared/interleaved among sequences, which implies a page pool that need not be as large as num_seqs*max_blocks. Every block_table entry in the described case is a legal page id (< num_pages), so the input is fully inside the stated contract; only the kernel's synthesized index leaves bounds. Metric: bit-exact mismatch versus reference, plus any CUDA error surfaced after torch.cuda.synchronize().",
+    "statement": "Because physical = seq*max_blocks + logical_block is unmasked and unclamped (kernel.py:15-19), whenever num_pages < num_seqs*max_blocks the kernel reads past the end of kv_cache: e.g. num_pages=16, num_seqs=4, max_blocks=8, page_size=16, head_dim=64 with a valid int32 block table whose entries are all < 16 will address pages up to index 31, producing garbage data or a CUDA illegal-memory-access / device-side assert rather than the reference result.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-08T16:32:41Z"
+  }
+]

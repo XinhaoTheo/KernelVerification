@@ -1,0 +1,103 @@
+[
+  {
+    "created_at": "2026-09-08T14:48:20Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:48:52Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "264a6580843f2fd55d7d97bd1ad550c924c4e6a3864d851d083fa5065a56c946"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "fec3e16ac1e36ff3bce08ad6fe6dbefea3d80f9d7a9109b0d5235f3711c697bc"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 6.677586,
+          "exit_code": 0,
+          "expected_signal": "For n_cols=100/65/200, output tail columns all zero while reference is nonzero -> confirms c1. For multiples of 64, near-zero error.",
+          "head_max_abs_err_all_cases": 0.0,
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "n_cols_100_max_abs_err": 3.12982439994812,
+          "n_cols_100_tail_all_zero": true,
+          "n_cols_128_max_abs_err": 0.0,
+          "n_cols_200_max_abs_err": 1.3475325107574463,
+          "n_cols_200_tail_all_zero": true,
+          "n_cols_64_max_abs_err": 0.0,
+          "n_cols_65_max_abs_err": 0.8738067150115967,
+          "n_cols_65_tail_all_zero": true,
+          "stderr": "",
+          "stdout": "{\n \"100\": {\n  \"max_abs_err\": 3.12982439994812,\n  \"tail_cols\": 36,\n  \"tail_out_all_zero\": true,\n  \"tail_ref_absmax\": 3.12982439994812,\n  \"head_max_abs_err\": 0.0\n },\n \"128\": {\n  \"max_abs_err\": 0.0,\n  \"tail_cols\": 0,\n  \"tail_out_all_zero\": null,\n  \"tail_ref_absmax\": null,\n  \"head_max_abs_err\": 0.0\n },\n \"64\": {\n  \"max_abs_err\": 0.0,\n  \"tail_cols\": 0,\n  \"tail_out_all_zero\": null,\n  \"tail_ref_absmax\": null,\n  \"head_max_abs_err\": 0.0\n },\n \"65\": {\n  \"max_abs_err\": 0.8738067150115967,\n  \"tail_cols\": 1,\n  \"tail_out_all_zero\": true,\n  \"tail_ref_absmax\": 0.8738067150115967,\n  \"head_max_abs_err\": 0.0\n },\n \"200\": {\n  \"max_abs_err\": 1.3475325107574463,\n  \"tail_cols\": 8,\n  \"tail_out_all_zero\": true,\n  \"tail_ref_absmax\": 1.3475325107574463,\n  \"head_max_abs_err\": 0.0\n }\n}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t7 compared group_quant_dequant against a per-group reference that handles a shorter trailing group. For n_cols=100 (36 tail cols), 65 (1 tail col) and 200 (8 tail cols) with group_size=64, every tail column of the kernel output is exactly 0 while the reference tail has nonzero magnitudes (max |ref| = 3.1298, 0.8738, 1.3475 respectively), giving max abs errors equal to those magnitudes. Columns inside complete groups match bit-exactly (head_max_abs_err = 0.0), and n_cols=64/128 match exactly. This is exactly the truncation of n_groups = n_cols // GROUP leaving zeros_like output untouched.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Line 12 computes n_groups by integer division and the loop at line 14 only covers full groups; out is initialized with torch.zeros_like, so tail columns are never written.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Input domain paragraph requires handling n_cols not a multiple of group_size, with the trailing shorter group getting its own scale."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "'Every column of the input must be quantized under the scale of the group it belongs to.'"
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly declares the input domain: n_cols may be any positive integer, is NOT required to be a multiple of group_size, and the trailing columns \"form a shorter final group, which is still a group with its own scale\". A representative admitted input is n_cols=100 with group_size=64.",
+    "statement": "When n_cols is not a multiple of group_size, group_quant_dequant leaves the trailing partial-group columns as zeros instead of quantizing them under their own group scale (loop bound n_groups = n_cols // GROUP truncates).",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:48:52Z"
+  },
+  {
+    "created_at": "2026-09-08T14:48:20Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:48:52Z",
+        "data": {
+          "contract_tiebreak_specified": false,
+          "kernel_rounding": "floor(x/scale + 0.5)",
+          "observed_head_max_abs_err": 0.0,
+          "reference_rounding": "torch.round (half-to-even)"
+        },
+        "id": "c2.e1",
+        "kind": "source_inspection",
+        "summary": "kernel.py line 20 uses tl.floor(x / scale + 0.5), i.e. round-half-up, whereas torch.round is round-half-to-even. problem.txt only says \"round(x / scale)\" without specifying a tie-break rule, and exact half-way quotients are measure-zero on the randn-style inputs the contract admits; probe t7 showed head (complete-group) columns matching torch.round bit-exactly (max abs err 0.0) across n_cols in {64,65,100,128,200}, so no rounding divergence was observed in practice. Not decisive either way.",
+        "supports": "inconclusive",
+        "tool_event_id": null
+      }
+    ],
+    "id": "c2",
+    "raised_by": "solo",
+    "rationale": "Line 20 uses floor(x/s+0.5), which is round-half-up rather than round-half-away-from-zero or banker's rounding.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt says 'round' without specifying tie-break; exact half-way values are measure-zero on typical float inputs, so this may be an unspecified detail.",
+    "statement": "Rounding via tl.floor(x/scale + 0.5) differs from the contract's round() for negative half-way values (rounds -0.5 to 0 instead of away from zero / to even), causing per-element mismatch.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-08T14:48:55Z"
+  }
+]

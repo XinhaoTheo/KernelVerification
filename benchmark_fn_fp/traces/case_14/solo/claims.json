@@ -1,0 +1,78 @@
+[
+  {
+    "created_at": "2026-09-08T14:48:11Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:48:43Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "acd90c85249e4a3ab614791b35f451fd6a2e9935fde4e12a54e6ce051408d5bb"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "93f2f3836dbf1263ef893a9d4ed854789122e72209fbada0d4e4d790c6f77120"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 6.015919,
+          "exit_code": 0,
+          "expected_signal": "If the claim holds, kernel output differs greatly from contract reference; large-magnitude rows saturate at 4.0 and small rows quantize to zero.",
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "large_row": {
+            "kernel_scale": 0.031496,
+            "max_abs_err": 26.269,
+            "n_clipped": 180,
+            "ref_scale": 0.238338
+          },
+          "randn_128x256": {
+            "kernel_out_max": 4.0,
+            "max_abs_err": 0.2301,
+            "n_clipped": 2,
+            "ref_out_max": 4.2301
+          },
+          "small_row": {
+            "kernel_scale": 0.000248,
+            "max_rel_err": 1.0,
+            "ref_scale": 0.0002003
+          },
+          "stderr": "",
+          "stdout": "{\n  \"randn_128x256\": {\n    \"max_abs_err\": 0.2301182746887207,\n    \"max_rel_err\": 0.9999999403953552,\n    \"kernel_scale_first\": 0.026040052995085716,\n    \"ref_scale_first\": 0.026107460260391235,\n    \"n_clipped\": 2,\n    \"max_absx\": 4.230118274688721,\n    \"kernel_out_max\": 4.0,\n    \"ref_out_max\": 4.230118274688721\n  },\n  \"large_row\": {\n    \"max_abs_err\": 26.268957138061523,\n    \"max_rel_err\": 94488192.0,\n    \"kernel_scale_first\": 0.031496062874794006,\n    \"ref_scale_first\": 0.23833824694156647,\n    \"n_clipped\": 180,\n    \"max_absx\": 30.268957138061523,\n    \"kernel_out_max\": 4.0,\n    \"ref_out_max\": 30.268957138061523\n  },\n  \"small_row\": {\n    \"max_abs_err\": 0.015825485810637474,\n    \"max_rel_err\": 0.9999999403953552,\n    \"kernel_scale_first\": 0.00024800049141049385,\n    \"ref_scale_first\": 0.0002003225963562727,\n    \"n_clipped\": 0,\n    \"max_absx\": 0.03668016940355301,\n    \"kernel_out_max\": 0.031496062874794006,\n    \"ref_out_max\": 0.03668016940355301\n  }\n}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Kernel uses a fixed absmax=4.0 for every row. On randn(128,256) 2 elements exceed 4.0 and are clipped (kernel_out_max=4.0 vs ref_out_max=4.230, max_abs_err=0.230). On a 10x-scaled input 180 elements are clipped, kernel_out_max=4.0 vs ref 30.27, max_abs_err=26.27, and the stored scale is 0.0315 instead of the contract's per-row 0.2383. On a small-magnitude input the kernel scale is 0.000248 vs the contract's 0.000200, giving max_rel_err ~1.0 (values quantized coarsely). This directly violates the contract formula absmax = max(max(|x_row|),1e-10) and the invariant that no value in a row is clipped by its own scale.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Kernel line 19 sets absmax = STALE_ABSMAX unconditionally; there is no row reduction of |x| anywhere in the kernel.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract gives absmax = max(max(|x_row|), 1e-10); scale = absmax/127; q = clamp(round(x/scale),-127,127); out = q*scale, and states no value in a row may be clipped by its own scale."
+      }
+    ],
+    "scope_rationale": "The problem statement explicitly specifies the scale formula per row (\"the scale is per-row and derived from THAT row's own magnitude\") and states the invariant \"no value in the row is clipped by its own scale\". Any input matrix of floats is admitted by the contract; standard randn activations routinely have |x| far from 4.0.",
+    "statement": "quant_dequant_int8 uses a fixed constant absmax (_STALE_ABSMAX=4.0) for every row rather than absmax = max(max(|x_row|), 1e-10), so the per-row scale is wrong and rows containing values with |x| > 4.0 get clipped by their own scale, while rows with small magnitude get coarse quantization.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:48:43Z"
+  }
+]

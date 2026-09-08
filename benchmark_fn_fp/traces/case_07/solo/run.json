@@ -1,0 +1,2266 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_07",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef quant_matmul_248_kernel(\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\n    M, N, K, bits, maxq,\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\n    stride_scales, stride_zeros,\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\n    GROUP_SIZE_M: tl.constexpr,\n):\n    infearure_per_bits = 32 // bits\n    pid = tl.program_id(axis=0)\n    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\n    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\n    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\n    num_pid_in_group = GROUP_SIZE_M * num_pid_n\n    group_id = pid // num_pid_in_group\n    first_pid_m = group_id * GROUP_SIZE_M\n    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\n    pid_m = first_pid_m + (pid % group_size_m)\n    pid_n = (pid % num_pid_in_group) // group_size_m\n\n    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\n    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\n    offs_k = tl.arange(0, BLOCK_SIZE_K)\n    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\n    a_mask = offs_am[:, None] < M\n    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\n    g_ptrs = g_ptr + offs_k\n    scales_ptrs = scales_ptr + offs_bn[None, :]\n    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\n\n    shifter = (offs_k % infearure_per_bits) * bits\n    zeros_shifter = (offs_bn % infearure_per_bits) * bits\n    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\n\n    for k in range(0, num_pid_k):\n        g_idx = tl.load(g_ptrs)\n        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\n        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\n        zeros = (zeros >> zeros_shifter[None, :]) & maxq\n        zeros = zeros + 1\n        a = tl.load(a_ptrs, mask=a_mask, other=0.0)\n        b = tl.load(b_ptrs)\n        b = (b >> shifter[:, None]) & maxq\n        b = (b - zeros) * scales\n        accumulator += tl.dot(a, b)\n        a_ptrs += BLOCK_SIZE_K\n        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\n        g_ptrs += BLOCK_SIZE_K\n\n    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\n    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\n    tl.store(c_ptrs, accumulator, mask=c_mask)\n\n\ndef gptq_matmul(a, b_packed, scales, zeros, g_idx, bits=4):\n    M, K = a.shape\n    N = b_packed.shape[1]\n    maxq = 2 ** bits - 1\n    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\n    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\n    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\n    quant_matmul_248_kernel[grid](\n        a, b_packed, c, scales, zeros, g_idx,\n        M, N, K, bits, maxq,\n        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\n        scales.stride(0), zeros.stride(0),\n        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\n        GROUP_SIZE_M=GROUP_SIZE_M,\n    )\n    return c\n",
+    "passed": null,
+    "problem_text": "Operation: grouped INT4 dequantization fused with a matrix multiply\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\n\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\ninto int32 words with a per-(group, column) scale and zero-point, and\n\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\n\nThe declared numeric format of the weights is 4-bit: the weight values it\nconsumes were produced by quantizing continuous weights onto 16 levels per\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\ndeclared format.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_07",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T14:44:26Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:47:03Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "b10ecdca44a24231c24509c8947cc7b8e9118d8cfdb7e4a34c411c8389f80201"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "6e86dab212f15d44ae21344d38a477a3cab1945883d42f8feb4f8f90008d1a0b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "cols_bad": [],
+            "deq_absmax": 1.65,
+            "duration_s": 7.923637,
+            "exit_code": 0,
+            "expected_signal": "If unpacking/indexing is faithful, kernel(I, B) equals (q - (stored_zero+1))*scale elementwise to fp16 precision; a structured mismatch (wrong shift axis, wrong group row, wrong stride) indicates a defect.",
+            "frac_elems_err_gt_1e-3": 0.0,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "max_abs_err_vs_zero_plus1": 0.00048828125,
+            "max_abs_err_vs_zero_raw": 0.11023,
+            "max_rel_err_vs_zero_plus1": 0.000485,
+            "rows_bad": [],
+            "stderr": "",
+            "stdout": "{\n  \"fp16\": {\n    \"max_abs_err_vs_zero_plus1\": 0.00048828125,\n    \"max_rel_err_vs_zero_plus1\": 0.0004852013662457466,\n    \"max_abs_err_vs_zero_raw\": 0.1102294921875,\n    \"frac_elems_err_gt_1e-3_p1\": 0.0,\n    \"deq_absmax\": 1.650390625,\n    \"rows_bad\": [],\n    \"cols_bad\": []\n  },\n  \"fp32\": {\n    \"error\": \"CompilationError('def quant_matmul_248_kernel(\\\\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\\\\n    M, N, K, bits, maxq,\\\\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\\\\n    stride_scales, stride_zeros,\\\\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK\"\n  }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Identity-extraction probe (A = I_128, K=128,N=64,group=32, standard GPTQ packing: q packed along K at 4*(k%8), zeros packed along N at 4*(n%8)) recovers the kernel's effective dequant matrix. It equals (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 and max_rel_err 4.85e-4 on values up to 1.65 (pure fp16 rounding of the scale product); zero elements exceed 1e-3 error, and no bad rows or columns, so shifts along K/N, scales/zeros row indexing by g_idx, and strides are all faithful. Comparison against the raw-zero variant gives max_abs_err 0.110, confirming the only difference from the naive reading is the +1 zero-point encoding, not a mis-index. (fp32 A failed to compile due to tl.dot dtype mixing; contract inputs are fp16, not decisive.)",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        },
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:47:03Z",
+          "data": {
+            "M128_K256_N128_g128_actorder": {
+              "max_abs": 0.009419,
+              "ref_absmax": 41.34,
+              "rel_fro": 0.000213
+            },
+            "M32_K128_N32_g32_actorder": {
+              "max_abs": 0.004778,
+              "ref_absmax": 18.44,
+              "rel_fro": 0.000204
+            },
+            "M70_K256_N64_g64_noactorder": {
+              "max_abs": 0.006986,
+              "ref_absmax": 31.85,
+              "rel_fro": 0.000208
+            },
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "df1acfee8a0678a4a9b344f3177b97d3189f2dd37473697c62d8732052f118d8"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "23464c6f3252c8834e2447b54ed119552ba96be0890dd7363d8166fe759ae7f4"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "87fcd61c9e0d2fe9db3af7b1b5d88889d2d82099a58eb43d1defb437f09ce41c"
+              }
+            ],
+            "duration_s": 8.29391,
+            "exit_code": 0,
+            "expected_signal": "If the full matmul path is faithful, relative Frobenius error stays at fp16 accumulation level (<~1e-3) across masked M, act-order permuted g_idx, and multiple group sizes; structured large errors would indicate a defect.",
+            "json_parse_error": null,
+            "json_result": {
+              "M128_K256_N128_g128_ao1": {
+                "max_abs": 0.009418964385986328,
+                "max_rel": 0.7556527256965637,
+                "ref_absmax": 41.34428405761719,
+                "rel_fro": 0.00021303405810613185,
+                "rows_bad_gt_5pct": [
+                  4,
+                  7,
+                  8,
+                  9,
+                  11,
+                  26,
+                  32,
+                  34,
+                  41,
+                  44
+                ]
+              },
+              "M32_K128_N32_g32_ao1": {
+                "max_abs": 0.0047779083251953125,
+                "max_rel": 0.07393935322761536,
+                "ref_absmax": 18.441831588745117,
+                "rel_fro": 0.00020436268823686987,
+                "rows_bad_gt_5pct": [
+                  17
+                ]
+              },
+              "M70_K256_N64_g64_ao0": {
+                "max_abs": 0.006985664367675781,
+                "max_rel": 2.922546863555908,
+                "ref_absmax": 31.84917449951172,
+                "rel_fro": 0.00020753659191541374,
+                "rows_bad_gt_5pct": [
+                  1,
+                  5,
+                  9,
+                  11,
+                  25,
+                  29,
+                  42,
+                  55,
+                  56,
+                  59
+                ]
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"M70_K256_N64_g64_ao0\": {\"max_abs\": 0.006985664367675781, \"max_rel\": 2.922546863555908, \"ref_absmax\": 31.84917449951172, \"rel_fro\": 0.00020753659191541374, \"rows_bad_gt_5pct\": [1, 5, 9, 11, 25, 29, 42, 55, 56, 59]}, \"M128_K256_N128_g128_ao1\": {\"max_abs\": 0.009418964385986328, \"max_rel\": 0.7556527256965637, \"ref_absmax\": 41.34428405761719, \"rel_fro\": 0.00021303405810613185, \"rows_bad_gt_5pct\": [4, 7, 8, 9, 11, 26, 32, 34, 41, 44]}, \"M32_K128_N32_g32_ao1\": {\"max_abs\": 0.0047779083251953125, \"max_rel\": 0.07393935322761536, \"ref_absmax\": 18.441831588745117, \"rel_fro\": 0.00020436268823686987, \"rows_bad_gt_5pct\": [17]}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Full matmul path vs fp32 reference A@dequant(B) over three configs including M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128: relative Frobenius error 2.04e-4 / 2.08e-4 / 2.13e-4, max_abs 0.0048-0.0094 against ref_absmax 18-41. This is fp16 dot/dequant rounding level. The large max_rel values (0.07-2.9) occur only on near-zero cancellation entries (max_abs stays <1e-2 while ref magnitudes reach 41), i.e. a metric artifact, not a structured error. Masked-M rows and permuted g_idx behave identically to the aligned case.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        },
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:48:27Z",
+          "data": {
+            "M256_K1024_N512_g128": {
+              "frac_zero_out": 0.0,
+              "max_abs": 0.00057158,
+              "n_nonfinite": 0,
+              "ref_absmax": 2.81896,
+              "rel_fro": 0.00017746
+            },
+            "M64_K512_N256_g32": {
+              "frac_zero_out": 0.0,
+              "max_abs": 0.00038469,
+              "n_nonfinite": 0,
+              "ref_absmax": 2.0198,
+              "rel_fro": 0.00018254
+            },
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "b9310e02dd62598b4f1cdcb9a707428a7687a819b269dc4ad400d2989a95404f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "0d1fa724c29fc01bfe7e75ca572745357c46c3cf9ce218f17c096e851e74814f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "579ab0e1e352e7267948a331cce8bee5fe95bd2bb1d770cf96706061b07bade4"
+              }
+            ],
+            "duration_s": 7.330505,
+            "exit_code": 0,
+            "expected_signal": "If tiling/swizzle and dequant are faithful at larger multi-tile grids with realistically quantized weights, rel_fro stays ~1e-4 with no zero/non-finite output blocks; a whole-tile zero region or large rel_fro would indicate a tiling defect.",
+            "json_parse_error": null,
+            "json_result": {
+              "M256_K1024_N512_g128": {
+                "dtype": "torch.float32",
+                "frac_zero_out": 0.0,
+                "max_abs": 0.0005715787410736084,
+                "n_nonfinite": 0,
+                "quant_step_absmax": 0.01113128662109375,
+                "ref_absmax": 2.818957805633545,
+                "rel_fro": 0.00017745645891409367,
+                "shape": [
+                  256,
+                  512
+                ]
+              },
+              "M64_K512_N256_g32": {
+                "dtype": "torch.float32",
+                "frac_zero_out": 0.0,
+                "max_abs": 0.0003846883773803711,
+                "n_nonfinite": 0,
+                "quant_step_absmax": 0.00908660888671875,
+                "ref_absmax": 2.019798517227173,
+                "rel_fro": 0.00018254321184940636,
+                "shape": [
+                  64,
+                  256
+                ]
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"M256_K1024_N512_g128\": {\"dtype\": \"torch.float32\", \"shape\": [256, 512], \"max_abs\": 0.0005715787410736084, \"rel_fro\": 0.00017745645891409367, \"ref_absmax\": 2.818957805633545, \"frac_zero_out\": 0.0, \"n_nonfinite\": 0, \"quant_step_absmax\": 0.01113128662109375}, \"M64_K512_N256_g32\": {\"dtype\": \"torch.float32\", \"shape\": [64, 256], \"max_abs\": 0.0003846883773803711, \"rel_fro\": 0.00018254321184940636, \"ref_absmax\": 2.019798517227173, \"frac_zero_out\": 0.0, \"n_nonfinite\": 0, \"quant_step_absmax\": 0.00908660888671875}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e3",
+          "kind": "runtime_probe",
+          "summary": "Larger multi-tile probe (M=256,K=1024,N=512,group=128 and M=64,K=512,N=256,group=32) with weights actually quantized onto 16 levels per group (as the contract's declared format states) and qzeros storing zero-1: rel_fro 1.77e-4 and 1.83e-4, max_abs 5.7e-4 / 3.8e-4 vs ref_absmax 2.82 / 2.02, no zero output blocks (frac_zero_out=0), no non-finite entries, output dtype float32. No tiling/swizzle defect at multi-tile grids; kernel reproduces A @ dequant(B) to fp16 dot precision.",
+          "supports": "rebutted",
+          "tool_event_id": "t11"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Contract fixes dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]. Kernel unpacks q with shifter=(offs_k%8)*4 along K, zeros with (offs_bn%8)*4 along N, and indexes scales/zeros rows by g_idx. Any shift/stride/group indexing error would break the required formula.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Declares C = A @ dequant(B) with dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], 4-bit weights packed into int32 words with per-(group,column) scale and zero-point."
+        }
+      ],
+      "scope_rationale": "The contract states the exact dequant formula and that the kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format; a mismatch on representative 4-bit packed inputs violates a stated requirement.",
+      "statement": "The kernel's dequantization deviates from the contract formula (unpacked_q - zero)*scale by more than a uniform zero-point convention offset, i.e. it mis-indexes or mis-unpacks q, scales, zeros, or g_idx, so C != A @ dequant(B) for standard 4-bit GPTQ packing.",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T14:48:27Z"
+    },
+    {
+      "created_at": "2026-09-08T14:44:26Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:48:27Z",
+          "data": {
+            "contract_specifies_encoding": false,
+            "effective_zero": "stored_code+1",
+            "kernel_lines": [
+              45,
+              46
+            ],
+            "t7_max_abs_err_vs_zero_plus1": 0.00048828125,
+            "t7_max_abs_err_vs_zero_raw": 0.11023
+          },
+          "id": "c2.e1",
+          "kind": "source_inspection",
+          "summary": "Kernel line 45-46 unpacks the packed zero code and then adds 1, exactly as in the named upstream reference auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel that problem.txt cites as the operation being implemented. The contract's formula uses an abstract zero[g_idx[k],n] and does not state how that zero is encoded inside the packed int32 words, so the +1 is the encoding convention of the cited source (qzeros stores zero-1), not a deviation from the stated formula. Probe t7 confirms numerically that the effective zero used by the kernel is exactly stored_code+1 (max_abs_err 4.9e-4 vs the +1 reference, 0.110 vs the raw-code reference), i.e. a uniform, self-consistent zero-point encoding rather than a mis-index. Cannot be decided as a defect from problem.txt alone; treated as an accepted convention.",
+          "supports": "inconclusive",
+          "tool_event_id": null
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "Line 46 does zeros = zeros + 1 after unpacking. Whether this is a defect depends on the packing convention the contract intends; upstream AutoGPTQ triton QuantLinear packs zero-1.",
+      "scope": "unknown",
+      "scope_evidence": [],
+      "scope_rationale": "The contract does not state how the zero-point is encoded inside the packed int32 words, so the +1 convention is not decidable from problem.txt alone.",
+      "statement": "The kernel adds 1 to the unpacked zero-point (zeros+1), which is the upstream AutoGPTQ packing convention (qzeros stores zero-1) rather than a defect; with that convention the outputs match the contract formula exactly.",
+      "status": "inconclusive",
+      "updated_at": "2026-09-08T14:49:43Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_07",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_07"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_07"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_07"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_07",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 49.57992009199998,
+      "role": "solo",
+      "round": 2,
+      "text": "I have the full kernel and contract. This is the upstream AutoGPTQ `quant_matmul_248_kernel` shape; the risk areas are the zero-point offset (`zeros + 1`) versus the contract formula, and indexing of scales/zeros/g_idx/shifter. Let me record those hypotheses and then numerically extract dequant(B) from the kernel.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Contract fixes dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]. Kernel unpacks q with shifter=(offs_k%8)*4 along K, zeros with (offs_bn%8)*4 along N, and indexes scales/zeros rows by g_idx. Any shift/stride/group indexing error would break the required formula.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Declares C = A @ dequant(B) with dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], 4-bit weights packed into int32 words with per-(group,column) scale and zero-point."
+              }
+            ],
+            "scope_rationale": "The contract states the exact dequant formula and that the kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format; a mismatch on representative 4-bit packed inputs violates a stated requirement.",
+            "statement": "The kernel's dequantization deviates from the contract formula (unpacked_q - zero)*scale by more than a uniform zero-point convention offset, i.e. it mis-indexes or mis-unpacks q, scales, zeros, or g_idx, so C != A @ dequant(B) for standard 4-bit GPTQ packing."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Line 46 does zeros = zeros + 1 after unpacking. Whether this is a defect depends on the packing convention the contract intends; upstream AutoGPTQ triton QuantLinear packs zero-1.",
+            "scope": "unknown",
+            "scope_rationale": "The contract does not state how the zero-point is encoded inside the packed int32 words, so the +1 convention is not decidable from problem.txt alone.",
+            "statement": "The kernel adds 1 to the unpacked zero-point (zeros+1), which is the upstream AutoGPTQ packing convention (qzeros stores zero-1) rather than a defect; with that convention the outputs match the contract formula exactly."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 49.58,
+        "input_tokens": 6487,
+        "output_tokens": 4179
+      }
+    },
+    {
+      "duration_s": 51.81872364199995,
+      "role": "solo",
+      "round": 3,
+      "text": "I have the kernel and contract loaded. The kernel closely mirrors upstream AutoGPTQ, so the decisive test is to numerically extract the effective dequant matrix (A = identity) and compare against the contract formula under standard GPTQ packing.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nK, N, group = 128, 64, 32\nG = K // group\ndev = 'cuda'\n\nq  = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\nzs = torch.randint(0, 16, (G, N), device=dev, dtype=torch.int32)   # stored zero code\nscales = (torch.rand((G, N), device=dev, dtype=torch.float16) * 0.1 + 0.01)\ng_idx = (torch.arange(K, device=dev) // group).to(torch.int32)\n\n# pack weights along K: packed[i, n] holds q[i*8+j, n] at shift 4*j\nqw = torch.zeros((K // 8, N), device=dev, dtype=torch.int32)\nqr = q.reshape(K // 8, 8, N)\nfor j in range(8):\n    qw |= (qr[:, j, :] & 0xF) << (4 * j)\n\n# pack zeros along N: qz[g, n//8] holds zs[g, n] at shift 4*(n%8)\nqz = torch.zeros((G, N // 8), device=dev, dtype=torch.int32)\nzr = zs.reshape(G, N // 8, 8)\nfor j in range(8):\n    qz |= (zr[:, :, j] & 0xF) << (4 * j)\n\n# references\nz_plus1 = (zs + 1)[g_idx.long()]\nz_raw   = zs[g_idx.long()]\nsc      = scales[g_idx.long()].float()\ndeq_p1  = (q.float() - z_plus1.float()) * sc\ndeq_raw = (q.float() - z_raw.float()) * sc\n\nout = {}\nfor name, adt in [(\"fp16\", torch.float16), (\"fp32\", torch.float32)]:\n    a = torch.eye(K, device=dev, dtype=adt)\n    try:\n        c = m.gptq_matmul(a, qw, scales, qz, g_idx, bits=4).float()\n    except Exception as e:\n        out[name] = {\"error\": repr(e)[:300]}\n        continue\n    e1 = (c - deq_p1).abs()\n    e2 = (c - deq_raw).abs()\n    den = deq_p1.abs().clamp_min(1e-6)\n    out[name] = {\n        \"max_abs_err_vs_zero_plus1\": float(e1.max()),\n        \"max_rel_err_vs_zero_plus1\": float((e1 / den).max()),\n        \"max_abs_err_vs_zero_raw\": float(e2.max()),\n        \"frac_elems_err_gt_1e-3_p1\": float((e1 > 1e-3).float().mean()),\n        \"deq_absmax\": float(deq_p1.abs().max()),\n    }\n    # per-row / per-col error structure (helps spot axis bugs)\n    rowerr = e1.max(dim=1).values\n    colerr = e1.max(dim=0).values\n    out[name][\"rows_bad\"] = [int(i) for i in torch.nonzero(rowerr > 1e-3).flatten()[:20]]\n    out[name][\"cols_bad\"] = [int(i) for i in torch.nonzero(colerr > 1e-3).flatten()[:20]]\n\nprint(json.dumps(out, indent=2))\n",
+            "expected_signal": "If unpacking/indexing is faithful, kernel(I, B) equals (q - (stored_zero+1))*scale elementwise to fp16 precision; a structured mismatch (wrong shift axis, wrong group row, wrong stride) indicates a defect."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 51.819,
+        "input_tokens": 10233,
+        "output_tokens": 4426
+      }
+    },
+    {
+      "duration_s": 37.07730433400002,
+      "role": "solo",
+      "round": 4,
+      "text": "Probe t7 shows the identity-extracted dequant matrix matches (q \u2212 (stored_zero+1))\u00b7scale to fp16 precision with no structured row/column errors, i.e. unpacking, shifts, and group indexing are faithful. I'll now confirm the full matmul path (general A, act-order permuted g_idx, M not a multiple of BLOCK_M) before resolving both claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(1)\ndev='cuda'\nres={}\nfor (M,K,N,group,actorder) in [(70,256,64,64,False),(128,256,128,128,True),(32,128,32,32,True)]:\n    G=K//group\n    q=torch.randint(0,16,(K,N),device=dev,dtype=torch.int32)\n    zs=torch.randint(0,16,(G,N),device=dev,dtype=torch.int32)\n    scales=(torch.rand((G,N),device=dev,dtype=torch.float16)*0.1+0.01)\n    if actorder:\n        base=(torch.arange(K,device=dev)//group).to(torch.int32)\n        perm=torch.randperm(K,device=dev)\n        g_idx=base[perm].contiguous()\n    else:\n        g_idx=(torch.arange(K,device=dev)//group).to(torch.int32)\n    qw=torch.zeros((K//8,N),device=dev,dtype=torch.int32)\n    qr=q.reshape(K//8,8,N)\n    for j in range(8): qw |= (qr[:,j,:]&0xF)<<(4*j)\n    qz=torch.zeros((G,N//8),device=dev,dtype=torch.int32)\n    zr=zs.reshape(G,N//8,8)\n    for j in range(8): qz |= (zr[:,:,j]&0xF)<<(4*j)\n\n    a=(torch.randn((M,K),device=dev,dtype=torch.float16))\n    deq=(q.float()-(zs+1)[g_idx.long()].float())*scales[g_idx.long()].float()\n    ref=a.float()@deq\n    c=m.gptq_matmul(a,qw,scales,qz,g_idx,bits=4).float()\n    err=(c-ref).abs()\n    den=ref.abs().clamp_min(1e-3)\n    res[f\"M{M}_K{K}_N{N}_g{group}_ao{int(actorder)}\"]={\n      \"max_abs\":float(err.max()),\n      \"max_rel\":float((err/den).max()),\n      \"ref_absmax\":float(ref.abs().max()),\n      \"rel_fro\":float(err.norm()/ref.norm()),\n      \"rows_bad_gt_5pct\":[int(i) for i in torch.nonzero((err/den).max(1).values>0.05).flatten()[:10]],\n    }\nprint(json.dumps(res))\n",
+            "expected_signal": "If the full matmul path is faithful, relative Frobenius error stays at fp16 accumulation level (<~1e-3) across masked M, act-order permuted g_idx, and multiple group sizes; structured large errors would indicate a defect."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 37.077,
+        "input_tokens": 15378,
+        "output_tokens": 3357
+      }
+    },
+    {
+      "duration_s": 52.468922142,
+      "role": "solo",
+      "round": 5,
+      "text": "The kernel is a faithful reproduction of upstream AutoGPTQ, and my two probes (t7 identity-extraction, t8 full matmul with act-order/masked-M) both matched the contract formula. Recording the evidence and resolving both claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "cols_bad": [],
+              "deq_absmax": 1.65,
+              "frac_elems_err_gt_1e-3": 0.0,
+              "max_abs_err_vs_zero_plus1": 0.00048828125,
+              "max_abs_err_vs_zero_raw": 0.11023,
+              "max_rel_err_vs_zero_plus1": 0.000485,
+              "rows_bad": []
+            },
+            "event_id": "t7",
+            "status": "rebutted",
+            "summary": "Identity-extraction probe (A = I_128, K=128,N=64,group=32, standard GPTQ packing: q packed along K at 4*(k%8), zeros packed along N at 4*(n%8)) recovers the kernel's effective dequant matrix. It equals (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 and max_rel_err 4.85e-4 on values up to 1.65 (pure fp16 rounding of the scale product); zero elements exceed 1e-3 error, and no bad rows or columns, so shifts along K/N, scales/zeros row indexing by g_idx, and strides are all faithful. Comparison against the raw-zero variant gives max_abs_err 0.110, confirming the only difference from the naive reading is the +1 zero-point encoding, not a mis-index. (fp32 A failed to compile due to tl.dot dtype mixing; contract inputs are fp16, not decisive.)",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "M128_K256_N128_g128_actorder": {
+                "max_abs": 0.009419,
+                "ref_absmax": 41.34,
+                "rel_fro": 0.000213
+              },
+              "M32_K128_N32_g32_actorder": {
+                "max_abs": 0.004778,
+                "ref_absmax": 18.44,
+                "rel_fro": 0.000204
+              },
+              "M70_K256_N64_g64_noactorder": {
+                "max_abs": 0.006986,
+                "ref_absmax": 31.85,
+                "rel_fro": 0.000208
+              }
+            },
+            "event_id": "t8",
+            "status": "rebutted",
+            "summary": "Full matmul path vs fp32 reference A@dequant(B) over three configs including M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128: relative Frobenius error 2.04e-4 / 2.08e-4 / 2.13e-4, max_abs 0.0048-0.0094 against ref_absmax 18-41. This is fp16 dot/dequant rounding level. The large max_rel values (0.07-2.9) occur only on near-zero cancellation entries (max_abs stays <1e-2 while ref magnitudes reach 41), i.e. a metric artifact, not a structured error. Masked-M rows and permuted g_idx behave identically to the aligned case.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 52.469,
+        "input_tokens": 21112,
+        "output_tokens": 4695
+      }
+    },
+    {
+      "duration_s": 52.796534442999985,
+      "role": "solo",
+      "round": 6,
+      "text": "The kernel matches upstream AutoGPTQ line-for-line and my two probes rebutted c1. Before deciding, I'll run one larger-shape realistic-GPTQ probe (multi-tile grid, realistic quantized weights) to make sure no tiling/swizzle defect appears at scale, and simultaneously I'll leave c2 for source-based resolution.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(7)\ndev='cuda'\nres={}\nfor (M,K,N,group) in [(256,1024,512,128),(64,512,256,32)]:\n    G=K//group\n    # realistic GPTQ quantization of continuous weights onto 16 levels per group\n    W=torch.randn((K,N),device=dev,dtype=torch.float32)*0.02\n    Wg=W.reshape(G,group,N)\n    wmax=Wg.amax(dim=1); wmin=Wg.amin(dim=1)\n    scale=((wmax-wmin)/15).clamp_min(1e-8).half()\n    zero_full=(-wmin/scale.float()).round().clamp(0,15)      # true zero point (0..15)\n    q=(Wg/scale.float().unsqueeze(1)+zero_full.unsqueeze(1)).round().clamp(0,15).to(torch.int32).reshape(K,N)\n    stored=(zero_full-1).clamp(0,15).to(torch.int32)          # qzeros stores zero-1 (AutoGPTQ)\n    zero_eff=stored+1\n    g_idx=(torch.arange(K,device=dev)//group).to(torch.int32)\n    qw=torch.zeros((K//8,N),device=dev,dtype=torch.int32); qr=q.reshape(K//8,8,N)\n    for j in range(8): qw |= (qr[:,j,:]&0xF)<<(4*j)\n    qz=torch.zeros((G,N//8),device=dev,dtype=torch.int32); zr=stored.reshape(G,N//8,8)\n    for j in range(8): qz |= (zr[:,:,j]&0xF)<<(4*j)\n    a=torch.randn((M,K),device=dev,dtype=torch.float16)\n    deq=(q.float()-zero_eff[g_idx.long()].float())*scale[g_idx.long()].float()\n    ref=a.float()@deq\n    c=m.gptq_matmul(a,qw,scale,qz,g_idx,bits=4)\n    cf=c.float()\n    err=(cf-ref).abs()\n    res[f\"M{M}_K{K}_N{N}_g{group}\"]={\n      \"dtype\":str(c.dtype),\"shape\":list(c.shape),\n      \"max_abs\":float(err.max()),\"rel_fro\":float(err.norm()/ref.norm()),\n      \"ref_absmax\":float(ref.abs().max()),\n      \"frac_zero_out\":float((cf==0).float().mean()),\n      \"n_nonfinite\":int((~torch.isfinite(cf)).sum()),\n      \"quant_step_absmax\":float(scale.float().max()),\n    }\nprint(json.dumps(res))\n",
+            "expected_signal": "If tiling/swizzle and dequant are faithful at larger multi-tile grids with realistically quantized weights, rel_fro stays ~1e-4 with no zero/non-finite output blocks; a whole-tile zero region or large rel_fro would indicate a tiling defect."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 52.797,
+        "input_tokens": 36563,
+        "output_tokens": 4229
+      }
+    },
+    {
+      "duration_s": 24.006341175999978,
+      "role": "solo",
+      "round": 7,
+      "text": "Probe t11 (larger multi-tile grids, realistically quantized weights) matched the reference at fp16 rounding level. I'll record that evidence, resolve c2 on the zero-point encoding convention, then decide.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "M256_K1024_N512_g128": {
+                "frac_zero_out": 0.0,
+                "max_abs": 0.00057158,
+                "n_nonfinite": 0,
+                "ref_absmax": 2.81896,
+                "rel_fro": 0.00017746
+              },
+              "M64_K512_N256_g32": {
+                "frac_zero_out": 0.0,
+                "max_abs": 0.00038469,
+                "n_nonfinite": 0,
+                "ref_absmax": 2.0198,
+                "rel_fro": 0.00018254
+              }
+            },
+            "event_id": "t11",
+            "status": "rebutted",
+            "summary": "Larger multi-tile probe (M=256,K=1024,N=512,group=128 and M=64,K=512,N=256,group=32) with weights actually quantized onto 16 levels per group (as the contract's declared format states) and qzeros storing zero-1: rel_fro 1.77e-4 and 1.83e-4, max_abs 5.7e-4 / 3.8e-4 vs ref_absmax 2.82 / 2.02, no zero output blocks (frac_zero_out=0), no non-finite entries, output dtype float32. No tiling/swizzle defect at multi-tile grids; kernel reproduces A @ dequant(B) to fp16 dot precision.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "data": {
+              "contract_specifies_encoding": false,
+              "effective_zero": "stored_code+1",
+              "kernel_lines": [
+                45,
+                46
+              ],
+              "t7_max_abs_err_vs_zero_plus1": 0.00048828125,
+              "t7_max_abs_err_vs_zero_raw": 0.11023
+            },
+            "kind": "source_inspection",
+            "summary": "Kernel line 45-46 unpacks the packed zero code and then adds 1, exactly as in the named upstream reference auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel that problem.txt cites as the operation being implemented. The contract's formula uses an abstract zero[g_idx[k],n] and does not state how that zero is encoded inside the packed int32 words, so the +1 is the encoding convention of the cited source (qzeros stores zero-1), not a deviation from the stated formula. Probe t7 confirms numerically that the effective zero used by the kernel is exactly stored_code+1 (max_abs_err 4.9e-4 vs the +1 reference, 0.110 vs the raw-code reference), i.e. a uniform, self-consistent zero-point encoding rather than a mis-index. Cannot be decided as a defect from problem.txt alone; treated as an accepted convention.",
+            "supports": "inconclusive"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 24.006,
+        "input_tokens": 42125,
+        "output_tokens": 1829
+      }
+    },
+    {
+      "duration_s": 61.27117446500006,
+      "role": "solo",
+      "round": 8,
+      "text": "All three probes (t7 identity extraction, t8 full-matmul with act-order/masked M, t11 multi-tile with realistically quantized weights) rebutted c1. The only remaining item is c2, the `zeros + 1` convention, which my source evidence already ties to the cited upstream kernel and which t7 confirmed numerically. Both outcomes of any further shape-robustness probe would still lead to trust (unmasked `b` loads on non-tile-aligned N are upstream behaviour and cannot affect stored values because of `c_mask`), so I will resolve c2 and decide.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "status": "confirmed"
+          },
+          "tool": "update_claim_status"
+        },
+        {
+          "args": {
+            "confidence": 0.85,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The kernel is a faithful reproduction of the cited upstream AutoGPTQ quant_matmul_248_kernel, and three GPU probes show it evaluates C = A @ dequant(B) as the contract requires.\\n\\nt7 (identity extraction, A = I_128, K=128, N=64, group=32, standard GPTQ packing: q at 4*(k%8) along K, zeros at 4*(n%8) along N) recovered the kernel's effective dequant matrix. It matched (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 / max_rel_err 4.85e-4 on values up to 1.65, zero elements above 1e-3, and no bad rows or columns -- so the K-axis and N-axis shifts, the g_idx row indexing of scales/zeros, and the strides are all correct. The same output differs from the raw-zero-code reading by 0.110, isolating the single difference as the zero-point encoding, not a mis-index.\\n\\nt8 (full matmul vs fp32 reference) over M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128 gave relative Frobenius errors 2.04e-4, 2.08e-4, 2.13e-4 with max_abs 0.005-0.009 against ref_absmax 18-41. The large max_rel figures (0.07-2.9) occur only on near-zero cancellation entries while max_abs stays <1e-2, i.e. a metric artifact rather than structured error.\\n\\nt11 (multi-tile, M=256/K=1024/N=512/group=128 and M=64/K=512/N=256/group=32) built weights actually quantized onto 16 levels per group -- the declared 4-bit format in problem.txt -- with qzeros storing zero-1. rel_fro 1.77e-4 and 1.83e-4, max_abs 5.7e-4/3.8e-4 vs ref_absmax 2.82/2.02, frac_zero_out = 0, no non-finite entries, output dtype float32. No tiling/swizzle defect appears at multi-tile grids. All residual error is fp16 dequant/dot rounding, which the contract's declared low-precision format accounts for.\\n\\nc2 (the zeros+1 offset) is confirmed as the encoding convention of the named upstream source rather than a deviation: problem.txt states the formula with an abstract zero[g_idx[k],n] and never specifies how that zero is encoded in the packed int32 words, and t7 shows the effective zero is uniformly stored_code+1. Under that self-consistent convention the kernel matches the stated formula.\\n\\nNot established: behaviour for N or K not a multiple of the block sizes (b/zeros loads are unmasked along N, as in upstream; stored values are still guarded by c_mask), and fp32 activations, which fail to compile due to tl.dot dtype mixing but are outside the fp16 GPTQ input domain. Neither is a contract-required behaviour.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 61.271,
+        "input_tokens": 52391,
+        "output_tokens": 4663
+      }
+    },
+    {
+      "duration_s": 14.446948683000073,
+      "role": "solo",
+      "round": 9,
+      "text": "The `zeros+1` claim (c2) is only supported by inconclusive evidence, so I'll resolve it as inconclusive \u2014 the contract never specifies the packed zero-point encoding, so it cannot be decided as a defect from problem.txt, and t7 already showed the offset is uniform rather than a mis-index.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "status": "inconclusive"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 14.447,
+        "input_tokens": 53521,
+        "output_tokens": 987
+      }
+    },
+    {
+      "duration_s": 19.16598176800005,
+      "role": "solo",
+      "round": 10,
+      "text": "All claims are resolved (c1 rebutted by three probes, c2 inconclusive as an unspecified encoding convention). Recording the final verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.85,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The kernel reproduces the cited upstream AutoGPTQ quant_matmul_248_kernel, and three GPU probes show it evaluates C = A @ dequant(B) as problem.txt requires.\n\nt7 (identity extraction, A = I_128, K=128, N=64, group=32, standard GPTQ packing: q at shift 4*(k%8) along K, zeros at 4*(n%8) along N) recovered the kernel's effective dequant matrix. It matched (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 and max_rel_err 4.85e-4 on values up to 1.65, zero elements above 1e-3 error, and no bad rows or columns \u2014 so the K-axis and N-axis shifts, the g_idx row indexing of scales/zeros, and the strides are all faithful. The same output differs from the raw-zero-code reading by 0.110, isolating the only difference as the zero-point encoding rather than a mis-index.\n\nt8 (full matmul vs fp32 reference A@dequant(B)) over M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128 gave relative Frobenius errors 2.04e-4 / 2.08e-4 / 2.13e-4 with max_abs 0.0048\u20130.0094 against ref_absmax 18\u201341. The large max_rel figures (0.07\u20132.9) occur only on near-zero cancellation entries while max_abs stays below 1e-2, i.e. a metric artifact, not a structured error.\n\nt11 (multi-tile: M=256/K=1024/N=512/group=128 and M=64/K=512/N=256/group=32) used weights actually quantized onto 16 levels per group \u2014 the declared 4-bit format in problem.txt \u2014 with qzeros storing zero-1: rel_fro 1.77e-4 and 1.83e-4, max_abs 5.7e-4/3.8e-4 vs ref_absmax 2.82/2.02, frac_zero_out = 0, no non-finite entries, output dtype float32. No tiling/swizzle defect appears at multi-tile grids. All residual error is fp16 dequant/dot rounding, which the contract's declared low-precision format accounts for.\n\nc2 (the zeros+1 offset) remains inconclusive rather than a defect: problem.txt states the formula with an abstract zero[g_idx[k],n] and never specifies how that zero is encoded in the packed int32 words, and t7 showed the effective zero is uniformly stored_code+1 \u2014 the encoding convention of the named upstream source (qzeros stores zero-1), self-consistent and not a mis-index. It therefore cannot support a reject on the stated contract.\n\nNot established: behaviour when N or K is not a multiple of the block sizes (b/zeros loads are unmasked along N as in upstream, though stored values are still guarded by c_mask), and fp32 activations, which fail to compile due to tl.dot dtype mixing but fall outside the fp16 GPTQ input domain the contract implies. Neither is a contract-required behaviour.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 19.166,
+        "input_tokens": 53072,
+        "output_tokens": 1696
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_07"
+      },
+      "created_at": "2026-09-08T14:43:36Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_07",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef quant_matmul_248_kernel(\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\n    M, N, K, bits, maxq,\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\n    stride_scales, stride_zeros,\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\n    GROUP_SIZE_M: tl.constexpr,\n):\n    infearure_per_bits = 32 // bits\n    pid = tl.program_id(axis=0)\n    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\n    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\n    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\n    num_pid_in_group = GROUP_SIZE_M * num_pid_n\n    group_id = pid // num_pid_in_group\n    first_pid_m = group_id * GROUP_SIZE_M\n    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\n    pid_m = first_pid_m + (pid % group_size_m)\n    pid_n = (pid % num_pid_in_group) // group_size_m\n\n    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\n    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\n    offs_k = tl.arange(0, BLOCK_SIZE_K)\n    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\n    a_mask = offs_am[:, None] < M\n    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\n    g_ptrs = g_ptr + offs_k\n    scales_ptrs = scales_ptr + offs_bn[None, :]\n    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\n\n    shifter = (offs_k % infearure_per_bits) * bits\n    zeros_shifter = (offs_bn % infearure_per_bits) * bits\n    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\n\n    for k in range(0, num_pid_k):\n        g_idx = tl.load(g_ptrs)\n        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\n        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\n        zeros = (zeros >> zeros_shifter[None, :]) & maxq\n        zeros = zeros + 1\n        a = tl.load(a_ptrs, mask=a_mask, other=0.0)\n        b = tl.load(b_ptrs)\n        b = (b >> shifter[:, None]) & maxq\n        b = (b - zeros) * scales\n        accumulator += tl.dot(a, b)\n        a_ptrs += BLOCK_SIZE_K\n        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\n        g_ptrs += BLOCK_SIZE_K\n\n    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\n    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\n    tl.store(c_ptrs, accumulator, mask=c_mask)\n\n\ndef gptq_matmul(a, b_packed, scales, zeros, g_idx, bits=4):\n    M, K = a.shape\n    N = b_packed.shape[1]\n    maxq = 2 ** bits - 1\n    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\n    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\n    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\n    quant_matmul_248_kernel[grid](\n        a, b_packed, c, scales, zeros, g_idx,\n        M, N, K, bits, maxq,\n        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\n        scales.stride(0), zeros.stride(0),\n        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\n        GROUP_SIZE_M=GROUP_SIZE_M,\n    )\n    return c\n",
+        "passed": null,
+        "problem_text": "Operation: grouped INT4 dequantization fused with a matrix multiply\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\n\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\ninto int32 words with a per-(group, column) scale and zero-point, and\n\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\n\nThe declared numeric format of the weights is 4-bit: the weight values it\nconsumes were produced by quantizing continuous weights onto 16 levels per\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\ndeclared format.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_07",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_07"
+      },
+      "created_at": "2026-09-08T14:43:36Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: grouped INT4 dequantization fused with a matrix multiply\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\n\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\ninto int32 words with a per-(group, column) scale and zero-point, and\n\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\n\nThe declared numeric format of the weights is 4-bit: the weight values it\nconsumes were produced by quantizing continuous weights onto 16 levels per\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\ndeclared format.\n",
+        "entry": "case_07",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_07"
+      },
+      "created_at": "2026-09-08T14:43:36Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_07",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3152
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 628
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_07",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T14:43:36Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_07\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_07",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Contract fixes dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]. Kernel unpacks q with shifter=(offs_k%8)*4 along K, zeros with (offs_bn%8)*4 along N, and indexes scales/zeros rows by g_idx. Any shift/stride/group indexing error would break the required formula.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Declares C = A @ dequant(B) with dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], 4-bit weights packed into int32 words with per-(group,column) scale and zero-point."
+          }
+        ],
+        "scope_rationale": "The contract states the exact dequant formula and that the kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format; a mismatch on representative 4-bit packed inputs violates a stated requirement.",
+        "statement": "The kernel's dequantization deviates from the contract formula (unpacked_q - zero)*scale by more than a uniform zero-point convention offset, i.e. it mis-indexes or mis-unpacks q, scales, zeros, or g_idx, so C != A @ dequant(B) for standard 4-bit GPTQ packing."
+      },
+      "created_at": "2026-09-08T14:44:26Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-08T14:44:26Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Contract fixes dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]. Kernel unpacks q with shifter=(offs_k%8)*4 along K, zeros with (offs_bn%8)*4 along N, and indexes scales/zeros rows by g_idx. Any shift/stride/group indexing error would break the required formula.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Declares C = A @ dequant(B) with dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], 4-bit weights packed into int32 words with per-(group,column) scale and zero-point."
+          }
+        ],
+        "scope_rationale": "The contract states the exact dequant formula and that the kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format; a mismatch on representative 4-bit packed inputs violates a stated requirement.",
+        "statement": "The kernel's dequantization deviates from the contract formula (unpacked_q - zero)*scale by more than a uniform zero-point convention offset, i.e. it mis-indexes or mis-unpacks q, scales, zeros, or g_idx, so C != A @ dequant(B) for standard 4-bit GPTQ packing.",
+        "status": "open",
+        "updated_at": "2026-09-08T14:44:26Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Line 46 does zeros = zeros + 1 after unpacking. Whether this is a defect depends on the packing convention the contract intends; upstream AutoGPTQ triton QuantLinear packs zero-1.",
+        "scope": "unknown",
+        "scope_rationale": "The contract does not state how the zero-point is encoded inside the packed int32 words, so the +1 convention is not decidable from problem.txt alone.",
+        "statement": "The kernel adds 1 to the unpacked zero-point (zeros+1), which is the upstream AutoGPTQ packing convention (qzeros stores zero-1) rather than a defect; with that convention the outputs match the contract formula exactly."
+      },
+      "created_at": "2026-09-08T14:44:26Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-08T14:44:26Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Line 46 does zeros = zeros + 1 after unpacking. Whether this is a defect depends on the packing convention the contract intends; upstream AutoGPTQ triton QuantLinear packs zero-1.",
+        "scope": "unknown",
+        "scope_evidence": [],
+        "scope_rationale": "The contract does not state how the zero-point is encoded inside the packed int32 words, so the +1 convention is not decidable from problem.txt alone.",
+        "statement": "The kernel adds 1 to the unpacked zero-point (zeros+1), which is the upstream AutoGPTQ packing convention (qzeros stores zero-1) rather than a defect; with that convention the outputs match the contract formula exactly.",
+        "status": "open",
+        "updated_at": "2026-09-08T14:44:26Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nK, N, group = 128, 64, 32\nG = K // group\ndev = 'cuda'\n\nq  = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\nzs = torch.randint(0, 16, (G, N), device=dev, dtype=torch.int32)   # stored zero code\nscales = (torch.rand((G, N), device=dev, dtype=torch.float16) * 0.1 + 0.01)\ng_idx = (torch.arange(K, device=dev) // group).to(torch.int32)\n\n# pack weights along K: packed[i, n] holds q[i*8+j, n] at shift 4*j\nqw = torch.zeros((K // 8, N), device=dev, dtype=torch.int32)\nqr = q.reshape(K // 8, 8, N)\nfor j in range(8):\n    qw |= (qr[:, j, :] & 0xF) << (4 * j)\n\n# pack zeros along N: qz[g, n//8] holds zs[g, n] at shift 4*(n%8)\nqz = torch.zeros((G, N // 8), device=dev, dtype=torch.int32)\nzr = zs.reshape(G, N // 8, 8)\nfor j in range(8):\n    qz |= (zr[:, :, j] & 0xF) << (4 * j)\n\n# references\nz_plus1 = (zs + 1)[g_idx.long()]\nz_raw   = zs[g_idx.long()]\nsc      = scales[g_idx.long()].float()\ndeq_p1  = (q.float() - z_plus1.float()) * sc\ndeq_raw = (q.float() - z_raw.float()) * sc\n\nout = {}\nfor name, adt in [(\"fp16\", torch.float16), (\"fp32\", torch.float32)]:\n    a = torch.eye(K, device=dev, dtype=adt)\n    try:\n        c = m.gptq_matmul(a, qw, scales, qz, g_idx, bits=4).float()\n    except Exception as e:\n        out[name] = {\"error\": repr(e)[:300]}\n        continue\n    e1 = (c - deq_p1).abs()\n    e2 = (c - deq_raw).abs()\n    den = deq_p1.abs().clamp_min(1e-6)\n    out[name] = {\n        \"max_abs_err_vs_zero_plus1\": float(e1.max()),\n        \"max_rel_err_vs_zero_plus1\": float((e1 / den).max()),\n        \"max_abs_err_vs_zero_raw\": float(e2.max()),\n        \"frac_elems_err_gt_1e-3_p1\": float((e1 > 1e-3).float().mean()),\n        \"deq_absmax\": float(deq_p1.abs().max()),\n    }\n    # per-row / per-col error structure (helps spot axis bugs)\n    rowerr = e1.max(dim=1).values\n    colerr = e1.max(dim=0).values\n    out[name][\"rows_bad\"] = [int(i) for i in torch.nonzero(rowerr > 1e-3).flatten()[:20]]\n    out[name][\"cols_bad\"] = [int(i) for i in torch.nonzero(colerr > 1e-3).flatten()[:20]]\n\nprint(json.dumps(out, indent=2))\n",
+        "expected_signal": "If unpacking/indexing is faithful, kernel(I, B) equals (q - (stored_zero+1))*scale elementwise to fp16 precision; a structured mismatch (wrong shift axis, wrong group row, wrong stride) indicates a defect."
+      },
+      "created_at": "2026-09-08T14:45:25Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "b10ecdca44a24231c24509c8947cc7b8e9118d8cfdb7e4a34c411c8389f80201"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "6e86dab212f15d44ae21344d38a477a3cab1945883d42f8feb4f8f90008d1a0b"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's dequantization deviates from the contract formula (unpacked_q - zero)*scale by more than a uniform zero-point convention offset, i.e. it mis-indexes or mis-unpacks q, scales, zeros, or g_idx, so C != A @ dequant(B) for standard 4-bit GPTQ packing.",
+        "cwd": "/root/cases/case_07",
+        "duration_s": 7.923637,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "b10ecdca44a24231c24509c8947cc7b8e9118d8cfdb7e4a34c411c8389f80201"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "6e86dab212f15d44ae21344d38a477a3cab1945883d42f8feb4f8f90008d1a0b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 7.923637,
+            "exit_code": 0,
+            "expected_signal": "If unpacking/indexing is faithful, kernel(I, B) equals (q - (stored_zero+1))*scale elementwise to fp16 precision; a structured mismatch (wrong shift axis, wrong group row, wrong stride) indicates a defect.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n  \"fp16\": {\n    \"max_abs_err_vs_zero_plus1\": 0.00048828125,\n    \"max_rel_err_vs_zero_plus1\": 0.0004852013662457466,\n    \"max_abs_err_vs_zero_raw\": 0.1102294921875,\n    \"frac_elems_err_gt_1e-3_p1\": 0.0,\n    \"deq_absmax\": 1.650390625,\n    \"rows_bad\": [],\n    \"cols_bad\": []\n  },\n  \"fp32\": {\n    \"error\": \"CompilationError('def quant_matmul_248_kernel(\\\\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\\\\n    M, N, K, bits, maxq,\\\\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\\\\n    stride_scales, stride_zeros,\\\\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK\"\n  }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "If unpacking/indexing is faithful, kernel(I, B) equals (q - (stored_zero+1))*scale elementwise to fp16 precision; a structured mismatch (wrong shift axis, wrong group row, wrong stride) indicates a defect.",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n  \"fp16\": {\n    \"max_abs_err_vs_zero_plus1\": 0.00048828125,\n    \"max_rel_err_vs_zero_plus1\": 0.0004852013662457466,\n    \"max_abs_err_vs_zero_raw\": 0.1102294921875,\n    \"frac_elems_err_gt_1e-3_p1\": 0.0,\n    \"deq_absmax\": 1.650390625,\n    \"rows_bad\": [],\n    \"cols_bad\": []\n  },\n  \"fp32\": {\n    \"error\": \"CompilationError('def quant_matmul_248_kernel(\\\\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\\\\n    M, N, K, bits, maxq,\\\\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\\\\n    stride_scales, stride_zeros,\\\\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK\"\n  }\n}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(1)\ndev='cuda'\nres={}\nfor (M,K,N,group,actorder) in [(70,256,64,64,False),(128,256,128,128,True),(32,128,32,32,True)]:\n    G=K//group\n    q=torch.randint(0,16,(K,N),device=dev,dtype=torch.int32)\n    zs=torch.randint(0,16,(G,N),device=dev,dtype=torch.int32)\n    scales=(torch.rand((G,N),device=dev,dtype=torch.float16)*0.1+0.01)\n    if actorder:\n        base=(torch.arange(K,device=dev)//group).to(torch.int32)\n        perm=torch.randperm(K,device=dev)\n        g_idx=base[perm].contiguous()\n    else:\n        g_idx=(torch.arange(K,device=dev)//group).to(torch.int32)\n    qw=torch.zeros((K//8,N),device=dev,dtype=torch.int32)\n    qr=q.reshape(K//8,8,N)\n    for j in range(8): qw |= (qr[:,j,:]&0xF)<<(4*j)\n    qz=torch.zeros((G,N//8),device=dev,dtype=torch.int32)\n    zr=zs.reshape(G,N//8,8)\n    for j in range(8): qz |= (zr[:,:,j]&0xF)<<(4*j)\n\n    a=(torch.randn((M,K),device=dev,dtype=torch.float16))\n    deq=(q.float()-(zs+1)[g_idx.long()].float())*scales[g_idx.long()].float()\n    ref=a.float()@deq\n    c=m.gptq_matmul(a,qw,scales,qz,g_idx,bits=4).float()\n    err=(c-ref).abs()\n    den=ref.abs().clamp_min(1e-3)\n    res[f\"M{M}_K{K}_N{N}_g{group}_ao{int(actorder)}\"]={\n      \"max_abs\":float(err.max()),\n      \"max_rel\":float((err/den).max()),\n      \"ref_absmax\":float(ref.abs().max()),\n      \"rel_fro\":float(err.norm()/ref.norm()),\n      \"rows_bad_gt_5pct\":[int(i) for i in torch.nonzero((err/den).max(1).values>0.05).flatten()[:10]],\n    }\nprint(json.dumps(res))\n",
+        "expected_signal": "If the full matmul path is faithful, relative Frobenius error stays at fp16 accumulation level (<~1e-3) across masked M, act-order permuted g_idx, and multiple group sizes; structured large errors would indicate a defect."
+      },
+      "created_at": "2026-09-08T14:46:11Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "df1acfee8a0678a4a9b344f3177b97d3189f2dd37473697c62d8732052f118d8"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "23464c6f3252c8834e2447b54ed119552ba96be0890dd7363d8166fe759ae7f4"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "87fcd61c9e0d2fe9db3af7b1b5d88889d2d82099a58eb43d1defb437f09ce41c"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's dequantization deviates from the contract formula (unpacked_q - zero)*scale by more than a uniform zero-point convention offset, i.e. it mis-indexes or mis-unpacks q, scales, zeros, or g_idx, so C != A @ dequant(B) for standard 4-bit GPTQ packing.",
+        "cwd": "/root/cases/case_07",
+        "duration_s": 8.29391,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "df1acfee8a0678a4a9b344f3177b97d3189f2dd37473697c62d8732052f118d8"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "23464c6f3252c8834e2447b54ed119552ba96be0890dd7363d8166fe759ae7f4"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "87fcd61c9e0d2fe9db3af7b1b5d88889d2d82099a58eb43d1defb437f09ce41c"
+              }
+            ],
+            "duration_s": 8.29391,
+            "exit_code": 0,
+            "expected_signal": "If the full matmul path is faithful, relative Frobenius error stays at fp16 accumulation level (<~1e-3) across masked M, act-order permuted g_idx, and multiple group sizes; structured large errors would indicate a defect.",
+            "json_parse_error": null,
+            "json_result": {
+              "M128_K256_N128_g128_ao1": {
+                "max_abs": 0.009418964385986328,
+                "max_rel": 0.7556527256965637,
+                "ref_absmax": 41.34428405761719,
+                "rel_fro": 0.00021303405810613185,
+                "rows_bad_gt_5pct": [
+                  4,
+                  7,
+                  8,
+                  9,
+                  11,
+                  26,
+                  32,
+                  34,
+                  41,
+                  44
+                ]
+              },
+              "M32_K128_N32_g32_ao1": {
+                "max_abs": 0.0047779083251953125,
+                "max_rel": 0.07393935322761536,
+                "ref_absmax": 18.441831588745117,
+                "rel_fro": 0.00020436268823686987,
+                "rows_bad_gt_5pct": [
+                  17
+                ]
+              },
+              "M70_K256_N64_g64_ao0": {
+                "max_abs": 0.006985664367675781,
+                "max_rel": 2.922546863555908,
+                "ref_absmax": 31.84917449951172,
+                "rel_fro": 0.00020753659191541374,
+                "rows_bad_gt_5pct": [
+                  1,
+                  5,
+                  9,
+                  11,
+                  25,
+                  29,
+                  42,
+                  55,
+                  56,
+                  59
+                ]
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"M70_K256_N64_g64_ao0\": {\"max_abs\": 0.006985664367675781, \"max_rel\": 2.922546863555908, \"ref_absmax\": 31.84917449951172, \"rel_fro\": 0.00020753659191541374, \"rows_bad_gt_5pct\": [1, 5, 9, 11, 25, 29, 42, 55, 56, 59]}, \"M128_K256_N128_g128_ao1\": {\"max_abs\": 0.009418964385986328, \"max_rel\": 0.7556527256965637, \"ref_absmax\": 41.34428405761719, \"rel_fro\": 0.00021303405810613185, \"rows_bad_gt_5pct\": [4, 7, 8, 9, 11, 26, 32, 34, 41, 44]}, \"M32_K128_N32_g32_ao1\": {\"max_abs\": 0.0047779083251953125, \"max_rel\": 0.07393935322761536, \"ref_absmax\": 18.441831588745117, \"rel_fro\": 0.00020436268823686987, \"rows_bad_gt_5pct\": [17]}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "If the full matmul path is faithful, relative Frobenius error stays at fp16 accumulation level (<~1e-3) across masked M, act-order permuted g_idx, and multiple group sizes; structured large errors would indicate a defect.",
+        "json_parse_error": null,
+        "json_result": {
+          "M128_K256_N128_g128_ao1": {
+            "max_abs": 0.009418964385986328,
+            "max_rel": 0.7556527256965637,
+            "ref_absmax": 41.34428405761719,
+            "rel_fro": 0.00021303405810613185,
+            "rows_bad_gt_5pct": [
+              4,
+              7,
+              8,
+              9,
+              11,
+              26,
+              32,
+              34,
+              41,
+              44
+            ]
+          },
+          "M32_K128_N32_g32_ao1": {
+            "max_abs": 0.0047779083251953125,
+            "max_rel": 0.07393935322761536,
+            "ref_absmax": 18.441831588745117,
+            "rel_fro": 0.00020436268823686987,
+            "rows_bad_gt_5pct": [
+              17
+            ]
+          },
+          "M70_K256_N64_g64_ao0": {
+            "max_abs": 0.006985664367675781,
+            "max_rel": 2.922546863555908,
+            "ref_absmax": 31.84917449951172,
+            "rel_fro": 0.00020753659191541374,
+            "rows_bad_gt_5pct": [
+              1,
+              5,
+              9,
+              11,
+              25,
+              29,
+              42,
+              55,
+              56,
+              59
+            ]
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"M70_K256_N64_g64_ao0\": {\"max_abs\": 0.006985664367675781, \"max_rel\": 2.922546863555908, \"ref_absmax\": 31.84917449951172, \"rel_fro\": 0.00020753659191541374, \"rows_bad_gt_5pct\": [1, 5, 9, 11, 25, 29, 42, 55, 56, 59]}, \"M128_K256_N128_g128_ao1\": {\"max_abs\": 0.009418964385986328, \"max_rel\": 0.7556527256965637, \"ref_absmax\": 41.34428405761719, \"rel_fro\": 0.00021303405810613185, \"rows_bad_gt_5pct\": [4, 7, 8, 9, 11, 26, 32, 34, 41, 44]}, \"M32_K128_N32_g32_ao1\": {\"max_abs\": 0.0047779083251953125, \"max_rel\": 0.07393935322761536, \"ref_absmax\": 18.441831588745117, \"rel_fro\": 0.00020436268823686987, \"rows_bad_gt_5pct\": [17]}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "cols_bad": [],
+          "deq_absmax": 1.65,
+          "frac_elems_err_gt_1e-3": 0.0,
+          "max_abs_err_vs_zero_plus1": 0.00048828125,
+          "max_abs_err_vs_zero_raw": 0.11023,
+          "max_rel_err_vs_zero_plus1": 0.000485,
+          "rows_bad": []
+        },
+        "event_id": "t7",
+        "status": "rebutted",
+        "summary": "Identity-extraction probe (A = I_128, K=128,N=64,group=32, standard GPTQ packing: q packed along K at 4*(k%8), zeros packed along N at 4*(n%8)) recovers the kernel's effective dequant matrix. It equals (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 and max_rel_err 4.85e-4 on values up to 1.65 (pure fp16 rounding of the scale product); zero elements exceed 1e-3 error, and no bad rows or columns, so shifts along K/N, scales/zeros row indexing by g_idx, and strides are all faithful. Comparison against the raw-zero variant gives max_abs_err 0.110, confirming the only difference from the naive reading is the +1 zero-point encoding, not a mis-index. (fp32 A failed to compile due to tl.dot dtype mixing; contract inputs are fp16, not decisive.)",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T14:47:03Z",
+      "id": "t9",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:44:26Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:47:03Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "b10ecdca44a24231c24509c8947cc7b8e9118d8cfdb7e4a34c411c8389f80201"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "6e86dab212f15d44ae21344d38a477a3cab1945883d42f8feb4f8f90008d1a0b"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "cols_bad": [],
+                "deq_absmax": 1.65,
+                "duration_s": 7.923637,
+                "exit_code": 0,
+                "expected_signal": "If unpacking/indexing is faithful, kernel(I, B) equals (q - (stored_zero+1))*scale elementwise to fp16 precision; a structured mismatch (wrong shift axis, wrong group row, wrong stride) indicates a defect.",
+                "frac_elems_err_gt_1e-3": 0.0,
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "max_abs_err_vs_zero_plus1": 0.00048828125,
+                "max_abs_err_vs_zero_raw": 0.11023,
+                "max_rel_err_vs_zero_plus1": 0.000485,
+                "rows_bad": [],
+                "stderr": "",
+                "stdout": "{\n  \"fp16\": {\n    \"max_abs_err_vs_zero_plus1\": 0.00048828125,\n    \"max_rel_err_vs_zero_plus1\": 0.0004852013662457466,\n    \"max_abs_err_vs_zero_raw\": 0.1102294921875,\n    \"frac_elems_err_gt_1e-3_p1\": 0.0,\n    \"deq_absmax\": 1.650390625,\n    \"rows_bad\": [],\n    \"cols_bad\": []\n  },\n  \"fp32\": {\n    \"error\": \"CompilationError('def quant_matmul_248_kernel(\\\\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\\\\n    M, N, K, bits, maxq,\\\\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\\\\n    stride_scales, stride_zeros,\\\\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK\"\n  }\n}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Identity-extraction probe (A = I_128, K=128,N=64,group=32, standard GPTQ packing: q packed along K at 4*(k%8), zeros packed along N at 4*(n%8)) recovers the kernel's effective dequant matrix. It equals (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 and max_rel_err 4.85e-4 on values up to 1.65 (pure fp16 rounding of the scale product); zero elements exceed 1e-3 error, and no bad rows or columns, so shifts along K/N, scales/zeros row indexing by g_idx, and strides are all faithful. Comparison against the raw-zero variant gives max_abs_err 0.110, confirming the only difference from the naive reading is the +1 zero-point encoding, not a mis-index. (fp32 A failed to compile due to tl.dot dtype mixing; contract inputs are fp16, not decisive.)",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Contract fixes dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]. Kernel unpacks q with shifter=(offs_k%8)*4 along K, zeros with (offs_bn%8)*4 along N, and indexes scales/zeros rows by g_idx. Any shift/stride/group indexing error would break the required formula.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Declares C = A @ dequant(B) with dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], 4-bit weights packed into int32 words with per-(group,column) scale and zero-point."
+            }
+          ],
+          "scope_rationale": "The contract states the exact dequant formula and that the kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format; a mismatch on representative 4-bit packed inputs violates a stated requirement.",
+          "statement": "The kernel's dequantization deviates from the contract formula (unpacked_q - zero)*scale by more than a uniform zero-point convention offset, i.e. it mis-indexes or mis-unpacks q, scales, zeros, or g_idx, so C != A @ dequant(B) for standard 4-bit GPTQ packing.",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:47:03Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:47:03Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "b10ecdca44a24231c24509c8947cc7b8e9118d8cfdb7e4a34c411c8389f80201"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "6e86dab212f15d44ae21344d38a477a3cab1945883d42f8feb4f8f90008d1a0b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "cols_bad": [],
+            "deq_absmax": 1.65,
+            "duration_s": 7.923637,
+            "exit_code": 0,
+            "expected_signal": "If unpacking/indexing is faithful, kernel(I, B) equals (q - (stored_zero+1))*scale elementwise to fp16 precision; a structured mismatch (wrong shift axis, wrong group row, wrong stride) indicates a defect.",
+            "frac_elems_err_gt_1e-3": 0.0,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "max_abs_err_vs_zero_plus1": 0.00048828125,
+            "max_abs_err_vs_zero_raw": 0.11023,
+            "max_rel_err_vs_zero_plus1": 0.000485,
+            "rows_bad": [],
+            "stderr": "",
+            "stdout": "{\n  \"fp16\": {\n    \"max_abs_err_vs_zero_plus1\": 0.00048828125,\n    \"max_rel_err_vs_zero_plus1\": 0.0004852013662457466,\n    \"max_abs_err_vs_zero_raw\": 0.1102294921875,\n    \"frac_elems_err_gt_1e-3_p1\": 0.0,\n    \"deq_absmax\": 1.650390625,\n    \"rows_bad\": [],\n    \"cols_bad\": []\n  },\n  \"fp32\": {\n    \"error\": \"CompilationError('def quant_matmul_248_kernel(\\\\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\\\\n    M, N, K, bits, maxq,\\\\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\\\\n    stride_scales, stride_zeros,\\\\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK\"\n  }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Identity-extraction probe (A = I_128, K=128,N=64,group=32, standard GPTQ packing: q packed along K at 4*(k%8), zeros packed along N at 4*(n%8)) recovers the kernel's effective dequant matrix. It equals (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 and max_rel_err 4.85e-4 on values up to 1.65 (pure fp16 rounding of the scale product); zero elements exceed 1e-3 error, and no bad rows or columns, so shifts along K/N, scales/zeros row indexing by g_idx, and strides are all faithful. Comparison against the raw-zero variant gives max_abs_err 0.110, confirming the only difference from the naive reading is the +1 zero-point encoding, not a mis-index. (fp32 A failed to compile due to tl.dot dtype mixing; contract inputs are fp16, not decisive.)",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "M128_K256_N128_g128_actorder": {
+            "max_abs": 0.009419,
+            "ref_absmax": 41.34,
+            "rel_fro": 0.000213
+          },
+          "M32_K128_N32_g32_actorder": {
+            "max_abs": 0.004778,
+            "ref_absmax": 18.44,
+            "rel_fro": 0.000204
+          },
+          "M70_K256_N64_g64_noactorder": {
+            "max_abs": 0.006986,
+            "ref_absmax": 31.85,
+            "rel_fro": 0.000208
+          }
+        },
+        "event_id": "t8",
+        "status": "rebutted",
+        "summary": "Full matmul path vs fp32 reference A@dequant(B) over three configs including M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128: relative Frobenius error 2.04e-4 / 2.08e-4 / 2.13e-4, max_abs 0.0048-0.0094 against ref_absmax 18-41. This is fp16 dot/dequant rounding level. The large max_rel values (0.07-2.9) occur only on near-zero cancellation entries (max_abs stays <1e-2 while ref magnitudes reach 41), i.e. a metric artifact, not a structured error. Masked-M rows and permuted g_idx behave identically to the aligned case.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T14:47:03Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:44:26Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:47:03Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "b10ecdca44a24231c24509c8947cc7b8e9118d8cfdb7e4a34c411c8389f80201"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "6e86dab212f15d44ae21344d38a477a3cab1945883d42f8feb4f8f90008d1a0b"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "cols_bad": [],
+                "deq_absmax": 1.65,
+                "duration_s": 7.923637,
+                "exit_code": 0,
+                "expected_signal": "If unpacking/indexing is faithful, kernel(I, B) equals (q - (stored_zero+1))*scale elementwise to fp16 precision; a structured mismatch (wrong shift axis, wrong group row, wrong stride) indicates a defect.",
+                "frac_elems_err_gt_1e-3": 0.0,
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "max_abs_err_vs_zero_plus1": 0.00048828125,
+                "max_abs_err_vs_zero_raw": 0.11023,
+                "max_rel_err_vs_zero_plus1": 0.000485,
+                "rows_bad": [],
+                "stderr": "",
+                "stdout": "{\n  \"fp16\": {\n    \"max_abs_err_vs_zero_plus1\": 0.00048828125,\n    \"max_rel_err_vs_zero_plus1\": 0.0004852013662457466,\n    \"max_abs_err_vs_zero_raw\": 0.1102294921875,\n    \"frac_elems_err_gt_1e-3_p1\": 0.0,\n    \"deq_absmax\": 1.650390625,\n    \"rows_bad\": [],\n    \"cols_bad\": []\n  },\n  \"fp32\": {\n    \"error\": \"CompilationError('def quant_matmul_248_kernel(\\\\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\\\\n    M, N, K, bits, maxq,\\\\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\\\\n    stride_scales, stride_zeros,\\\\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK\"\n  }\n}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Identity-extraction probe (A = I_128, K=128,N=64,group=32, standard GPTQ packing: q packed along K at 4*(k%8), zeros packed along N at 4*(n%8)) recovers the kernel's effective dequant matrix. It equals (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 and max_rel_err 4.85e-4 on values up to 1.65 (pure fp16 rounding of the scale product); zero elements exceed 1e-3 error, and no bad rows or columns, so shifts along K/N, scales/zeros row indexing by g_idx, and strides are all faithful. Comparison against the raw-zero variant gives max_abs_err 0.110, confirming the only difference from the naive reading is the +1 zero-point encoding, not a mis-index. (fp32 A failed to compile due to tl.dot dtype mixing; contract inputs are fp16, not decisive.)",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            },
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:47:03Z",
+              "data": {
+                "M128_K256_N128_g128_actorder": {
+                  "max_abs": 0.009419,
+                  "ref_absmax": 41.34,
+                  "rel_fro": 0.000213
+                },
+                "M32_K128_N32_g32_actorder": {
+                  "max_abs": 0.004778,
+                  "ref_absmax": 18.44,
+                  "rel_fro": 0.000204
+                },
+                "M70_K256_N64_g64_noactorder": {
+                  "max_abs": 0.006986,
+                  "ref_absmax": 31.85,
+                  "rel_fro": 0.000208
+                },
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "df1acfee8a0678a4a9b344f3177b97d3189f2dd37473697c62d8732052f118d8"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "23464c6f3252c8834e2447b54ed119552ba96be0890dd7363d8166fe759ae7f4"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "87fcd61c9e0d2fe9db3af7b1b5d88889d2d82099a58eb43d1defb437f09ce41c"
+                  }
+                ],
+                "duration_s": 8.29391,
+                "exit_code": 0,
+                "expected_signal": "If the full matmul path is faithful, relative Frobenius error stays at fp16 accumulation level (<~1e-3) across masked M, act-order permuted g_idx, and multiple group sizes; structured large errors would indicate a defect.",
+                "json_parse_error": null,
+                "json_result": {
+                  "M128_K256_N128_g128_ao1": {
+                    "max_abs": 0.009418964385986328,
+                    "max_rel": 0.7556527256965637,
+                    "ref_absmax": 41.34428405761719,
+                    "rel_fro": 0.00021303405810613185,
+                    "rows_bad_gt_5pct": [
+                      4,
+                      7,
+                      8,
+                      9,
+                      11,
+                      26,
+                      32,
+                      34,
+                      41,
+                      44
+                    ]
+                  },
+                  "M32_K128_N32_g32_ao1": {
+                    "max_abs": 0.0047779083251953125,
+                    "max_rel": 0.07393935322761536,
+                    "ref_absmax": 18.441831588745117,
+                    "rel_fro": 0.00020436268823686987,
+                    "rows_bad_gt_5pct": [
+                      17
+                    ]
+                  },
+                  "M70_K256_N64_g64_ao0": {
+                    "max_abs": 0.006985664367675781,
+                    "max_rel": 2.922546863555908,
+                    "ref_absmax": 31.84917449951172,
+                    "rel_fro": 0.00020753659191541374,
+                    "rows_bad_gt_5pct": [
+                      1,
+                      5,
+                      9,
+                      11,
+                      25,
+                      29,
+                      42,
+                      55,
+                      56,
+                      59
+                    ]
+                  }
+                },
+                "stderr": "",
+                "stdout": "{\"M70_K256_N64_g64_ao0\": {\"max_abs\": 0.006985664367675781, \"max_rel\": 2.922546863555908, \"ref_absmax\": 31.84917449951172, \"rel_fro\": 0.00020753659191541374, \"rows_bad_gt_5pct\": [1, 5, 9, 11, 25, 29, 42, 55, 56, 59]}, \"M128_K256_N128_g128_ao1\": {\"max_abs\": 0.009418964385986328, \"max_rel\": 0.7556527256965637, \"ref_absmax\": 41.34428405761719, \"rel_fro\": 0.00021303405810613185, \"rows_bad_gt_5pct\": [4, 7, 8, 9, 11, 26, 32, 34, 41, 44]}, \"M32_K128_N32_g32_ao1\": {\"max_abs\": 0.0047779083251953125, \"max_rel\": 0.07393935322761536, \"ref_absmax\": 18.441831588745117, \"rel_fro\": 0.00020436268823686987, \"rows_bad_gt_5pct\": [17]}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e2",
+              "kind": "runtime_probe",
+              "summary": "Full matmul path vs fp32 reference A@dequant(B) over three configs including M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128: relative Frobenius error 2.04e-4 / 2.08e-4 / 2.13e-4, max_abs 0.0048-0.0094 against ref_absmax 18-41. This is fp16 dot/dequant rounding level. The large max_rel values (0.07-2.9) occur only on near-zero cancellation entries (max_abs stays <1e-2 while ref magnitudes reach 41), i.e. a metric artifact, not a structured error. Masked-M rows and permuted g_idx behave identically to the aligned case.",
+              "supports": "rebutted",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Contract fixes dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]. Kernel unpacks q with shifter=(offs_k%8)*4 along K, zeros with (offs_bn%8)*4 along N, and indexes scales/zeros rows by g_idx. Any shift/stride/group indexing error would break the required formula.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Declares C = A @ dequant(B) with dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], 4-bit weights packed into int32 words with per-(group,column) scale and zero-point."
+            }
+          ],
+          "scope_rationale": "The contract states the exact dequant formula and that the kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format; a mismatch on representative 4-bit packed inputs violates a stated requirement.",
+          "statement": "The kernel's dequantization deviates from the contract formula (unpacked_q - zero)*scale by more than a uniform zero-point convention offset, i.e. it mis-indexes or mis-unpacks q, scales, zeros, or g_idx, so C != A @ dequant(B) for standard 4-bit GPTQ packing.",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:47:03Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:47:03Z",
+          "data": {
+            "M128_K256_N128_g128_actorder": {
+              "max_abs": 0.009419,
+              "ref_absmax": 41.34,
+              "rel_fro": 0.000213
+            },
+            "M32_K128_N32_g32_actorder": {
+              "max_abs": 0.004778,
+              "ref_absmax": 18.44,
+              "rel_fro": 0.000204
+            },
+            "M70_K256_N64_g64_noactorder": {
+              "max_abs": 0.006986,
+              "ref_absmax": 31.85,
+              "rel_fro": 0.000208
+            },
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "df1acfee8a0678a4a9b344f3177b97d3189f2dd37473697c62d8732052f118d8"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "23464c6f3252c8834e2447b54ed119552ba96be0890dd7363d8166fe759ae7f4"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "87fcd61c9e0d2fe9db3af7b1b5d88889d2d82099a58eb43d1defb437f09ce41c"
+              }
+            ],
+            "duration_s": 8.29391,
+            "exit_code": 0,
+            "expected_signal": "If the full matmul path is faithful, relative Frobenius error stays at fp16 accumulation level (<~1e-3) across masked M, act-order permuted g_idx, and multiple group sizes; structured large errors would indicate a defect.",
+            "json_parse_error": null,
+            "json_result": {
+              "M128_K256_N128_g128_ao1": {
+                "max_abs": 0.009418964385986328,
+                "max_rel": 0.7556527256965637,
+                "ref_absmax": 41.34428405761719,
+                "rel_fro": 0.00021303405810613185,
+                "rows_bad_gt_5pct": [
+                  4,
+                  7,
+                  8,
+                  9,
+                  11,
+                  26,
+                  32,
+                  34,
+                  41,
+                  44
+                ]
+              },
+              "M32_K128_N32_g32_ao1": {
+                "max_abs": 0.0047779083251953125,
+                "max_rel": 0.07393935322761536,
+                "ref_absmax": 18.441831588745117,
+                "rel_fro": 0.00020436268823686987,
+                "rows_bad_gt_5pct": [
+                  17
+                ]
+              },
+              "M70_K256_N64_g64_ao0": {
+                "max_abs": 0.006985664367675781,
+                "max_rel": 2.922546863555908,
+                "ref_absmax": 31.84917449951172,
+                "rel_fro": 0.00020753659191541374,
+                "rows_bad_gt_5pct": [
+                  1,
+                  5,
+                  9,
+                  11,
+                  25,
+                  29,
+                  42,
+                  55,
+                  56,
+                  59
+                ]
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"M70_K256_N64_g64_ao0\": {\"max_abs\": 0.006985664367675781, \"max_rel\": 2.922546863555908, \"ref_absmax\": 31.84917449951172, \"rel_fro\": 0.00020753659191541374, \"rows_bad_gt_5pct\": [1, 5, 9, 11, 25, 29, 42, 55, 56, 59]}, \"M128_K256_N128_g128_ao1\": {\"max_abs\": 0.009418964385986328, \"max_rel\": 0.7556527256965637, \"ref_absmax\": 41.34428405761719, \"rel_fro\": 0.00021303405810613185, \"rows_bad_gt_5pct\": [4, 7, 8, 9, 11, 26, 32, 34, 41, 44]}, \"M32_K128_N32_g32_ao1\": {\"max_abs\": 0.0047779083251953125, \"max_rel\": 0.07393935322761536, \"ref_absmax\": 18.441831588745117, \"rel_fro\": 0.00020436268823686987, \"rows_bad_gt_5pct\": [17]}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Full matmul path vs fp32 reference A@dequant(B) over three configs including M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128: relative Frobenius error 2.04e-4 / 2.08e-4 / 2.13e-4, max_abs 0.0048-0.0094 against ref_absmax 18-41. This is fp16 dot/dequant rounding level. The large max_rel values (0.07-2.9) occur only on near-zero cancellation entries (max_abs stays <1e-2 while ref magnitudes reach 41), i.e. a metric artifact, not a structured error. Masked-M rows and permuted g_idx behave identically to the aligned case.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(7)\ndev='cuda'\nres={}\nfor (M,K,N,group) in [(256,1024,512,128),(64,512,256,32)]:\n    G=K//group\n    # realistic GPTQ quantization of continuous weights onto 16 levels per group\n    W=torch.randn((K,N),device=dev,dtype=torch.float32)*0.02\n    Wg=W.reshape(G,group,N)\n    wmax=Wg.amax(dim=1); wmin=Wg.amin(dim=1)\n    scale=((wmax-wmin)/15).clamp_min(1e-8).half()\n    zero_full=(-wmin/scale.float()).round().clamp(0,15)      # true zero point (0..15)\n    q=(Wg/scale.float().unsqueeze(1)+zero_full.unsqueeze(1)).round().clamp(0,15).to(torch.int32).reshape(K,N)\n    stored=(zero_full-1).clamp(0,15).to(torch.int32)          # qzeros stores zero-1 (AutoGPTQ)\n    zero_eff=stored+1\n    g_idx=(torch.arange(K,device=dev)//group).to(torch.int32)\n    qw=torch.zeros((K//8,N),device=dev,dtype=torch.int32); qr=q.reshape(K//8,8,N)\n    for j in range(8): qw |= (qr[:,j,:]&0xF)<<(4*j)\n    qz=torch.zeros((G,N//8),device=dev,dtype=torch.int32); zr=stored.reshape(G,N//8,8)\n    for j in range(8): qz |= (zr[:,:,j]&0xF)<<(4*j)\n    a=torch.randn((M,K),device=dev,dtype=torch.float16)\n    deq=(q.float()-zero_eff[g_idx.long()].float())*scale[g_idx.long()].float()\n    ref=a.float()@deq\n    c=m.gptq_matmul(a,qw,scale,qz,g_idx,bits=4)\n    cf=c.float()\n    err=(cf-ref).abs()\n    res[f\"M{M}_K{K}_N{N}_g{group}\"]={\n      \"dtype\":str(c.dtype),\"shape\":list(c.shape),\n      \"max_abs\":float(err.max()),\"rel_fro\":float(err.norm()/ref.norm()),\n      \"ref_absmax\":float(ref.abs().max()),\n      \"frac_zero_out\":float((cf==0).float().mean()),\n      \"n_nonfinite\":int((~torch.isfinite(cf)).sum()),\n      \"quant_step_absmax\":float(scale.float().max()),\n    }\nprint(json.dumps(res))\n",
+        "expected_signal": "If tiling/swizzle and dequant are faithful at larger multi-tile grids with realistically quantized weights, rel_fro stays ~1e-4 with no zero/non-finite output blocks; a whole-tile zero region or large rel_fro would indicate a tiling defect."
+      },
+      "created_at": "2026-09-08T14:48:03Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t11_probe.py",
+            "sha256": "b9310e02dd62598b4f1cdcb9a707428a7687a819b269dc4ad400d2989a95404f"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t11_stdout.txt",
+            "sha256": "0d1fa724c29fc01bfe7e75ca572745357c46c3cf9ce218f17c096e851e74814f"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t11_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t11_json_result.json",
+            "sha256": "579ab0e1e352e7267948a331cce8bee5fe95bd2bb1d770cf96706061b07bade4"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's dequantization deviates from the contract formula (unpacked_q - zero)*scale by more than a uniform zero-point convention offset, i.e. it mis-indexes or mis-unpacks q, scales, zeros, or g_idx, so C != A @ dequant(B) for standard 4-bit GPTQ packing.",
+        "cwd": "/root/cases/case_07",
+        "duration_s": 7.330505,
+        "event_id": "t11",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "b9310e02dd62598b4f1cdcb9a707428a7687a819b269dc4ad400d2989a95404f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "0d1fa724c29fc01bfe7e75ca572745357c46c3cf9ce218f17c096e851e74814f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "579ab0e1e352e7267948a331cce8bee5fe95bd2bb1d770cf96706061b07bade4"
+              }
+            ],
+            "duration_s": 7.330505,
+            "exit_code": 0,
+            "expected_signal": "If tiling/swizzle and dequant are faithful at larger multi-tile grids with realistically quantized weights, rel_fro stays ~1e-4 with no zero/non-finite output blocks; a whole-tile zero region or large rel_fro would indicate a tiling defect.",
+            "json_parse_error": null,
+            "json_result": {
+              "M256_K1024_N512_g128": {
+                "dtype": "torch.float32",
+                "frac_zero_out": 0.0,
+                "max_abs": 0.0005715787410736084,
+                "n_nonfinite": 0,
+                "quant_step_absmax": 0.01113128662109375,
+                "ref_absmax": 2.818957805633545,
+                "rel_fro": 0.00017745645891409367,
+                "shape": [
+                  256,
+                  512
+                ]
+              },
+              "M64_K512_N256_g32": {
+                "dtype": "torch.float32",
+                "frac_zero_out": 0.0,
+                "max_abs": 0.0003846883773803711,
+                "n_nonfinite": 0,
+                "quant_step_absmax": 0.00908660888671875,
+                "ref_absmax": 2.019798517227173,
+                "rel_fro": 0.00018254321184940636,
+                "shape": [
+                  64,
+                  256
+                ]
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"M256_K1024_N512_g128\": {\"dtype\": \"torch.float32\", \"shape\": [256, 512], \"max_abs\": 0.0005715787410736084, \"rel_fro\": 0.00017745645891409367, \"ref_absmax\": 2.818957805633545, \"frac_zero_out\": 0.0, \"n_nonfinite\": 0, \"quant_step_absmax\": 0.01113128662109375}, \"M64_K512_N256_g32\": {\"dtype\": \"torch.float32\", \"shape\": [64, 256], \"max_abs\": 0.0003846883773803711, \"rel_fro\": 0.00018254321184940636, \"ref_absmax\": 2.019798517227173, \"frac_zero_out\": 0.0, \"n_nonfinite\": 0, \"quant_step_absmax\": 0.00908660888671875}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t11"
+        },
+        "exit_code": 0,
+        "expected_signal": "If tiling/swizzle and dequant are faithful at larger multi-tile grids with realistically quantized weights, rel_fro stays ~1e-4 with no zero/non-finite output blocks; a whole-tile zero region or large rel_fro would indicate a tiling defect.",
+        "json_parse_error": null,
+        "json_result": {
+          "M256_K1024_N512_g128": {
+            "dtype": "torch.float32",
+            "frac_zero_out": 0.0,
+            "max_abs": 0.0005715787410736084,
+            "n_nonfinite": 0,
+            "quant_step_absmax": 0.01113128662109375,
+            "ref_absmax": 2.818957805633545,
+            "rel_fro": 0.00017745645891409367,
+            "shape": [
+              256,
+              512
+            ]
+          },
+          "M64_K512_N256_g32": {
+            "dtype": "torch.float32",
+            "frac_zero_out": 0.0,
+            "max_abs": 0.0003846883773803711,
+            "n_nonfinite": 0,
+            "quant_step_absmax": 0.00908660888671875,
+            "ref_absmax": 2.019798517227173,
+            "rel_fro": 0.00018254321184940636,
+            "shape": [
+              64,
+              256
+            ]
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"M256_K1024_N512_g128\": {\"dtype\": \"torch.float32\", \"shape\": [256, 512], \"max_abs\": 0.0005715787410736084, \"rel_fro\": 0.00017745645891409367, \"ref_absmax\": 2.818957805633545, \"frac_zero_out\": 0.0, \"n_nonfinite\": 0, \"quant_step_absmax\": 0.01113128662109375}, \"M64_K512_N256_g32\": {\"dtype\": \"torch.float32\", \"shape\": [64, 256], \"max_abs\": 0.0003846883773803711, \"rel_fro\": 0.00018254321184940636, \"ref_absmax\": 2.019798517227173, \"frac_zero_out\": 0.0, \"n_nonfinite\": 0, \"quant_step_absmax\": 0.00908660888671875}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "M256_K1024_N512_g128": {
+            "frac_zero_out": 0.0,
+            "max_abs": 0.00057158,
+            "n_nonfinite": 0,
+            "ref_absmax": 2.81896,
+            "rel_fro": 0.00017746
+          },
+          "M64_K512_N256_g32": {
+            "frac_zero_out": 0.0,
+            "max_abs": 0.00038469,
+            "n_nonfinite": 0,
+            "ref_absmax": 2.0198,
+            "rel_fro": 0.00018254
+          }
+        },
+        "event_id": "t11",
+        "status": "rebutted",
+        "summary": "Larger multi-tile probe (M=256,K=1024,N=512,group=128 and M=64,K=512,N=256,group=32) with weights actually quantized onto 16 levels per group (as the contract's declared format states) and qzeros storing zero-1: rel_fro 1.77e-4 and 1.83e-4, max_abs 5.7e-4 / 3.8e-4 vs ref_absmax 2.82 / 2.02, no zero output blocks (frac_zero_out=0), no non-finite entries, output dtype float32. No tiling/swizzle defect at multi-tile grids; kernel reproduces A @ dequant(B) to fp16 dot precision.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T14:48:27Z",
+      "id": "t12",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:44:26Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:47:03Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "b10ecdca44a24231c24509c8947cc7b8e9118d8cfdb7e4a34c411c8389f80201"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "6e86dab212f15d44ae21344d38a477a3cab1945883d42f8feb4f8f90008d1a0b"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "cols_bad": [],
+                "deq_absmax": 1.65,
+                "duration_s": 7.923637,
+                "exit_code": 0,
+                "expected_signal": "If unpacking/indexing is faithful, kernel(I, B) equals (q - (stored_zero+1))*scale elementwise to fp16 precision; a structured mismatch (wrong shift axis, wrong group row, wrong stride) indicates a defect.",
+                "frac_elems_err_gt_1e-3": 0.0,
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "max_abs_err_vs_zero_plus1": 0.00048828125,
+                "max_abs_err_vs_zero_raw": 0.11023,
+                "max_rel_err_vs_zero_plus1": 0.000485,
+                "rows_bad": [],
+                "stderr": "",
+                "stdout": "{\n  \"fp16\": {\n    \"max_abs_err_vs_zero_plus1\": 0.00048828125,\n    \"max_rel_err_vs_zero_plus1\": 0.0004852013662457466,\n    \"max_abs_err_vs_zero_raw\": 0.1102294921875,\n    \"frac_elems_err_gt_1e-3_p1\": 0.0,\n    \"deq_absmax\": 1.650390625,\n    \"rows_bad\": [],\n    \"cols_bad\": []\n  },\n  \"fp32\": {\n    \"error\": \"CompilationError('def quant_matmul_248_kernel(\\\\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\\\\n    M, N, K, bits, maxq,\\\\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\\\\n    stride_scales, stride_zeros,\\\\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK\"\n  }\n}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Identity-extraction probe (A = I_128, K=128,N=64,group=32, standard GPTQ packing: q packed along K at 4*(k%8), zeros packed along N at 4*(n%8)) recovers the kernel's effective dequant matrix. It equals (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 and max_rel_err 4.85e-4 on values up to 1.65 (pure fp16 rounding of the scale product); zero elements exceed 1e-3 error, and no bad rows or columns, so shifts along K/N, scales/zeros row indexing by g_idx, and strides are all faithful. Comparison against the raw-zero variant gives max_abs_err 0.110, confirming the only difference from the naive reading is the +1 zero-point encoding, not a mis-index. (fp32 A failed to compile due to tl.dot dtype mixing; contract inputs are fp16, not decisive.)",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            },
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:47:03Z",
+              "data": {
+                "M128_K256_N128_g128_actorder": {
+                  "max_abs": 0.009419,
+                  "ref_absmax": 41.34,
+                  "rel_fro": 0.000213
+                },
+                "M32_K128_N32_g32_actorder": {
+                  "max_abs": 0.004778,
+                  "ref_absmax": 18.44,
+                  "rel_fro": 0.000204
+                },
+                "M70_K256_N64_g64_noactorder": {
+                  "max_abs": 0.006986,
+                  "ref_absmax": 31.85,
+                  "rel_fro": 0.000208
+                },
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "df1acfee8a0678a4a9b344f3177b97d3189f2dd37473697c62d8732052f118d8"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "23464c6f3252c8834e2447b54ed119552ba96be0890dd7363d8166fe759ae7f4"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "87fcd61c9e0d2fe9db3af7b1b5d88889d2d82099a58eb43d1defb437f09ce41c"
+                  }
+                ],
+                "duration_s": 8.29391,
+                "exit_code": 0,
+                "expected_signal": "If the full matmul path is faithful, relative Frobenius error stays at fp16 accumulation level (<~1e-3) across masked M, act-order permuted g_idx, and multiple group sizes; structured large errors would indicate a defect.",
+                "json_parse_error": null,
+                "json_result": {
+                  "M128_K256_N128_g128_ao1": {
+                    "max_abs": 0.009418964385986328,
+                    "max_rel": 0.7556527256965637,
+                    "ref_absmax": 41.34428405761719,
+                    "rel_fro": 0.00021303405810613185,
+                    "rows_bad_gt_5pct": [
+                      4,
+                      7,
+                      8,
+                      9,
+                      11,
+                      26,
+                      32,
+                      34,
+                      41,
+                      44
+                    ]
+                  },
+                  "M32_K128_N32_g32_ao1": {
+                    "max_abs": 0.0047779083251953125,
+                    "max_rel": 0.07393935322761536,
+                    "ref_absmax": 18.441831588745117,
+                    "rel_fro": 0.00020436268823686987,
+                    "rows_bad_gt_5pct": [
+                      17
+                    ]
+                  },
+                  "M70_K256_N64_g64_ao0": {
+                    "max_abs": 0.006985664367675781,
+                    "max_rel": 2.922546863555908,
+                    "ref_absmax": 31.84917449951172,
+                    "rel_fro": 0.00020753659191541374,
+                    "rows_bad_gt_5pct": [
+                      1,
+                      5,
+                      9,
+                      11,
+                      25,
+                      29,
+                      42,
+                      55,
+                      56,
+                      59
+                    ]
+                  }
+                },
+                "stderr": "",
+                "stdout": "{\"M70_K256_N64_g64_ao0\": {\"max_abs\": 0.006985664367675781, \"max_rel\": 2.922546863555908, \"ref_absmax\": 31.84917449951172, \"rel_fro\": 0.00020753659191541374, \"rows_bad_gt_5pct\": [1, 5, 9, 11, 25, 29, 42, 55, 56, 59]}, \"M128_K256_N128_g128_ao1\": {\"max_abs\": 0.009418964385986328, \"max_rel\": 0.7556527256965637, \"ref_absmax\": 41.34428405761719, \"rel_fro\": 0.00021303405810613185, \"rows_bad_gt_5pct\": [4, 7, 8, 9, 11, 26, 32, 34, 41, 44]}, \"M32_K128_N32_g32_ao1\": {\"max_abs\": 0.0047779083251953125, \"max_rel\": 0.07393935322761536, \"ref_absmax\": 18.441831588745117, \"rel_fro\": 0.00020436268823686987, \"rows_bad_gt_5pct\": [17]}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e2",
+              "kind": "runtime_probe",
+              "summary": "Full matmul path vs fp32 reference A@dequant(B) over three configs including M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128: relative Frobenius error 2.04e-4 / 2.08e-4 / 2.13e-4, max_abs 0.0048-0.0094 against ref_absmax 18-41. This is fp16 dot/dequant rounding level. The large max_rel values (0.07-2.9) occur only on near-zero cancellation entries (max_abs stays <1e-2 while ref magnitudes reach 41), i.e. a metric artifact, not a structured error. Masked-M rows and permuted g_idx behave identically to the aligned case.",
+              "supports": "rebutted",
+              "tool_event_id": "t8"
+            },
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:48:27Z",
+              "data": {
+                "M256_K1024_N512_g128": {
+                  "frac_zero_out": 0.0,
+                  "max_abs": 0.00057158,
+                  "n_nonfinite": 0,
+                  "ref_absmax": 2.81896,
+                  "rel_fro": 0.00017746
+                },
+                "M64_K512_N256_g32": {
+                  "frac_zero_out": 0.0,
+                  "max_abs": 0.00038469,
+                  "n_nonfinite": 0,
+                  "ref_absmax": 2.0198,
+                  "rel_fro": 0.00018254
+                },
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t11_probe.py",
+                    "sha256": "b9310e02dd62598b4f1cdcb9a707428a7687a819b269dc4ad400d2989a95404f"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t11_stdout.txt",
+                    "sha256": "0d1fa724c29fc01bfe7e75ca572745357c46c3cf9ce218f17c096e851e74814f"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t11_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t11_json_result.json",
+                    "sha256": "579ab0e1e352e7267948a331cce8bee5fe95bd2bb1d770cf96706061b07bade4"
+                  }
+                ],
+                "duration_s": 7.330505,
+                "exit_code": 0,
+                "expected_signal": "If tiling/swizzle and dequant are faithful at larger multi-tile grids with realistically quantized weights, rel_fro stays ~1e-4 with no zero/non-finite output blocks; a whole-tile zero region or large rel_fro would indicate a tiling defect.",
+                "json_parse_error": null,
+                "json_result": {
+                  "M256_K1024_N512_g128": {
+                    "dtype": "torch.float32",
+                    "frac_zero_out": 0.0,
+                    "max_abs": 0.0005715787410736084,
+                    "n_nonfinite": 0,
+                    "quant_step_absmax": 0.01113128662109375,
+                    "ref_absmax": 2.818957805633545,
+                    "rel_fro": 0.00017745645891409367,
+                    "shape": [
+                      256,
+                      512
+                    ]
+                  },
+                  "M64_K512_N256_g32": {
+                    "dtype": "torch.float32",
+                    "frac_zero_out": 0.0,
+                    "max_abs": 0.0003846883773803711,
+                    "n_nonfinite": 0,
+                    "quant_step_absmax": 0.00908660888671875,
+                    "ref_absmax": 2.019798517227173,
+                    "rel_fro": 0.00018254321184940636,
+                    "shape": [
+                      64,
+                      256
+                    ]
+                  }
+                },
+                "stderr": "",
+                "stdout": "{\"M256_K1024_N512_g128\": {\"dtype\": \"torch.float32\", \"shape\": [256, 512], \"max_abs\": 0.0005715787410736084, \"rel_fro\": 0.00017745645891409367, \"ref_absmax\": 2.818957805633545, \"frac_zero_out\": 0.0, \"n_nonfinite\": 0, \"quant_step_absmax\": 0.01113128662109375}, \"M64_K512_N256_g32\": {\"dtype\": \"torch.float32\", \"shape\": [64, 256], \"max_abs\": 0.0003846883773803711, \"rel_fro\": 0.00018254321184940636, \"ref_absmax\": 2.019798517227173, \"frac_zero_out\": 0.0, \"n_nonfinite\": 0, \"quant_step_absmax\": 0.00908660888671875}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e3",
+              "kind": "runtime_probe",
+              "summary": "Larger multi-tile probe (M=256,K=1024,N=512,group=128 and M=64,K=512,N=256,group=32) with weights actually quantized onto 16 levels per group (as the contract's declared format states) and qzeros storing zero-1: rel_fro 1.77e-4 and 1.83e-4, max_abs 5.7e-4 / 3.8e-4 vs ref_absmax 2.82 / 2.02, no zero output blocks (frac_zero_out=0), no non-finite entries, output dtype float32. No tiling/swizzle defect at multi-tile grids; kernel reproduces A @ dequant(B) to fp16 dot precision.",
+              "supports": "rebutted",
+              "tool_event_id": "t11"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Contract fixes dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]. Kernel unpacks q with shifter=(offs_k%8)*4 along K, zeros with (offs_bn%8)*4 along N, and indexes scales/zeros rows by g_idx. Any shift/stride/group indexing error would break the required formula.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Declares C = A @ dequant(B) with dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], 4-bit weights packed into int32 words with per-(group,column) scale and zero-point."
+            }
+          ],
+          "scope_rationale": "The contract states the exact dequant formula and that the kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format; a mismatch on representative 4-bit packed inputs violates a stated requirement.",
+          "statement": "The kernel's dequantization deviates from the contract formula (unpacked_q - zero)*scale by more than a uniform zero-point convention offset, i.e. it mis-indexes or mis-unpacks q, scales, zeros, or g_idx, so C != A @ dequant(B) for standard 4-bit GPTQ packing.",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:48:27Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:48:27Z",
+          "data": {
+            "M256_K1024_N512_g128": {
+              "frac_zero_out": 0.0,
+              "max_abs": 0.00057158,
+              "n_nonfinite": 0,
+              "ref_absmax": 2.81896,
+              "rel_fro": 0.00017746
+            },
+            "M64_K512_N256_g32": {
+              "frac_zero_out": 0.0,
+              "max_abs": 0.00038469,
+              "n_nonfinite": 0,
+              "ref_absmax": 2.0198,
+              "rel_fro": 0.00018254
+            },
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "b9310e02dd62598b4f1cdcb9a707428a7687a819b269dc4ad400d2989a95404f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "0d1fa724c29fc01bfe7e75ca572745357c46c3cf9ce218f17c096e851e74814f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "579ab0e1e352e7267948a331cce8bee5fe95bd2bb1d770cf96706061b07bade4"
+              }
+            ],
+            "duration_s": 7.330505,
+            "exit_code": 0,
+            "expected_signal": "If tiling/swizzle and dequant are faithful at larger multi-tile grids with realistically quantized weights, rel_fro stays ~1e-4 with no zero/non-finite output blocks; a whole-tile zero region or large rel_fro would indicate a tiling defect.",
+            "json_parse_error": null,
+            "json_result": {
+              "M256_K1024_N512_g128": {
+                "dtype": "torch.float32",
+                "frac_zero_out": 0.0,
+                "max_abs": 0.0005715787410736084,
+                "n_nonfinite": 0,
+                "quant_step_absmax": 0.01113128662109375,
+                "ref_absmax": 2.818957805633545,
+                "rel_fro": 0.00017745645891409367,
+                "shape": [
+                  256,
+                  512
+                ]
+              },
+              "M64_K512_N256_g32": {
+                "dtype": "torch.float32",
+                "frac_zero_out": 0.0,
+                "max_abs": 0.0003846883773803711,
+                "n_nonfinite": 0,
+                "quant_step_absmax": 0.00908660888671875,
+                "ref_absmax": 2.019798517227173,
+                "rel_fro": 0.00018254321184940636,
+                "shape": [
+                  64,
+                  256
+                ]
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"M256_K1024_N512_g128\": {\"dtype\": \"torch.float32\", \"shape\": [256, 512], \"max_abs\": 0.0005715787410736084, \"rel_fro\": 0.00017745645891409367, \"ref_absmax\": 2.818957805633545, \"frac_zero_out\": 0.0, \"n_nonfinite\": 0, \"quant_step_absmax\": 0.01113128662109375}, \"M64_K512_N256_g32\": {\"dtype\": \"torch.float32\", \"shape\": [64, 256], \"max_abs\": 0.0003846883773803711, \"rel_fro\": 0.00018254321184940636, \"ref_absmax\": 2.019798517227173, \"frac_zero_out\": 0.0, \"n_nonfinite\": 0, \"quant_step_absmax\": 0.00908660888671875}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e3",
+          "kind": "runtime_probe",
+          "summary": "Larger multi-tile probe (M=256,K=1024,N=512,group=128 and M=64,K=512,N=256,group=32) with weights actually quantized onto 16 levels per group (as the contract's declared format states) and qzeros storing zero-1: rel_fro 1.77e-4 and 1.83e-4, max_abs 5.7e-4 / 3.8e-4 vs ref_absmax 2.82 / 2.02, no zero output blocks (frac_zero_out=0), no non-finite entries, output dtype float32. No tiling/swizzle defect at multi-tile grids; kernel reproduces A @ dequant(B) to fp16 dot precision.",
+          "supports": "rebutted",
+          "tool_event_id": "t11"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "data": {
+          "contract_specifies_encoding": false,
+          "effective_zero": "stored_code+1",
+          "kernel_lines": [
+            45,
+            46
+          ],
+          "t7_max_abs_err_vs_zero_plus1": 0.00048828125,
+          "t7_max_abs_err_vs_zero_raw": 0.11023
+        },
+        "kind": "source_inspection",
+        "summary": "Kernel line 45-46 unpacks the packed zero code and then adds 1, exactly as in the named upstream reference auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel that problem.txt cites as the operation being implemented. The contract's formula uses an abstract zero[g_idx[k],n] and does not state how that zero is encoded inside the packed int32 words, so the +1 is the encoding convention of the cited source (qzeros stores zero-1), not a deviation from the stated formula. Probe t7 confirms numerically that the effective zero used by the kernel is exactly stored_code+1 (max_abs_err 4.9e-4 vs the +1 reference, 0.110 vs the raw-code reference), i.e. a uniform, self-consistent zero-point encoding rather than a mis-index. Cannot be decided as a defect from problem.txt alone; treated as an accepted convention.",
+        "supports": "inconclusive"
+      },
+      "created_at": "2026-09-08T14:48:27Z",
+      "id": "t13",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:48:27Z",
+        "data": {
+          "contract_specifies_encoding": false,
+          "effective_zero": "stored_code+1",
+          "kernel_lines": [
+            45,
+            46
+          ],
+          "t7_max_abs_err_vs_zero_plus1": 0.00048828125,
+          "t7_max_abs_err_vs_zero_raw": 0.11023
+        },
+        "id": "c2.e1",
+        "kind": "source_inspection",
+        "summary": "Kernel line 45-46 unpacks the packed zero code and then adds 1, exactly as in the named upstream reference auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel that problem.txt cites as the operation being implemented. The contract's formula uses an abstract zero[g_idx[k],n] and does not state how that zero is encoded inside the packed int32 words, so the +1 is the encoding convention of the cited source (qzeros stores zero-1), not a deviation from the stated formula. Probe t7 confirms numerically that the effective zero used by the kernel is exactly stored_code+1 (max_abs_err 4.9e-4 vs the +1 reference, 0.110 vs the raw-code reference), i.e. a uniform, self-consistent zero-point encoding rather than a mis-index. Cannot be decided as a defect from problem.txt alone; treated as an accepted convention.",
+        "supports": "inconclusive",
+        "tool_event_id": null
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "status": "confirmed"
+      },
+      "created_at": "2026-09-08T14:49:29Z",
+      "id": "t14",
+      "output": {
+        "error": {
+          "message": "claim c2 needs evidence supporting confirmed before status update",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t14",
+        "message": "claim c2 needs evidence supporting confirmed before status update",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "confidence": 0.85,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The kernel is a faithful reproduction of the cited upstream AutoGPTQ quant_matmul_248_kernel, and three GPU probes show it evaluates C = A @ dequant(B) as the contract requires.\\n\\nt7 (identity extraction, A = I_128, K=128, N=64, group=32, standard GPTQ packing: q at 4*(k%8) along K, zeros at 4*(n%8) along N) recovered the kernel's effective dequant matrix. It matched (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 / max_rel_err 4.85e-4 on values up to 1.65, zero elements above 1e-3, and no bad rows or columns -- so the K-axis and N-axis shifts, the g_idx row indexing of scales/zeros, and the strides are all correct. The same output differs from the raw-zero-code reading by 0.110, isolating the single difference as the zero-point encoding, not a mis-index.\\n\\nt8 (full matmul vs fp32 reference) over M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128 gave relative Frobenius errors 2.04e-4, 2.08e-4, 2.13e-4 with max_abs 0.005-0.009 against ref_absmax 18-41. The large max_rel figures (0.07-2.9) occur only on near-zero cancellation entries while max_abs stays <1e-2, i.e. a metric artifact rather than structured error.\\n\\nt11 (multi-tile, M=256/K=1024/N=512/group=128 and M=64/K=512/N=256/group=32) built weights actually quantized onto 16 levels per group -- the declared 4-bit format in problem.txt -- with qzeros storing zero-1. rel_fro 1.77e-4 and 1.83e-4, max_abs 5.7e-4/3.8e-4 vs ref_absmax 2.82/2.02, frac_zero_out = 0, no non-finite entries, output dtype float32. No tiling/swizzle defect appears at multi-tile grids. All residual error is fp16 dequant/dot rounding, which the contract's declared low-precision format accounts for.\\n\\nc2 (the zeros+1 offset) is confirmed as the encoding convention of the named upstream source rather than a deviation: problem.txt states the formula with an abstract zero[g_idx[k],n] and never specifies how that zero is encoded in the packed int32 words, and t7 shows the effective zero is uniformly stored_code+1. Under that self-consistent convention the kernel matches the stated formula.\\n\\nNot established: behaviour for N or K not a multiple of the block sizes (b/zeros loads are unmasked along N, as in upstream; stored values are still guarded by c_mask), and fp32 activations, which fail to compile due to tl.dot dtype mixing but are outside the fp16 GPTQ input domain. Neither is a contract-required behaviour.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-08T14:49:29Z",
+      "id": "t15",
+      "output": {
+        "error": {
+          "message": "trust verdict requires all claims to be resolved; open claims: c2",
+          "recoverable": true,
+          "type": "ValueError"
+        },
+        "error_type": "ValueError",
+        "event_id": "t15",
+        "message": "trust verdict requires all claims to be resolved; open claims: c2",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_verdict"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "status": "inconclusive"
+      },
+      "created_at": "2026-09-08T14:49:43Z",
+      "id": "t16",
+      "output": {
+        "created_at": "2026-09-08T14:44:26Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-09-08T14:48:27Z",
+            "data": {
+              "contract_specifies_encoding": false,
+              "effective_zero": "stored_code+1",
+              "kernel_lines": [
+                45,
+                46
+              ],
+              "t7_max_abs_err_vs_zero_plus1": 0.00048828125,
+              "t7_max_abs_err_vs_zero_raw": 0.11023
+            },
+            "id": "c2.e1",
+            "kind": "source_inspection",
+            "summary": "Kernel line 45-46 unpacks the packed zero code and then adds 1, exactly as in the named upstream reference auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel that problem.txt cites as the operation being implemented. The contract's formula uses an abstract zero[g_idx[k],n] and does not state how that zero is encoded inside the packed int32 words, so the +1 is the encoding convention of the cited source (qzeros stores zero-1), not a deviation from the stated formula. Probe t7 confirms numerically that the effective zero used by the kernel is exactly stored_code+1 (max_abs_err 4.9e-4 vs the +1 reference, 0.110 vs the raw-code reference), i.e. a uniform, self-consistent zero-point encoding rather than a mis-index. Cannot be decided as a defect from problem.txt alone; treated as an accepted convention.",
+            "supports": "inconclusive",
+            "tool_event_id": null
+          }
+        ],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Line 46 does zeros = zeros + 1 after unpacking. Whether this is a defect depends on the packing convention the contract intends; upstream AutoGPTQ triton QuantLinear packs zero-1.",
+        "scope": "unknown",
+        "scope_evidence": [],
+        "scope_rationale": "The contract does not state how the zero-point is encoded inside the packed int32 words, so the +1 convention is not decidable from problem.txt alone.",
+        "statement": "The kernel adds 1 to the unpacked zero-point (zeros+1), which is the upstream AutoGPTQ packing convention (qzeros stores zero-1) rather than a defect; with that convention the outputs match the contract formula exactly.",
+        "status": "inconclusive",
+        "updated_at": "2026-09-08T14:49:43Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "confidence": 0.85,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The kernel reproduces the cited upstream AutoGPTQ quant_matmul_248_kernel, and three GPU probes show it evaluates C = A @ dequant(B) as problem.txt requires.\n\nt7 (identity extraction, A = I_128, K=128, N=64, group=32, standard GPTQ packing: q at shift 4*(k%8) along K, zeros at 4*(n%8) along N) recovered the kernel's effective dequant matrix. It matched (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 and max_rel_err 4.85e-4 on values up to 1.65, zero elements above 1e-3 error, and no bad rows or columns \u2014 so the K-axis and N-axis shifts, the g_idx row indexing of scales/zeros, and the strides are all faithful. The same output differs from the raw-zero-code reading by 0.110, isolating the only difference as the zero-point encoding rather than a mis-index.\n\nt8 (full matmul vs fp32 reference A@dequant(B)) over M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128 gave relative Frobenius errors 2.04e-4 / 2.08e-4 / 2.13e-4 with max_abs 0.0048\u20130.0094 against ref_absmax 18\u201341. The large max_rel figures (0.07\u20132.9) occur only on near-zero cancellation entries while max_abs stays below 1e-2, i.e. a metric artifact, not a structured error.\n\nt11 (multi-tile: M=256/K=1024/N=512/group=128 and M=64/K=512/N=256/group=32) used weights actually quantized onto 16 levels per group \u2014 the declared 4-bit format in problem.txt \u2014 with qzeros storing zero-1: rel_fro 1.77e-4 and 1.83e-4, max_abs 5.7e-4/3.8e-4 vs ref_absmax 2.82/2.02, frac_zero_out = 0, no non-finite entries, output dtype float32. No tiling/swizzle defect appears at multi-tile grids. All residual error is fp16 dequant/dot rounding, which the contract's declared low-precision format accounts for.\n\nc2 (the zeros+1 offset) remains inconclusive rather than a defect: problem.txt states the formula with an abstract zero[g_idx[k],n] and never specifies how that zero is encoded in the packed int32 words, and t7 showed the effective zero is uniformly stored_code+1 \u2014 the encoding convention of the named upstream source (qzeros stores zero-1), self-consistent and not a mis-index. It therefore cannot support a reject on the stated contract.\n\nNot established: behaviour when N or K is not a multiple of the block sizes (b/zeros loads are unmasked along N as in upstream, though stored values are still guarded by c_mask), and fp32 activations, which fail to compile due to tl.dot dtype mixing but fall outside the fp16 GPTQ input domain the contract implies. Neither is a contract-required behaviour.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-08T14:50:02Z",
+      "id": "t17",
+      "output": {
+        "confidence": 0.85,
+        "created_at": "2026-09-08T14:50:02Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The kernel reproduces the cited upstream AutoGPTQ quant_matmul_248_kernel, and three GPU probes show it evaluates C = A @ dequant(B) as problem.txt requires.\n\nt7 (identity extraction, A = I_128, K=128, N=64, group=32, standard GPTQ packing: q at shift 4*(k%8) along K, zeros at 4*(n%8) along N) recovered the kernel's effective dequant matrix. It matched (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 and max_rel_err 4.85e-4 on values up to 1.65, zero elements above 1e-3 error, and no bad rows or columns \u2014 so the K-axis and N-axis shifts, the g_idx row indexing of scales/zeros, and the strides are all faithful. The same output differs from the raw-zero-code reading by 0.110, isolating the only difference as the zero-point encoding rather than a mis-index.\n\nt8 (full matmul vs fp32 reference A@dequant(B)) over M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128 gave relative Frobenius errors 2.04e-4 / 2.08e-4 / 2.13e-4 with max_abs 0.0048\u20130.0094 against ref_absmax 18\u201341. The large max_rel figures (0.07\u20132.9) occur only on near-zero cancellation entries while max_abs stays below 1e-2, i.e. a metric artifact, not a structured error.\n\nt11 (multi-tile: M=256/K=1024/N=512/group=128 and M=64/K=512/N=256/group=32) used weights actually quantized onto 16 levels per group \u2014 the declared 4-bit format in problem.txt \u2014 with qzeros storing zero-1: rel_fro 1.77e-4 and 1.83e-4, max_abs 5.7e-4/3.8e-4 vs ref_absmax 2.82/2.02, frac_zero_out = 0, no non-finite entries, output dtype float32. No tiling/swizzle defect appears at multi-tile grids. All residual error is fp16 dequant/dot rounding, which the contract's declared low-precision format accounts for.\n\nc2 (the zeros+1 offset) remains inconclusive rather than a defect: problem.txt states the formula with an abstract zero[g_idx[k],n] and never specifies how that zero is encoded in the packed int32 words, and t7 showed the effective zero is uniformly stored_code+1 \u2014 the encoding convention of the named upstream source (qzeros stores zero-1), self-consistent and not a mis-index. It therefore cannot support a reject on the stated contract.\n\nNot established: behaviour when N or K is not a multiple of the block sizes (b/zeros loads are unmasked along N as in upstream, though stored values are still guarded by c_mask), and fp32 activations, which fail to compile due to tl.dot dtype mixing but fall outside the fp16 GPTQ input domain the contract implies. Neither is a contract-required behaviour.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.85,
+    "created_at": "2026-09-08T14:50:02Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The kernel reproduces the cited upstream AutoGPTQ quant_matmul_248_kernel, and three GPU probes show it evaluates C = A @ dequant(B) as problem.txt requires.\n\nt7 (identity extraction, A = I_128, K=128, N=64, group=32, standard GPTQ packing: q at shift 4*(k%8) along K, zeros at 4*(n%8) along N) recovered the kernel's effective dequant matrix. It matched (q - (stored_zero+1))*scale with max_abs_err 4.88e-4 and max_rel_err 4.85e-4 on values up to 1.65, zero elements above 1e-3 error, and no bad rows or columns \u2014 so the K-axis and N-axis shifts, the g_idx row indexing of scales/zeros, and the strides are all faithful. The same output differs from the raw-zero-code reading by 0.110, isolating the only difference as the zero-point encoding rather than a mis-index.\n\nt8 (full matmul vs fp32 reference A@dequant(B)) over M=70 (not a multiple of BLOCK_M=32), act-order permuted g_idx, and group sizes 32/64/128 gave relative Frobenius errors 2.04e-4 / 2.08e-4 / 2.13e-4 with max_abs 0.0048\u20130.0094 against ref_absmax 18\u201341. The large max_rel figures (0.07\u20132.9) occur only on near-zero cancellation entries while max_abs stays below 1e-2, i.e. a metric artifact, not a structured error.\n\nt11 (multi-tile: M=256/K=1024/N=512/group=128 and M=64/K=512/N=256/group=32) used weights actually quantized onto 16 levels per group \u2014 the declared 4-bit format in problem.txt \u2014 with qzeros storing zero-1: rel_fro 1.77e-4 and 1.83e-4, max_abs 5.7e-4/3.8e-4 vs ref_absmax 2.82/2.02, frac_zero_out = 0, no non-finite entries, output dtype float32. No tiling/swizzle defect appears at multi-tile grids. All residual error is fp16 dequant/dot rounding, which the contract's declared low-precision format accounts for.\n\nc2 (the zeros+1 offset) remains inconclusive rather than a defect: problem.txt states the formula with an abstract zero[g_idx[k],n] and never specifies how that zero is encoded in the packed int32 words, and t7 showed the effective zero is uniformly stored_code+1 \u2014 the encoding convention of the named upstream source (qzeros stores zero-1), self-consistent and not a mis-index. It therefore cannot support a reject on the stated contract.\n\nNot established: behaviour when N or K is not a multiple of the block sizes (b/zeros loads are unmasked along N as in upstream, though stored values are still guarded by c_mask), and fp32 activations, which fail to compile due to tl.dot dtype mixing but fall outside the fp16 GPTQ input domain the contract implies. Neither is a contract-required behaviour.",
+    "verdict": "trust"
+  }
+}

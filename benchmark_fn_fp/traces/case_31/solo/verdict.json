@@ -1,0 +1,9 @@
+{
+  "confidence": 0.93,
+  "created_at": "2026-09-08T14:55:01Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The contract (problem.txt) explicitly declares that sequence lengths are arbitrary, need not be multiples of the block size, and that positions past a sequence's end \"must not contribute to the softmax\". kernel.py:226 computes the key-side partial-block flag globally, EVEN_SEQ_KBLOCK = ((cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0), instead of per-sequence as the query side correctly does at line 227. When that flag is True the kernel compiles out both the K/V bound mask (lines 117-127) and the -inf tail masking at lines 155-156, so a partial final key block silently absorbs rows belonging to the next sequence (and can read past the tensor).\n\nProbe t8 (evidence c1.e1) ran the real kernel with q/k seqlens [8,24] (total 32, block size 16, headdim 16, all blocks selected, causal=False) - an input the contract admits, since neither 8 nor 24 is a multiple of 16 while the total is. EVEN_SEQ_KBLOCK evaluated True. Sequence-0 output rows (0-7) differ from the per-sequence-restricted softmax reference by max abs 1.7364, but match a \"leaky\" reference in which sequence-0 queries attend to keys 0..15 (i.e. including sequence-1 keys 8..15) to within 2.4e-7 - i.e. the kernel is exactly computing the cross-sequence attention the contract forbids, not merely a rounding-level deviation. Sequence-1 rows (8-31) also deviate by max abs 0.4278, consistent with the last k block (off_n = 24..39) being loaded unmasked past the end of the 32-row K/V tensors. An earlier attempt at the same claim with block size 4 (t7) only failed on a Triton tl.dot K>=8 constraint, which is why block size 16 was used.\n\nThis is a violation of a behaviour the contract explicitly requires, on an input the contract explicitly declares in scope, so the verdict is reject.",
+  "verdict": "reject"
+}

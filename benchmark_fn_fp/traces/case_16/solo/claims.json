@@ -1,0 +1,110 @@
+[
+  {
+    "created_at": "2026-09-08T14:48:55Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:49:27Z",
+        "data": {
+          "K100_err_vs_full": 10.942752838134766,
+          "K100_err_vs_truncated": 1.33514404296875e-05,
+          "K100_ref_absmax": 41.098785400390625,
+          "K128_err_vs_full": 1.52587890625e-05,
+          "K16_Ktrunc": 0,
+          "K16_err_vs_full": 18.517723083496094,
+          "K16_err_vs_truncated": 0.0,
+          "K40_err_vs_full": 12.568033218383789,
+          "K40_err_vs_truncated": 0.0,
+          "K40_ref_absmax": 26.165523529052734,
+          "K64_err_vs_full": 9.5367431640625e-06,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "9d3a296dd3af0213675046279f15bb7cb8f982d044e68d9a355f8edabcfb5ae7"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "3b43e3d21ead872f35e0495dd08637dda5bcd5305fcf98defb7c413d22879969"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 7.870885,
+          "exit_code": 0,
+          "expected_signal": "K=40,100,16 should show large error vs full A@B and ~0 vs truncated; K=64,128 near zero error.",
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "stderr": "",
+          "stdout": "{\n \"M64_N64_K40\": {\n  \"max_abs_err_vs_full\": 12.568033218383789,\n  \"max_abs_err_vs_truncated\": 0.0,\n  \"ref_absmax\": 26.165523529052734,\n  \"Ktrunc\": 32\n },\n \"M100_N70_K100\": {\n  \"max_abs_err_vs_full\": 10.942752838134766,\n  \"max_abs_err_vs_truncated\": 1.33514404296875e-05,\n  \"ref_absmax\": 41.098785400390625,\n  \"Ktrunc\": 96\n },\n \"M64_N64_K64\": {\n  \"max_abs_err_vs_full\": 9.5367431640625e-06,\n  \"max_abs_err_vs_truncated\": 9.5367431640625e-06,\n  \"ref_absmax\": 34.371124267578125,\n  \"Ktrunc\": 64\n },\n \"M70_N100_K128\": {\n  \"max_abs_err_vs_full\": 1.52587890625e-05,\n  \"max_abs_err_vs_truncated\": 1.52587890625e-05,\n  \"ref_absmax\": 48.92439651489258,\n  \"Ktrunc\": 128\n },\n \"M32_N32_K16\": {\n  \"max_abs_err_vs_full\": 18.517723083496094,\n  \"max_abs_err_vs_truncated\": 0.0,\n  \"ref_absmax\": 18.517723083496094,\n  \"Ktrunc\": 0\n }\n}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "K-tail is dropped. For K=40 (Ktrunc=32): max|C - A@B| = 12.57 vs ref absmax 26.17, while max|C - A[:, :32]@B[:32,:]| = 0.0 exactly. For K=100 (Ktrunc=96): err vs full = 10.94 (ref absmax 41.10), err vs truncated = 1.3e-5 (fp32 reduction-order noise). For K=16 (Ktrunc=0): err vs full = 18.52 = ref absmax, i.e. output is all zeros. K=64 and K=128 agree with full A@B to 1.5e-5. This is exactly the failure the contract calls out.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Line 19 loops `range(0, K // BLOCK_K)` and there is no masked epilogue tile; offs_k has no K-bound mask. The contract explicitly declares K need not be a multiple of BLOCK_K and requires the leftover entries to participate.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'M, N and K may each be any positive integer. In particular K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.'"
+      },
+      {
+        "source": "problem.txt",
+        "summary": "C[m, n] = sum over k of A[m, k] * B[k, n] \u2014 full K reduction is required."
+      }
+    ],
+    "scope_rationale": "The problem statement declares the input domain as any positive M, N, K and states specifically that K is NOT required to be a multiple of the kernel's K block size, with the final partial tile contributing to the sum. K=40 (or 100) is a representative admitted input.",
+    "statement": "matmul() drops the partial final K tile: for K not a multiple of BLOCK_K=32, the kernel only accumulates floor(K/32)*32 of the K terms, so C differs from A@B (and equals A[:, :K//32*32] @ B[:K//32*32, :]).",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:49:27Z"
+  },
+  {
+    "created_at": "2026-09-08T14:48:55Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:49:27Z",
+        "data": {
+          "K64_max_abs_err": 9.5367431640625e-06,
+          "K64_ref_absmax": 34.371124267578125,
+          "M70_N100_K128_max_abs_err": 1.52587890625e-05,
+          "M70_N100_K128_ref_absmax": 48.92439651489258
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Same probe (t7) covered the K-multiple-of-32 baseline: M=64,N=64,K=64 max abs err vs torch.matmul = 9.54e-6 (ref absmax 34.37); M=70,N=100,K=128 (both M and N non-multiples of the 64 tile) max abs err = 1.53e-5 (ref absmax 48.92). M/N masking and pointer arithmetic are correct; the defect is isolated to the K tail.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "solo",
+    "rationale": "Baseline check that the M/N masking and pointer arithmetic are otherwise correct, isolating the K-tail issue.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: C = A @ B for float32 operands, any positive M, N, K."
+      }
+    ],
+    "scope_rationale": "Contract admits any positive M, N, K; K multiple of 32 is a subset of the declared domain.",
+    "statement": "For K a multiple of 32 (and arbitrary M, N including non-multiples of 64), matmul() matches torch.matmul within float32 tolerance.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:49:30Z"
+  }
+]

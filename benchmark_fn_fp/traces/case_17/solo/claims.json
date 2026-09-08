@@ -1,0 +1,89 @@
+[
+  {
+    "created_at": "2026-09-08T14:49:02Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:49:31Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "baa3deea9dd5f78ce22e037293e4c1fe1b43099d1fb44de0de4329b919134fdc"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "8f27b136fe210ae20c447f78f97bd1d58ba3ff199d9fc486695cf5743b6e76d2"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 8.018577,
+          "exit_code": 0,
+          "expected_signal": "If claim holds: for seqlen=200/100/65/63 the tail region outputs are exactly zero and max_abs_err_tail is large, while head error ~0. If rebutted: allclose true for all.",
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "metric": "max abs err vs torch.cumsum, split head vs tail region",
+          "seqlen_100": {
+            "max_abs_err_head": 9.5367431640625e-07,
+            "max_abs_err_tail": 23.17313003540039,
+            "tail_len": 36,
+            "tail_out_all_zero": true
+          },
+          "seqlen_128_max_abs_err": 1.9073486328125e-06,
+          "seqlen_200": {
+            "max_abs_err_head": 1.9073486328125e-06,
+            "max_abs_err_tail": 23.936138153076172,
+            "tail_len": 8,
+            "tail_out_all_zero": true
+          },
+          "seqlen_63": {
+            "max_abs_err_tail": 10.159927368164062,
+            "tail_len": 63,
+            "tail_out_all_zero": true
+          },
+          "seqlen_65": {
+            "max_abs_err_tail": 28.420053482055664,
+            "tail_len": 1,
+            "tail_out_all_zero": true
+          },
+          "stderr": "",
+          "stdout": "{\n \"metric\": \"elementwise abs err vs torch.cumsum, split head/tail\",\n \"results\": {\n  \"128\": {\n   \"seqlen\": 128,\n   \"tail_len\": 0,\n   \"max_abs_err\": 1.9073486328125e-06,\n   \"max_abs_err_head\": 1.9073486328125e-06,\n   \"max_abs_err_tail\": null,\n   \"tail_out_all_zero\": null,\n   \"ref_tail_absmax\": null,\n   \"allclose\": true\n  },\n  \"200\": {\n   \"seqlen\": 200,\n   \"tail_len\": 8,\n   \"max_abs_err\": 23.936138153076172,\n   \"max_abs_err_head\": 1.9073486328125e-06,\n   \"max_abs_err_tail\": 23.936138153076172,\n   \"tail_out_all_zero\": true,\n   \"ref_tail_absmax\": 23.936138153076172,\n   \"allclose\": false\n  },\n  \"100\": {\n   \"seqlen\": 100,\n   \"tail_len\": 36,\n   \"max_abs_err\": 23.17313003540039,\n   \"max_abs_err_head\": 9.5367431640625e-07,\n   \"max_abs_err_tail\": 23.17313003540039,\n   \"tail_out_all_zero\": true,\n   \"ref_tail_absmax\": 23.17313003540039,\n   \"allclose\": false\n  },\n  \"65\": {\n   \"seqlen\": 65,\n   \"tail_len\": 1,\n   \"max_abs_err\": 28.420053482055664,\n   \"max_abs_err_head\": 3.814697265625e-06,\n   \"max_abs_err_tail\": 28.420053482055664,\n   \"tail_out_all_zero\": true,\n   \"ref_tail_absmax\": 28.420053482055664,\n   \"allclose\": false\n  },\n  \"63\": {\n   \"seqlen\": 63,\n   \"tail_len\": 63,\n   \"max_abs_err\": 10.159927368164062,\n   \"max_abs_err_head\": null,\n   \"max_abs_err_tail\": 10.159927368164062,\n   \"tail_out_all_zero\": true,\n   \"ref_tail_absmax\": 10.159927368164062,\n   \"allclose\": false\n  }\n }\n}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t6 ran chunked_cumsum(chunk=64) against torch.cumsum for seqlen in {128,200,100,65,63}, batch=4, float32 CUDA. seqlen=128 (exact multiple) matches to 1.9e-6. For every non-multiple seqlen the trailing seqlen%64 columns are exactly zero (tail_out_all_zero=True) while the reference values there are large (e.g. seqlen=200: max_abs_err_tail=23.94; seqlen=65: 28.42; seqlen=63: all 63 columns zero, err 10.16). Head region error stays ~1e-6, isolating the failure to the unprocessed partial final chunk, exactly as predicted by n_chunks = seqlen // CHUNK.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Line 11 computes n_chunks by floor division and the loop over c in range(n_chunks) never covers offsets >= n_chunks*CHUNK; out is initialized with torch.zeros_like, so tail entries stay 0.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.\""
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Required formula y[b,t] = sum_{s<=t} x[b,s] for all t."
+      }
+    ],
+    "scope_rationale": "problem.txt states seqlen may be any positive integer and is NOT required to be a multiple of chunk, and that the trailing shorter final chunk's outputs must still be produced. A non-multiple seqlen is therefore explicitly in the declared input domain.",
+    "statement": "When seqlen is not a multiple of chunk, chunked_cumsum leaves the trailing seqlen % chunk positions as zeros instead of the required cumulative sums, because the kernel loop runs only n_chunks = seqlen // CHUNK iterations.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:49:31Z"
+  }
+]

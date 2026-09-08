@@ -1,0 +1,281 @@
+[
+  {
+    "created_at": "2026-09-08T15:23:34Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T15:26:18Z",
+        "data": {
+          "N": 1024,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "2812cfc4e483c80df154987cedc6dddaac32ea3eae98a89f65602dabb4501e28"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "6d9989491336e80ccae269d02cc249485cb03b39285ba72af80ae5a59530f6ec"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "391b4542b4d4e6a791a193a0e078fd2476c8c5d99d594ab29f53466843c9cb9a"
+            }
+          ],
+          "confound": "bitwise equality membership test vs host fp32 reference",
+          "duration_s": 9.166848,
+          "exit_code": 0,
+          "expected_signal": "Per-element empirical upper-frequency over many seeds should match p_up within ~binomial noise (|z|&lt;5); large systematic z or mean(out)-x bias would confirm the claim.",
+          "frac_abs_z_gt_5": 0.2822265625,
+          "grand_mean_out_minus_x": -5.128781884804668e-06,
+          "grand_mean_sampling_std_est": 1.4e-05,
+          "json_parse_error": null,
+          "json_result": {
+            "N": 1024,
+            "frac_abs_z_gt_5": 0.2822265625,
+            "grand_mean_out_minus_x": -5.128781884804668e-06,
+            "max_abs_mean_err": 0.00125001519918444,
+            "max_abs_mean_err_rel_STEP": 0.0250003039836888,
+            "max_abs_z": 164.31816019739543,
+            "max_z_freq": 0.0,
+            "max_z_index": 4,
+            "max_z_p_up": 0.9000015258789062,
+            "mean_z": -20.453873229875143,
+            "nonmember_count": 432330,
+            "overall_freq_minus_p": -0.14083500137696198,
+            "seeds": 3000
+          },
+          "max_abs_mean_err": 0.00125001519918444,
+          "max_abs_mean_err_rel_STEP": 0.0250003039836888,
+          "max_abs_z_bitwise_metric": 164.31816019739543,
+          "nonmember_count": 432330,
+          "nonmember_fraction": 0.14073,
+          "overall_freq_minus_p": -0.14083500137696198,
+          "seeds": 3000,
+          "stderr": "",
+          "stdout": "{\"N\": 1024, \"seeds\": 3000, \"max_abs_z\": 164.31816019739543, \"max_z_index\": 4, \"max_z_p_up\": 0.9000015258789062, \"max_z_freq\": 0.0, \"frac_abs_z_gt_5\": 0.2822265625, \"mean_z\": -20.453873229875143, \"overall_freq_minus_p\": -0.14083500137696198, \"max_abs_mean_err\": 0.00125001519918444, \"max_abs_mean_err_rel_STEP\": 0.0250003039836888, \"grand_mean_out_minus_x\": -5.128781884804668e-06, \"nonmember_count\": 432330}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Metric artifact, not decisive for c1. The probe classified \"upper chosen\" by bitwise equality out==upper against host fp32 lower=floor(x/0.05)*0.05, upper=lower+0.05. It reported max |z| = 164 and overall freq-minus-p = -0.14084, but simultaneously 432330/3072000 = 0.14073 of samples matched neither host lower nor host upper: the frequency deficit equals the nonmember fraction almost exactly, so the apparent bias is entirely explained by the kernel emitting values that differ from my host reference by a tiny (sub-ulp/1-ulp) amount rather than by a wrong Bernoulli probability. Supporting this benign reading: grand mean(out)-x = -5.13e-06, versus the sampling std of that grand mean ~1.4e-05 (0.05*0.5/sqrt(1024*3000)), i.e. within noise. Relaunching with a double-precision nearest-neighbour classifier and a separate off-grid metric.",
+        "supports": "inconclusive",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The Bernoulli source is r = tl.rand(seed, offs) with offsets always 0..N-1 and only the seed varying (kernel.py:15). Any bias in the seed-key direction of the Philox stream, or an r distribution that is not uniform on [0,1), yields a systematic per-element bias that a single-seed allclose probe cannot see. Decision metric: per-element upper-frequency vs p_up (z-score) and per-element mean(out) - x against fp32 tolerance.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Specifies P(out = lower + STEP) = (x - lower)/STEP and 'so that E[out] == x', with input domain 'x is a 1-D tensor whose length is a power of two and fits in a single block'."
+      }
+    ],
+    "scope_rationale": "problem.txt states the required probability P(out = lower+STEP) = (x-lower)/STEP and explicitly asserts E[out] == x, and fixes the input domain to 1-D power-of-two-length tensors fitting in one block; the probed inputs are exactly such tensors, so this tests a stated required behaviour on contract-admitted inputs.",
+    "statement": "Statistical contract violation: for a fixed in-contract input (1-D fp32 CUDA tensor, power-of-two length, mid-cell values such as x = k*0.05 + f*0.05 with f in {0.1,0.25,0.5,0.75,0.9}, plus negative values), the empirical frequency with which stochastic_round_to_grid selects the upper neighbour over many distinct seeds deviates from p_up=(x-lower)/0.05 by more than binomial sampling error (e.g. >5 sigma), so E[out] != x as required by problem.txt.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-08T15:26:18Z"
+  },
+  {
+    "created_at": "2026-09-08T15:23:34Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T15:26:18Z",
+        "data": {
+          "N": 128,
+          "STEP": 0.05,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "77be0b3ad5cd03b78821c682d4744ed54d539ecf58a6d0b3016abe3dc0e37150"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "59506ac2a55c15b916c3f5264e5ab9728214bf0869dcc77f647712d173cadc45"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "5787b540e908e379cd2ed3f8546ac0c38248b25724243c536c572b50fae18310"
+            }
+          ],
+          "duration_s": 6.86706,
+          "exact_frac_lower_ne_x": 0.0703125,
+          "exact_max_frac_moved_full_step": 0.0,
+          "exact_max_offgrid_abs": 0.0,
+          "exact_num_elems_moved_ge_50pct": 0,
+          "exact_p_up_max": 0.9999990463256836,
+          "exact_p_up_min": 0.0,
+          "example_max_abs_out_minus_x": 0.0,
+          "exit_code": 0,
+          "expected_signal": "For x = k*0.05 exactly (and +/-1ulp), outputs should stay on the 0.05 grid and exact grid points should not move by ~STEP; large |out - nearest multiple| or a high fraction of exact-grid inputs shifting by STEP confirms.",
+          "json_parse_error": null,
+          "json_result": {
+            "exact_frac_lower_ne_x": 0.0703125,
+            "exact_frac_p_up_gt_0.5": 0.0703125,
+            "exact_max_frac_moved_full_step": 0.0,
+            "exact_max_offgrid_abs": 0.0,
+            "exact_mean_frac_moved_full_step": 0.0,
+            "exact_num_elems_moved_ge_50pct": 0,
+            "exact_p_up_max": 0.9999990463256836,
+            "exact_p_up_min": 0.0,
+            "example_max_abs_out_minus_x": 0.0,
+            "example_mean_abs_out_minus_x": 0.0,
+            "minus1ulp_max_frac_moved_full_step": 0.0,
+            "minus1ulp_max_offgrid_abs": 0.0,
+            "minus1ulp_mean_frac_moved_full_step": 0.0,
+            "minus1ulp_num_elems_moved_ge_50pct": 0,
+            "plus1ulp_max_frac_moved_full_step": 0.0,
+            "plus1ulp_max_offgrid_abs": 0.0,
+            "plus1ulp_mean_frac_moved_full_step": 0.0,
+            "plus1ulp_num_elems_moved_ge_50pct": 0
+          },
+          "minus1ulp_max_frac_moved_full_step": 0.0,
+          "minus1ulp_max_offgrid_abs": 0.0,
+          "plus1ulp_max_frac_moved_full_step": 0.0,
+          "plus1ulp_max_offgrid_abs": 0.0,
+          "seeds_per_family": 200,
+          "stderr": "",
+          "stdout": "{\"exact_max_offgrid_abs\": 0.0, \"exact_max_frac_moved_full_step\": 0.0, \"exact_mean_frac_moved_full_step\": 0.0, \"exact_num_elems_moved_ge_50pct\": 0, \"minus1ulp_max_offgrid_abs\": 0.0, \"minus1ulp_max_frac_moved_full_step\": 0.0, \"minus1ulp_mean_frac_moved_full_step\": 0.0, \"minus1ulp_num_elems_moved_ge_50pct\": 0, \"plus1ulp_max_offgrid_abs\": 0.0, \"plus1ulp_max_frac_moved_full_step\": 0.0, \"plus1ulp_mean_frac_moved_full_step\": 0.0, \"plus1ulp_num_elems_moved_ge_50pct\": 0, \"exact_p_up_min\": 0.0, \"exact_p_up_max\": 0.9999990463256836, \"exact_frac_p_up_gt_0.5\": 0.0703125, \"exact_frac_lower_ne_x\": 0.0703125, \"example_max_abs_out_minus_x\": 0.0, \"example_mean_abs_out_minus_x\": 0.0}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Exact-grid and +/-1ulp inputs (x = k*0.05, k in -64..63, N=128, 200 seeds each) show no grid or neighbour violation: every output is bitwise equal to round(out/0.05)*0.05 (max off-grid deviation 0.0 for all three input families), and no element ever moved by a full STEP away from an exact grid point (max fraction moved = 0.0, 0 elements moved >=50% of trials). Host-side inspection confirms the float hazard exists (7.03% of exact multiples have floor(x/0.05)*0.05 != x, with p_up up to 0.99999905) but the kernel's r < p_up selection then reconstructs lower+STEP to exactly x, so the observable output stays on grid and equal to the input. Claim c2 rebutted.",
+        "supports": "rebutted",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "0.05 is not binary-representable; x/STEP for an exact multiple can land just below or above the integer, so floor may pick k-1 (p_up ~ 1, output reconstructed as lower+STEP which need not bit-match k*0.05) or k (p_up ~ -epsilon). Kernel never clamps p_up into [0,1] and reconstructs upper by accumulation rather than as (k+1)*STEP (kernel.py:12-16). Decision metric: max |out - nearest_multiple_of_0.05| and the fraction of exact-grid inputs whose output differs from the input by ~STEP.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Requires rounding 'each element to one of the two neighbouring multiples of STEP' with lower = floor(x/STEP)*STEP; input domain only constrains 1-D, power-of-two length, single block, not the values."
+      }
+    ],
+    "scope_rationale": "problem.txt requires the output be one of the two neighbouring multiples of STEP with the stated probability; exact multiples of 0.05 and their neighbours are ordinary 1-D power-of-two-length inputs admitted by the stated input domain (no value-range restriction is given), so this tests a stated invariant on representative admitted inputs.",
+    "statement": "Grid/neighbour violation at and near exact grid multiples: for in-contract inputs x = k*0.05 (k spanning e.g. -64..64) and x = k*0.05 +/- 1ulp, fp32 evaluation of floor(x/0.05)*0.05 and upper = lower + 0.05 can (a) return values that are not the correctly rounded fp32 representation of a multiple of 0.05, and/or (b) make an exact grid point round away from itself (out != x) with probability far above 0, breaking the \"out is one of the two neighbouring multiples with P(upper) = (x-lower)/STEP\" requirement.",
+    "status": "rebutted",
+    "updated_at": "2026-09-08T15:26:18Z"
+  },
+  {
+    "created_at": "2026-09-08T15:23:34Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T15:26:18Z",
+        "data": {
+          "N": 4096,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "a8f8b5c2abd9ba7111962ce5c898e4c4089838d2a51e2d3fc11e132407378acb"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "e20fe813a5980e093126cdb8e179c1a5e5ee5a7b906b7d0b426f0ccb72b945e5"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "b3c90bd7f059f81fbb9933404d3b1310273efbb9c69432c1a629e42c013059e3"
+            }
+          ],
+          "cross_seed_max_pattern_match": 0.523681640625,
+          "distinct_patterns": 64,
+          "duration_s": 7.099937,
+          "exit_code": 0,
+          "expected_signal": "For constant x with p_up=0.5 and N=4096, per-seed upper-fraction should be ~0.5 with |z|&lt;5, longest run modest (~<25), and outputs should differ across seeds; degenerate/duplicated draws would show extreme fractions or repeated patterns.",
+          "json_parse_error": null,
+          "json_result": {
+            "N": 4096,
+            "cross_seed_max_pattern_match": 0.523681640625,
+            "distinct_patterns": 64,
+            "max_abs_z": 3.3437538146972714,
+            "max_frac": 0.526123046875,
+            "max_run_len": 17,
+            "mean_lag1_autocorr": 0.0014885122431867778,
+            "mean_run_len": 12.40625,
+            "min_frac": 0.4833984375,
+            "p_up": 0.4999999701976776,
+            "same_seed_reproducible": true,
+            "seeds": 64
+          },
+          "max_abs_z": 3.3437538146972714,
+          "max_frac": 0.526123046875,
+          "max_run_len": 17,
+          "mean_lag1_autocorr": 0.0014885122431867778,
+          "mean_run_len": 12.40625,
+          "min_frac": 0.4833984375,
+          "p_up": 0.5,
+          "same_seed_reproducible": true,
+          "seeds": 64,
+          "stderr": "",
+          "stdout": "{\"N\": 4096, \"p_up\": 0.4999999701976776, \"seeds\": 64, \"min_frac\": 0.4833984375, \"max_frac\": 0.526123046875, \"max_abs_z\": 3.3437538146972714, \"max_run_len\": 17, \"mean_run_len\": 12.40625, \"distinct_patterns\": 64, \"mean_lag1_autocorr\": 0.0014885122431867778, \"same_seed_reproducible\": true, \"cross_seed_max_pattern_match\": 0.523681640625}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "No within-call RNG degeneracy. Constant input x=0.125 (p_up=0.5), N=4096, 64 seeds: per-seed upper-fraction ranged 0.4834..0.5261 with max |z| = 3.34 (expected max of 64 standard normals ~2.7-3.2, so consistent with independent Bernoulli), longest same-value run 17 (mean 12.4; expected ~log2(4096)=12 for iid bits), mean lag-1 autocorrelation 0.0015, all 64 seeds produced distinct bit patterns, cross-seed pattern agreement max 0.5237 (~chance 0.5), and the same seed reproduced identical output (counter-based determinism intact). Claim c3 rebutted.",
+        "supports": "rebutted",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "The kernel derives all per-element randomness from the offset vector 0..N-1 with the seed as Philox key (kernel.py:15); if the offset-to-counter mapping collides or is broadcast, every call reuses the same degenerate pattern, which single-seed mean checks would not reveal. Decision metric: for constant x with p_up=0.5 and N=1024, fraction of upper picks per seed, chi-square against Binomial(N,0.5), and count of distinct output patterns / index-wise correlation across seeds.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "States per-element probabilistic rounding with randomness 'drawn from the supplied seed' using Triton's counter-based Philox RNG (tl.rand), for 1-D power-of-two-length single-block inputs."
+      }
+    ],
+    "scope_rationale": "problem.txt requires each element to be rounded up with probability equal to its own fractional distance and names tl.rand as the RNG; a constant 1-D power-of-two-length vector is inside the stated input domain, and per-element independence is what makes the stated per-element probability meaningful.",
+    "statement": "Per-element randomness degeneracy: within a single call with one seed, the draws r = tl.rand(seed, offs) may be correlated or duplicated across offsets (e.g. identical values for groups of indices), so for a constant input vector x with p_up = 0.5 the outputs across elements are not independent Bernoulli draws \u2014 detectable as an across-element upper-fraction far from 0.5 or as long runs / repeated identical patterns for a single seed.",
+    "status": "rebutted",
+    "updated_at": "2026-09-08T15:26:18Z"
+  }
+]

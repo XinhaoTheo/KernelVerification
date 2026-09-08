@@ -1,0 +1,1380 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_08",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\nSTEP = 0.05\n\n\n@triton.jit\ndef stochastic_round_kernel(x_ptr, out_ptr, seed, N: tl.constexpr, STEP: tl.constexpr):\n    offs = tl.arange(0, N)\n    x = tl.load(x_ptr + offs)\n    lower = tl.floor(x / STEP) * STEP\n    upper = lower + STEP\n    p_up = (x - lower) / STEP\n    r = tl.rand(seed, offs)  # real Triton Philox RNG\n    out = tl.where(r < p_up, upper, lower)\n    tl.store(out_ptr + offs, out)\n\n\ndef stochastic_round_to_grid(x: torch.Tensor, seed: int) -> torch.Tensor:\n    N = x.shape[0]\n    out = torch.empty_like(x)\n    stochastic_round_kernel[(1,)](x, out, seed, N=N, STEP=STEP)\n    return out\n",
+    "passed": null,
+    "problem_text": "Operation: stochastic rounding of a tensor onto a coarse grid, using Triton's\ncounter-based Philox RNG (tl.rand), as used by low-precision training kernels\nwhen casting high-precision accumulators down to a storage format.\n\n`stochastic_round_to_grid(x, seed)` must round each element to one of the two\nneighbouring multiples of STEP, choosing the upper one with probability equal\nto the element's fractional distance to it:\n\n    lower = floor(x / STEP) * STEP\n    P(out = lower + STEP) = (x - lower) / STEP,   otherwise out = lower\n\nso that E[out] == x. The randomness is drawn from the supplied seed.\n\nInput domain: `x` is a 1-D tensor whose length is a power of two and fits in a\nsingle block.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_08",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T14:44:21Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:46:41Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "894d0365606a216196ec3bdc77b772464aac7989488a9e5fecfb6eb3320416ec"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "3930d300293ac5eaea62ae081ea93bb6f4761ef6700e6c2a0734f5dbc8937ad4"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "b0f387fccea11d5304c07cffccca65e179b524254de8381fbe665721a018a8aa"
+              }
+            ],
+            "duration_s": 7.048518,
+            "exit_code": 0,
+            "expected_signal": "If every output lies within ~1-2 fp32 ulps of an exact multiple of 0.05 and inside the fp64 bracket, the earlier mismatches are fp rounding of the same formula -> c1 rebutted. Deviations of many ulps or outputs outside the bracket confirm c1.",
+            "frac_outside_bracket_all_cases": 0.0,
+            "global_max_ulps_from_exact_grid": 0.6,
+            "json_parse_error": null,
+            "json_result": {
+              "examples": [],
+              "global_max_ulps": 0.5999999996274711,
+              "metric": "distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value",
+              "per_case": {
+                "exact_multiples": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.5999999996274711
+                },
+                "near_grid_eps": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.5999999996274711
+                },
+                "negatives": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.599999999627471
+                },
+                "tiny": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.19999999925494194
+                },
+                "uniform_pm100": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.5999999996274711
+                },
+                "uniform_pm2": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.599999999627471
+                }
+              },
+              "reason": "contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible",
+              "total": 6144,
+              "total_gt_2ulp": 0
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value\", \"reason\": \"contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible\", \"per_case\": {\"uniform_pm2\": {\"max_ulps_from_grid\": 0.599999999627471, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"uniform_pm100\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"exact_multiples\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"tiny\": {\"max_ulps_from_grid\": 0.19999999925494194, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"near_grid_eps\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"negatives\": {\"max_ulps_from_grid\": 0.599999999627471, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}}, \"total\": 6144, \"total_gt_2ulp\": 0, \"global_max_ulps\": 0.5999999996274711, \"examples\": []}\n",
+            "t7_max_dist_to_nearest_bracket_fp32": 7.62939453125e-06,
+            "timed_out": false,
+            "timeout_s": 120,
+            "total_elements": 6144,
+            "total_gt_2ulp": 0
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "6144 elements across 6 distributions (uniform +-2, +-100, exact multiples of 0.05, tiny 1e-3 scale, near-grid perturbed, negatives): every output lies within 0.6 fp32 ulp of an exact multiple of 0.05 (global_max_ulps=0.60, total_gt_2ulp=0) and 0% of outputs fall outside the fp64 [lower, lower+STEP] bracket. The 15% 'bad' fraction seen in t7 under exact fp32 equality was 1-ulp representation difference between torch's floor(x/0.05)*0.05 and the kernel's, max absolute discrepancy 7.6e-6 at magnitude ~100, i.e. fp32 rounding of the same contract formula, not an off-grid output.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The contract requires each element be rounded to one of the two neighbouring grid multiples. Floating-point issues with STEP=0.05 (not exactly representable) in floor(x/STEP)*STEP could produce off-grid or wrong-bracket values.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "'must round each element to one of the two neighbouring multiples of STEP' with lower = floor(x/STEP)*STEP; input domain is 1-D power-of-two length tensor."
+        }
+      ],
+      "scope_rationale": "problem.txt explicitly states the output must be lower or lower+STEP with lower = floor(x/STEP)*STEP, for 1-D power-of-two-length x fitting one block.",
+      "statement": "stochastic_round_to_grid produces outputs that are not always one of the two neighbouring multiples of STEP=0.05 bracketing x (i.e. out \u2209 {floor(x/STEP)*STEP, floor(x/STEP)*STEP + STEP}).",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T14:46:41Z"
+    },
+    {
+      "created_at": "2026-09-08T14:44:21Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:46:28Z",
+          "data": {
+            "N": 1024,
+            "T": 4000,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "a3f9e358e9ba30e8e60977b45e252ec149fbef7a533a24a00510ee21a672c9f2"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "b7de25461555cfbcdd9740a563be4379ea14fd697bbae920975b6524c72dcdaa"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "binomial_sd_of_mean": 0.0004,
+            "corr_phat_pref": 0.99973,
+            "duration_s": 7.175044,
+            "exit_code": 0,
+            "expected_signal": "Per-element empirical P(upper) should match p_up=(x-lower)/STEP within binomial noise (|z| small) and E[out]\u2248x. Large systematic deviation, degenerate r (all same choice), or seed-independence confirms c2.",
+            "frac_abs_z_gt_4": 0.00098,
+            "frac_diff_seed11_vs_12": 0.333,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "max_abs_mean_err": 0.0010764,
+            "max_abs_z": 4.0274,
+            "mean_abs_z": 0.8197,
+            "mean_signed_err": -2.64e-06,
+            "p_half_max_abs_z": 3.891,
+            "p_half_mean": 0.50003,
+            "same_seed_deterministic": true,
+            "stderr": "",
+            "stdout": "{\n \"metric\": \"per-element empirical P(upper) vs p_up, z-score over T seeds; and |E[out]-x|\",\n \"reason\": \"contract fixes P(out=upper)=(x-lower)/STEP so E[out]==x\",\n \"T\": 4000,\n \"N\": 1024,\n \"max_abs_z\": 4.027400970458984,\n \"mean_abs_z\": 0.819685697555542,\n \"frac_abs_z_gt_4\": 0.0009765625,\n \"corr_phat_pref\": 0.9997279612532723,\n \"max_abs_mean_err\": 0.0010764002799987793,\n \"mean_signed_err\": -2.6399520720588043e-06,\n \"phat_min\": 0.011250000447034836,\n \"phat_max\": 0.9895000457763672,\n \"sample_pairs\": [\n  [\n   0.8825,\n   0.885\n  ],\n  [\n   0.6179,\n   0.612\n  ],\n  [\n   0.7867,\n   0.793\n  ],\n  [\n   0.5884,\n   0.5825\n  ],\n  [\n   0.1161,\n   0.1088\n  ],\n  [\n   0.9835,\n   0.9845\n  ],\n  [\n   0.6698,\n   0.6758\n  ],\n  [\n   0.3012,\n   0.2928\n  ]\n ],\n \"frac_diff_seed11_vs_12\": 0.3330078125,\n \"same_seed_deterministic\": true,\n \"p_half_mean\": 0.5000253915786743,\n \"p_half_min\": 0.45650002360343933,\n \"p_half_max\": 0.531000018119812,\n \"p_half_max_abs_z\": 3.890756130218506\n}\n",
+            "timed_out": false,
+            "timeout_s": 420
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "4000 independent seeds x 1024 elements: per-element empirical P(upper) matches p_up=(x-lower)/STEP within binomial noise (max |z| = 4.03 over 1024 elements, mean |z| = 0.82, only 1/1024 above 4; corr(phat, p_ref) = 0.99973). Max |E[out]-x| = 1.08e-3 vs binomial sd of STEP*sqrt(p(1-p)/T) ~= 4e-4, and mean signed error = -2.6e-6, so no bias. Non-degenerate and seed-dependent: same seed reproducible, seeds 11 vs 12 differ on 33% of elements; with p=0.5 everywhere, per-offset frequency mean 0.50003, range [0.457, 0.531], max |z| 3.89 over 1024 offsets (expected for 1024 draws) -> no cross-offset correlation or constant-r degeneracy.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "The contract fixes the selection probability exactly and requires E[out]==x. A wrong RNG usage (constant per-element draws, seed ignored, or off-by-one probability) would break this while still producing on-grid values.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "'P(out = lower + STEP) = (x - lower) / STEP, otherwise out = lower ... so that E[out] == x. The randomness is drawn from the supplied seed.'"
+        }
+      ],
+      "scope_rationale": "problem.txt states P(out = lower + STEP) = (x - lower)/STEP so that E[out] == x, and that randomness is drawn from the supplied seed.",
+      "statement": "The empirical probability of selecting the upper grid point deviates from p_up = (x - lower)/STEP (equivalently E[out] != x), e.g. because tl.rand output is degenerate, correlated across offsets, or the comparison uses the wrong probability.",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T14:46:28Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_08",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_08"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_08"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_08"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_08",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 34.95998013600001,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll start by recording the two central testable properties from the contract, then probe them empirically on the GPU.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The contract requires each element be rounded to one of the two neighbouring grid multiples. Floating-point issues with STEP=0.05 (not exactly representable) in floor(x/STEP)*STEP could produce off-grid or wrong-bracket values.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "'must round each element to one of the two neighbouring multiples of STEP' with lower = floor(x/STEP)*STEP; input domain is 1-D power-of-two length tensor."
+              }
+            ],
+            "scope_rationale": "problem.txt explicitly states the output must be lower or lower+STEP with lower = floor(x/STEP)*STEP, for 1-D power-of-two-length x fitting one block.",
+            "statement": "stochastic_round_to_grid produces outputs that are not always one of the two neighbouring multiples of STEP=0.05 bracketing x (i.e. out \u2209 {floor(x/STEP)*STEP, floor(x/STEP)*STEP + STEP})."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The contract fixes the selection probability exactly and requires E[out]==x. A wrong RNG usage (constant per-element draws, seed ignored, or off-by-one probability) would break this while still producing on-grid values.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "'P(out = lower + STEP) = (x - lower) / STEP, otherwise out = lower ... so that E[out] == x. The randomness is drawn from the supplied seed.'"
+              }
+            ],
+            "scope_rationale": "problem.txt states P(out = lower + STEP) = (x - lower)/STEP so that E[out] == x, and that randomness is drawn from the supplied seed.",
+            "statement": "The empirical probability of selecting the upper grid point deviates from p_up = (x - lower)/STEP (equivalently E[out] != x), e.g. because tl.rand output is degenerate, correlated across offsets, or the comparison uses the wrong probability."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 34.96,
+        "input_tokens": 3201,
+        "output_tokens": 2761
+      }
+    },
+    {
+      "duration_s": 50.31679348900002,
+      "role": "solo",
+      "round": 3,
+      "text": "Both claims are recorded; now I'll test them empirically on the GPU \u2014 c1 with an on-grid/bracket check over a varied input set, c2 with a per-element frequency test across many seeds.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_08/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\ndev='cuda'\nSTEP=0.05\nresults={}\nbad_examples=[]\ntot=0; bad=0\nmaxdev=0.0\n\ndef check(x, seed, tag):\n    global tot,bad,maxdev\n    out = m.stochastic_round_to_grid(x, seed)\n    lower = torch.floor(x/STEP)*STEP\n    upper = lower + STEP\n    ok = (out==lower)|(out==upper)\n    tot += x.numel(); bad += int((~ok).sum())\n    # also measure distance from output to nearest of {lower,upper}\n    d = torch.minimum((out-lower).abs(), (out-upper).abs()).max().item()\n    maxdev = max(maxdev, d)\n    if (~ok).any():\n        idx=(~ok).nonzero()[:5,0]\n        for i in idx.tolist():\n            bad_examples.append(dict(tag=tag,x=float(x[i]),out=float(out[i]),lower=float(lower[i]),upper=float(upper[i])))\n    return float((~ok).float().mean())\n\ncases={}\nx1 = (torch.rand(1024, device=dev)*4-2)          # random in [-2,2)\ncases['uniform_pm2']=check(x1, 12345, 'uniform_pm2')\nx2 = (torch.arange(1024, device=dev, dtype=torch.float32)-512)*STEP   # exact multiples\ncases['exact_multiples']=check(x2, 777, 'exact_multiples')\nx3 = x2 + 1e-7\ncases['just_above_grid']=check(x3, 778, 'just_above_grid')\nx4 = x2 - 1e-7\ncases['just_below_grid']=check(x4, 779, 'just_below_grid')\nx5 = (torch.rand(256, device=dev)*200-100)\ncases['uniform_pm100']=check(x5, 4242, 'uniform_pm100')\nx6 = torch.zeros(64, device=dev)\ncases['zeros']=check(x6, 5, 'zeros')\n\nprint(json.dumps(dict(metric=\"fraction of outputs not in {lower,upper}\",\n                      per_case_bad_frac=cases, total=tot, total_bad=bad,\n                      max_dist_to_nearest_bracket=maxdev,\n                      examples=bad_examples[:10]), indent=1))\n",
+            "expected_signal": "If every output equals floor(x/0.05)*0.05 or that +0.05 (computed the same way in torch fp32), c1 is rebutted. Off-grid or out-of-bracket outputs confirm c1."
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport torch, json, math, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_08/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ndev='cuda'; STEP=0.05\ntorch.manual_seed(1)\n\nN=1024\n# x with known fractional positions: cycle p in {0.05,...,0.95} plus random\nfrac = torch.rand(N, device=dev)*0.98+0.01\nbase = (torch.randint(-20,20,(N,),device=dev).float())*STEP\nx = base + frac*STEP\nlower = torch.floor(x/STEP)*STEP\np_ref = ((x-lower)/STEP).clamp(0,1)\n\nT=4000\nseeds = torch.randint(0, 2**31-1, (T,)).tolist()\ncnt = torch.zeros(N, device=dev)\nacc = torch.zeros(N, device=dev, dtype=torch.float64)\nfor s in seeds:\n    out = m.stochastic_round_to_grid(x, s)\n    cnt += (out > lower + 0.5*STEP).float()\n    acc += out.double()\nphat = cnt/T\nmean_out = (acc/T).float()\nse = torch.sqrt((p_ref*(1-p_ref)/T).clamp_min(1e-12))\nz = (phat-p_ref)/se\nabsz = z.abs()\n# global mean over all elements&seeds\nglobal_bias = float((mean_out - x).abs().max())\n# expected max |z| for 1024 normal draws ~3.3\nres = dict(\n  metric=\"per-element empirical P(upper) vs p_up, z-score over T seeds; and |E[out]-x|\",\n  reason=\"contract fixes P(out=upper)=(x-lower)/STEP so E[out]==x\",\n  T=T, N=N,\n  max_abs_z=float(absz.max()), mean_abs_z=float(absz.mean()),\n  frac_abs_z_gt_4=float((absz>4).float().mean()),\n  corr_phat_pref=float(torch.corrcoef(torch.stack([phat.double(),p_ref.double()]))[0,1]),\n  max_abs_mean_err=global_bias,\n  mean_signed_err=float((mean_out-x).mean()),\n  phat_min=float(phat.min()), phat_max=float(phat.max()),\n  sample_pairs=[[round(float(p_ref[i]),4), round(float(phat[i]),4)] for i in range(0,N,128)],\n)\n\n# degeneracy / seed-sensitivity checks\no1 = m.stochastic_round_to_grid(x, 11); o2 = m.stochastic_round_to_grid(x, 12)\nres['frac_diff_seed11_vs_12'] = float((o1!=o2).float().mean())\no1b = m.stochastic_round_to_grid(x, 11)\nres['same_seed_deterministic'] = bool(torch.equal(o1,o1b))\n# uniformity of the implied r across offsets: use x with p=0.5 everywhere\nxh = torch.full((N,), 0.5*STEP, device=dev)\nups = torch.zeros(N, device=dev)\nfor s in seeds[:2000]:\n    ups += (m.stochastic_round_to_grid(xh, s) > 0.5*0.5*STEP+1e-9).float()\nph = ups/2000\nres['p_half_mean']=float(ph.mean()); res['p_half_min']=float(ph.min()); res['p_half_max']=float(ph.max())\nres['p_half_max_abs_z']=float(((ph-0.5).abs()/math.sqrt(0.25/2000)).max())\nprint(json.dumps(res, indent=1))\n",
+            "expected_signal": "Per-element empirical P(upper) should match p_up=(x-lower)/STEP within binomial noise (|z| small) and E[out]\u2248x. Large systematic deviation, degenerate r (all same choice), or seed-independence confirms c2.",
+            "timeout_s": 420
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 50.317,
+        "input_tokens": 6748,
+        "output_tokens": 4101
+      }
+    },
+    {
+      "duration_s": 54.37413131799997,
+      "role": "solo",
+      "round": 4,
+      "text": "Both probes ran. The c1 \"bad\" fractions look like pure 1-ulp fp32 differences (max distance to nearest bracket = 7.6e-6, exactly 1 ulp at magnitude ~100). I'll confirm that with an fp64 grid reference before resolving c1, and record the c2 evidence which already looks clean.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_08/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ndev='cuda'; STEP=0.05\ntorch.manual_seed(0)\n\ndef ulp(v):\n    v=v.abs().double()\n    return torch.where(v>0, torch.pow(2.0, torch.floor(torch.log2(v.clamp_min(1e-30)))-23), torch.full_like(v,1e-45))\n\nreport={}\nworst=[]\nmaxrel=0.0\ntot=0; off=0\ndef check(x, seed, tag):\n    global maxrel, tot, off, worst\n    out = m.stochastic_round_to_grid(x, seed)\n    xd = x.double(); od = out.double()\n    k = torch.floor(xd/0.05)\n    lo = k*0.05; hi=(k+1)*0.05\n    d = torch.minimum((od-lo).abs(), (od-hi).abs())\n    u = ulp(od).clamp_min(ulp(xd))\n    rel = d/u                     # distance to nearest exact grid pt, in ulps of the value\n    mr = float(rel.max())\n    maxrel = max(maxrel, mr)\n    bad = rel > 2.0\n    tot += x.numel(); off += int(bad.sum())\n    if bad.any():\n        i = int(bad.nonzero()[0,0])\n        worst.append(dict(tag=tag, x=float(x[i]), out=float(out[i]), lo=float(lo[i]), hi=float(hi[i]), ulps=float(rel[i])))\n    # also: is out within [lo - 2ulp, hi + 2ulp]?\n    inb = (od >= lo - 2*u) & (od <= hi + 2*u)\n    return dict(max_ulps_from_grid=mr, frac_gt_2ulp=float(bad.float().mean()),\n                frac_outside_bracket=float((~inb).float().mean()))\n\nreport['uniform_pm2'] = check(torch.rand(1024, device=dev)*4-2, 12345, 'uniform_pm2')\nreport['uniform_pm100'] = check(torch.rand(1024, device=dev)*200-100, 42, 'uniform_pm100')\nreport['exact_multiples'] = check((torch.arange(1024, device=dev, dtype=torch.float32)-512)*STEP, 777, 'exact_mult')\nreport['tiny'] = check((torch.rand(1024, device=dev)*2-1)*1e-3, 9, 'tiny')\nreport['near_grid_eps'] = check(((torch.arange(1024, device=dev, dtype=torch.float32)-512)*STEP)*(1+1e-7), 3, 'near_grid')\nreport['negatives'] = check(-torch.rand(1024, device=dev)*10, 55, 'neg')\n\nprint(json.dumps(dict(metric=\"distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value\",\n                      reason=\"contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible\",\n                      per_case=report, total=tot, total_gt_2ulp=off,\n                      global_max_ulps=maxrel, examples=worst[:5])))\n",
+            "expected_signal": "If every output lies within ~1-2 fp32 ulps of an exact multiple of 0.05 and inside the fp64 bracket, the earlier mismatches are fp rounding of the same formula -> c1 rebutted. Deviations of many ulps or outputs outside the bracket confirm c1.",
+            "timeout_s": 120
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "data": {
+              "N": 1024,
+              "T": 4000,
+              "binomial_sd_of_mean": 0.0004,
+              "corr_phat_pref": 0.99973,
+              "frac_abs_z_gt_4": 0.00098,
+              "frac_diff_seed11_vs_12": 0.333,
+              "max_abs_mean_err": 0.0010764,
+              "max_abs_z": 4.0274,
+              "mean_abs_z": 0.8197,
+              "mean_signed_err": -2.64e-06,
+              "p_half_max_abs_z": 3.891,
+              "p_half_mean": 0.50003,
+              "same_seed_deterministic": true
+            },
+            "event_id": "t8",
+            "status": "rebutted",
+            "summary": "4000 independent seeds x 1024 elements: per-element empirical P(upper) matches p_up=(x-lower)/STEP within binomial noise (max |z| = 4.03 over 1024 elements, mean |z| = 0.82, only 1/1024 above 4; corr(phat, p_ref) = 0.99973). Max |E[out]-x| = 1.08e-3 vs binomial sd of STEP*sqrt(p(1-p)/T) ~= 4e-4, and mean signed error = -2.6e-6, so no bias. Non-degenerate and seed-dependent: same seed reproducible, seeds 11 vs 12 differ on 33% of elements; with p=0.5 everywhere, per-offset frequency mean 0.50003, range [0.457, 0.531], max |z| 3.89 over 1024 offsets (expected for 1024 draws) -> no cross-offset correlation or constant-r degeneracy.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 54.374,
+        "input_tokens": 18347,
+        "output_tokens": 4411
+      }
+    },
+    {
+      "duration_s": 13.625896996999984,
+      "role": "solo",
+      "round": 5,
+      "text": "Probe t9 resolves c1: the earlier \"mismatches\" were pure fp32 rounding (all outputs \u22640.6 ulp from an exact multiple of 0.05, none outside the bracket). I'll record that evidence and then the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "frac_outside_bracket_all_cases": 0.0,
+              "global_max_ulps_from_exact_grid": 0.6,
+              "t7_max_dist_to_nearest_bracket_fp32": 7.62939453125e-06,
+              "total_elements": 6144,
+              "total_gt_2ulp": 0
+            },
+            "event_id": "t9",
+            "status": "rebutted",
+            "summary": "6144 elements across 6 distributions (uniform +-2, +-100, exact multiples of 0.05, tiny 1e-3 scale, near-grid perturbed, negatives): every output lies within 0.6 fp32 ulp of an exact multiple of 0.05 (global_max_ulps=0.60, total_gt_2ulp=0) and 0% of outputs fall outside the fp64 [lower, lower+STEP] bracket. The 15% 'bad' fraction seen in t7 under exact fp32 equality was 1-ulp representation difference between torch's floor(x/0.05)*0.05 and the kernel's, max absolute discrepancy 7.6e-6 at magnitude ~100, i.e. fp32 rounding of the same contract formula, not an off-grid output.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 13.626,
+        "input_tokens": 32166,
+        "output_tokens": 875
+      }
+    },
+    {
+      "duration_s": 34.08466222300001,
+      "role": "solo",
+      "round": 6,
+      "text": "Both in-scope contract properties have been tested and rebutted; the remaining questions (dtype/shape variants) are outside the declared input domain and would not change the outcome. Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.87,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The contract requires (a) each output be one of the two neighbouring multiples of STEP=0.05 with lower = floor(x/STEP)*STEP, and (b) P(out = lower+STEP) = (x-lower)/STEP from the supplied seed, giving E[out]==x, on 1-D power-of-two-length inputs fitting one block. Both were probed directly on the real kernel.\n\nc1 (grid membership): probe t7 flagged ~15% of outputs as unequal to torch's fp32 floor(x/0.05)*0.05, but max distance to the nearest bracket endpoint was 7.63e-6 = 1 fp32 ulp at magnitude ~100. Probe t9 re-measured against an fp64 grid reference over 6144 elements in six distributions (uniform \u00b12, uniform \u00b1100, exact multiples of 0.05, tiny 1e-3 scale, near-grid \u00b11e-7 perturbations, negatives): global max deviation from an exact multiple of 0.05 was 0.60 fp32 ulp, 0/6144 elements exceeded 2 ulp, and 0% of outputs fell outside the [lower, lower+STEP] bracket. The t7 discrepancy is fp32 rounding of the same contract formula, not an off-grid or wrong-bracket result. c1 rebutted.\n\nc2 (probability law / expectation): probe t8 ran 4000 independent seeds over 1024 elements with known fractional positions. Per-element empirical P(upper) matched p_up=(x-lower)/STEP within binomial noise (mean |z| = 0.82, max |z| = 4.03, only 1/1024 above 4, corr(p\u0302, p_ref) = 0.99973); max |E[out]-x| = 1.08e-3 against a binomial sd of ~4e-4 per element, with mean signed error -2.6e-6 (no bias). The RNG is non-degenerate and seed-driven: identical seed reproduces bit-identically, seeds 11 vs 12 differ on 33% of elements, and with p=0.5 for all offsets the per-offset frequencies had mean 0.50003, range [0.457, 0.531], max |z| 3.89 over 1024 offsets \u2014 consistent with independent draws, no cross-offset correlation or constant-r degeneracy. c2 rebutted.\n\nBoth in-scope contract properties hold; the kernel's source (tl.floor(x/STEP)*STEP, p_up=(x-lower)/STEP, r=tl.rand(seed,offs), where(r<p_up, upper, lower)) is a literal transcription of the specified formula. Residual uncertainty is only about untested variants (non-fp32 dtypes, non-power-of-two lengths, N exceeding one block) that the stated input domain excludes.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 34.085,
+        "input_tokens": 40517,
+        "output_tokens": 1407
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_08"
+      },
+      "created_at": "2026-09-08T14:43:46Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_08",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\nSTEP = 0.05\n\n\n@triton.jit\ndef stochastic_round_kernel(x_ptr, out_ptr, seed, N: tl.constexpr, STEP: tl.constexpr):\n    offs = tl.arange(0, N)\n    x = tl.load(x_ptr + offs)\n    lower = tl.floor(x / STEP) * STEP\n    upper = lower + STEP\n    p_up = (x - lower) / STEP\n    r = tl.rand(seed, offs)  # real Triton Philox RNG\n    out = tl.where(r < p_up, upper, lower)\n    tl.store(out_ptr + offs, out)\n\n\ndef stochastic_round_to_grid(x: torch.Tensor, seed: int) -> torch.Tensor:\n    N = x.shape[0]\n    out = torch.empty_like(x)\n    stochastic_round_kernel[(1,)](x, out, seed, N=N, STEP=STEP)\n    return out\n",
+        "passed": null,
+        "problem_text": "Operation: stochastic rounding of a tensor onto a coarse grid, using Triton's\ncounter-based Philox RNG (tl.rand), as used by low-precision training kernels\nwhen casting high-precision accumulators down to a storage format.\n\n`stochastic_round_to_grid(x, seed)` must round each element to one of the two\nneighbouring multiples of STEP, choosing the upper one with probability equal\nto the element's fractional distance to it:\n\n    lower = floor(x / STEP) * STEP\n    P(out = lower + STEP) = (x - lower) / STEP,   otherwise out = lower\n\nso that E[out] == x. The randomness is drawn from the supplied seed.\n\nInput domain: `x` is a 1-D tensor whose length is a power of two and fits in a\nsingle block.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_08",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_08"
+      },
+      "created_at": "2026-09-08T14:43:46Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: stochastic rounding of a tensor onto a coarse grid, using Triton's\ncounter-based Philox RNG (tl.rand), as used by low-precision training kernels\nwhen casting high-precision accumulators down to a storage format.\n\n`stochastic_round_to_grid(x, seed)` must round each element to one of the two\nneighbouring multiples of STEP, choosing the upper one with probability equal\nto the element's fractional distance to it:\n\n    lower = floor(x / STEP) * STEP\n    P(out = lower + STEP) = (x - lower) / STEP,   otherwise out = lower\n\nso that E[out] == x. The randomness is drawn from the supplied seed.\n\nInput domain: `x` is a 1-D tensor whose length is a power of two and fits in a\nsingle block.\n",
+        "entry": "case_08",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_08"
+      },
+      "created_at": "2026-09-08T14:43:46Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_08",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 656
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 696
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_08",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T14:43:46Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_08\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_08",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The contract requires each element be rounded to one of the two neighbouring grid multiples. Floating-point issues with STEP=0.05 (not exactly representable) in floor(x/STEP)*STEP could produce off-grid or wrong-bracket values.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'must round each element to one of the two neighbouring multiples of STEP' with lower = floor(x/STEP)*STEP; input domain is 1-D power-of-two length tensor."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly states the output must be lower or lower+STEP with lower = floor(x/STEP)*STEP, for 1-D power-of-two-length x fitting one block.",
+        "statement": "stochastic_round_to_grid produces outputs that are not always one of the two neighbouring multiples of STEP=0.05 bracketing x (i.e. out \u2209 {floor(x/STEP)*STEP, floor(x/STEP)*STEP + STEP})."
+      },
+      "created_at": "2026-09-08T14:44:21Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-08T14:44:21Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The contract requires each element be rounded to one of the two neighbouring grid multiples. Floating-point issues with STEP=0.05 (not exactly representable) in floor(x/STEP)*STEP could produce off-grid or wrong-bracket values.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'must round each element to one of the two neighbouring multiples of STEP' with lower = floor(x/STEP)*STEP; input domain is 1-D power-of-two length tensor."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly states the output must be lower or lower+STEP with lower = floor(x/STEP)*STEP, for 1-D power-of-two-length x fitting one block.",
+        "statement": "stochastic_round_to_grid produces outputs that are not always one of the two neighbouring multiples of STEP=0.05 bracketing x (i.e. out \u2209 {floor(x/STEP)*STEP, floor(x/STEP)*STEP + STEP}).",
+        "status": "open",
+        "updated_at": "2026-09-08T14:44:21Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The contract fixes the selection probability exactly and requires E[out]==x. A wrong RNG usage (constant per-element draws, seed ignored, or off-by-one probability) would break this while still producing on-grid values.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'P(out = lower + STEP) = (x - lower) / STEP, otherwise out = lower ... so that E[out] == x. The randomness is drawn from the supplied seed.'"
+          }
+        ],
+        "scope_rationale": "problem.txt states P(out = lower + STEP) = (x - lower)/STEP so that E[out] == x, and that randomness is drawn from the supplied seed.",
+        "statement": "The empirical probability of selecting the upper grid point deviates from p_up = (x - lower)/STEP (equivalently E[out] != x), e.g. because tl.rand output is degenerate, correlated across offsets, or the comparison uses the wrong probability."
+      },
+      "created_at": "2026-09-08T14:44:21Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-08T14:44:21Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "The contract fixes the selection probability exactly and requires E[out]==x. A wrong RNG usage (constant per-element draws, seed ignored, or off-by-one probability) would break this while still producing on-grid values.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'P(out = lower + STEP) = (x - lower) / STEP, otherwise out = lower ... so that E[out] == x. The randomness is drawn from the supplied seed.'"
+          }
+        ],
+        "scope_rationale": "problem.txt states P(out = lower + STEP) = (x - lower)/STEP so that E[out] == x, and that randomness is drawn from the supplied seed.",
+        "statement": "The empirical probability of selecting the upper grid point deviates from p_up = (x - lower)/STEP (equivalently E[out] != x), e.g. because tl.rand output is degenerate, correlated across offsets, or the comparison uses the wrong probability.",
+        "status": "open",
+        "updated_at": "2026-09-08T14:44:21Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_08/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\ndev='cuda'\nSTEP=0.05\nresults={}\nbad_examples=[]\ntot=0; bad=0\nmaxdev=0.0\n\ndef check(x, seed, tag):\n    global tot,bad,maxdev\n    out = m.stochastic_round_to_grid(x, seed)\n    lower = torch.floor(x/STEP)*STEP\n    upper = lower + STEP\n    ok = (out==lower)|(out==upper)\n    tot += x.numel(); bad += int((~ok).sum())\n    # also measure distance from output to nearest of {lower,upper}\n    d = torch.minimum((out-lower).abs(), (out-upper).abs()).max().item()\n    maxdev = max(maxdev, d)\n    if (~ok).any():\n        idx=(~ok).nonzero()[:5,0]\n        for i in idx.tolist():\n            bad_examples.append(dict(tag=tag,x=float(x[i]),out=float(out[i]),lower=float(lower[i]),upper=float(upper[i])))\n    return float((~ok).float().mean())\n\ncases={}\nx1 = (torch.rand(1024, device=dev)*4-2)          # random in [-2,2)\ncases['uniform_pm2']=check(x1, 12345, 'uniform_pm2')\nx2 = (torch.arange(1024, device=dev, dtype=torch.float32)-512)*STEP   # exact multiples\ncases['exact_multiples']=check(x2, 777, 'exact_multiples')\nx3 = x2 + 1e-7\ncases['just_above_grid']=check(x3, 778, 'just_above_grid')\nx4 = x2 - 1e-7\ncases['just_below_grid']=check(x4, 779, 'just_below_grid')\nx5 = (torch.rand(256, device=dev)*200-100)\ncases['uniform_pm100']=check(x5, 4242, 'uniform_pm100')\nx6 = torch.zeros(64, device=dev)\ncases['zeros']=check(x6, 5, 'zeros')\n\nprint(json.dumps(dict(metric=\"fraction of outputs not in {lower,upper}\",\n                      per_case_bad_frac=cases, total=tot, total_bad=bad,\n                      max_dist_to_nearest_bracket=maxdev,\n                      examples=bad_examples[:10]), indent=1))\n",
+        "expected_signal": "If every output equals floor(x/0.05)*0.05 or that +0.05 (computed the same way in torch fp32), c1 is rebutted. Off-grid or out-of-bracket outputs confirm c1."
+      },
+      "created_at": "2026-09-08T14:45:19Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "a7ebced3b05e154bbc910e9ac117d83da61b8abbf59ac9176f090072dc39f28d"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "326e530a7916bdc0e3596098174aa6b6431d8f624a1753a6f8592b6e42d7e23b"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "stochastic_round_to_grid produces outputs that are not always one of the two neighbouring multiples of STEP=0.05 bracketing x (i.e. out \u2209 {floor(x/STEP)*STEP, floor(x/STEP)*STEP + STEP}).",
+        "cwd": "/root/cases/case_08",
+        "duration_s": 7.568681,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "a7ebced3b05e154bbc910e9ac117d83da61b8abbf59ac9176f090072dc39f28d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "326e530a7916bdc0e3596098174aa6b6431d8f624a1753a6f8592b6e42d7e23b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 7.568681,
+            "exit_code": 0,
+            "expected_signal": "If every output equals floor(x/0.05)*0.05 or that +0.05 (computed the same way in torch fp32), c1 is rebutted. Off-grid or out-of-bracket outputs confirm c1.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n \"metric\": \"fraction of outputs not in {lower,upper}\",\n \"per_case_bad_frac\": {\n  \"uniform_pm2\": 0.1572265625,\n  \"exact_multiples\": 0.0283203125,\n  \"just_above_grid\": 0.02734375,\n  \"just_below_grid\": 0.04296875,\n  \"uniform_pm100\": 0.16796875,\n  \"zeros\": 0.0\n },\n \"total\": 4416,\n \"total_bad\": 305,\n \"max_dist_to_nearest_bracket\": 7.62939453125e-06,\n \"examples\": [\n  {\n   \"tag\": \"uniform_pm2\",\n   \"x\": -1.9002784490585327,\n   \"out\": -1.899999976158142,\n   \"lower\": -1.9500000476837158,\n   \"upper\": -1.9000000953674316\n  },\n  {\n   \"tag\": \"uniform_pm2\",\n   \"x\": -0.339943528175354,\n   \"out\": -0.30000001192092896,\n   \"lower\": -0.3499999940395355,\n   \"upper\": -0.29999998211860657\n  },\n  {\n   \"tag\": \"uniform_pm2\",\n   \"x\": -1.5266532897949219,\n   \"out\": -1.5,\n   \"lower\": -1.5500000715255737,\n   \"upper\": -1.5000001192092896\n  },\n  {\n   \"tag\": \"uniform_pm2\",\n   \"x\": -1.1627933979034424,\n   \"out\": -1.149999976158142,\n   \"lower\": -1.2000000476837158,\n   \"upper\": -1.1500000953674316\n  },\n  {\n   \"tag\": \"uniform_pm2\",\n   \"x\": -1.1533069610595703,\n   \"out\": -1.149999976158142,\n   \"lower\": -1.2000000476837158,\n   \"upper\": -1.1500000953674316\n  },\n  {\n   \"tag\": \"exact_multiples\",\n   \"x\": -12.65000057220459,\n   \"out\": -12.65000057220459,\n   \"lower\": -12.699999809265137,\n   \"upper\": -12.649999618530273\n  },\n  {\n   \"tag\": \"exact_multiples\",\n   \"x\": -12.40000057220459,\n   \"out\": -12.40000057220459,\n   \"lower\": -12.449999809265137,\n   \"upper\": -12.399999618530273\n  },\n  {\n   \"tag\": \"exact_multiples\",\n   \"x\": -12.15000057220459,\n   \"out\": -12.15000057220459,\n   \"lower\": -12.199999809265137,\n   \"upper\": -12.149999618530273\n  },\n  {\n   \"tag\": \"exact_multiples\",\n   \"x\": -11.90000057220459,\n   \"out\": -11.90000057220459,\n   \"lower\": -11.949999809265137,\n   \"upper\": -11.899999618530273\n  },\n  {\n   \"tag\": \"exact_multiples\",\n   \"x\": -11.65000057220459,\n   \"out\": -11.65000057220459,\n   \"lower\": -11.699999809265137,\n   \"upper\": -11.649999618530273\n  }\n ]\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "If every output equals floor(x/0.05)*0.05 or that +0.05 (computed the same way in torch fp32), c1 is rebutted. Off-grid or out-of-bracket outputs confirm c1.",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n \"metric\": \"fraction of outputs not in {lower,upper}\",\n \"per_case_bad_frac\": {\n  \"uniform_pm2\": 0.1572265625,\n  \"exact_multiples\": 0.0283203125,\n  \"just_above_grid\": 0.02734375,\n  \"just_below_grid\": 0.04296875,\n  \"uniform_pm100\": 0.16796875,\n  \"zeros\": 0.0\n },\n \"total\": 4416,\n \"total_bad\": 305,\n \"max_dist_to_nearest_bracket\": 7.62939453125e-06,\n \"examples\": [\n  {\n   \"tag\": \"uniform_pm2\",\n   \"x\": -1.9002784490585327,\n   \"out\": -1.899999976158142,\n   \"lower\": -1.9500000476837158,\n   \"upper\": -1.9000000953674316\n  },\n  {\n   \"tag\": \"uniform_pm2\",\n   \"x\": -0.339943528175354,\n   \"out\": -0.30000001192092896,\n   \"lower\": -0.3499999940395355,\n   \"upper\": -0.29999998211860657\n  },\n  {\n   \"tag\": \"uniform_pm2\",\n   \"x\": -1.5266532897949219,\n   \"out\": -1.5,\n   \"lower\": -1.5500000715255737,\n   \"upper\": -1.5000001192092896\n  },\n  {\n   \"tag\": \"uniform_pm2\",\n   \"x\": -1.1627933979034424,\n   \"out\": -1.149999976158142,\n   \"lower\": -1.2000000476837158,\n   \"upper\": -1.1500000953674316\n  },\n  {\n   \"tag\": \"uniform_pm2\",\n   \"x\": -1.1533069610595703,\n   \"out\": -1.149999976158142,\n   \"lower\": -1.2000000476837158,\n   \"upper\": -1.1500000953674316\n  },\n  {\n   \"tag\": \"exact_multiples\",\n   \"x\": -12.65000057220459,\n   \"out\": -12.65000057220459,\n   \"lower\": -12.699999809265137,\n   \"upper\": -12.649999618530273\n  },\n  {\n   \"tag\": \"exact_multiples\",\n   \"x\": -12.40000057220459,\n   \"out\": -12.40000057220459,\n   \"lower\": -12.449999809265137,\n   \"upper\": -12.399999618530273\n  },\n  {\n   \"tag\": \"exact_multiples\",\n   \"x\": -12.15000057220459,\n   \"out\": -12.15000057220459,\n   \"lower\": -12.199999809265137,\n   \"upper\": -12.149999618530273\n  },\n  {\n   \"tag\": \"exact_multiples\",\n   \"x\": -11.90000057220459,\n   \"out\": -11.90000057220459,\n   \"lower\": -11.949999809265137,\n   \"upper\": -11.899999618530273\n  },\n  {\n   \"tag\": \"exact_multiples\",\n   \"x\": -11.65000057220459,\n   \"out\": -11.65000057220459,\n   \"lower\": -11.699999809265137,\n   \"upper\": -11.649999618530273\n  }\n ]\n}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport torch, json, math, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_08/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ndev='cuda'; STEP=0.05\ntorch.manual_seed(1)\n\nN=1024\n# x with known fractional positions: cycle p in {0.05,...,0.95} plus random\nfrac = torch.rand(N, device=dev)*0.98+0.01\nbase = (torch.randint(-20,20,(N,),device=dev).float())*STEP\nx = base + frac*STEP\nlower = torch.floor(x/STEP)*STEP\np_ref = ((x-lower)/STEP).clamp(0,1)\n\nT=4000\nseeds = torch.randint(0, 2**31-1, (T,)).tolist()\ncnt = torch.zeros(N, device=dev)\nacc = torch.zeros(N, device=dev, dtype=torch.float64)\nfor s in seeds:\n    out = m.stochastic_round_to_grid(x, s)\n    cnt += (out > lower + 0.5*STEP).float()\n    acc += out.double()\nphat = cnt/T\nmean_out = (acc/T).float()\nse = torch.sqrt((p_ref*(1-p_ref)/T).clamp_min(1e-12))\nz = (phat-p_ref)/se\nabsz = z.abs()\n# global mean over all elements&seeds\nglobal_bias = float((mean_out - x).abs().max())\n# expected max |z| for 1024 normal draws ~3.3\nres = dict(\n  metric=\"per-element empirical P(upper) vs p_up, z-score over T seeds; and |E[out]-x|\",\n  reason=\"contract fixes P(out=upper)=(x-lower)/STEP so E[out]==x\",\n  T=T, N=N,\n  max_abs_z=float(absz.max()), mean_abs_z=float(absz.mean()),\n  frac_abs_z_gt_4=float((absz>4).float().mean()),\n  corr_phat_pref=float(torch.corrcoef(torch.stack([phat.double(),p_ref.double()]))[0,1]),\n  max_abs_mean_err=global_bias,\n  mean_signed_err=float((mean_out-x).mean()),\n  phat_min=float(phat.min()), phat_max=float(phat.max()),\n  sample_pairs=[[round(float(p_ref[i]),4), round(float(phat[i]),4)] for i in range(0,N,128)],\n)\n\n# degeneracy / seed-sensitivity checks\no1 = m.stochastic_round_to_grid(x, 11); o2 = m.stochastic_round_to_grid(x, 12)\nres['frac_diff_seed11_vs_12'] = float((o1!=o2).float().mean())\no1b = m.stochastic_round_to_grid(x, 11)\nres['same_seed_deterministic'] = bool(torch.equal(o1,o1b))\n# uniformity of the implied r across offsets: use x with p=0.5 everywhere\nxh = torch.full((N,), 0.5*STEP, device=dev)\nups = torch.zeros(N, device=dev)\nfor s in seeds[:2000]:\n    ups += (m.stochastic_round_to_grid(xh, s) > 0.5*0.5*STEP+1e-9).float()\nph = ups/2000\nres['p_half_mean']=float(ph.mean()); res['p_half_min']=float(ph.min()); res['p_half_max']=float(ph.max())\nres['p_half_max_abs_z']=float(((ph-0.5).abs()/math.sqrt(0.25/2000)).max())\nprint(json.dumps(res, indent=1))\n",
+        "expected_signal": "Per-element empirical P(upper) should match p_up=(x-lower)/STEP within binomial noise (|z| small) and E[out]\u2248x. Large systematic deviation, degenerate r (all same choice), or seed-independence confirms c2.",
+        "timeout_s": 420
+      },
+      "created_at": "2026-09-08T14:45:26Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "a3f9e358e9ba30e8e60977b45e252ec149fbef7a533a24a00510ee21a672c9f2"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "b7de25461555cfbcdd9740a563be4379ea14fd697bbae920975b6524c72dcdaa"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "The empirical probability of selecting the upper grid point deviates from p_up = (x - lower)/STEP (equivalently E[out] != x), e.g. because tl.rand output is degenerate, correlated across offsets, or the comparison uses the wrong probability.",
+        "cwd": "/root/cases/case_08",
+        "duration_s": 7.175044,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "a3f9e358e9ba30e8e60977b45e252ec149fbef7a533a24a00510ee21a672c9f2"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "b7de25461555cfbcdd9740a563be4379ea14fd697bbae920975b6524c72dcdaa"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 7.175044,
+            "exit_code": 0,
+            "expected_signal": "Per-element empirical P(upper) should match p_up=(x-lower)/STEP within binomial noise (|z| small) and E[out]\u2248x. Large systematic deviation, degenerate r (all same choice), or seed-independence confirms c2.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n \"metric\": \"per-element empirical P(upper) vs p_up, z-score over T seeds; and |E[out]-x|\",\n \"reason\": \"contract fixes P(out=upper)=(x-lower)/STEP so E[out]==x\",\n \"T\": 4000,\n \"N\": 1024,\n \"max_abs_z\": 4.027400970458984,\n \"mean_abs_z\": 0.819685697555542,\n \"frac_abs_z_gt_4\": 0.0009765625,\n \"corr_phat_pref\": 0.9997279612532723,\n \"max_abs_mean_err\": 0.0010764002799987793,\n \"mean_signed_err\": -2.6399520720588043e-06,\n \"phat_min\": 0.011250000447034836,\n \"phat_max\": 0.9895000457763672,\n \"sample_pairs\": [\n  [\n   0.8825,\n   0.885\n  ],\n  [\n   0.6179,\n   0.612\n  ],\n  [\n   0.7867,\n   0.793\n  ],\n  [\n   0.5884,\n   0.5825\n  ],\n  [\n   0.1161,\n   0.1088\n  ],\n  [\n   0.9835,\n   0.9845\n  ],\n  [\n   0.6698,\n   0.6758\n  ],\n  [\n   0.3012,\n   0.2928\n  ]\n ],\n \"frac_diff_seed11_vs_12\": 0.3330078125,\n \"same_seed_deterministic\": true,\n \"p_half_mean\": 0.5000253915786743,\n \"p_half_min\": 0.45650002360343933,\n \"p_half_max\": 0.531000018119812,\n \"p_half_max_abs_z\": 3.890756130218506\n}\n",
+            "timed_out": false,
+            "timeout_s": 420
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "Per-element empirical P(upper) should match p_up=(x-lower)/STEP within binomial noise (|z| small) and E[out]\u2248x. Large systematic deviation, degenerate r (all same choice), or seed-independence confirms c2.",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 450,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n \"metric\": \"per-element empirical P(upper) vs p_up, z-score over T seeds; and |E[out]-x|\",\n \"reason\": \"contract fixes P(out=upper)=(x-lower)/STEP so E[out]==x\",\n \"T\": 4000,\n \"N\": 1024,\n \"max_abs_z\": 4.027400970458984,\n \"mean_abs_z\": 0.819685697555542,\n \"frac_abs_z_gt_4\": 0.0009765625,\n \"corr_phat_pref\": 0.9997279612532723,\n \"max_abs_mean_err\": 0.0010764002799987793,\n \"mean_signed_err\": -2.6399520720588043e-06,\n \"phat_min\": 0.011250000447034836,\n \"phat_max\": 0.9895000457763672,\n \"sample_pairs\": [\n  [\n   0.8825,\n   0.885\n  ],\n  [\n   0.6179,\n   0.612\n  ],\n  [\n   0.7867,\n   0.793\n  ],\n  [\n   0.5884,\n   0.5825\n  ],\n  [\n   0.1161,\n   0.1088\n  ],\n  [\n   0.9835,\n   0.9845\n  ],\n  [\n   0.6698,\n   0.6758\n  ],\n  [\n   0.3012,\n   0.2928\n  ]\n ],\n \"frac_diff_seed11_vs_12\": 0.3330078125,\n \"same_seed_deterministic\": true,\n \"p_half_mean\": 0.5000253915786743,\n \"p_half_min\": 0.45650002360343933,\n \"p_half_max\": 0.531000018119812,\n \"p_half_max_abs_z\": 3.890756130218506\n}\n",
+        "timed_out": false,
+        "timeout_s": 420,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_08/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ndev='cuda'; STEP=0.05\ntorch.manual_seed(0)\n\ndef ulp(v):\n    v=v.abs().double()\n    return torch.where(v>0, torch.pow(2.0, torch.floor(torch.log2(v.clamp_min(1e-30)))-23), torch.full_like(v,1e-45))\n\nreport={}\nworst=[]\nmaxrel=0.0\ntot=0; off=0\ndef check(x, seed, tag):\n    global maxrel, tot, off, worst\n    out = m.stochastic_round_to_grid(x, seed)\n    xd = x.double(); od = out.double()\n    k = torch.floor(xd/0.05)\n    lo = k*0.05; hi=(k+1)*0.05\n    d = torch.minimum((od-lo).abs(), (od-hi).abs())\n    u = ulp(od).clamp_min(ulp(xd))\n    rel = d/u                     # distance to nearest exact grid pt, in ulps of the value\n    mr = float(rel.max())\n    maxrel = max(maxrel, mr)\n    bad = rel > 2.0\n    tot += x.numel(); off += int(bad.sum())\n    if bad.any():\n        i = int(bad.nonzero()[0,0])\n        worst.append(dict(tag=tag, x=float(x[i]), out=float(out[i]), lo=float(lo[i]), hi=float(hi[i]), ulps=float(rel[i])))\n    # also: is out within [lo - 2ulp, hi + 2ulp]?\n    inb = (od >= lo - 2*u) & (od <= hi + 2*u)\n    return dict(max_ulps_from_grid=mr, frac_gt_2ulp=float(bad.float().mean()),\n                frac_outside_bracket=float((~inb).float().mean()))\n\nreport['uniform_pm2'] = check(torch.rand(1024, device=dev)*4-2, 12345, 'uniform_pm2')\nreport['uniform_pm100'] = check(torch.rand(1024, device=dev)*200-100, 42, 'uniform_pm100')\nreport['exact_multiples'] = check((torch.arange(1024, device=dev, dtype=torch.float32)-512)*STEP, 777, 'exact_mult')\nreport['tiny'] = check((torch.rand(1024, device=dev)*2-1)*1e-3, 9, 'tiny')\nreport['near_grid_eps'] = check(((torch.arange(1024, device=dev, dtype=torch.float32)-512)*STEP)*(1+1e-7), 3, 'near_grid')\nreport['negatives'] = check(-torch.rand(1024, device=dev)*10, 55, 'neg')\n\nprint(json.dumps(dict(metric=\"distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value\",\n                      reason=\"contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible\",\n                      per_case=report, total=tot, total_gt_2ulp=off,\n                      global_max_ulps=maxrel, examples=worst[:5])))\n",
+        "expected_signal": "If every output lies within ~1-2 fp32 ulps of an exact multiple of 0.05 and inside the fp64 bracket, the earlier mismatches are fp rounding of the same formula -> c1 rebutted. Deviations of many ulps or outputs outside the bracket confirm c1.",
+        "timeout_s": 120
+      },
+      "created_at": "2026-09-08T14:46:28Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "894d0365606a216196ec3bdc77b772464aac7989488a9e5fecfb6eb3320416ec"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "3930d300293ac5eaea62ae081ea93bb6f4761ef6700e6c2a0734f5dbc8937ad4"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "b0f387fccea11d5304c07cffccca65e179b524254de8381fbe665721a018a8aa"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "stochastic_round_to_grid produces outputs that are not always one of the two neighbouring multiples of STEP=0.05 bracketing x (i.e. out \u2209 {floor(x/STEP)*STEP, floor(x/STEP)*STEP + STEP}).",
+        "cwd": "/root/cases/case_08",
+        "duration_s": 7.048518,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "894d0365606a216196ec3bdc77b772464aac7989488a9e5fecfb6eb3320416ec"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "3930d300293ac5eaea62ae081ea93bb6f4761ef6700e6c2a0734f5dbc8937ad4"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "b0f387fccea11d5304c07cffccca65e179b524254de8381fbe665721a018a8aa"
+              }
+            ],
+            "duration_s": 7.048518,
+            "exit_code": 0,
+            "expected_signal": "If every output lies within ~1-2 fp32 ulps of an exact multiple of 0.05 and inside the fp64 bracket, the earlier mismatches are fp rounding of the same formula -> c1 rebutted. Deviations of many ulps or outputs outside the bracket confirm c1.",
+            "json_parse_error": null,
+            "json_result": {
+              "examples": [],
+              "global_max_ulps": 0.5999999996274711,
+              "metric": "distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value",
+              "per_case": {
+                "exact_multiples": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.5999999996274711
+                },
+                "near_grid_eps": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.5999999996274711
+                },
+                "negatives": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.599999999627471
+                },
+                "tiny": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.19999999925494194
+                },
+                "uniform_pm100": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.5999999996274711
+                },
+                "uniform_pm2": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.599999999627471
+                }
+              },
+              "reason": "contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible",
+              "total": 6144,
+              "total_gt_2ulp": 0
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value\", \"reason\": \"contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible\", \"per_case\": {\"uniform_pm2\": {\"max_ulps_from_grid\": 0.599999999627471, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"uniform_pm100\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"exact_multiples\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"tiny\": {\"max_ulps_from_grid\": 0.19999999925494194, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"near_grid_eps\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"negatives\": {\"max_ulps_from_grid\": 0.599999999627471, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}}, \"total\": 6144, \"total_gt_2ulp\": 0, \"global_max_ulps\": 0.5999999996274711, \"examples\": []}\n",
+            "timed_out": false,
+            "timeout_s": 120
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "If every output lies within ~1-2 fp32 ulps of an exact multiple of 0.05 and inside the fp64 bracket, the earlier mismatches are fp rounding of the same formula -> c1 rebutted. Deviations of many ulps or outputs outside the bracket confirm c1.",
+        "json_parse_error": null,
+        "json_result": {
+          "examples": [],
+          "global_max_ulps": 0.5999999996274711,
+          "metric": "distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value",
+          "per_case": {
+            "exact_multiples": {
+              "frac_gt_2ulp": 0.0,
+              "frac_outside_bracket": 0.0,
+              "max_ulps_from_grid": 0.5999999996274711
+            },
+            "near_grid_eps": {
+              "frac_gt_2ulp": 0.0,
+              "frac_outside_bracket": 0.0,
+              "max_ulps_from_grid": 0.5999999996274711
+            },
+            "negatives": {
+              "frac_gt_2ulp": 0.0,
+              "frac_outside_bracket": 0.0,
+              "max_ulps_from_grid": 0.599999999627471
+            },
+            "tiny": {
+              "frac_gt_2ulp": 0.0,
+              "frac_outside_bracket": 0.0,
+              "max_ulps_from_grid": 0.19999999925494194
+            },
+            "uniform_pm100": {
+              "frac_gt_2ulp": 0.0,
+              "frac_outside_bracket": 0.0,
+              "max_ulps_from_grid": 0.5999999996274711
+            },
+            "uniform_pm2": {
+              "frac_gt_2ulp": 0.0,
+              "frac_outside_bracket": 0.0,
+              "max_ulps_from_grid": 0.599999999627471
+            }
+          },
+          "reason": "contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible",
+          "total": 6144,
+          "total_gt_2ulp": 0
+        },
+        "sandbox": {
+          "cpu_limit_s": 150,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value\", \"reason\": \"contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible\", \"per_case\": {\"uniform_pm2\": {\"max_ulps_from_grid\": 0.599999999627471, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"uniform_pm100\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"exact_multiples\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"tiny\": {\"max_ulps_from_grid\": 0.19999999925494194, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"near_grid_eps\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"negatives\": {\"max_ulps_from_grid\": 0.599999999627471, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}}, \"total\": 6144, \"total_gt_2ulp\": 0, \"global_max_ulps\": 0.5999999996274711, \"examples\": []}\n",
+        "timed_out": false,
+        "timeout_s": 120,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "N": 1024,
+          "T": 4000,
+          "binomial_sd_of_mean": 0.0004,
+          "corr_phat_pref": 0.99973,
+          "frac_abs_z_gt_4": 0.00098,
+          "frac_diff_seed11_vs_12": 0.333,
+          "max_abs_mean_err": 0.0010764,
+          "max_abs_z": 4.0274,
+          "mean_abs_z": 0.8197,
+          "mean_signed_err": -2.64e-06,
+          "p_half_max_abs_z": 3.891,
+          "p_half_mean": 0.50003,
+          "same_seed_deterministic": true
+        },
+        "event_id": "t8",
+        "status": "rebutted",
+        "summary": "4000 independent seeds x 1024 elements: per-element empirical P(upper) matches p_up=(x-lower)/STEP within binomial noise (max |z| = 4.03 over 1024 elements, mean |z| = 0.82, only 1/1024 above 4; corr(phat, p_ref) = 0.99973). Max |E[out]-x| = 1.08e-3 vs binomial sd of STEP*sqrt(p(1-p)/T) ~= 4e-4, and mean signed error = -2.6e-6, so no bias. Non-degenerate and seed-dependent: same seed reproducible, seeds 11 vs 12 differ on 33% of elements; with p=0.5 everywhere, per-offset frequency mean 0.50003, range [0.457, 0.531], max |z| 3.89 over 1024 offsets (expected for 1024 draws) -> no cross-offset correlation or constant-r degeneracy.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T14:46:28Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:44:21Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:46:28Z",
+              "data": {
+                "N": 1024,
+                "T": 4000,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "a3f9e358e9ba30e8e60977b45e252ec149fbef7a533a24a00510ee21a672c9f2"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "b7de25461555cfbcdd9740a563be4379ea14fd697bbae920975b6524c72dcdaa"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "binomial_sd_of_mean": 0.0004,
+                "corr_phat_pref": 0.99973,
+                "duration_s": 7.175044,
+                "exit_code": 0,
+                "expected_signal": "Per-element empirical P(upper) should match p_up=(x-lower)/STEP within binomial noise (|z| small) and E[out]\u2248x. Large systematic deviation, degenerate r (all same choice), or seed-independence confirms c2.",
+                "frac_abs_z_gt_4": 0.00098,
+                "frac_diff_seed11_vs_12": 0.333,
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "max_abs_mean_err": 0.0010764,
+                "max_abs_z": 4.0274,
+                "mean_abs_z": 0.8197,
+                "mean_signed_err": -2.64e-06,
+                "p_half_max_abs_z": 3.891,
+                "p_half_mean": 0.50003,
+                "same_seed_deterministic": true,
+                "stderr": "",
+                "stdout": "{\n \"metric\": \"per-element empirical P(upper) vs p_up, z-score over T seeds; and |E[out]-x|\",\n \"reason\": \"contract fixes P(out=upper)=(x-lower)/STEP so E[out]==x\",\n \"T\": 4000,\n \"N\": 1024,\n \"max_abs_z\": 4.027400970458984,\n \"mean_abs_z\": 0.819685697555542,\n \"frac_abs_z_gt_4\": 0.0009765625,\n \"corr_phat_pref\": 0.9997279612532723,\n \"max_abs_mean_err\": 0.0010764002799987793,\n \"mean_signed_err\": -2.6399520720588043e-06,\n \"phat_min\": 0.011250000447034836,\n \"phat_max\": 0.9895000457763672,\n \"sample_pairs\": [\n  [\n   0.8825,\n   0.885\n  ],\n  [\n   0.6179,\n   0.612\n  ],\n  [\n   0.7867,\n   0.793\n  ],\n  [\n   0.5884,\n   0.5825\n  ],\n  [\n   0.1161,\n   0.1088\n  ],\n  [\n   0.9835,\n   0.9845\n  ],\n  [\n   0.6698,\n   0.6758\n  ],\n  [\n   0.3012,\n   0.2928\n  ]\n ],\n \"frac_diff_seed11_vs_12\": 0.3330078125,\n \"same_seed_deterministic\": true,\n \"p_half_mean\": 0.5000253915786743,\n \"p_half_min\": 0.45650002360343933,\n \"p_half_max\": 0.531000018119812,\n \"p_half_max_abs_z\": 3.890756130218506\n}\n",
+                "timed_out": false,
+                "timeout_s": 420
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "4000 independent seeds x 1024 elements: per-element empirical P(upper) matches p_up=(x-lower)/STEP within binomial noise (max |z| = 4.03 over 1024 elements, mean |z| = 0.82, only 1/1024 above 4; corr(phat, p_ref) = 0.99973). Max |E[out]-x| = 1.08e-3 vs binomial sd of STEP*sqrt(p(1-p)/T) ~= 4e-4, and mean signed error = -2.6e-6, so no bias. Non-degenerate and seed-dependent: same seed reproducible, seeds 11 vs 12 differ on 33% of elements; with p=0.5 everywhere, per-offset frequency mean 0.50003, range [0.457, 0.531], max |z| 3.89 over 1024 offsets (expected for 1024 draws) -> no cross-offset correlation or constant-r degeneracy.",
+              "supports": "rebutted",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "solo",
+          "rationale": "The contract fixes the selection probability exactly and requires E[out]==x. A wrong RNG usage (constant per-element draws, seed ignored, or off-by-one probability) would break this while still producing on-grid values.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "'P(out = lower + STEP) = (x - lower) / STEP, otherwise out = lower ... so that E[out] == x. The randomness is drawn from the supplied seed.'"
+            }
+          ],
+          "scope_rationale": "problem.txt states P(out = lower + STEP) = (x - lower)/STEP so that E[out] == x, and that randomness is drawn from the supplied seed.",
+          "statement": "The empirical probability of selecting the upper grid point deviates from p_up = (x - lower)/STEP (equivalently E[out] != x), e.g. because tl.rand output is degenerate, correlated across offsets, or the comparison uses the wrong probability.",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:46:28Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:46:28Z",
+          "data": {
+            "N": 1024,
+            "T": 4000,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "a3f9e358e9ba30e8e60977b45e252ec149fbef7a533a24a00510ee21a672c9f2"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "b7de25461555cfbcdd9740a563be4379ea14fd697bbae920975b6524c72dcdaa"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "binomial_sd_of_mean": 0.0004,
+            "corr_phat_pref": 0.99973,
+            "duration_s": 7.175044,
+            "exit_code": 0,
+            "expected_signal": "Per-element empirical P(upper) should match p_up=(x-lower)/STEP within binomial noise (|z| small) and E[out]\u2248x. Large systematic deviation, degenerate r (all same choice), or seed-independence confirms c2.",
+            "frac_abs_z_gt_4": 0.00098,
+            "frac_diff_seed11_vs_12": 0.333,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "max_abs_mean_err": 0.0010764,
+            "max_abs_z": 4.0274,
+            "mean_abs_z": 0.8197,
+            "mean_signed_err": -2.64e-06,
+            "p_half_max_abs_z": 3.891,
+            "p_half_mean": 0.50003,
+            "same_seed_deterministic": true,
+            "stderr": "",
+            "stdout": "{\n \"metric\": \"per-element empirical P(upper) vs p_up, z-score over T seeds; and |E[out]-x|\",\n \"reason\": \"contract fixes P(out=upper)=(x-lower)/STEP so E[out]==x\",\n \"T\": 4000,\n \"N\": 1024,\n \"max_abs_z\": 4.027400970458984,\n \"mean_abs_z\": 0.819685697555542,\n \"frac_abs_z_gt_4\": 0.0009765625,\n \"corr_phat_pref\": 0.9997279612532723,\n \"max_abs_mean_err\": 0.0010764002799987793,\n \"mean_signed_err\": -2.6399520720588043e-06,\n \"phat_min\": 0.011250000447034836,\n \"phat_max\": 0.9895000457763672,\n \"sample_pairs\": [\n  [\n   0.8825,\n   0.885\n  ],\n  [\n   0.6179,\n   0.612\n  ],\n  [\n   0.7867,\n   0.793\n  ],\n  [\n   0.5884,\n   0.5825\n  ],\n  [\n   0.1161,\n   0.1088\n  ],\n  [\n   0.9835,\n   0.9845\n  ],\n  [\n   0.6698,\n   0.6758\n  ],\n  [\n   0.3012,\n   0.2928\n  ]\n ],\n \"frac_diff_seed11_vs_12\": 0.3330078125,\n \"same_seed_deterministic\": true,\n \"p_half_mean\": 0.5000253915786743,\n \"p_half_min\": 0.45650002360343933,\n \"p_half_max\": 0.531000018119812,\n \"p_half_max_abs_z\": 3.890756130218506\n}\n",
+            "timed_out": false,
+            "timeout_s": 420
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "4000 independent seeds x 1024 elements: per-element empirical P(upper) matches p_up=(x-lower)/STEP within binomial noise (max |z| = 4.03 over 1024 elements, mean |z| = 0.82, only 1/1024 above 4; corr(phat, p_ref) = 0.99973). Max |E[out]-x| = 1.08e-3 vs binomial sd of STEP*sqrt(p(1-p)/T) ~= 4e-4, and mean signed error = -2.6e-6, so no bias. Non-degenerate and seed-dependent: same seed reproducible, seeds 11 vs 12 differ on 33% of elements; with p=0.5 everywhere, per-offset frequency mean 0.50003, range [0.457, 0.531], max |z| 3.89 over 1024 offsets (expected for 1024 draws) -> no cross-offset correlation or constant-r degeneracy.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "frac_outside_bracket_all_cases": 0.0,
+          "global_max_ulps_from_exact_grid": 0.6,
+          "t7_max_dist_to_nearest_bracket_fp32": 7.62939453125e-06,
+          "total_elements": 6144,
+          "total_gt_2ulp": 0
+        },
+        "event_id": "t9",
+        "status": "rebutted",
+        "summary": "6144 elements across 6 distributions (uniform +-2, +-100, exact multiples of 0.05, tiny 1e-3 scale, near-grid perturbed, negatives): every output lies within 0.6 fp32 ulp of an exact multiple of 0.05 (global_max_ulps=0.60, total_gt_2ulp=0) and 0% of outputs fall outside the fp64 [lower, lower+STEP] bracket. The 15% 'bad' fraction seen in t7 under exact fp32 equality was 1-ulp representation difference between torch's floor(x/0.05)*0.05 and the kernel's, max absolute discrepancy 7.6e-6 at magnitude ~100, i.e. fp32 rounding of the same contract formula, not an off-grid output.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T14:46:41Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:44:21Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:46:41Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "894d0365606a216196ec3bdc77b772464aac7989488a9e5fecfb6eb3320416ec"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "3930d300293ac5eaea62ae081ea93bb6f4761ef6700e6c2a0734f5dbc8937ad4"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "b0f387fccea11d5304c07cffccca65e179b524254de8381fbe665721a018a8aa"
+                  }
+                ],
+                "duration_s": 7.048518,
+                "exit_code": 0,
+                "expected_signal": "If every output lies within ~1-2 fp32 ulps of an exact multiple of 0.05 and inside the fp64 bracket, the earlier mismatches are fp rounding of the same formula -> c1 rebutted. Deviations of many ulps or outputs outside the bracket confirm c1.",
+                "frac_outside_bracket_all_cases": 0.0,
+                "global_max_ulps_from_exact_grid": 0.6,
+                "json_parse_error": null,
+                "json_result": {
+                  "examples": [],
+                  "global_max_ulps": 0.5999999996274711,
+                  "metric": "distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value",
+                  "per_case": {
+                    "exact_multiples": {
+                      "frac_gt_2ulp": 0.0,
+                      "frac_outside_bracket": 0.0,
+                      "max_ulps_from_grid": 0.5999999996274711
+                    },
+                    "near_grid_eps": {
+                      "frac_gt_2ulp": 0.0,
+                      "frac_outside_bracket": 0.0,
+                      "max_ulps_from_grid": 0.5999999996274711
+                    },
+                    "negatives": {
+                      "frac_gt_2ulp": 0.0,
+                      "frac_outside_bracket": 0.0,
+                      "max_ulps_from_grid": 0.599999999627471
+                    },
+                    "tiny": {
+                      "frac_gt_2ulp": 0.0,
+                      "frac_outside_bracket": 0.0,
+                      "max_ulps_from_grid": 0.19999999925494194
+                    },
+                    "uniform_pm100": {
+                      "frac_gt_2ulp": 0.0,
+                      "frac_outside_bracket": 0.0,
+                      "max_ulps_from_grid": 0.5999999996274711
+                    },
+                    "uniform_pm2": {
+                      "frac_gt_2ulp": 0.0,
+                      "frac_outside_bracket": 0.0,
+                      "max_ulps_from_grid": 0.599999999627471
+                    }
+                  },
+                  "reason": "contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible",
+                  "total": 6144,
+                  "total_gt_2ulp": 0
+                },
+                "stderr": "",
+                "stdout": "{\"metric\": \"distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value\", \"reason\": \"contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible\", \"per_case\": {\"uniform_pm2\": {\"max_ulps_from_grid\": 0.599999999627471, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"uniform_pm100\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"exact_multiples\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"tiny\": {\"max_ulps_from_grid\": 0.19999999925494194, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"near_grid_eps\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"negatives\": {\"max_ulps_from_grid\": 0.599999999627471, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}}, \"total\": 6144, \"total_gt_2ulp\": 0, \"global_max_ulps\": 0.5999999996274711, \"examples\": []}\n",
+                "t7_max_dist_to_nearest_bracket_fp32": 7.62939453125e-06,
+                "timed_out": false,
+                "timeout_s": 120,
+                "total_elements": 6144,
+                "total_gt_2ulp": 0
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "6144 elements across 6 distributions (uniform +-2, +-100, exact multiples of 0.05, tiny 1e-3 scale, near-grid perturbed, negatives): every output lies within 0.6 fp32 ulp of an exact multiple of 0.05 (global_max_ulps=0.60, total_gt_2ulp=0) and 0% of outputs fall outside the fp64 [lower, lower+STEP] bracket. The 15% 'bad' fraction seen in t7 under exact fp32 equality was 1-ulp representation difference between torch's floor(x/0.05)*0.05 and the kernel's, max absolute discrepancy 7.6e-6 at magnitude ~100, i.e. fp32 rounding of the same contract formula, not an off-grid output.",
+              "supports": "rebutted",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The contract requires each element be rounded to one of the two neighbouring grid multiples. Floating-point issues with STEP=0.05 (not exactly representable) in floor(x/STEP)*STEP could produce off-grid or wrong-bracket values.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "'must round each element to one of the two neighbouring multiples of STEP' with lower = floor(x/STEP)*STEP; input domain is 1-D power-of-two length tensor."
+            }
+          ],
+          "scope_rationale": "problem.txt explicitly states the output must be lower or lower+STEP with lower = floor(x/STEP)*STEP, for 1-D power-of-two-length x fitting one block.",
+          "statement": "stochastic_round_to_grid produces outputs that are not always one of the two neighbouring multiples of STEP=0.05 bracketing x (i.e. out \u2209 {floor(x/STEP)*STEP, floor(x/STEP)*STEP + STEP}).",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:46:41Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:46:41Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "894d0365606a216196ec3bdc77b772464aac7989488a9e5fecfb6eb3320416ec"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "3930d300293ac5eaea62ae081ea93bb6f4761ef6700e6c2a0734f5dbc8937ad4"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "b0f387fccea11d5304c07cffccca65e179b524254de8381fbe665721a018a8aa"
+              }
+            ],
+            "duration_s": 7.048518,
+            "exit_code": 0,
+            "expected_signal": "If every output lies within ~1-2 fp32 ulps of an exact multiple of 0.05 and inside the fp64 bracket, the earlier mismatches are fp rounding of the same formula -> c1 rebutted. Deviations of many ulps or outputs outside the bracket confirm c1.",
+            "frac_outside_bracket_all_cases": 0.0,
+            "global_max_ulps_from_exact_grid": 0.6,
+            "json_parse_error": null,
+            "json_result": {
+              "examples": [],
+              "global_max_ulps": 0.5999999996274711,
+              "metric": "distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value",
+              "per_case": {
+                "exact_multiples": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.5999999996274711
+                },
+                "near_grid_eps": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.5999999996274711
+                },
+                "negatives": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.599999999627471
+                },
+                "tiny": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.19999999925494194
+                },
+                "uniform_pm100": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.5999999996274711
+                },
+                "uniform_pm2": {
+                  "frac_gt_2ulp": 0.0,
+                  "frac_outside_bracket": 0.0,
+                  "max_ulps_from_grid": 0.599999999627471
+                }
+              },
+              "reason": "contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible",
+              "total": 6144,
+              "total_gt_2ulp": 0
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"distance from output to nearest exact multiple of 0.05 (fp64 ref), measured in fp32 ulps of the value\", \"reason\": \"contract requires out in {floor(x/STEP)*STEP, +STEP}; only fp32 rounding of that formula is admissible\", \"per_case\": {\"uniform_pm2\": {\"max_ulps_from_grid\": 0.599999999627471, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"uniform_pm100\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"exact_multiples\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"tiny\": {\"max_ulps_from_grid\": 0.19999999925494194, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"near_grid_eps\": {\"max_ulps_from_grid\": 0.5999999996274711, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}, \"negatives\": {\"max_ulps_from_grid\": 0.599999999627471, \"frac_gt_2ulp\": 0.0, \"frac_outside_bracket\": 0.0}}, \"total\": 6144, \"total_gt_2ulp\": 0, \"global_max_ulps\": 0.5999999996274711, \"examples\": []}\n",
+            "t7_max_dist_to_nearest_bracket_fp32": 7.62939453125e-06,
+            "timed_out": false,
+            "timeout_s": 120,
+            "total_elements": 6144,
+            "total_gt_2ulp": 0
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "6144 elements across 6 distributions (uniform +-2, +-100, exact multiples of 0.05, tiny 1e-3 scale, near-grid perturbed, negatives): every output lies within 0.6 fp32 ulp of an exact multiple of 0.05 (global_max_ulps=0.60, total_gt_2ulp=0) and 0% of outputs fall outside the fp64 [lower, lower+STEP] bracket. The 15% 'bad' fraction seen in t7 under exact fp32 equality was 1-ulp representation difference between torch's floor(x/0.05)*0.05 and the kernel's, max absolute discrepancy 7.6e-6 at magnitude ~100, i.e. fp32 rounding of the same contract formula, not an off-grid output.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.87,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract requires (a) each output be one of the two neighbouring multiples of STEP=0.05 with lower = floor(x/STEP)*STEP, and (b) P(out = lower+STEP) = (x-lower)/STEP from the supplied seed, giving E[out]==x, on 1-D power-of-two-length inputs fitting one block. Both were probed directly on the real kernel.\n\nc1 (grid membership): probe t7 flagged ~15% of outputs as unequal to torch's fp32 floor(x/0.05)*0.05, but max distance to the nearest bracket endpoint was 7.63e-6 = 1 fp32 ulp at magnitude ~100. Probe t9 re-measured against an fp64 grid reference over 6144 elements in six distributions (uniform \u00b12, uniform \u00b1100, exact multiples of 0.05, tiny 1e-3 scale, near-grid \u00b11e-7 perturbations, negatives): global max deviation from an exact multiple of 0.05 was 0.60 fp32 ulp, 0/6144 elements exceeded 2 ulp, and 0% of outputs fell outside the [lower, lower+STEP] bracket. The t7 discrepancy is fp32 rounding of the same contract formula, not an off-grid or wrong-bracket result. c1 rebutted.\n\nc2 (probability law / expectation): probe t8 ran 4000 independent seeds over 1024 elements with known fractional positions. Per-element empirical P(upper) matched p_up=(x-lower)/STEP within binomial noise (mean |z| = 0.82, max |z| = 4.03, only 1/1024 above 4, corr(p\u0302, p_ref) = 0.99973); max |E[out]-x| = 1.08e-3 against a binomial sd of ~4e-4 per element, with mean signed error -2.6e-6 (no bias). The RNG is non-degenerate and seed-driven: identical seed reproduces bit-identically, seeds 11 vs 12 differ on 33% of elements, and with p=0.5 for all offsets the per-offset frequencies had mean 0.50003, range [0.457, 0.531], max |z| 3.89 over 1024 offsets \u2014 consistent with independent draws, no cross-offset correlation or constant-r degeneracy. c2 rebutted.\n\nBoth in-scope contract properties hold; the kernel's source (tl.floor(x/STEP)*STEP, p_up=(x-lower)/STEP, r=tl.rand(seed,offs), where(r<p_up, upper, lower)) is a literal transcription of the specified formula. Residual uncertainty is only about untested variants (non-fp32 dtypes, non-power-of-two lengths, N exceeding one block) that the stated input domain excludes.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-08T14:47:15Z",
+      "id": "t12",
+      "output": {
+        "confidence": 0.87,
+        "created_at": "2026-09-08T14:47:15Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract requires (a) each output be one of the two neighbouring multiples of STEP=0.05 with lower = floor(x/STEP)*STEP, and (b) P(out = lower+STEP) = (x-lower)/STEP from the supplied seed, giving E[out]==x, on 1-D power-of-two-length inputs fitting one block. Both were probed directly on the real kernel.\n\nc1 (grid membership): probe t7 flagged ~15% of outputs as unequal to torch's fp32 floor(x/0.05)*0.05, but max distance to the nearest bracket endpoint was 7.63e-6 = 1 fp32 ulp at magnitude ~100. Probe t9 re-measured against an fp64 grid reference over 6144 elements in six distributions (uniform \u00b12, uniform \u00b1100, exact multiples of 0.05, tiny 1e-3 scale, near-grid \u00b11e-7 perturbations, negatives): global max deviation from an exact multiple of 0.05 was 0.60 fp32 ulp, 0/6144 elements exceeded 2 ulp, and 0% of outputs fell outside the [lower, lower+STEP] bracket. The t7 discrepancy is fp32 rounding of the same contract formula, not an off-grid or wrong-bracket result. c1 rebutted.\n\nc2 (probability law / expectation): probe t8 ran 4000 independent seeds over 1024 elements with known fractional positions. Per-element empirical P(upper) matched p_up=(x-lower)/STEP within binomial noise (mean |z| = 0.82, max |z| = 4.03, only 1/1024 above 4, corr(p\u0302, p_ref) = 0.99973); max |E[out]-x| = 1.08e-3 against a binomial sd of ~4e-4 per element, with mean signed error -2.6e-6 (no bias). The RNG is non-degenerate and seed-driven: identical seed reproduces bit-identically, seeds 11 vs 12 differ on 33% of elements, and with p=0.5 for all offsets the per-offset frequencies had mean 0.50003, range [0.457, 0.531], max |z| 3.89 over 1024 offsets \u2014 consistent with independent draws, no cross-offset correlation or constant-r degeneracy. c2 rebutted.\n\nBoth in-scope contract properties hold; the kernel's source (tl.floor(x/STEP)*STEP, p_up=(x-lower)/STEP, r=tl.rand(seed,offs), where(r<p_up, upper, lower)) is a literal transcription of the specified formula. Residual uncertainty is only about untested variants (non-fp32 dtypes, non-power-of-two lengths, N exceeding one block) that the stated input domain excludes.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.87,
+    "created_at": "2026-09-08T14:47:15Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The contract requires (a) each output be one of the two neighbouring multiples of STEP=0.05 with lower = floor(x/STEP)*STEP, and (b) P(out = lower+STEP) = (x-lower)/STEP from the supplied seed, giving E[out]==x, on 1-D power-of-two-length inputs fitting one block. Both were probed directly on the real kernel.\n\nc1 (grid membership): probe t7 flagged ~15% of outputs as unequal to torch's fp32 floor(x/0.05)*0.05, but max distance to the nearest bracket endpoint was 7.63e-6 = 1 fp32 ulp at magnitude ~100. Probe t9 re-measured against an fp64 grid reference over 6144 elements in six distributions (uniform \u00b12, uniform \u00b1100, exact multiples of 0.05, tiny 1e-3 scale, near-grid \u00b11e-7 perturbations, negatives): global max deviation from an exact multiple of 0.05 was 0.60 fp32 ulp, 0/6144 elements exceeded 2 ulp, and 0% of outputs fell outside the [lower, lower+STEP] bracket. The t7 discrepancy is fp32 rounding of the same contract formula, not an off-grid or wrong-bracket result. c1 rebutted.\n\nc2 (probability law / expectation): probe t8 ran 4000 independent seeds over 1024 elements with known fractional positions. Per-element empirical P(upper) matched p_up=(x-lower)/STEP within binomial noise (mean |z| = 0.82, max |z| = 4.03, only 1/1024 above 4, corr(p\u0302, p_ref) = 0.99973); max |E[out]-x| = 1.08e-3 against a binomial sd of ~4e-4 per element, with mean signed error -2.6e-6 (no bias). The RNG is non-degenerate and seed-driven: identical seed reproduces bit-identically, seeds 11 vs 12 differ on 33% of elements, and with p=0.5 for all offsets the per-offset frequencies had mean 0.50003, range [0.457, 0.531], max |z| 3.89 over 1024 offsets \u2014 consistent with independent draws, no cross-offset correlation or constant-r degeneracy. c2 rebutted.\n\nBoth in-scope contract properties hold; the kernel's source (tl.floor(x/STEP)*STEP, p_up=(x-lower)/STEP, r=tl.rand(seed,offs), where(r<p_up, upper, lower)) is a literal transcription of the specified formula. Residual uncertainty is only about untested variants (non-fp32 dtypes, non-power-of-two lengths, N exceeding one block) that the stated input domain excludes.",
+    "verdict": "trust"
+  }
+}

@@ -1,0 +1,951 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_21",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _paged_gather_kernel(KV, BlockTable, Out, max_blocks, page_size,\n                         stride_kv_page, stride_out_seq,\n                         HEAD_DIM: tl.constexpr):\n    seq = tl.program_id(0)\n    slot = tl.program_id(1)\n    logical_block = slot // page_size\n    within = slot % page_size\n\n    physical = seq * max_blocks + logical_block\n    offs = tl.arange(0, HEAD_DIM)\n    src = KV + physical * stride_kv_page + within * HEAD_DIM + offs\n    dst = Out + seq * stride_out_seq + slot * HEAD_DIM + offs\n    tl.store(dst, tl.load(src))\n\n\ndef paged_gather(kv_cache: torch.Tensor, block_table: torch.Tensor,\n                 seq_len: int) -> torch.Tensor:\n    \"\"\"Gather `seq_len` cached tokens for each sequence through its block table.\"\"\"\n    num_pages, page_size, head_dim = kv_cache.shape\n    num_seqs, max_blocks = block_table.shape\n    out = torch.empty((num_seqs, seq_len, head_dim), device=kv_cache.device,\n                      dtype=kv_cache.dtype)\n    _paged_gather_kernel[(num_seqs, seq_len)](\n        kv_cache, block_table, out, max_blocks, page_size,\n        kv_cache.stride(0), out.stride(0), HEAD_DIM=head_dim)\n    return out\n",
+    "passed": null,
+    "problem_text": "Operation: gather cached key/value tokens for a batch of sequences out of a\npaged KV cache, the block-table indirection used by paged-attention inference\nengines.\n\n    kv_cache     : [num_pages, page_size, head_dim]\n    block_table  : [num_seqs, max_blocks], int32\n                   block_table[s, b] is the PHYSICAL page holding logical block b\n                   of sequence s\n    result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]\n\nPages are allocated on demand, so the physical pages of one sequence are not\ncontiguous and are generally interleaved with those of other sequences.\n\nInput domain: `seq_len` may be any length that fits within `max_blocks` pages,\nand the block table may map any sequence to any physical page.\n\nDoes paged_gather() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_21",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T14:49:58Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:50:24Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "bf53437dd5bc0c1e2566486ced9d3473294d89a87ec12e6460c14b3a398d2a52"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "a2b76cdd0062cb5e7dece5c123cf12b528414700de40a44d18810806f3be14f8"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "1020c0de117da4af8a19719b42d968b7ede1bfe6e1d88b094cfbce5350ecba25"
+              }
+            ],
+            "block_table": [
+              [
+                7,
+                3,
+                14,
+                2
+              ],
+              [
+                8,
+                6,
+                4,
+                15
+              ],
+              [
+                12,
+                1,
+                5,
+                0
+              ],
+              [
+                13,
+                10,
+                11,
+                9
+              ]
+            ],
+            "duration_s": 5.653046,
+            "exit_code": 0,
+            "expected_signal": "Large nonzero error for permuted block table, zero for identity contiguous table",
+            "json_parse_error": null,
+            "json_result": {
+              "block_table": [
+                [
+                  7,
+                  3,
+                  14,
+                  2
+                ],
+                [
+                  8,
+                  6,
+                  4,
+                  15
+                ],
+                [
+                  12,
+                  1,
+                  5,
+                  0
+                ],
+                [
+                  13,
+                  10,
+                  11,
+                  9
+                ]
+              ],
+              "max_err_contiguous_identity_table": 0.0,
+              "max_err_permuted": 3.0668957233428955,
+              "metric": "max_abs_err_vs_contract_formula",
+              "rows_mismatched": 32,
+              "total_rows": 32
+            },
+            "max_err_contiguous_identity_table": 0.0,
+            "max_err_permuted": 3.0668957233428955,
+            "metric": "max_abs_err_vs_contract_formula",
+            "rows_mismatched": 32,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max_abs_err_vs_contract_formula\", \"block_table\": [[7, 3, 14, 2], [8, 6, 4, 15], [12, 1, 5, 0], [13, 10, 11, 9]], \"max_err_permuted\": 3.0668957233428955, \"rows_mismatched\": 32, \"total_rows\": 32, \"max_err_contiguous_identity_table\": 0.0}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "total_rows": 32
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "With a random permuted int32 block table (num_pages=16, page_size=4, head_dim=8, num_seqs=4, max_blocks=4, seq_len=8), paged_gather output differs from the contract formula kv_cache[block_table[s,t//page_size], t%page_size] in 32/32 token rows, max abs err 3.0669. With a contiguous identity block table (block_table[s,b] = s*max_blocks+b) the error is exactly 0.0, matching the source's physical = seq*max_blocks + logical_block computation and the absence of any tl.load of BlockTable.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Source line 15 sets physical from program ids only; BlockTable pointer is passed but never loaded (no tl.load of BlockTable anywhere).",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Requires result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]; input domain says 'the block table may map any sequence to any physical page' and pages are interleaved/non-contiguous."
+        }
+      ],
+      "scope_rationale": "The contract states the exact output formula using block_table[s, t//page_size] and explicitly says physical pages of one sequence are not contiguous and are interleaved with other sequences, and that the block table may map any sequence to any physical page.",
+      "statement": "paged_gather ignores the block_table indirection: the kernel computes the physical page as seq*max_blocks + logical_block instead of block_table[seq, logical_block], so result[s,t] != kv_cache[block_table[s, t//page_size], t%page_size] for any non-identity/non-contiguous block table.",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T14:50:24Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_21",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_21"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_21"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_21"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_21",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 8.316613599999982,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel never loads from `BlockTable`; it computes `physical = seq * max_blocks + logical_block`, i.e. assumes a contiguous per-sequence page layout, which the contract explicitly denies.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Source line 15 sets physical from program ids only; BlockTable pointer is passed but never loaded (no tl.load of BlockTable anywhere).",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Requires result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]; input domain says 'the block table may map any sequence to any physical page' and pages are interleaved/non-contiguous."
+              }
+            ],
+            "scope_rationale": "The contract states the exact output formula using block_table[s, t//page_size] and explicitly says physical pages of one sequence are not contiguous and are interleaved with other sequences, and that the block table may map any sequence to any physical page.",
+            "statement": "paged_gather ignores the block_table indirection: the kernel computes the physical page as seq*max_blocks + logical_block instead of block_table[seq, logical_block], so result[s,t] != kv_cache[block_table[s, t//page_size], t%page_size] for any non-identity/non-contiguous block table."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 8.317,
+        "input_tokens": 3709,
+        "output_tokens": 631
+      }
+    },
+    {
+      "duration_s": 10.38064461099998,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run a probe with a permuted (non-identity) block table and compare against the contract formula.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_21/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nnum_pages, page_size, head_dim = 16, 4, 8\nnum_seqs, max_blocks = 4, 4\nseq_len = 8\nkv = torch.randn(num_pages, page_size, head_dim, device='cuda')\nperm = torch.randperm(num_pages, device='cuda')[:num_seqs*max_blocks].to(torch.int32)\nbt = perm.view(num_seqs, max_blocks).contiguous()\n\nout = m.paged_gather(kv, bt, seq_len)\nt = torch.arange(seq_len, device='cuda')\nref = kv[bt[:, (t//page_size)].long(), (t % page_size).unsqueeze(0).expand(num_seqs, seq_len)]\nmaxerr = (out-ref).abs().max().item()\n# identity-contiguous table check\nbt_id = torch.arange(num_seqs*max_blocks, device='cuda', dtype=torch.int32).view(num_seqs, max_blocks)\nout_id = m.paged_gather(kv, bt_id, seq_len)\nref_id = kv[bt_id[:, (t//page_size)].long(), (t % page_size).unsqueeze(0).expand(num_seqs, seq_len)]\nerr_id = (out_id-ref_id).abs().max().item()\nprint(json.dumps({\"metric\":\"max_abs_err_vs_contract_formula\",\n \"block_table\": bt.tolist(),\n \"max_err_permuted\": maxerr,\n \"rows_mismatched\": int((out!=ref).any(-1).sum().item()),\n \"total_rows\": num_seqs*seq_len,\n \"max_err_contiguous_identity_table\": err_id}))\n",
+            "expected_signal": "Large nonzero error for permuted block table, zero for identity contiguous table"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 10.381,
+        "input_tokens": 5634,
+        "output_tokens": 819
+      }
+    },
+    {
+      "duration_s": 9.360229361000052,
+      "role": "solo",
+      "round": 4,
+      "text": "Probe t6 confirms the defect: with a permuted block table all 32 output rows mismatch the contract formula (max abs err 3.07), while a contiguous identity table gives 0 error \u2014 exactly the signature of ignoring the block-table indirection.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "block_table": [
+                [
+                  7,
+                  3,
+                  14,
+                  2
+                ],
+                [
+                  8,
+                  6,
+                  4,
+                  15
+                ],
+                [
+                  12,
+                  1,
+                  5,
+                  0
+                ],
+                [
+                  13,
+                  10,
+                  11,
+                  9
+                ]
+              ],
+              "max_err_contiguous_identity_table": 0.0,
+              "max_err_permuted": 3.0668957233428955,
+              "metric": "max_abs_err_vs_contract_formula",
+              "rows_mismatched": 32,
+              "total_rows": 32
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "With a random permuted int32 block table (num_pages=16, page_size=4, head_dim=8, num_seqs=4, max_blocks=4, seq_len=8), paged_gather output differs from the contract formula kv_cache[block_table[s,t//page_size], t%page_size] in 32/32 token rows, max abs err 3.0669. With a contiguous identity block table (block_table[s,b] = s*max_blocks+b) the error is exactly 0.0, matching the source's physical = seq*max_blocks + logical_block computation and the absence of any tl.load of BlockTable.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 9.36,
+        "input_tokens": 9539,
+        "output_tokens": 587
+      }
+    },
+    {
+      "duration_s": 7.413833199999999,
+      "role": "solo",
+      "round": 5,
+      "text": "The claim is confirmed with decisive runtime evidence; nothing further would change the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The contract requires result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size], and explicitly states pages are non-contiguous and interleaved, with the block table free to map any sequence to any physical page. The kernel (line 15) computes physical = seq*max_blocks + logical_block and never loads from the BlockTable pointer at all, i.e. it hardcodes a contiguous per-sequence page layout. Probe t6 ran the real kernel on GPU with num_pages=16, page_size=4, head_dim=8, num_seqs=4, max_blocks=4, seq_len=8 and an int32 permuted block table [[7,3,14,2],[8,6,4,15],[12,1,5,0],[13,10,11,9]]: all 32/32 token rows mismatched the contract formula with max abs error 3.0669, while a contiguous identity table (block_table[s,b]=s*max_blocks+b) gave exactly 0.0 error \u2014 the exact signature of ignoring the block-table indirection. This is a required-formula violation on inputs the declared input domain admits.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 7.414,
+        "input_tokens": 15392,
+        "output_tokens": 521
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_21"
+      },
+      "created_at": "2026-09-08T14:49:50Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_21",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _paged_gather_kernel(KV, BlockTable, Out, max_blocks, page_size,\n                         stride_kv_page, stride_out_seq,\n                         HEAD_DIM: tl.constexpr):\n    seq = tl.program_id(0)\n    slot = tl.program_id(1)\n    logical_block = slot // page_size\n    within = slot % page_size\n\n    physical = seq * max_blocks + logical_block\n    offs = tl.arange(0, HEAD_DIM)\n    src = KV + physical * stride_kv_page + within * HEAD_DIM + offs\n    dst = Out + seq * stride_out_seq + slot * HEAD_DIM + offs\n    tl.store(dst, tl.load(src))\n\n\ndef paged_gather(kv_cache: torch.Tensor, block_table: torch.Tensor,\n                 seq_len: int) -> torch.Tensor:\n    \"\"\"Gather `seq_len` cached tokens for each sequence through its block table.\"\"\"\n    num_pages, page_size, head_dim = kv_cache.shape\n    num_seqs, max_blocks = block_table.shape\n    out = torch.empty((num_seqs, seq_len, head_dim), device=kv_cache.device,\n                      dtype=kv_cache.dtype)\n    _paged_gather_kernel[(num_seqs, seq_len)](\n        kv_cache, block_table, out, max_blocks, page_size,\n        kv_cache.stride(0), out.stride(0), HEAD_DIM=head_dim)\n    return out\n",
+        "passed": null,
+        "problem_text": "Operation: gather cached key/value tokens for a batch of sequences out of a\npaged KV cache, the block-table indirection used by paged-attention inference\nengines.\n\n    kv_cache     : [num_pages, page_size, head_dim]\n    block_table  : [num_seqs, max_blocks], int32\n                   block_table[s, b] is the PHYSICAL page holding logical block b\n                   of sequence s\n    result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]\n\nPages are allocated on demand, so the physical pages of one sequence are not\ncontiguous and are generally interleaved with those of other sequences.\n\nInput domain: `seq_len` may be any length that fits within `max_blocks` pages,\nand the block table may map any sequence to any physical page.\n\nDoes paged_gather() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_21",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_21"
+      },
+      "created_at": "2026-09-08T14:49:50Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: gather cached key/value tokens for a batch of sequences out of a\npaged KV cache, the block-table indirection used by paged-attention inference\nengines.\n\n    kv_cache     : [num_pages, page_size, head_dim]\n    block_table  : [num_seqs, max_blocks], int32\n                   block_table[s, b] is the PHYSICAL page holding logical block b\n                   of sequence s\n    result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]\n\nPages are allocated on demand, so the physical pages of one sequence are not\ncontiguous and are generally interleaved with those of other sequences.\n\nInput domain: `seq_len` may be any length that fits within `max_blocks` pages,\nand the block table may map any sequence to any physical page.\n\nDoes paged_gather() satisfy this contract?\n",
+        "entry": "case_21",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_21"
+      },
+      "created_at": "2026-09-08T14:49:50Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_21",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1217
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 794
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_21",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T14:49:50Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_21\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_21",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Source line 15 sets physical from program ids only; BlockTable pointer is passed but never loaded (no tl.load of BlockTable anywhere).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Requires result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]; input domain says 'the block table may map any sequence to any physical page' and pages are interleaved/non-contiguous."
+          }
+        ],
+        "scope_rationale": "The contract states the exact output formula using block_table[s, t//page_size] and explicitly says physical pages of one sequence are not contiguous and are interleaved with other sequences, and that the block table may map any sequence to any physical page.",
+        "statement": "paged_gather ignores the block_table indirection: the kernel computes the physical page as seq*max_blocks + logical_block instead of block_table[seq, logical_block], so result[s,t] != kv_cache[block_table[s, t//page_size], t%page_size] for any non-identity/non-contiguous block table."
+      },
+      "created_at": "2026-09-08T14:49:58Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-08T14:49:58Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Source line 15 sets physical from program ids only; BlockTable pointer is passed but never loaded (no tl.load of BlockTable anywhere).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Requires result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]; input domain says 'the block table may map any sequence to any physical page' and pages are interleaved/non-contiguous."
+          }
+        ],
+        "scope_rationale": "The contract states the exact output formula using block_table[s, t//page_size] and explicitly says physical pages of one sequence are not contiguous and are interleaved with other sequences, and that the block table may map any sequence to any physical page.",
+        "statement": "paged_gather ignores the block_table indirection: the kernel computes the physical page as seq*max_blocks + logical_block instead of block_table[seq, logical_block], so result[s,t] != kv_cache[block_table[s, t//page_size], t%page_size] for any non-identity/non-contiguous block table.",
+        "status": "open",
+        "updated_at": "2026-09-08T14:49:58Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_21/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nnum_pages, page_size, head_dim = 16, 4, 8\nnum_seqs, max_blocks = 4, 4\nseq_len = 8\nkv = torch.randn(num_pages, page_size, head_dim, device='cuda')\nperm = torch.randperm(num_pages, device='cuda')[:num_seqs*max_blocks].to(torch.int32)\nbt = perm.view(num_seqs, max_blocks).contiguous()\n\nout = m.paged_gather(kv, bt, seq_len)\nt = torch.arange(seq_len, device='cuda')\nref = kv[bt[:, (t//page_size)].long(), (t % page_size).unsqueeze(0).expand(num_seqs, seq_len)]\nmaxerr = (out-ref).abs().max().item()\n# identity-contiguous table check\nbt_id = torch.arange(num_seqs*max_blocks, device='cuda', dtype=torch.int32).view(num_seqs, max_blocks)\nout_id = m.paged_gather(kv, bt_id, seq_len)\nref_id = kv[bt_id[:, (t//page_size)].long(), (t % page_size).unsqueeze(0).expand(num_seqs, seq_len)]\nerr_id = (out_id-ref_id).abs().max().item()\nprint(json.dumps({\"metric\":\"max_abs_err_vs_contract_formula\",\n \"block_table\": bt.tolist(),\n \"max_err_permuted\": maxerr,\n \"rows_mismatched\": int((out!=ref).any(-1).sum().item()),\n \"total_rows\": num_seqs*seq_len,\n \"max_err_contiguous_identity_table\": err_id}))\n",
+        "expected_signal": "Large nonzero error for permuted block table, zero for identity contiguous table"
+      },
+      "created_at": "2026-09-08T14:50:14Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "bf53437dd5bc0c1e2566486ced9d3473294d89a87ec12e6460c14b3a398d2a52"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "a2b76cdd0062cb5e7dece5c123cf12b528414700de40a44d18810806f3be14f8"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "1020c0de117da4af8a19719b42d968b7ede1bfe6e1d88b094cfbce5350ecba25"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "paged_gather ignores the block_table indirection: the kernel computes the physical page as seq*max_blocks + logical_block instead of block_table[seq, logical_block], so result[s,t] != kv_cache[block_table[s, t//page_size], t%page_size] for any non-identity/non-contiguous block table.",
+        "cwd": "/root/cases/case_21",
+        "duration_s": 5.653046,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "bf53437dd5bc0c1e2566486ced9d3473294d89a87ec12e6460c14b3a398d2a52"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "a2b76cdd0062cb5e7dece5c123cf12b528414700de40a44d18810806f3be14f8"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "1020c0de117da4af8a19719b42d968b7ede1bfe6e1d88b094cfbce5350ecba25"
+              }
+            ],
+            "duration_s": 5.653046,
+            "exit_code": 0,
+            "expected_signal": "Large nonzero error for permuted block table, zero for identity contiguous table",
+            "json_parse_error": null,
+            "json_result": {
+              "block_table": [
+                [
+                  7,
+                  3,
+                  14,
+                  2
+                ],
+                [
+                  8,
+                  6,
+                  4,
+                  15
+                ],
+                [
+                  12,
+                  1,
+                  5,
+                  0
+                ],
+                [
+                  13,
+                  10,
+                  11,
+                  9
+                ]
+              ],
+              "max_err_contiguous_identity_table": 0.0,
+              "max_err_permuted": 3.0668957233428955,
+              "metric": "max_abs_err_vs_contract_formula",
+              "rows_mismatched": 32,
+              "total_rows": 32
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"max_abs_err_vs_contract_formula\", \"block_table\": [[7, 3, 14, 2], [8, 6, 4, 15], [12, 1, 5, 0], [13, 10, 11, 9]], \"max_err_permuted\": 3.0668957233428955, \"rows_mismatched\": 32, \"total_rows\": 32, \"max_err_contiguous_identity_table\": 0.0}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": "Large nonzero error for permuted block table, zero for identity contiguous table",
+        "json_parse_error": null,
+        "json_result": {
+          "block_table": [
+            [
+              7,
+              3,
+              14,
+              2
+            ],
+            [
+              8,
+              6,
+              4,
+              15
+            ],
+            [
+              12,
+              1,
+              5,
+              0
+            ],
+            [
+              13,
+              10,
+              11,
+              9
+            ]
+          ],
+          "max_err_contiguous_identity_table": 0.0,
+          "max_err_permuted": 3.0668957233428955,
+          "metric": "max_abs_err_vs_contract_formula",
+          "rows_mismatched": 32,
+          "total_rows": 32
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"max_abs_err_vs_contract_formula\", \"block_table\": [[7, 3, 14, 2], [8, 6, 4, 15], [12, 1, 5, 0], [13, 10, 11, 9]], \"max_err_permuted\": 3.0668957233428955, \"rows_mismatched\": 32, \"total_rows\": 32, \"max_err_contiguous_identity_table\": 0.0}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "block_table": [
+            [
+              7,
+              3,
+              14,
+              2
+            ],
+            [
+              8,
+              6,
+              4,
+              15
+            ],
+            [
+              12,
+              1,
+              5,
+              0
+            ],
+            [
+              13,
+              10,
+              11,
+              9
+            ]
+          ],
+          "max_err_contiguous_identity_table": 0.0,
+          "max_err_permuted": 3.0668957233428955,
+          "metric": "max_abs_err_vs_contract_formula",
+          "rows_mismatched": 32,
+          "total_rows": 32
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "With a random permuted int32 block table (num_pages=16, page_size=4, head_dim=8, num_seqs=4, max_blocks=4, seq_len=8), paged_gather output differs from the contract formula kv_cache[block_table[s,t//page_size], t%page_size] in 32/32 token rows, max abs err 3.0669. With a contiguous identity block table (block_table[s,b] = s*max_blocks+b) the error is exactly 0.0, matching the source's physical = seq*max_blocks + logical_block computation and the absence of any tl.load of BlockTable.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T14:50:24Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:49:58Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:50:24Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "bf53437dd5bc0c1e2566486ced9d3473294d89a87ec12e6460c14b3a398d2a52"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "a2b76cdd0062cb5e7dece5c123cf12b528414700de40a44d18810806f3be14f8"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "1020c0de117da4af8a19719b42d968b7ede1bfe6e1d88b094cfbce5350ecba25"
+                  }
+                ],
+                "block_table": [
+                  [
+                    7,
+                    3,
+                    14,
+                    2
+                  ],
+                  [
+                    8,
+                    6,
+                    4,
+                    15
+                  ],
+                  [
+                    12,
+                    1,
+                    5,
+                    0
+                  ],
+                  [
+                    13,
+                    10,
+                    11,
+                    9
+                  ]
+                ],
+                "duration_s": 5.653046,
+                "exit_code": 0,
+                "expected_signal": "Large nonzero error for permuted block table, zero for identity contiguous table",
+                "json_parse_error": null,
+                "json_result": {
+                  "block_table": [
+                    [
+                      7,
+                      3,
+                      14,
+                      2
+                    ],
+                    [
+                      8,
+                      6,
+                      4,
+                      15
+                    ],
+                    [
+                      12,
+                      1,
+                      5,
+                      0
+                    ],
+                    [
+                      13,
+                      10,
+                      11,
+                      9
+                    ]
+                  ],
+                  "max_err_contiguous_identity_table": 0.0,
+                  "max_err_permuted": 3.0668957233428955,
+                  "metric": "max_abs_err_vs_contract_formula",
+                  "rows_mismatched": 32,
+                  "total_rows": 32
+                },
+                "max_err_contiguous_identity_table": 0.0,
+                "max_err_permuted": 3.0668957233428955,
+                "metric": "max_abs_err_vs_contract_formula",
+                "rows_mismatched": 32,
+                "stderr": "",
+                "stdout": "{\"metric\": \"max_abs_err_vs_contract_formula\", \"block_table\": [[7, 3, 14, 2], [8, 6, 4, 15], [12, 1, 5, 0], [13, 10, 11, 9]], \"max_err_permuted\": 3.0668957233428955, \"rows_mismatched\": 32, \"total_rows\": 32, \"max_err_contiguous_identity_table\": 0.0}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "total_rows": 32
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "With a random permuted int32 block table (num_pages=16, page_size=4, head_dim=8, num_seqs=4, max_blocks=4, seq_len=8), paged_gather output differs from the contract formula kv_cache[block_table[s,t//page_size], t%page_size] in 32/32 token rows, max abs err 3.0669. With a contiguous identity block table (block_table[s,b] = s*max_blocks+b) the error is exactly 0.0, matching the source's physical = seq*max_blocks + logical_block computation and the absence of any tl.load of BlockTable.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Source line 15 sets physical from program ids only; BlockTable pointer is passed but never loaded (no tl.load of BlockTable anywhere).",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Requires result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]; input domain says 'the block table may map any sequence to any physical page' and pages are interleaved/non-contiguous."
+            }
+          ],
+          "scope_rationale": "The contract states the exact output formula using block_table[s, t//page_size] and explicitly says physical pages of one sequence are not contiguous and are interleaved with other sequences, and that the block table may map any sequence to any physical page.",
+          "statement": "paged_gather ignores the block_table indirection: the kernel computes the physical page as seq*max_blocks + logical_block instead of block_table[seq, logical_block], so result[s,t] != kv_cache[block_table[s, t//page_size], t%page_size] for any non-identity/non-contiguous block table.",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T14:50:24Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:50:24Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "bf53437dd5bc0c1e2566486ced9d3473294d89a87ec12e6460c14b3a398d2a52"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "a2b76cdd0062cb5e7dece5c123cf12b528414700de40a44d18810806f3be14f8"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "1020c0de117da4af8a19719b42d968b7ede1bfe6e1d88b094cfbce5350ecba25"
+              }
+            ],
+            "block_table": [
+              [
+                7,
+                3,
+                14,
+                2
+              ],
+              [
+                8,
+                6,
+                4,
+                15
+              ],
+              [
+                12,
+                1,
+                5,
+                0
+              ],
+              [
+                13,
+                10,
+                11,
+                9
+              ]
+            ],
+            "duration_s": 5.653046,
+            "exit_code": 0,
+            "expected_signal": "Large nonzero error for permuted block table, zero for identity contiguous table",
+            "json_parse_error": null,
+            "json_result": {
+              "block_table": [
+                [
+                  7,
+                  3,
+                  14,
+                  2
+                ],
+                [
+                  8,
+                  6,
+                  4,
+                  15
+                ],
+                [
+                  12,
+                  1,
+                  5,
+                  0
+                ],
+                [
+                  13,
+                  10,
+                  11,
+                  9
+                ]
+              ],
+              "max_err_contiguous_identity_table": 0.0,
+              "max_err_permuted": 3.0668957233428955,
+              "metric": "max_abs_err_vs_contract_formula",
+              "rows_mismatched": 32,
+              "total_rows": 32
+            },
+            "max_err_contiguous_identity_table": 0.0,
+            "max_err_permuted": 3.0668957233428955,
+            "metric": "max_abs_err_vs_contract_formula",
+            "rows_mismatched": 32,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max_abs_err_vs_contract_formula\", \"block_table\": [[7, 3, 14, 2], [8, 6, 4, 15], [12, 1, 5, 0], [13, 10, 11, 9]], \"max_err_permuted\": 3.0668957233428955, \"rows_mismatched\": 32, \"total_rows\": 32, \"max_err_contiguous_identity_table\": 0.0}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "total_rows": 32
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "With a random permuted int32 block table (num_pages=16, page_size=4, head_dim=8, num_seqs=4, max_blocks=4, seq_len=8), paged_gather output differs from the contract formula kv_cache[block_table[s,t//page_size], t%page_size] in 32/32 token rows, max abs err 3.0669. With a contiguous identity block table (block_table[s,b] = s*max_blocks+b) the error is exactly 0.0, matching the source's physical = seq*max_blocks + logical_block computation and the absence of any tl.load of BlockTable.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract requires result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size], and explicitly states pages are non-contiguous and interleaved, with the block table free to map any sequence to any physical page. The kernel (line 15) computes physical = seq*max_blocks + logical_block and never loads from the BlockTable pointer at all, i.e. it hardcodes a contiguous per-sequence page layout. Probe t6 ran the real kernel on GPU with num_pages=16, page_size=4, head_dim=8, num_seqs=4, max_blocks=4, seq_len=8 and an int32 permuted block table [[7,3,14,2],[8,6,4,15],[12,1,5,0],[13,10,11,9]]: all 32/32 token rows mismatched the contract formula with max abs error 3.0669, while a contiguous identity table (block_table[s,b]=s*max_blocks+b) gave exactly 0.0 error \u2014 the exact signature of ignoring the block-table indirection. This is a required-formula violation on inputs the declared input domain admits.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-08T14:50:31Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-08T14:50:31Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract requires result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size], and explicitly states pages are non-contiguous and interleaved, with the block table free to map any sequence to any physical page. The kernel (line 15) computes physical = seq*max_blocks + logical_block and never loads from the BlockTable pointer at all, i.e. it hardcodes a contiguous per-sequence page layout. Probe t6 ran the real kernel on GPU with num_pages=16, page_size=4, head_dim=8, num_seqs=4, max_blocks=4, seq_len=8 and an int32 permuted block table [[7,3,14,2],[8,6,4,15],[12,1,5,0],[13,10,11,9]]: all 32/32 token rows mismatched the contract formula with max abs error 3.0669, while a contiguous identity table (block_table[s,b]=s*max_blocks+b) gave exactly 0.0 error \u2014 the exact signature of ignoring the block-table indirection. This is a required-formula violation on inputs the declared input domain admits.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-08T14:50:31Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The contract requires result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size], and explicitly states pages are non-contiguous and interleaved, with the block table free to map any sequence to any physical page. The kernel (line 15) computes physical = seq*max_blocks + logical_block and never loads from the BlockTable pointer at all, i.e. it hardcodes a contiguous per-sequence page layout. Probe t6 ran the real kernel on GPU with num_pages=16, page_size=4, head_dim=8, num_seqs=4, max_blocks=4, seq_len=8 and an int32 permuted block table [[7,3,14,2],[8,6,4,15],[12,1,5,0],[13,10,11,9]]: all 32/32 token rows mismatched the contract formula with max abs error 3.0669, while a contiguous identity table (block_table[s,b]=s*max_blocks+b) gave exactly 0.0 error \u2014 the exact signature of ignoring the block-table indirection. This is a required-formula violation on inputs the declared input domain admits.",
+    "verdict": "reject"
+  }
+}

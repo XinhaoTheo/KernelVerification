@@ -1,0 +1,11 @@
+{
+  "confidence": 0.97,
+  "created_at": "2026-09-08T15:05:14Z",
+  "decisive_claims": [
+    "c1",
+    "c2",
+    "c3"
+  ],
+  "reason": "The artifact ships only kernel.py, meta.json, and problem.txt (no test.py/get_inputs), so problem.txt is the operative contract. It explicitly states: \\\"n_cols may be any positive integer. It is NOT required to be a multiple of block_size; when it is not, the trailing partial block is still part of the row and must be normalized with the rest of it,\\\" and requires every output row to be a probability distribution summing to 1. The kernel violates exactly that clause: line 11 bounds the denominator loop by n_full = n_cols // BLOCK (floor division) while the max pass (line 14) and store pass (line 25) use tl.cdiv, so the trailing partial block's exp() contributions are omitted from denom.\\n\\nEvidence: c1 (probe t9) shows for block_size=128 and n_cols=130/200/257 row sums of up to 1.1387 / 1.6475 / 1.00694 versus the required 1.0, with the measured deviation matching the analytically predicted total_sum/partial_sum ratio to ~1e-7 in every case; controls at n_cols=128 and 256 (exact multiples) match torch.softmax to 7.45e-09, isolating the defect to precisely the non-multiple case the contract calls out. c2 (probe t10) shows the degenerate sub-case n_cols < block_size (1, 8, 64, 127 with the default block_size=128) yields denom = 0.0 and 100% of output elements +Inf (4/4, 32/32, 256/256, 508/508) while the reference is finite and well defined. c3 (probe t11) shows the error is not a tolerance artifact: with mass in the trailing block (n_cols=200, x[:, -3:]=20) row sums reach ~1.14e7 and 12 entries exceed 1.0.\\n\\nThis is not a permitted deviation: it is not reduction-order or rounding noise, not a representation convention, and not an unspecified tie-break \u2014 it is a required normalization the contract states explicitly and the kernel does not implement. No claims were left unresolved, and the only remaining notes (non-power-of-two block_size, non-contiguous inputs) are generalization observations that would not change the outcome.",
+  "verdict": "reject"
+}

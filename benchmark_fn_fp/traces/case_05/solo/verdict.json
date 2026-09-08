@@ -1,0 +1,11 @@
+{
+  "confidence": 0.88,
+  "created_at": "2026-09-08T14:43:11Z",
+  "decisive_claims": [
+    "c1",
+    "c2",
+    "c3"
+  ],
+  "reason": "The contract requires count_tied_at_boundary(scores, pivot) to return how many values strictly above `pivot` are tied (within an unspecified tolerance) with the smallest such value, for a single float32 tile of power-of-two length. The kernel computes tile_min = min over the above-pivot mask (inf sentinel), then sums the mask (|v - tile_min| < 1e-3) & (v > pivot); with min_larger initialized to +inf the is_new branch always takes the tile count on a single-tile call, and when nothing is above the pivot tile_min = inf makes both is_new and is_same false so the result is 0. I tested three concrete failure hypotheses. c1 (t6): 27 hand-built cases with explicit tie-group sizes 1,2,3,4,5,7,8,17,100, quantized N=1024 tiles, randn N=512 tiles at the median pivot, an empty-above-pivot tile and an all-tied N=256 tile \u2014 n_mismatch=0, and odd counts (3,5,7,17,155) came back exactly, rebutting the int1-reduction-wrap hypothesis. c2 (t9): 48 cases covering every power-of-two length N=1..16384, N=1 above/below pivot, all-negative tiles, 1e6-magnitude values, pivot=-9998.5, mixed sign, boundary spacings d = 0, 1e-5, 5e-4, 9.9e-4, 2e-3, 1e-2 (kernel groups d<EPS into one count of 12 and splits d>EPS into 6, i.e. the tolerance behaves as a consistent tie test), and pivots exactly equal to element values (strict '>' honoured: pivot=5.0 over elements <=5.0 returns 0) \u2014 n_mismatch=0. c3 (t12): a randomized fuzz of 600 tiles over N=2^0..2^12 and 7 distributions (randn, uniform at 3 scales, coarse and fine quantized grids with step sizes 1e-4..2e-3 straddling EPS, exponential, tightly clustered sigma 1e-4..1e-2, bimodal) with pivots drawn as an element value, the median, below the minimum, or near the maximum \u2014 n_mismatch=0. The only residual freedom is the numeric tolerance (EPS=1e-3), which problem.txt explicitly leaves unspecified, so it cannot ground a reject. No in-scope violation was found.",
+  "verdict": "trust"
+}

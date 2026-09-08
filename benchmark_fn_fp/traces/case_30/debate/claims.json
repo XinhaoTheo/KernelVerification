@@ -1,0 +1,600 @@
+[
+  {
+    "created_at": "2026-09-08T16:40:15Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T16:41:32Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "1e6d4d7bc2cbb61b591b4e856619932656d2ec62cedc6bf13cb2bc49d7d5d5b0"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "1f9a8d041bdcc17cfdec68adc39e5eb1bcc1058f44d1eb104a75f805184df9f8"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "5fc69a5acfeaced8d798a50861a57f3e8ad9a1d4ee8014ccf1ecec1bd3c4f023"
+            }
+          ],
+          "duration_s": 5.238095,
+          "exit_code": 0,
+          "expected_signal": "Kernel returns highest tied index (e.g. 2 for [2,1,2]) while torch.argmax returns lowest (0); mismatch on all tied rows.",
+          "json_parse_error": null,
+          "json_result": {
+            "kernel_idx": [
+              2,
+              1,
+              2,
+              0,
+              2
+            ],
+            "kernel_picks_highest_tied": [
+              true,
+              true,
+              true
+            ],
+            "metric": "exact_index_equality_vs_torch_argmax",
+            "nonpow2_E5_unique_mismatches": 0,
+            "num_tied": 3,
+            "num_tied_mismatch": 3,
+            "ref_idx": [
+              0,
+              0,
+              1,
+              0,
+              2
+            ],
+            "rows": [
+              [
+                2.0,
+                1.0,
+                2.0
+              ],
+              [
+                3.0,
+                3.0,
+                0.0
+              ],
+              [
+                1.0,
+                5.0,
+                5.0
+              ],
+              [
+                7.0,
+                1.0,
+                2.0
+              ],
+              [
+                0.0,
+                1.0,
+                9.0
+              ]
+            ],
+            "tied_mismatches": [
+              0,
+              1,
+              2
+            ],
+            "tied_row_ids": [
+              0,
+              1,
+              2
+            ],
+            "untied_mismatches": []
+          },
+          "kernel_idx": [
+            2,
+            1,
+            2,
+            0,
+            2
+          ],
+          "kernel_picks_highest_tied_all": true,
+          "metric": "exact_index_equality_vs_torch_argmax",
+          "nonpow2_E5_unique_max_mismatches": 0,
+          "num_tied_mismatch": 3,
+          "num_tied_rows": 3,
+          "ref_idx": [
+            0,
+            0,
+            1,
+            0,
+            2
+          ],
+          "stderr": "",
+          "stdout": "{\"metric\": \"exact_index_equality_vs_torch_argmax\", \"rows\": [[2.0, 1.0, 2.0], [3.0, 3.0, 0.0], [1.0, 5.0, 5.0], [7.0, 1.0, 2.0], [0.0, 1.0, 9.0]], \"kernel_idx\": [2, 1, 2, 0, 2], \"ref_idx\": [0, 0, 1, 0, 2], \"tied_row_ids\": [0, 1, 2], \"tied_mismatches\": [0, 1, 2], \"untied_mismatches\": [], \"kernel_picks_highest_tied\": [true, true, true], \"num_tied\": 3, \"num_tied_mismatch\": 3, \"nonpow2_E5_unique_mismatches\": 0}\n",
+          "tied_mismatch_rate": 1.0,
+          "timed_out": false,
+          "timeout_s": 60,
+          "untied_mismatches": 0
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Hand-crafted tied rows: kernel returns the HIGHEST tied index on all 3 tied rows while torch.argmax returns the lowest ([2,1,2]->kernel 2 vs ref 0; [3,3,0]->1 vs 0; [1,5,5]->2 vs 1). All untied rows match, and 256 random fp32 rows with E=5 (non-power-of-2) show 0 mismatches, so padding lanes and the per-expert reduction are not implicated \u2014 the defect is exactly the non-strict `v >= best` at kernel.py:17.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "Line 17 uses `>=` rather than `>`, and the loop scans e = 0..E-1 in ascending order, so each equal-valued later index unconditionally replaces the stored winner. This structurally inverts the tie-break direction the problem names as load-bearing.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"When several experts share the largest logit, the contract requires the LOWEST expert index to win\" \u2014 tie-break direction is an explicit stated requirement, and ties are described as routine rather than exotic."
+      },
+      {
+        "source": "kernel.py:15-19",
+        "summary": "Ascending loop over e with `take = v >= best`; on equality `best_i` is updated to the larger e, implementing highest-index-wins."
+      }
+    ],
+    "scope_rationale": "problem.txt is the only contract source and it explicitly states that when several experts share the largest logit the LOWEST expert index must win, and that ties are a normal occurrence. Representative inputs the contract admits are ordinary [n_tokens, n_experts] logit matrices containing duplicated maxima within a row; no test.py exists to narrow the domain further.",
+    "statement": "On any token row where the maximum logit value occurs at two or more expert indices (e.g. logits[t] = [2.0, 1.0, 2.0]), `_route_kernel`'s non-strict acceptance test `take = v >= best` (kernel.py:17) lets the later loop iteration overwrite `best_i`, so route_top1 returns the HIGHEST tied index instead of the contractually required LOWEST index; measured as exact index equality against torch.argmax(logits, dim=-1), the kernel will mismatch on such rows.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T16:41:32Z"
+  },
+  {
+    "created_at": "2026-09-08T16:40:15Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T16:41:32Z",
+        "data": {
+          "E": 8,
+          "N": 8192,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "affa6c816f57c004453fb358b6f3574491619e2c23a8105ca527c2b2bd44dd2b"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "a215dceb9327e8ff863277e96f1402f35c3e85df4ad45104165e078c595f4559"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "b422a439c0b54f992d83041da72e90d7b1b5ad93e625fd7d75cb864038b324ec"
+            }
+          ],
+          "bf16_max_index_error": 7,
+          "bf16_mismatch_on_tied": 31,
+          "bf16_mismatch_on_untied": 0,
+          "bf16_tied_rate": 0.0037841796875,
+          "bf16_tied_rows": 31,
+          "duration_s": 4.917402,
+          "exit_code": 0,
+          "expected_signal": "fp16/bf16 random logits produce a nonzero rate of tied-max rows, and kernel mismatches torch.argmax on essentially all of them while matching on untied rows.",
+          "fp16_max_index_error": 5,
+          "fp16_mismatch_on_tied": 5,
+          "fp16_mismatch_on_untied": 0,
+          "fp16_tied_rate": 0.0006103515625,
+          "fp16_tied_rows": 5,
+          "fp32_tied_rows": 0,
+          "fp32_total_mismatch": 0,
+          "json_parse_error": null,
+          "json_result": {
+            "bf16": {
+              "E": 8,
+              "N": 8192,
+              "kernel_chosen_value_always_equals_max": true,
+              "max_index_error": 7,
+              "mismatch_on_tied": 31,
+              "mismatch_on_untied": 0,
+              "tied_rate": 0.0037841796875,
+              "tied_rows": 31,
+              "tied_rows_mismatched_frac": 1.0,
+              "total_mismatch": 31
+            },
+            "fp16": {
+              "E": 8,
+              "N": 8192,
+              "kernel_chosen_value_always_equals_max": true,
+              "max_index_error": 5,
+              "mismatch_on_tied": 5,
+              "mismatch_on_untied": 0,
+              "tied_rate": 0.0006103515625,
+              "tied_rows": 5,
+              "tied_rows_mismatched_frac": 1.0,
+              "total_mismatch": 5
+            },
+            "fp32": {
+              "E": 8,
+              "N": 8192,
+              "kernel_chosen_value_always_equals_max": true,
+              "max_index_error": 0,
+              "mismatch_on_tied": 0,
+              "mismatch_on_untied": 0,
+              "tied_rate": 0.0,
+              "tied_rows": 0,
+              "tied_rows_mismatched_frac": 0.0,
+              "total_mismatch": 0
+            },
+            "metric": "exact_index_equality_vs_torch_argmax_on_reduced_precision_logits"
+          },
+          "kernel_chosen_value_always_equals_max": true,
+          "metric": "exact_index_equality_vs_torch_argmax_on_reduced_precision_logits",
+          "stderr": "",
+          "stdout": "{\"fp16\": {\"N\": 8192, \"E\": 8, \"tied_rows\": 5, \"tied_rate\": 0.0006103515625, \"total_mismatch\": 5, \"mismatch_on_tied\": 5, \"mismatch_on_untied\": 0, \"tied_rows_mismatched_frac\": 1.0, \"kernel_chosen_value_always_equals_max\": true, \"max_index_error\": 5}, \"bf16\": {\"N\": 8192, \"E\": 8, \"tied_rows\": 31, \"tied_rate\": 0.0037841796875, \"total_mismatch\": 31, \"mismatch_on_tied\": 31, \"mismatch_on_untied\": 0, \"tied_rows_mismatched_frac\": 1.0, \"kernel_chosen_value_always_equals_max\": true, \"max_index_error\": 7}, \"fp32\": {\"N\": 8192, \"E\": 8, \"tied_rows\": 0, \"tied_rate\": 0.0, \"total_mismatch\": 0, \"mismatch_on_tied\": 0, \"mismatch_on_untied\": 0, \"tied_rows_mismatched_frac\": 0.0, \"kernel_chosen_value_always_equals_max\": true, \"max_index_error\": 0}, \"metric\": \"exact_index_equality_vs_torch_argmax_on_reduced_precision_logits\"}\n",
+          "tied_rows_mismatched_frac_fp16_bf16": 1.0,
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Reduced-precision reachability confirmed without hand-crafted duplicates: 8192x8 random logits cast to bf16 give 31 tied-max rows (0.38%) and 31 mismatches (100% of tied rows); fp16 gives 5 tied rows (0.061%) and 5 mismatches; fp32 gives 0 ties and 0 mismatches. Zero mismatches on untied rows in every dtype, and the kernel's chosen value always equals the row max, so the per-expert sum-reduction is bit-exact and the divergence is purely tie-break direction. Max index error 7 (bf16), i.e. the kernel routed to expert 7 where the contract requires expert 0.",
+        "supports": "confirmed",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The contract justifies the tie rule by reduced-precision rounding. If a probe only used fp32 randn it would almost never tie and would look clean, so the claim must be tested on fp16/bf16-quantized inputs to show real-world reachability of the `>=` defect.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "States logits are computed in reduced precision and that distinct logits routinely round to the same representable value, making ties normal \u2014 this defines the expected input distribution."
+      }
+    ],
+    "scope_rationale": "problem.txt states that \"router logits are computed in reduced precision and distinct logits routinely round to the same representable value\", so fp16/bf16 logit matrices are exactly the input population the contract describes; correct tie handling on them is required.",
+    "statement": "With realistic reduced-precision router logits (fp32 values cast to fp16/bf16, which the problem says routinely collide), a batch of random rows will contain quantization-induced tied maxima at a nonzero rate, and route_top1's returned index will disagree with torch.argmax on those rows \u2014 i.e. the tie bug is reachable without hand-crafted exact duplicates.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T16:41:32Z"
+  },
+  {
+    "created_at": "2026-09-08T16:40:15Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T16:41:32Z",
+        "data": {
+          "E_values_tested": [
+            2,
+            3,
+            4,
+            5,
+            6,
+            8,
+            16
+          ],
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "4dab936eb9ae4f2354c3ff6505897cf9726be488b0814fc7dd5f088e3e3e66d6"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "39be8a1535b869192571543417c68d89f78360e98c5c9201e4f1e3b627332282"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "61d375953f5ec16b583d169b5fdee55b5f18f0ab6bcb3780ced744e6bbe0a1d5"
+            }
+          ],
+          "configs_returning_E_minus_1": 14,
+          "configs_total": 14,
+          "dtypes_tested": [
+            "fp32",
+            "fp16"
+          ],
+          "duration_s": 5.786706,
+          "exit_code": 0,
+          "expected_contract_index": 0,
+          "expected_signal": "Constant/all-equal rows return E-1 from the kernel while contract/torch.argmax requires 0, for several E including non-powers of 2.",
+          "index_error_E3": 2,
+          "index_error_E8": 7,
+          "json_parse_error": null,
+          "json_result": {
+            "E16_fp16": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 15,
+              "kernel": [
+                15,
+                15,
+                15,
+                15
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E16_fp32": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 15,
+              "kernel": [
+                15,
+                15,
+                15,
+                15
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E2_fp16": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 1,
+              "kernel": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E2_fp32": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 1,
+              "kernel": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E3_fp16": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 2,
+              "kernel": [
+                2,
+                2,
+                2,
+                2
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E3_fp32": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 2,
+              "kernel": [
+                2,
+                2,
+                2,
+                2
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E4_fp16": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 3,
+              "kernel": [
+                3,
+                3,
+                3,
+                3
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E4_fp32": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 3,
+              "kernel": [
+                3,
+                3,
+                3,
+                3
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E5_fp16": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 4,
+              "kernel": [
+                4,
+                4,
+                4,
+                4
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E5_fp32": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 4,
+              "kernel": [
+                4,
+                4,
+                4,
+                4
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E6_fp16": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 5,
+              "kernel": [
+                5,
+                5,
+                5,
+                5
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E6_fp32": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 5,
+              "kernel": [
+                5,
+                5,
+                5,
+                5
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E8_fp16": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 7,
+              "kernel": [
+                7,
+                7,
+                7,
+                7
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "E8_fp32": {
+              "equals_E_minus_1": true,
+              "expected_contract": 0,
+              "index_error": 7,
+              "kernel": [
+                7,
+                7,
+                7,
+                7
+              ],
+              "ref": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "metric": "all_equal_row_returns_lowest_index_0"
+          },
+          "max_index_error_E16": 15,
+          "metric": "all_equal_row_returns_lowest_index_0",
+          "nonpow2_behaves_same": true,
+          "stderr": "",
+          "stdout": "{\"E2_fp32\": {\"kernel\": [1, 1, 1, 1], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 1}, \"E2_fp16\": {\"kernel\": [1, 1, 1, 1], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 1}, \"E3_fp32\": {\"kernel\": [2, 2, 2, 2], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 2}, \"E3_fp16\": {\"kernel\": [2, 2, 2, 2], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 2}, \"E4_fp32\": {\"kernel\": [3, 3, 3, 3], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 3}, \"E4_fp16\": {\"kernel\": [3, 3, 3, 3], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 3}, \"E5_fp32\": {\"kernel\": [4, 4, 4, 4], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 4}, \"E5_fp16\": {\"kernel\": [4, 4, 4, 4], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 4}, \"E6_fp32\": {\"kernel\": [5, 5, 5, 5], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 5}, \"E6_fp16\": {\"kernel\": [5, 5, 5, 5], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 5}, \"E8_fp32\": {\"kernel\": [7, 7, 7, 7], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 7}, \"E8_fp16\": {\"kernel\": [7, 7, 7, 7], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 7}, \"E16_fp32\": {\"kernel\": [15, 15, 15, 15], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 15}, \"E16_fp16\": {\"kernel\": [15, 15, 15, 15], \"ref\": [0, 0, 0, 0], \"expected_contract\": 0, \"equals_E_minus_1\": true, \"index_error\": 15}, \"metric\": \"all_equal_row_returns_lowest_index_0\"}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "Fully-tied constant rows (value 0.25) return E-1 for every tested E in {2,3,4,5,6,8,16} and both fp32 and fp16, while the contract and torch.argmax require 0. equals_E_minus_1 is true in all 14 configurations; index error scales with E up to 15 at E=16. Non-power-of-2 E (3,5,6) behaves identically, so BLOCK padding is not the cause \u2014 it is the -inf init plus non-strict `>=`.",
+        "supports": "confirmed",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "The all-equal row is the maximal-severity instance of the tie rule: the contract's answer is unambiguously index 0, while the kernel's sequential overwrite yields the last expert, so severity of the tie defect can be quantified as an index error of E-1.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Tie rule requires the lowest expert index to win whenever multiple experts share the largest logit; an all-equal row is such a case and must return 0."
+      }
+    ],
+    "scope_rationale": "A constant-valued logit row is an ordinary finite [n_tokens, n_experts] input; problem.txt's tie rule covers \"several experts share the largest logit\", which includes all experts sharing it, and prescribes index 0.",
+    "statement": "For a degenerate row where all E logits are equal (the fully tied case, e.g. a constant row), route_top1 returns E-1 rather than the contractually required 0, because `best` is initialized to -inf and every iteration passes the non-strict `>=` test (kernel.py:13-19).",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T16:41:32Z"
+  }
+]

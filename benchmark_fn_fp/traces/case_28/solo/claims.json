@@ -1,0 +1,89 @@
+[
+  {
+    "created_at": "2026-09-08T14:52:13Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:52:42Z",
+        "data": {
+          "A_gauss_kernel_max_relerr": 0.03963,
+          "A_gauss_ref_max_relerr": 0.008144,
+          "B_outlier3_kernel_relerr_rows": [
+            0.4009,
+            0.401,
+            0.3986,
+            0.3996,
+            0.4014,
+            0.3991,
+            0.4004,
+            0.3998
+          ],
+          "B_outlier3_ref_max_relerr": 0.038065,
+          "B_row0_in": [
+            60.0,
+            -45.0,
+            30.0
+          ],
+          "B_row0_out": [
+            30.0,
+            -30.0,
+            30.0
+          ],
+          "C_row0_in": 20.0,
+          "C_row0_out": 3.48997,
+          "C_single_outlier_kernel_max_relerr": 0.60986,
+          "C_single_outlier_ref_max_relerr": 0.037335,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "fb3b51f708b5343f1382835f03b76cdb66c07bf0e81cc41495a0b6b4f89b00e2"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "414011d0b9603b5d479742ed74a320c2cf439b0d700eb2d41f8e401380c3687c"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "contract_limit": 0.05,
+          "duration_s": 6.760956,
+          "exit_code": 0,
+          "expected_signal": "Outlier rows B/C show max relative error >> 0.05 with clamped outlier outputs, while the absmax reference stays < 0.01.",
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "stderr": "",
+          "stdout": "{\n \"A_kernel_max_relerr\": 0.03963358700275421,\n \"A_ref_max_relerr\": 0.008143541403114796,\n \"B_kernel_relerr_rows\": [\n  0.4009,\n  0.401,\n  0.3986,\n  0.3996,\n  0.4014,\n  0.3991,\n  0.4004,\n  0.3998\n ],\n \"B_kernel_max_relerr\": 0.40139853954315186,\n \"B_ref_max_relerr\": 0.03806508705019951,\n \"B_row0_in\": [\n  60.0,\n  -45.0,\n  30.0\n ],\n \"B_row0_out\": [\n  30.0,\n  -30.0,\n  30.0\n ],\n \"C_kernel_max_relerr\": 0.6098600625991821,\n \"C_ref_max_relerr\": 0.03733498975634575,\n \"C_row0_in5\": 20.0,\n \"C_row0_out5\": 3.4899697303771973,\n \"limit\": 0.05\n}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On heavy-tailed rows the kernel's per-row relative reconstruction error is 0.40 (three outlier channels) and 0.61 (single 20x outlier), both far above the contract's 5% bound, while a correct absmax calibration gives 0.038/0.037 on the same inputs. Outliers are visibly clamped: input 60.0 -> output 30.0, -45.0 -> -30.0, 20.0 -> 3.49, exactly as predicted by calibrating on the 3rd-largest magnitude. Even benign Gaussian rows give 0.0396 vs 0.0081 for the reference, i.e. ~5x worse and near the limit.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Lines 16-21: thresh starts at absmax and is reduced twice to the next-lower distinct magnitude; scale = thresh/127, so any |x| > thresh saturates at \u00b1thresh, removing its magnitude from the reconstruction.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"Input domain: real transformer activations, whose per-channel magnitudes are heavy-tailed. A small number of channels carrying values one or two orders of magnitude above the bulk is normal...\" and \"must not exceed 5%... It is not loose enough to absorb a value that has been clamped away\"."
+      }
+    ],
+    "scope_rationale": "The contract explicitly declares the input domain as heavy-tailed transformer activations with a few channels one or two orders of magnitude above the bulk, and explicitly states the 5% bound is not loose enough to absorb a clamped entry. So an outlier-bearing row is a representative admitted input and the 5% row-relative-error bound is a required behaviour.",
+    "statement": "quant_dequant() calibrates the scale from the 3rd-largest distinct |x| in the row (two peel-off iterations), so rows containing a few outlier channels 1-2 orders of magnitude above the bulk have those entries clamped, driving the per-row relative reconstruction error ||y-x||/||x|| far above the required 5%.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:52:42Z"
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "confidence": 0.93,
+  "created_at": "2026-09-08T14:46:35Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The contract in problem.txt explicitly requires that \"when two candidates have exactly equal scores, the LOWER index must be the one kept\", and that the k highest-scoring indices be returned in descending score order. The kernel's compare-and-swap (kernel.py line 24) uses `cond = (left > right) != flip`, which contains no index term; with the descending final merge (flip=1) the condition reduces to `left <= right`, so exactly-tied elements are swapped and the network is unstable on ties.\n\nProbe t6 (finalized as evidence c1.e1) ran the actual kernel on GPU against a stable descending argsort reference, all within the declared input domain (power-of-two column counts, N=16 and N=32):\n- all_equal_N16 (all zeros, k=8): kernel returned [8,9,11,10,14,15,13,12]; the contract requires [0..7]. Set diff: ref_only={0..7}, kernel_only={8..15}, all values identical (0.0) \u2014 i.e. every kept candidate is a higher index among exact ties.\n- quantized_3levels_N16 (k=8): kernel kept tied (value 1.0) indices 8 and 14 while dropping lower tied indices 4 and 6; row 2 kept 12,14,15 while dropping 2,4,7. It also ordered tied 2.0 entries as 11 before 10, violating lower-index-first ordering.\n- Control cases with distinct scores (distinct_N16) and strictly decreasing scores (groups_of_4_N32) matched the reference exactly (idx_exact_match=true), isolating the failure precisely to the contractually specified tie rule rather than to a metric artifact or a reference-undefined case.\n\nSince the tie-break is an explicitly stated required behaviour and the failing inputs (exactly equal / quantized scores with power-of-two N) are admitted by the declared input domain, this is a contract violation, not an unspecified-choice difference.",
+  "verdict": "reject"
+}

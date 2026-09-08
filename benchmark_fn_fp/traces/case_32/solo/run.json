@@ -1,0 +1,2381 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_32",
+    "has_error": null,
+    "kernel_code": "# Copyright (c) Meta Platforms, Inc. and affiliates.\n\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _stable_argsort_kernel(\n    keys_ptr,       # [N, W] int64 input (modified in-place: sorted)\n    perm_ptr,       # [N, W] int64 output (permutation indices)\n    N: tl.constexpr,\n    W: tl.constexpr,\n    BLOCK_W: tl.constexpr,\n):\n    \"\"\"Ascending bitonic sort of each row, returning the permutation.\"\"\"\n    pid = tl.program_id(0)\n    if pid >= N:\n        return\n\n    offs = tl.arange(0, BLOCK_W)\n    mask = offs < W\n    base = pid * W\n\n    keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)\n    perm = offs.to(tl.int64)\n\n    size = 1\n    while size < BLOCK_W:\n        stride = size\n        while stride > 0:\n            partner = offs ^ stride\n            ascending = ((offs & (size << 1)) == 0)\n\n            p_key = tl.load(keys_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)\n            p_perm = tl.load(perm_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)\n\n            is_lower_idx = offs < partner\n            want_smaller = (is_lower_idx & ascending) | ((~is_lower_idx) & (~ascending))\n\n            my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm))\n\n            should_take_partner = (want_smaller & (~my_is_smaller) & (partner < W)) | \\\n                                  ((~want_smaller) & my_is_smaller & (partner < W))\n\n            keys = tl.where(should_take_partner, p_key, keys)\n            perm = tl.where(should_take_partner, p_perm, perm)\n\n            tl.store(keys_ptr + base + offs, keys, mask=mask)\n            tl.store(perm_ptr + base + offs, perm, mask=mask)\n            tl.debug_barrier()\n\n            keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)\n            perm = tl.load(perm_ptr + base + offs, mask=mask, other=0)\n\n            stride = stride >> 1\n        size = size << 1\n\n\ndef triton_argsort(keys: torch.Tensor):\n    \"\"\"Ascending argsort for small rows. Returns (sorted_keys, permutation).\"\"\"\n    N, W = keys.shape\n    BLOCK_W = triton.next_power_of_2(W)\n    keys_out = keys.clone()\n    perm = torch.arange(W, device=keys.device, dtype=torch.int64).unsqueeze(0).expand(N, -1).contiguous()\n    _stable_argsort_kernel[(N,)](keys_out, perm, N=N, W=W, BLOCK_W=BLOCK_W, num_warps=1)\n    return keys_out, perm\n",
+    "passed": null,
+    "problem_text": "Operation: per-row ascending argsort of small integer keys\n(facebookresearch/sparse-delta-memory, lingua/sparse_delta_memory/triton_argsort.py).\n\n`triton_argsort(keys)` takes an [N, W] int64 tensor and returns the sorted keys\ntogether with the permutation that produces them:\n\n    sorted_keys[n, i] = keys[n, perm[n, i]]\n    sorted_keys[n, :] is non-decreasing\n\nTie rule: the sort must be STABLE. When two entries of a row hold the same key,\nthe one with the LOWER original index must come first. The permutation is used\nto gather memory slots whose contents differ, so which of two tied entries is\nplaced first changes the values that are read out afterwards, and stability is\nwhat makes the read reproducible across runs and across replicas.\n\nInput domain: keys are arbitrary int64 values. Duplicate keys within a row are\nexpected -- the keys are quantized scores, and quantization is what makes two\ndifferent underlying values land on the same key.\n\nDoes triton_argsort() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_32",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T14:53:53Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:54:28Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "324926aa3b5822382c55ba03db376050ac57a112bf5ff798115ba8d805f02ad4"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "03e3b0e13eb173c1efd277a3a9a0737f4e5a179fe99e2614662ee7fa9a330b8f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "3ec1919f3f285273eb8d19b096794302d65f5a623b7bfe6ba1897a24da1d61e8"
+              }
+            ],
+            "caseA_allequal_perm": [
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "caseA_allequal_ref_perm": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "caseA_row0_perm": [
+              5,
+              4,
+              7,
+              6,
+              3,
+              2,
+              1,
+              0
+            ],
+            "caseA_row0_ref_perm": [
+              4,
+              5,
+              6,
+              7,
+              0,
+              1,
+              2,
+              3
+            ],
+            "caseB_W7_kernel_sorted": [
+              0,
+              1,
+              0,
+              1,
+              1,
+              5,
+              5
+            ],
+            "caseB_W7_ref_sorted": [
+              0,
+              0,
+              1,
+              1,
+              1,
+              5,
+              5
+            ],
+            "caseB_sorted_ok": false,
+            "caseC_rows_with_perm_mismatch": 64,
+            "caseC_sorted_values_ok": true,
+            "caseC_total_rows": 64,
+            "deterministic": true,
+            "duration_s": 7.304279,
+            "exit_code": 0,
+            "expected_signal": "If tie-break is inverted, perm within tied groups will be in descending original index order vs torch stable argsort.",
+            "json_parse_error": null,
+            "json_result": {
+              "A": {
+                "gather_consistent": true,
+                "keys": [
+                  [
+                    5,
+                    5,
+                    5,
+                    5,
+                    1,
+                    1,
+                    3,
+                    3
+                  ],
+                  [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                  ],
+                  [
+                    7,
+                    1,
+                    7,
+                    1,
+                    7,
+                    1,
+                    7,
+                    1
+                  ]
+                ],
+                "perm": [
+                  [
+                    5,
+                    4,
+                    7,
+                    6,
+                    3,
+                    2,
+                    1,
+                    0
+                  ],
+                  [
+                    7,
+                    6,
+                    5,
+                    4,
+                    3,
+                    2,
+                    1,
+                    0
+                  ],
+                  [
+                    7,
+                    5,
+                    3,
+                    1,
+                    6,
+                    4,
+                    2,
+                    0
+                  ]
+                ],
+                "perm_ok": false,
+                "ref_perm": [
+                  [
+                    4,
+                    5,
+                    6,
+                    7,
+                    0,
+                    1,
+                    2,
+                    3
+                  ],
+                  [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7
+                  ],
+                  [
+                    1,
+                    3,
+                    5,
+                    7,
+                    0,
+                    2,
+                    4,
+                    6
+                  ]
+                ],
+                "ref_sorted": [
+                  [
+                    1,
+                    1,
+                    3,
+                    3,
+                    5,
+                    5,
+                    5,
+                    5
+                  ],
+                  [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                  ],
+                  [
+                    1,
+                    1,
+                    1,
+                    1,
+                    7,
+                    7,
+                    7,
+                    7
+                  ]
+                ],
+                "sorted": [
+                  [
+                    1,
+                    1,
+                    3,
+                    3,
+                    5,
+                    5,
+                    5,
+                    5
+                  ],
+                  [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                  ],
+                  [
+                    1,
+                    1,
+                    1,
+                    1,
+                    7,
+                    7,
+                    7,
+                    7
+                  ]
+                ],
+                "sorted_ok": true
+              },
+              "B": {
+                "gather_consistent": true,
+                "keys": [
+                  [
+                    4,
+                    4,
+                    2,
+                    2,
+                    9,
+                    9,
+                    9
+                  ],
+                  [
+                    1,
+                    1,
+                    1,
+                    0,
+                    0,
+                    5,
+                    5
+                  ]
+                ],
+                "perm": [
+                  [
+                    3,
+                    2,
+                    1,
+                    0,
+                    6,
+                    5,
+                    4
+                  ],
+                  [
+                    4,
+                    2,
+                    3,
+                    0,
+                    1,
+                    6,
+                    5
+                  ]
+                ],
+                "perm_ok": false,
+                "ref_perm": [
+                  [
+                    2,
+                    3,
+                    0,
+                    1,
+                    4,
+                    5,
+                    6
+                  ],
+                  [
+                    3,
+                    4,
+                    0,
+                    1,
+                    2,
+                    5,
+                    6
+                  ]
+                ],
+                "ref_sorted": [
+                  [
+                    2,
+                    2,
+                    4,
+                    4,
+                    9,
+                    9,
+                    9
+                  ],
+                  [
+                    0,
+                    0,
+                    1,
+                    1,
+                    1,
+                    5,
+                    5
+                  ]
+                ],
+                "sorted": [
+                  [
+                    2,
+                    2,
+                    4,
+                    4,
+                    9,
+                    9,
+                    9
+                  ],
+                  [
+                    0,
+                    1,
+                    0,
+                    1,
+                    1,
+                    5,
+                    5
+                  ]
+                ],
+                "sorted_ok": false
+              },
+              "C": {
+                "gather_consistent": true,
+                "nondecreasing": true,
+                "perm_ok": false,
+                "rows_with_perm_mismatch": 64,
+                "shape": [
+                  64,
+                  32
+                ],
+                "sorted_ok": true,
+                "total_rows": 64
+              },
+              "D": {
+                "deterministic": true
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"A\": {\"keys\": [[5, 5, 5, 5, 1, 1, 3, 3], [2, 2, 2, 2, 2, 2, 2, 2], [7, 1, 7, 1, 7, 1, 7, 1]], \"sorted\": [[1, 1, 3, 3, 5, 5, 5, 5], [2, 2, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 7, 7, 7, 7]], \"perm\": [[5, 4, 7, 6, 3, 2, 1, 0], [7, 6, 5, 4, 3, 2, 1, 0], [7, 5, 3, 1, 6, 4, 2, 0]], \"ref_perm\": [[4, 5, 6, 7, 0, 1, 2, 3], [0, 1, 2, 3, 4, 5, 6, 7], [1, 3, 5, 7, 0, 2, 4, 6]], \"ref_sorted\": [[1, 1, 3, 3, 5, 5, 5, 5], [2, 2, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 7, 7, 7, 7]], \"sorted_ok\": true, \"perm_ok\": false, \"gather_consistent\": true}, \"B\": {\"keys\": [[4, 4, 2, 2, 9, 9, 9], [1, 1, 1, 0, 0, 5, 5]], \"sorted\": [[2, 2, 4, 4, 9, 9, 9], [0, 1, 0, 1, 1, 5, 5]], \"perm\": [[3, 2, 1, 0, 6, 5, 4], [4, 2, 3, 0, 1, 6, 5]], \"ref_perm\": [[2, 3, 0, 1, 4, 5, 6], [3, 4, 0, 1, 2, 5, 6]], \"ref_sorted\": [[2, 2, 4, 4, 9, 9, 9], [0, 0, 1, 1, 1, 5, 5]], \"sorted_ok\": false, \"perm_ok\": false, \"gather_consistent\": true}, \"C\": {\"shape\": [64, 32], \"sorted_ok\": true, \"perm_ok\": false, \"rows_with_perm_mismatch\": 64, \"total_rows\": 64, \"gather_consistent\": true, \"nondecreasing\": true}, \"D\": {\"deterministic\": true}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Tie-break is inverted (descending original index among equal keys), and non-power-of-2 rows can even come out non-monotone. Case A row [2]*8: kernel perm=[7,6,5,4,3,2,1,0] vs required stable [0,1,2,3,4,5,6,7]; row [5,5,5,5,1,1,3,3]: kernel perm=[5,4,7,6,3,2,1,0] vs stable [4,5,6,7,0,1,2,3] \u2014 each tied group reversed. Case C (64x32 keys in [0,8)): 64/64 rows mismatch stable argsort indices while sorted values are correct and non-decreasing, so the defect is purely the tie order. Case B (W=7, non power of 2): keys [1,1,1,0,0,5,5] -> kernel sorted [0,1,0,1,1,5,5], which is not non-decreasing (sorted_ok=false), an additional contract violation. Results are deterministic across repeats (D), so this is a systematic ordering rule, not a race artifact.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Line 41 computes my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm)); for equal keys it treats the larger original index as smaller, which orders ties in descending index order \u2014 the opposite of stability.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "'Tie rule: the sort must be STABLE. When two entries of a row hold the same key, the one with the LOWER original index must come first.' and 'Duplicate keys within a row are expected'."
+        }
+      ],
+      "scope_rationale": "The contract explicitly requires stability (\"the one with the LOWER original index must come first\") and explicitly states duplicate keys within a row are expected in the input domain (quantized scores).",
+      "statement": "triton_argsort's tie-break is inverted: for rows containing duplicate keys, the entry with the HIGHER original index is placed first among tied keys, violating the contract's required stable (lower-index-first) tie rule.",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T14:54:28Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_32",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_32"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_32"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_32"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_32",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 13.035402701999942,
+      "role": "solo",
+      "round": 2,
+      "text": "The tie-break expression `(keys == p_key) & (perm > p_perm)` declares an element \"smaller\" when its original index is *larger*, which is the inverse of stability. Let me record that and test it.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Line 41 computes my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm)); for equal keys it treats the larger original index as smaller, which orders ties in descending index order \u2014 the opposite of stability.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "'Tie rule: the sort must be STABLE. When two entries of a row hold the same key, the one with the LOWER original index must come first.' and 'Duplicate keys within a row are expected'."
+              }
+            ],
+            "scope_rationale": "The contract explicitly requires stability (\"the one with the LOWER original index must come first\") and explicitly states duplicate keys within a row are expected in the input domain (quantized scores).",
+            "statement": "triton_argsort's tie-break is inverted: for rows containing duplicate keys, the entry with the HIGHER original index is placed first among tied keys, violating the contract's required stable (lower-index-first) tie rule."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 13.035,
+        "input_tokens": 5264,
+        "output_tokens": 934
+      }
+    },
+    {
+      "duration_s": 14.840064041000005,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run a probe on the real kernel with duplicate keys and compare permutations against torch's stable argsort.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_32/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nres = {}\n\n# Case A: many duplicates, W power of 2\nkeys = torch.tensor([[5,5,5,5,1,1,3,3],\n                     [2,2,2,2,2,2,2,2],\n                     [7,1,7,1,7,1,7,1]], device='cuda', dtype=torch.int64)\nsk, perm = m.triton_argsort(keys)\nref_perm = torch.argsort(keys, dim=1, stable=True)\nref_sk = torch.sort(keys, dim=1, stable=True).values\nres['A'] = dict(keys=keys.tolist(), sorted=sk.tolist(), perm=perm.tolist(),\n                ref_perm=ref_perm.tolist(), ref_sorted=ref_sk.tolist(),\n                sorted_ok=bool(torch.equal(sk, ref_sk)),\n                perm_ok=bool(torch.equal(perm, ref_perm)),\n                gather_consistent=bool(torch.equal(torch.gather(keys,1,perm), sk)))\n\n# Case B: non-power-of-2 W with duplicates\nkeys2 = torch.tensor([[4,4,2,2,9,9,9],\n                      [1,1,1,0,0,5,5]], device='cuda', dtype=torch.int64)\nsk2, perm2 = m.triton_argsort(keys2)\nref_perm2 = torch.argsort(keys2, dim=1, stable=True)\nref_sk2 = torch.sort(keys2, dim=1, stable=True).values\nres['B'] = dict(keys=keys2.tolist(), sorted=sk2.tolist(), perm=perm2.tolist(),\n                ref_perm=ref_perm2.tolist(), ref_sorted=ref_sk2.tolist(),\n                sorted_ok=bool(torch.equal(sk2, ref_sk2)),\n                perm_ok=bool(torch.equal(perm2, ref_perm2)),\n                gather_consistent=bool(torch.equal(torch.gather(keys2,1,perm2), sk2)))\n\n# Case C: random quantized keys, larger\nkeys3 = torch.randint(0, 8, (64, 32), device='cuda', dtype=torch.int64)\nsk3, perm3 = m.triton_argsort(keys3)\nref3 = torch.sort(keys3, dim=1, stable=True)\nmismatch_rows = int((perm3 != ref3.indices).any(dim=1).sum())\nres['C'] = dict(shape=list(keys3.shape), sorted_ok=bool(torch.equal(sk3, ref3.values)),\n                perm_ok=bool(torch.equal(perm3, ref3.indices)),\n                rows_with_perm_mismatch=mismatch_rows, total_rows=64,\n                gather_consistent=bool(torch.equal(torch.gather(keys3,1,perm3), sk3)),\n                nondecreasing=bool((sk3[:,1:]>=sk3[:,:-1]).all()))\n\n# Case D: determinism across repeats\nreps = [m.triton_argsort(keys3)[1] for _ in range(3)]\nres['D'] = dict(deterministic=all(torch.equal(reps[0], r) for r in reps))\nprint(json.dumps(res))\n",
+            "expected_signal": "If tie-break is inverted, perm within tied groups will be in descending original index order vs torch stable argsort."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 14.84,
+        "input_tokens": 7106,
+        "output_tokens": 1378
+      }
+    },
+    {
+      "duration_s": 13.647343796999962,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe is decisive: for an all-equal row the kernel returns perm `[7,6,5,4,3,2,1,0]` where stability requires `[0,1,...,7]`, and every one of 64 random duplicate-key rows mismatches stable argsort. Case B additionally shows sorted keys `[0,1,0,1,1,5,5]` \u2014 not even non-decreasing for non-power-of-2 W.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "caseA_allequal_perm": [
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0
+              ],
+              "caseA_allequal_ref_perm": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "caseA_row0_perm": [
+                5,
+                4,
+                7,
+                6,
+                3,
+                2,
+                1,
+                0
+              ],
+              "caseA_row0_ref_perm": [
+                4,
+                5,
+                6,
+                7,
+                0,
+                1,
+                2,
+                3
+              ],
+              "caseB_W7_kernel_sorted": [
+                0,
+                1,
+                0,
+                1,
+                1,
+                5,
+                5
+              ],
+              "caseB_W7_ref_sorted": [
+                0,
+                0,
+                1,
+                1,
+                1,
+                5,
+                5
+              ],
+              "caseB_sorted_ok": false,
+              "caseC_rows_with_perm_mismatch": 64,
+              "caseC_sorted_values_ok": true,
+              "caseC_total_rows": 64,
+              "deterministic": true
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "Tie-break is inverted (descending original index among equal keys), and non-power-of-2 rows can even come out non-monotone. Case A row [2]*8: kernel perm=[7,6,5,4,3,2,1,0] vs required stable [0,1,2,3,4,5,6,7]; row [5,5,5,5,1,1,3,3]: kernel perm=[5,4,7,6,3,2,1,0] vs stable [4,5,6,7,0,1,2,3] \u2014 each tied group reversed. Case C (64x32 keys in [0,8)): 64/64 rows mismatch stable argsort indices while sorted values are correct and non-decreasing, so the defect is purely the tie order. Case B (W=7, non power of 2): keys [1,1,1,0,0,5,5] -> kernel sorted [0,1,0,1,1,5,5], which is not non-decreasing (sorted_ok=false), an additional contract violation. Results are deterministic across repeats (D), so this is a systematic ordering rule, not a race artifact.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 13.647,
+        "input_tokens": 15703,
+        "output_tokens": 1091
+      }
+    },
+    {
+      "duration_s": 9.432090143999972,
+      "role": "solo",
+      "round": 5,
+      "text": "The claim is confirmed with decisive runtime evidence; no further probing would change the outcome.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.96,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The contract explicitly requires a STABLE sort ('When two entries of a row hold the same key, the one with the LOWER original index must come first') and declares duplicate keys within a row to be expected. Kernel line 41 computes my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm)), i.e. among equal keys it treats the HIGHER original index as smaller \u2014 the inverse of stability. Probe t6 on the real kernel confirmed this at runtime: for keys=[2]*8 the kernel returns perm=[7,6,5,4,3,2,1,0] where stability requires [0,1,2,3,4,5,6,7]; for [5,5,5,5,1,1,3,3] it returns perm=[5,4,7,6,3,2,1,0] vs the required [4,5,6,7,0,1,2,3] (each tied group reversed); on a 64x32 batch of quantized keys in [0,8), 64/64 rows disagree with torch stable argsort indices while the sorted values themselves are correct and non-decreasing, isolating the defect to tie order. Results were deterministic across repeats, so this is a systematic ordering rule, not a race. Additionally (t6 case B, W=7, non-power-of-two row): keys [1,1,1,0,0,5,5] produce kernel sorted output [0,1,0,1,1,5,5], which violates even the basic 'sorted_keys[n,:] is non-decreasing' requirement. Both failures lie squarely in the contract's declared input domain (arbitrary int64 keys with expected duplicates).",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 9.432,
+        "input_tokens": 29361,
+        "output_tokens": 689
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_32"
+      },
+      "created_at": "2026-09-08T14:53:40Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_32",
+        "has_error": null,
+        "kernel_code": "# Copyright (c) Meta Platforms, Inc. and affiliates.\n\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _stable_argsort_kernel(\n    keys_ptr,       # [N, W] int64 input (modified in-place: sorted)\n    perm_ptr,       # [N, W] int64 output (permutation indices)\n    N: tl.constexpr,\n    W: tl.constexpr,\n    BLOCK_W: tl.constexpr,\n):\n    \"\"\"Ascending bitonic sort of each row, returning the permutation.\"\"\"\n    pid = tl.program_id(0)\n    if pid >= N:\n        return\n\n    offs = tl.arange(0, BLOCK_W)\n    mask = offs < W\n    base = pid * W\n\n    keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)\n    perm = offs.to(tl.int64)\n\n    size = 1\n    while size < BLOCK_W:\n        stride = size\n        while stride > 0:\n            partner = offs ^ stride\n            ascending = ((offs & (size << 1)) == 0)\n\n            p_key = tl.load(keys_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)\n            p_perm = tl.load(perm_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)\n\n            is_lower_idx = offs < partner\n            want_smaller = (is_lower_idx & ascending) | ((~is_lower_idx) & (~ascending))\n\n            my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm))\n\n            should_take_partner = (want_smaller & (~my_is_smaller) & (partner < W)) | \\\n                                  ((~want_smaller) & my_is_smaller & (partner < W))\n\n            keys = tl.where(should_take_partner, p_key, keys)\n            perm = tl.where(should_take_partner, p_perm, perm)\n\n            tl.store(keys_ptr + base + offs, keys, mask=mask)\n            tl.store(perm_ptr + base + offs, perm, mask=mask)\n            tl.debug_barrier()\n\n            keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)\n            perm = tl.load(perm_ptr + base + offs, mask=mask, other=0)\n\n            stride = stride >> 1\n        size = size << 1\n\n\ndef triton_argsort(keys: torch.Tensor):\n    \"\"\"Ascending argsort for small rows. Returns (sorted_keys, permutation).\"\"\"\n    N, W = keys.shape\n    BLOCK_W = triton.next_power_of_2(W)\n    keys_out = keys.clone()\n    perm = torch.arange(W, device=keys.device, dtype=torch.int64).unsqueeze(0).expand(N, -1).contiguous()\n    _stable_argsort_kernel[(N,)](keys_out, perm, N=N, W=W, BLOCK_W=BLOCK_W, num_warps=1)\n    return keys_out, perm\n",
+        "passed": null,
+        "problem_text": "Operation: per-row ascending argsort of small integer keys\n(facebookresearch/sparse-delta-memory, lingua/sparse_delta_memory/triton_argsort.py).\n\n`triton_argsort(keys)` takes an [N, W] int64 tensor and returns the sorted keys\ntogether with the permutation that produces them:\n\n    sorted_keys[n, i] = keys[n, perm[n, i]]\n    sorted_keys[n, :] is non-decreasing\n\nTie rule: the sort must be STABLE. When two entries of a row hold the same key,\nthe one with the LOWER original index must come first. The permutation is used\nto gather memory slots whose contents differ, so which of two tied entries is\nplaced first changes the values that are read out afterwards, and stability is\nwhat makes the read reproducible across runs and across replicas.\n\nInput domain: keys are arbitrary int64 values. Duplicate keys within a row are\nexpected -- the keys are quantized scores, and quantization is what makes two\ndifferent underlying values land on the same key.\n\nDoes triton_argsort() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_32",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_32"
+      },
+      "created_at": "2026-09-08T14:53:40Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: per-row ascending argsort of small integer keys\n(facebookresearch/sparse-delta-memory, lingua/sparse_delta_memory/triton_argsort.py).\n\n`triton_argsort(keys)` takes an [N, W] int64 tensor and returns the sorted keys\ntogether with the permutation that produces them:\n\n    sorted_keys[n, i] = keys[n, perm[n, i]]\n    sorted_keys[n, :] is non-decreasing\n\nTie rule: the sort must be STABLE. When two entries of a row hold the same key,\nthe one with the LOWER original index must come first. The permutation is used\nto gather memory slots whose contents differ, so which of two tied entries is\nplaced first changes the values that are read out afterwards, and stability is\nwhat makes the read reproducible across runs and across replicas.\n\nInput domain: keys are arbitrary int64 values. Duplicate keys within a row are\nexpected -- the keys are quantized scores, and quantization is what makes two\ndifferent underlying values land on the same key.\n\nDoes triton_argsort() satisfy this contract?\n",
+        "entry": "case_32",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_32"
+      },
+      "created_at": "2026-09-08T14:53:40Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_32",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2373
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 998
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_32",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T14:53:40Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_32\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_32",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Line 41 computes my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm)); for equal keys it treats the larger original index as smaller, which orders ties in descending index order \u2014 the opposite of stability.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'Tie rule: the sort must be STABLE. When two entries of a row hold the same key, the one with the LOWER original index must come first.' and 'Duplicate keys within a row are expected'."
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires stability (\"the one with the LOWER original index must come first\") and explicitly states duplicate keys within a row are expected in the input domain (quantized scores).",
+        "statement": "triton_argsort's tie-break is inverted: for rows containing duplicate keys, the entry with the HIGHER original index is placed first among tied keys, violating the contract's required stable (lower-index-first) tie rule."
+      },
+      "created_at": "2026-09-08T14:53:53Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-08T14:53:53Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Line 41 computes my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm)); for equal keys it treats the larger original index as smaller, which orders ties in descending index order \u2014 the opposite of stability.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'Tie rule: the sort must be STABLE. When two entries of a row hold the same key, the one with the LOWER original index must come first.' and 'Duplicate keys within a row are expected'."
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires stability (\"the one with the LOWER original index must come first\") and explicitly states duplicate keys within a row are expected in the input domain (quantized scores).",
+        "statement": "triton_argsort's tie-break is inverted: for rows containing duplicate keys, the entry with the HIGHER original index is placed first among tied keys, violating the contract's required stable (lower-index-first) tie rule.",
+        "status": "open",
+        "updated_at": "2026-09-08T14:53:53Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_32/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nres = {}\n\n# Case A: many duplicates, W power of 2\nkeys = torch.tensor([[5,5,5,5,1,1,3,3],\n                     [2,2,2,2,2,2,2,2],\n                     [7,1,7,1,7,1,7,1]], device='cuda', dtype=torch.int64)\nsk, perm = m.triton_argsort(keys)\nref_perm = torch.argsort(keys, dim=1, stable=True)\nref_sk = torch.sort(keys, dim=1, stable=True).values\nres['A'] = dict(keys=keys.tolist(), sorted=sk.tolist(), perm=perm.tolist(),\n                ref_perm=ref_perm.tolist(), ref_sorted=ref_sk.tolist(),\n                sorted_ok=bool(torch.equal(sk, ref_sk)),\n                perm_ok=bool(torch.equal(perm, ref_perm)),\n                gather_consistent=bool(torch.equal(torch.gather(keys,1,perm), sk)))\n\n# Case B: non-power-of-2 W with duplicates\nkeys2 = torch.tensor([[4,4,2,2,9,9,9],\n                      [1,1,1,0,0,5,5]], device='cuda', dtype=torch.int64)\nsk2, perm2 = m.triton_argsort(keys2)\nref_perm2 = torch.argsort(keys2, dim=1, stable=True)\nref_sk2 = torch.sort(keys2, dim=1, stable=True).values\nres['B'] = dict(keys=keys2.tolist(), sorted=sk2.tolist(), perm=perm2.tolist(),\n                ref_perm=ref_perm2.tolist(), ref_sorted=ref_sk2.tolist(),\n                sorted_ok=bool(torch.equal(sk2, ref_sk2)),\n                perm_ok=bool(torch.equal(perm2, ref_perm2)),\n                gather_consistent=bool(torch.equal(torch.gather(keys2,1,perm2), sk2)))\n\n# Case C: random quantized keys, larger\nkeys3 = torch.randint(0, 8, (64, 32), device='cuda', dtype=torch.int64)\nsk3, perm3 = m.triton_argsort(keys3)\nref3 = torch.sort(keys3, dim=1, stable=True)\nmismatch_rows = int((perm3 != ref3.indices).any(dim=1).sum())\nres['C'] = dict(shape=list(keys3.shape), sorted_ok=bool(torch.equal(sk3, ref3.values)),\n                perm_ok=bool(torch.equal(perm3, ref3.indices)),\n                rows_with_perm_mismatch=mismatch_rows, total_rows=64,\n                gather_consistent=bool(torch.equal(torch.gather(keys3,1,perm3), sk3)),\n                nondecreasing=bool((sk3[:,1:]>=sk3[:,:-1]).all()))\n\n# Case D: determinism across repeats\nreps = [m.triton_argsort(keys3)[1] for _ in range(3)]\nres['D'] = dict(deterministic=all(torch.equal(reps[0], r) for r in reps))\nprint(json.dumps(res))\n",
+        "expected_signal": "If tie-break is inverted, perm within tied groups will be in descending original index order vs torch stable argsort."
+      },
+      "created_at": "2026-09-08T14:54:15Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "324926aa3b5822382c55ba03db376050ac57a112bf5ff798115ba8d805f02ad4"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "03e3b0e13eb173c1efd277a3a9a0737f4e5a179fe99e2614662ee7fa9a330b8f"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "3ec1919f3f285273eb8d19b096794302d65f5a623b7bfe6ba1897a24da1d61e8"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "triton_argsort's tie-break is inverted: for rows containing duplicate keys, the entry with the HIGHER original index is placed first among tied keys, violating the contract's required stable (lower-index-first) tie rule.",
+        "cwd": "/root/cases/case_32",
+        "duration_s": 7.304279,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "324926aa3b5822382c55ba03db376050ac57a112bf5ff798115ba8d805f02ad4"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "03e3b0e13eb173c1efd277a3a9a0737f4e5a179fe99e2614662ee7fa9a330b8f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "3ec1919f3f285273eb8d19b096794302d65f5a623b7bfe6ba1897a24da1d61e8"
+              }
+            ],
+            "duration_s": 7.304279,
+            "exit_code": 0,
+            "expected_signal": "If tie-break is inverted, perm within tied groups will be in descending original index order vs torch stable argsort.",
+            "json_parse_error": null,
+            "json_result": {
+              "A": {
+                "gather_consistent": true,
+                "keys": [
+                  [
+                    5,
+                    5,
+                    5,
+                    5,
+                    1,
+                    1,
+                    3,
+                    3
+                  ],
+                  [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                  ],
+                  [
+                    7,
+                    1,
+                    7,
+                    1,
+                    7,
+                    1,
+                    7,
+                    1
+                  ]
+                ],
+                "perm": [
+                  [
+                    5,
+                    4,
+                    7,
+                    6,
+                    3,
+                    2,
+                    1,
+                    0
+                  ],
+                  [
+                    7,
+                    6,
+                    5,
+                    4,
+                    3,
+                    2,
+                    1,
+                    0
+                  ],
+                  [
+                    7,
+                    5,
+                    3,
+                    1,
+                    6,
+                    4,
+                    2,
+                    0
+                  ]
+                ],
+                "perm_ok": false,
+                "ref_perm": [
+                  [
+                    4,
+                    5,
+                    6,
+                    7,
+                    0,
+                    1,
+                    2,
+                    3
+                  ],
+                  [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7
+                  ],
+                  [
+                    1,
+                    3,
+                    5,
+                    7,
+                    0,
+                    2,
+                    4,
+                    6
+                  ]
+                ],
+                "ref_sorted": [
+                  [
+                    1,
+                    1,
+                    3,
+                    3,
+                    5,
+                    5,
+                    5,
+                    5
+                  ],
+                  [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                  ],
+                  [
+                    1,
+                    1,
+                    1,
+                    1,
+                    7,
+                    7,
+                    7,
+                    7
+                  ]
+                ],
+                "sorted": [
+                  [
+                    1,
+                    1,
+                    3,
+                    3,
+                    5,
+                    5,
+                    5,
+                    5
+                  ],
+                  [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                  ],
+                  [
+                    1,
+                    1,
+                    1,
+                    1,
+                    7,
+                    7,
+                    7,
+                    7
+                  ]
+                ],
+                "sorted_ok": true
+              },
+              "B": {
+                "gather_consistent": true,
+                "keys": [
+                  [
+                    4,
+                    4,
+                    2,
+                    2,
+                    9,
+                    9,
+                    9
+                  ],
+                  [
+                    1,
+                    1,
+                    1,
+                    0,
+                    0,
+                    5,
+                    5
+                  ]
+                ],
+                "perm": [
+                  [
+                    3,
+                    2,
+                    1,
+                    0,
+                    6,
+                    5,
+                    4
+                  ],
+                  [
+                    4,
+                    2,
+                    3,
+                    0,
+                    1,
+                    6,
+                    5
+                  ]
+                ],
+                "perm_ok": false,
+                "ref_perm": [
+                  [
+                    2,
+                    3,
+                    0,
+                    1,
+                    4,
+                    5,
+                    6
+                  ],
+                  [
+                    3,
+                    4,
+                    0,
+                    1,
+                    2,
+                    5,
+                    6
+                  ]
+                ],
+                "ref_sorted": [
+                  [
+                    2,
+                    2,
+                    4,
+                    4,
+                    9,
+                    9,
+                    9
+                  ],
+                  [
+                    0,
+                    0,
+                    1,
+                    1,
+                    1,
+                    5,
+                    5
+                  ]
+                ],
+                "sorted": [
+                  [
+                    2,
+                    2,
+                    4,
+                    4,
+                    9,
+                    9,
+                    9
+                  ],
+                  [
+                    0,
+                    1,
+                    0,
+                    1,
+                    1,
+                    5,
+                    5
+                  ]
+                ],
+                "sorted_ok": false
+              },
+              "C": {
+                "gather_consistent": true,
+                "nondecreasing": true,
+                "perm_ok": false,
+                "rows_with_perm_mismatch": 64,
+                "shape": [
+                  64,
+                  32
+                ],
+                "sorted_ok": true,
+                "total_rows": 64
+              },
+              "D": {
+                "deterministic": true
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"A\": {\"keys\": [[5, 5, 5, 5, 1, 1, 3, 3], [2, 2, 2, 2, 2, 2, 2, 2], [7, 1, 7, 1, 7, 1, 7, 1]], \"sorted\": [[1, 1, 3, 3, 5, 5, 5, 5], [2, 2, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 7, 7, 7, 7]], \"perm\": [[5, 4, 7, 6, 3, 2, 1, 0], [7, 6, 5, 4, 3, 2, 1, 0], [7, 5, 3, 1, 6, 4, 2, 0]], \"ref_perm\": [[4, 5, 6, 7, 0, 1, 2, 3], [0, 1, 2, 3, 4, 5, 6, 7], [1, 3, 5, 7, 0, 2, 4, 6]], \"ref_sorted\": [[1, 1, 3, 3, 5, 5, 5, 5], [2, 2, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 7, 7, 7, 7]], \"sorted_ok\": true, \"perm_ok\": false, \"gather_consistent\": true}, \"B\": {\"keys\": [[4, 4, 2, 2, 9, 9, 9], [1, 1, 1, 0, 0, 5, 5]], \"sorted\": [[2, 2, 4, 4, 9, 9, 9], [0, 1, 0, 1, 1, 5, 5]], \"perm\": [[3, 2, 1, 0, 6, 5, 4], [4, 2, 3, 0, 1, 6, 5]], \"ref_perm\": [[2, 3, 0, 1, 4, 5, 6], [3, 4, 0, 1, 2, 5, 6]], \"ref_sorted\": [[2, 2, 4, 4, 9, 9, 9], [0, 0, 1, 1, 1, 5, 5]], \"sorted_ok\": false, \"perm_ok\": false, \"gather_consistent\": true}, \"C\": {\"shape\": [64, 32], \"sorted_ok\": true, \"perm_ok\": false, \"rows_with_perm_mismatch\": 64, \"total_rows\": 64, \"gather_consistent\": true, \"nondecreasing\": true}, \"D\": {\"deterministic\": true}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": "If tie-break is inverted, perm within tied groups will be in descending original index order vs torch stable argsort.",
+        "json_parse_error": null,
+        "json_result": {
+          "A": {
+            "gather_consistent": true,
+            "keys": [
+              [
+                5,
+                5,
+                5,
+                5,
+                1,
+                1,
+                3,
+                3
+              ],
+              [
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2
+              ],
+              [
+                7,
+                1,
+                7,
+                1,
+                7,
+                1,
+                7,
+                1
+              ]
+            ],
+            "perm": [
+              [
+                5,
+                4,
+                7,
+                6,
+                3,
+                2,
+                1,
+                0
+              ],
+              [
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0
+              ],
+              [
+                7,
+                5,
+                3,
+                1,
+                6,
+                4,
+                2,
+                0
+              ]
+            ],
+            "perm_ok": false,
+            "ref_perm": [
+              [
+                4,
+                5,
+                6,
+                7,
+                0,
+                1,
+                2,
+                3
+              ],
+              [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              [
+                1,
+                3,
+                5,
+                7,
+                0,
+                2,
+                4,
+                6
+              ]
+            ],
+            "ref_sorted": [
+              [
+                1,
+                1,
+                3,
+                3,
+                5,
+                5,
+                5,
+                5
+              ],
+              [
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2
+              ],
+              [
+                1,
+                1,
+                1,
+                1,
+                7,
+                7,
+                7,
+                7
+              ]
+            ],
+            "sorted": [
+              [
+                1,
+                1,
+                3,
+                3,
+                5,
+                5,
+                5,
+                5
+              ],
+              [
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                2
+              ],
+              [
+                1,
+                1,
+                1,
+                1,
+                7,
+                7,
+                7,
+                7
+              ]
+            ],
+            "sorted_ok": true
+          },
+          "B": {
+            "gather_consistent": true,
+            "keys": [
+              [
+                4,
+                4,
+                2,
+                2,
+                9,
+                9,
+                9
+              ],
+              [
+                1,
+                1,
+                1,
+                0,
+                0,
+                5,
+                5
+              ]
+            ],
+            "perm": [
+              [
+                3,
+                2,
+                1,
+                0,
+                6,
+                5,
+                4
+              ],
+              [
+                4,
+                2,
+                3,
+                0,
+                1,
+                6,
+                5
+              ]
+            ],
+            "perm_ok": false,
+            "ref_perm": [
+              [
+                2,
+                3,
+                0,
+                1,
+                4,
+                5,
+                6
+              ],
+              [
+                3,
+                4,
+                0,
+                1,
+                2,
+                5,
+                6
+              ]
+            ],
+            "ref_sorted": [
+              [
+                2,
+                2,
+                4,
+                4,
+                9,
+                9,
+                9
+              ],
+              [
+                0,
+                0,
+                1,
+                1,
+                1,
+                5,
+                5
+              ]
+            ],
+            "sorted": [
+              [
+                2,
+                2,
+                4,
+                4,
+                9,
+                9,
+                9
+              ],
+              [
+                0,
+                1,
+                0,
+                1,
+                1,
+                5,
+                5
+              ]
+            ],
+            "sorted_ok": false
+          },
+          "C": {
+            "gather_consistent": true,
+            "nondecreasing": true,
+            "perm_ok": false,
+            "rows_with_perm_mismatch": 64,
+            "shape": [
+              64,
+              32
+            ],
+            "sorted_ok": true,
+            "total_rows": 64
+          },
+          "D": {
+            "deterministic": true
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"A\": {\"keys\": [[5, 5, 5, 5, 1, 1, 3, 3], [2, 2, 2, 2, 2, 2, 2, 2], [7, 1, 7, 1, 7, 1, 7, 1]], \"sorted\": [[1, 1, 3, 3, 5, 5, 5, 5], [2, 2, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 7, 7, 7, 7]], \"perm\": [[5, 4, 7, 6, 3, 2, 1, 0], [7, 6, 5, 4, 3, 2, 1, 0], [7, 5, 3, 1, 6, 4, 2, 0]], \"ref_perm\": [[4, 5, 6, 7, 0, 1, 2, 3], [0, 1, 2, 3, 4, 5, 6, 7], [1, 3, 5, 7, 0, 2, 4, 6]], \"ref_sorted\": [[1, 1, 3, 3, 5, 5, 5, 5], [2, 2, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 7, 7, 7, 7]], \"sorted_ok\": true, \"perm_ok\": false, \"gather_consistent\": true}, \"B\": {\"keys\": [[4, 4, 2, 2, 9, 9, 9], [1, 1, 1, 0, 0, 5, 5]], \"sorted\": [[2, 2, 4, 4, 9, 9, 9], [0, 1, 0, 1, 1, 5, 5]], \"perm\": [[3, 2, 1, 0, 6, 5, 4], [4, 2, 3, 0, 1, 6, 5]], \"ref_perm\": [[2, 3, 0, 1, 4, 5, 6], [3, 4, 0, 1, 2, 5, 6]], \"ref_sorted\": [[2, 2, 4, 4, 9, 9, 9], [0, 0, 1, 1, 1, 5, 5]], \"sorted_ok\": false, \"perm_ok\": false, \"gather_consistent\": true}, \"C\": {\"shape\": [64, 32], \"sorted_ok\": true, \"perm_ok\": false, \"rows_with_perm_mismatch\": 64, \"total_rows\": 64, \"gather_consistent\": true, \"nondecreasing\": true}, \"D\": {\"deterministic\": true}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "caseA_allequal_perm": [
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          "caseA_allequal_ref_perm": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "caseA_row0_perm": [
+            5,
+            4,
+            7,
+            6,
+            3,
+            2,
+            1,
+            0
+          ],
+          "caseA_row0_ref_perm": [
+            4,
+            5,
+            6,
+            7,
+            0,
+            1,
+            2,
+            3
+          ],
+          "caseB_W7_kernel_sorted": [
+            0,
+            1,
+            0,
+            1,
+            1,
+            5,
+            5
+          ],
+          "caseB_W7_ref_sorted": [
+            0,
+            0,
+            1,
+            1,
+            1,
+            5,
+            5
+          ],
+          "caseB_sorted_ok": false,
+          "caseC_rows_with_perm_mismatch": 64,
+          "caseC_sorted_values_ok": true,
+          "caseC_total_rows": 64,
+          "deterministic": true
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "Tie-break is inverted (descending original index among equal keys), and non-power-of-2 rows can even come out non-monotone. Case A row [2]*8: kernel perm=[7,6,5,4,3,2,1,0] vs required stable [0,1,2,3,4,5,6,7]; row [5,5,5,5,1,1,3,3]: kernel perm=[5,4,7,6,3,2,1,0] vs stable [4,5,6,7,0,1,2,3] \u2014 each tied group reversed. Case C (64x32 keys in [0,8)): 64/64 rows mismatch stable argsort indices while sorted values are correct and non-decreasing, so the defect is purely the tie order. Case B (W=7, non power of 2): keys [1,1,1,0,0,5,5] -> kernel sorted [0,1,0,1,1,5,5], which is not non-decreasing (sorted_ok=false), an additional contract violation. Results are deterministic across repeats (D), so this is a systematic ordering rule, not a race artifact.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T14:54:28Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:53:53Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:54:28Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "324926aa3b5822382c55ba03db376050ac57a112bf5ff798115ba8d805f02ad4"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "03e3b0e13eb173c1efd277a3a9a0737f4e5a179fe99e2614662ee7fa9a330b8f"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "3ec1919f3f285273eb8d19b096794302d65f5a623b7bfe6ba1897a24da1d61e8"
+                  }
+                ],
+                "caseA_allequal_perm": [
+                  7,
+                  6,
+                  5,
+                  4,
+                  3,
+                  2,
+                  1,
+                  0
+                ],
+                "caseA_allequal_ref_perm": [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  6,
+                  7
+                ],
+                "caseA_row0_perm": [
+                  5,
+                  4,
+                  7,
+                  6,
+                  3,
+                  2,
+                  1,
+                  0
+                ],
+                "caseA_row0_ref_perm": [
+                  4,
+                  5,
+                  6,
+                  7,
+                  0,
+                  1,
+                  2,
+                  3
+                ],
+                "caseB_W7_kernel_sorted": [
+                  0,
+                  1,
+                  0,
+                  1,
+                  1,
+                  5,
+                  5
+                ],
+                "caseB_W7_ref_sorted": [
+                  0,
+                  0,
+                  1,
+                  1,
+                  1,
+                  5,
+                  5
+                ],
+                "caseB_sorted_ok": false,
+                "caseC_rows_with_perm_mismatch": 64,
+                "caseC_sorted_values_ok": true,
+                "caseC_total_rows": 64,
+                "deterministic": true,
+                "duration_s": 7.304279,
+                "exit_code": 0,
+                "expected_signal": "If tie-break is inverted, perm within tied groups will be in descending original index order vs torch stable argsort.",
+                "json_parse_error": null,
+                "json_result": {
+                  "A": {
+                    "gather_consistent": true,
+                    "keys": [
+                      [
+                        5,
+                        5,
+                        5,
+                        5,
+                        1,
+                        1,
+                        3,
+                        3
+                      ],
+                      [
+                        2,
+                        2,
+                        2,
+                        2,
+                        2,
+                        2,
+                        2,
+                        2
+                      ],
+                      [
+                        7,
+                        1,
+                        7,
+                        1,
+                        7,
+                        1,
+                        7,
+                        1
+                      ]
+                    ],
+                    "perm": [
+                      [
+                        5,
+                        4,
+                        7,
+                        6,
+                        3,
+                        2,
+                        1,
+                        0
+                      ],
+                      [
+                        7,
+                        6,
+                        5,
+                        4,
+                        3,
+                        2,
+                        1,
+                        0
+                      ],
+                      [
+                        7,
+                        5,
+                        3,
+                        1,
+                        6,
+                        4,
+                        2,
+                        0
+                      ]
+                    ],
+                    "perm_ok": false,
+                    "ref_perm": [
+                      [
+                        4,
+                        5,
+                        6,
+                        7,
+                        0,
+                        1,
+                        2,
+                        3
+                      ],
+                      [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7
+                      ],
+                      [
+                        1,
+                        3,
+                        5,
+                        7,
+                        0,
+                        2,
+                        4,
+                        6
+                      ]
+                    ],
+                    "ref_sorted": [
+                      [
+                        1,
+                        1,
+                        3,
+                        3,
+                        5,
+                        5,
+                        5,
+                        5
+                      ],
+                      [
+                        2,
+                        2,
+                        2,
+                        2,
+                        2,
+                        2,
+                        2,
+                        2
+                      ],
+                      [
+                        1,
+                        1,
+                        1,
+                        1,
+                        7,
+                        7,
+                        7,
+                        7
+                      ]
+                    ],
+                    "sorted": [
+                      [
+                        1,
+                        1,
+                        3,
+                        3,
+                        5,
+                        5,
+                        5,
+                        5
+                      ],
+                      [
+                        2,
+                        2,
+                        2,
+                        2,
+                        2,
+                        2,
+                        2,
+                        2
+                      ],
+                      [
+                        1,
+                        1,
+                        1,
+                        1,
+                        7,
+                        7,
+                        7,
+                        7
+                      ]
+                    ],
+                    "sorted_ok": true
+                  },
+                  "B": {
+                    "gather_consistent": true,
+                    "keys": [
+                      [
+                        4,
+                        4,
+                        2,
+                        2,
+                        9,
+                        9,
+                        9
+                      ],
+                      [
+                        1,
+                        1,
+                        1,
+                        0,
+                        0,
+                        5,
+                        5
+                      ]
+                    ],
+                    "perm": [
+                      [
+                        3,
+                        2,
+                        1,
+                        0,
+                        6,
+                        5,
+                        4
+                      ],
+                      [
+                        4,
+                        2,
+                        3,
+                        0,
+                        1,
+                        6,
+                        5
+                      ]
+                    ],
+                    "perm_ok": false,
+                    "ref_perm": [
+                      [
+                        2,
+                        3,
+                        0,
+                        1,
+                        4,
+                        5,
+                        6
+                      ],
+                      [
+                        3,
+                        4,
+                        0,
+                        1,
+                        2,
+                        5,
+                        6
+                      ]
+                    ],
+                    "ref_sorted": [
+                      [
+                        2,
+                        2,
+                        4,
+                        4,
+                        9,
+                        9,
+                        9
+                      ],
+                      [
+                        0,
+                        0,
+                        1,
+                        1,
+                        1,
+                        5,
+                        5
+                      ]
+                    ],
+                    "sorted": [
+                      [
+                        2,
+                        2,
+                        4,
+                        4,
+                        9,
+                        9,
+                        9
+                      ],
+                      [
+                        0,
+                        1,
+                        0,
+                        1,
+                        1,
+                        5,
+                        5
+                      ]
+                    ],
+                    "sorted_ok": false
+                  },
+                  "C": {
+                    "gather_consistent": true,
+                    "nondecreasing": true,
+                    "perm_ok": false,
+                    "rows_with_perm_mismatch": 64,
+                    "shape": [
+                      64,
+                      32
+                    ],
+                    "sorted_ok": true,
+                    "total_rows": 64
+                  },
+                  "D": {
+                    "deterministic": true
+                  }
+                },
+                "stderr": "",
+                "stdout": "{\"A\": {\"keys\": [[5, 5, 5, 5, 1, 1, 3, 3], [2, 2, 2, 2, 2, 2, 2, 2], [7, 1, 7, 1, 7, 1, 7, 1]], \"sorted\": [[1, 1, 3, 3, 5, 5, 5, 5], [2, 2, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 7, 7, 7, 7]], \"perm\": [[5, 4, 7, 6, 3, 2, 1, 0], [7, 6, 5, 4, 3, 2, 1, 0], [7, 5, 3, 1, 6, 4, 2, 0]], \"ref_perm\": [[4, 5, 6, 7, 0, 1, 2, 3], [0, 1, 2, 3, 4, 5, 6, 7], [1, 3, 5, 7, 0, 2, 4, 6]], \"ref_sorted\": [[1, 1, 3, 3, 5, 5, 5, 5], [2, 2, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 7, 7, 7, 7]], \"sorted_ok\": true, \"perm_ok\": false, \"gather_consistent\": true}, \"B\": {\"keys\": [[4, 4, 2, 2, 9, 9, 9], [1, 1, 1, 0, 0, 5, 5]], \"sorted\": [[2, 2, 4, 4, 9, 9, 9], [0, 1, 0, 1, 1, 5, 5]], \"perm\": [[3, 2, 1, 0, 6, 5, 4], [4, 2, 3, 0, 1, 6, 5]], \"ref_perm\": [[2, 3, 0, 1, 4, 5, 6], [3, 4, 0, 1, 2, 5, 6]], \"ref_sorted\": [[2, 2, 4, 4, 9, 9, 9], [0, 0, 1, 1, 1, 5, 5]], \"sorted_ok\": false, \"perm_ok\": false, \"gather_consistent\": true}, \"C\": {\"shape\": [64, 32], \"sorted_ok\": true, \"perm_ok\": false, \"rows_with_perm_mismatch\": 64, \"total_rows\": 64, \"gather_consistent\": true, \"nondecreasing\": true}, \"D\": {\"deterministic\": true}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Tie-break is inverted (descending original index among equal keys), and non-power-of-2 rows can even come out non-monotone. Case A row [2]*8: kernel perm=[7,6,5,4,3,2,1,0] vs required stable [0,1,2,3,4,5,6,7]; row [5,5,5,5,1,1,3,3]: kernel perm=[5,4,7,6,3,2,1,0] vs stable [4,5,6,7,0,1,2,3] \u2014 each tied group reversed. Case C (64x32 keys in [0,8)): 64/64 rows mismatch stable argsort indices while sorted values are correct and non-decreasing, so the defect is purely the tie order. Case B (W=7, non power of 2): keys [1,1,1,0,0,5,5] -> kernel sorted [0,1,0,1,1,5,5], which is not non-decreasing (sorted_ok=false), an additional contract violation. Results are deterministic across repeats (D), so this is a systematic ordering rule, not a race artifact.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Line 41 computes my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm)); for equal keys it treats the larger original index as smaller, which orders ties in descending index order \u2014 the opposite of stability.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "'Tie rule: the sort must be STABLE. When two entries of a row hold the same key, the one with the LOWER original index must come first.' and 'Duplicate keys within a row are expected'."
+            }
+          ],
+          "scope_rationale": "The contract explicitly requires stability (\"the one with the LOWER original index must come first\") and explicitly states duplicate keys within a row are expected in the input domain (quantized scores).",
+          "statement": "triton_argsort's tie-break is inverted: for rows containing duplicate keys, the entry with the HIGHER original index is placed first among tied keys, violating the contract's required stable (lower-index-first) tie rule.",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T14:54:28Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:54:28Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "324926aa3b5822382c55ba03db376050ac57a112bf5ff798115ba8d805f02ad4"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "03e3b0e13eb173c1efd277a3a9a0737f4e5a179fe99e2614662ee7fa9a330b8f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "3ec1919f3f285273eb8d19b096794302d65f5a623b7bfe6ba1897a24da1d61e8"
+              }
+            ],
+            "caseA_allequal_perm": [
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "caseA_allequal_ref_perm": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "caseA_row0_perm": [
+              5,
+              4,
+              7,
+              6,
+              3,
+              2,
+              1,
+              0
+            ],
+            "caseA_row0_ref_perm": [
+              4,
+              5,
+              6,
+              7,
+              0,
+              1,
+              2,
+              3
+            ],
+            "caseB_W7_kernel_sorted": [
+              0,
+              1,
+              0,
+              1,
+              1,
+              5,
+              5
+            ],
+            "caseB_W7_ref_sorted": [
+              0,
+              0,
+              1,
+              1,
+              1,
+              5,
+              5
+            ],
+            "caseB_sorted_ok": false,
+            "caseC_rows_with_perm_mismatch": 64,
+            "caseC_sorted_values_ok": true,
+            "caseC_total_rows": 64,
+            "deterministic": true,
+            "duration_s": 7.304279,
+            "exit_code": 0,
+            "expected_signal": "If tie-break is inverted, perm within tied groups will be in descending original index order vs torch stable argsort.",
+            "json_parse_error": null,
+            "json_result": {
+              "A": {
+                "gather_consistent": true,
+                "keys": [
+                  [
+                    5,
+                    5,
+                    5,
+                    5,
+                    1,
+                    1,
+                    3,
+                    3
+                  ],
+                  [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                  ],
+                  [
+                    7,
+                    1,
+                    7,
+                    1,
+                    7,
+                    1,
+                    7,
+                    1
+                  ]
+                ],
+                "perm": [
+                  [
+                    5,
+                    4,
+                    7,
+                    6,
+                    3,
+                    2,
+                    1,
+                    0
+                  ],
+                  [
+                    7,
+                    6,
+                    5,
+                    4,
+                    3,
+                    2,
+                    1,
+                    0
+                  ],
+                  [
+                    7,
+                    5,
+                    3,
+                    1,
+                    6,
+                    4,
+                    2,
+                    0
+                  ]
+                ],
+                "perm_ok": false,
+                "ref_perm": [
+                  [
+                    4,
+                    5,
+                    6,
+                    7,
+                    0,
+                    1,
+                    2,
+                    3
+                  ],
+                  [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7
+                  ],
+                  [
+                    1,
+                    3,
+                    5,
+                    7,
+                    0,
+                    2,
+                    4,
+                    6
+                  ]
+                ],
+                "ref_sorted": [
+                  [
+                    1,
+                    1,
+                    3,
+                    3,
+                    5,
+                    5,
+                    5,
+                    5
+                  ],
+                  [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                  ],
+                  [
+                    1,
+                    1,
+                    1,
+                    1,
+                    7,
+                    7,
+                    7,
+                    7
+                  ]
+                ],
+                "sorted": [
+                  [
+                    1,
+                    1,
+                    3,
+                    3,
+                    5,
+                    5,
+                    5,
+                    5
+                  ],
+                  [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                  ],
+                  [
+                    1,
+                    1,
+                    1,
+                    1,
+                    7,
+                    7,
+                    7,
+                    7
+                  ]
+                ],
+                "sorted_ok": true
+              },
+              "B": {
+                "gather_consistent": true,
+                "keys": [
+                  [
+                    4,
+                    4,
+                    2,
+                    2,
+                    9,
+                    9,
+                    9
+                  ],
+                  [
+                    1,
+                    1,
+                    1,
+                    0,
+                    0,
+                    5,
+                    5
+                  ]
+                ],
+                "perm": [
+                  [
+                    3,
+                    2,
+                    1,
+                    0,
+                    6,
+                    5,
+                    4
+                  ],
+                  [
+                    4,
+                    2,
+                    3,
+                    0,
+                    1,
+                    6,
+                    5
+                  ]
+                ],
+                "perm_ok": false,
+                "ref_perm": [
+                  [
+                    2,
+                    3,
+                    0,
+                    1,
+                    4,
+                    5,
+                    6
+                  ],
+                  [
+                    3,
+                    4,
+                    0,
+                    1,
+                    2,
+                    5,
+                    6
+                  ]
+                ],
+                "ref_sorted": [
+                  [
+                    2,
+                    2,
+                    4,
+                    4,
+                    9,
+                    9,
+                    9
+                  ],
+                  [
+                    0,
+                    0,
+                    1,
+                    1,
+                    1,
+                    5,
+                    5
+                  ]
+                ],
+                "sorted": [
+                  [
+                    2,
+                    2,
+                    4,
+                    4,
+                    9,
+                    9,
+                    9
+                  ],
+                  [
+                    0,
+                    1,
+                    0,
+                    1,
+                    1,
+                    5,
+                    5
+                  ]
+                ],
+                "sorted_ok": false
+              },
+              "C": {
+                "gather_consistent": true,
+                "nondecreasing": true,
+                "perm_ok": false,
+                "rows_with_perm_mismatch": 64,
+                "shape": [
+                  64,
+                  32
+                ],
+                "sorted_ok": true,
+                "total_rows": 64
+              },
+              "D": {
+                "deterministic": true
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"A\": {\"keys\": [[5, 5, 5, 5, 1, 1, 3, 3], [2, 2, 2, 2, 2, 2, 2, 2], [7, 1, 7, 1, 7, 1, 7, 1]], \"sorted\": [[1, 1, 3, 3, 5, 5, 5, 5], [2, 2, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 7, 7, 7, 7]], \"perm\": [[5, 4, 7, 6, 3, 2, 1, 0], [7, 6, 5, 4, 3, 2, 1, 0], [7, 5, 3, 1, 6, 4, 2, 0]], \"ref_perm\": [[4, 5, 6, 7, 0, 1, 2, 3], [0, 1, 2, 3, 4, 5, 6, 7], [1, 3, 5, 7, 0, 2, 4, 6]], \"ref_sorted\": [[1, 1, 3, 3, 5, 5, 5, 5], [2, 2, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 7, 7, 7, 7]], \"sorted_ok\": true, \"perm_ok\": false, \"gather_consistent\": true}, \"B\": {\"keys\": [[4, 4, 2, 2, 9, 9, 9], [1, 1, 1, 0, 0, 5, 5]], \"sorted\": [[2, 2, 4, 4, 9, 9, 9], [0, 1, 0, 1, 1, 5, 5]], \"perm\": [[3, 2, 1, 0, 6, 5, 4], [4, 2, 3, 0, 1, 6, 5]], \"ref_perm\": [[2, 3, 0, 1, 4, 5, 6], [3, 4, 0, 1, 2, 5, 6]], \"ref_sorted\": [[2, 2, 4, 4, 9, 9, 9], [0, 0, 1, 1, 1, 5, 5]], \"sorted_ok\": false, \"perm_ok\": false, \"gather_consistent\": true}, \"C\": {\"shape\": [64, 32], \"sorted_ok\": true, \"perm_ok\": false, \"rows_with_perm_mismatch\": 64, \"total_rows\": 64, \"gather_consistent\": true, \"nondecreasing\": true}, \"D\": {\"deterministic\": true}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Tie-break is inverted (descending original index among equal keys), and non-power-of-2 rows can even come out non-monotone. Case A row [2]*8: kernel perm=[7,6,5,4,3,2,1,0] vs required stable [0,1,2,3,4,5,6,7]; row [5,5,5,5,1,1,3,3]: kernel perm=[5,4,7,6,3,2,1,0] vs stable [4,5,6,7,0,1,2,3] \u2014 each tied group reversed. Case C (64x32 keys in [0,8)): 64/64 rows mismatch stable argsort indices while sorted values are correct and non-decreasing, so the defect is purely the tie order. Case B (W=7, non power of 2): keys [1,1,1,0,0,5,5] -> kernel sorted [0,1,0,1,1,5,5], which is not non-decreasing (sorted_ok=false), an additional contract violation. Results are deterministic across repeats (D), so this is a systematic ordering rule, not a race artifact.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.96,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract explicitly requires a STABLE sort ('When two entries of a row hold the same key, the one with the LOWER original index must come first') and declares duplicate keys within a row to be expected. Kernel line 41 computes my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm)), i.e. among equal keys it treats the HIGHER original index as smaller \u2014 the inverse of stability. Probe t6 on the real kernel confirmed this at runtime: for keys=[2]*8 the kernel returns perm=[7,6,5,4,3,2,1,0] where stability requires [0,1,2,3,4,5,6,7]; for [5,5,5,5,1,1,3,3] it returns perm=[5,4,7,6,3,2,1,0] vs the required [4,5,6,7,0,1,2,3] (each tied group reversed); on a 64x32 batch of quantized keys in [0,8), 64/64 rows disagree with torch stable argsort indices while the sorted values themselves are correct and non-decreasing, isolating the defect to tie order. Results were deterministic across repeats, so this is a systematic ordering rule, not a race. Additionally (t6 case B, W=7, non-power-of-two row): keys [1,1,1,0,0,5,5] produce kernel sorted output [0,1,0,1,1,5,5], which violates even the basic 'sorted_keys[n,:] is non-decreasing' requirement. Both failures lie squarely in the contract's declared input domain (arbitrary int64 keys with expected duplicates).",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-08T14:54:38Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.96,
+        "created_at": "2026-09-08T14:54:38Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract explicitly requires a STABLE sort ('When two entries of a row hold the same key, the one with the LOWER original index must come first') and declares duplicate keys within a row to be expected. Kernel line 41 computes my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm)), i.e. among equal keys it treats the HIGHER original index as smaller \u2014 the inverse of stability. Probe t6 on the real kernel confirmed this at runtime: for keys=[2]*8 the kernel returns perm=[7,6,5,4,3,2,1,0] where stability requires [0,1,2,3,4,5,6,7]; for [5,5,5,5,1,1,3,3] it returns perm=[5,4,7,6,3,2,1,0] vs the required [4,5,6,7,0,1,2,3] (each tied group reversed); on a 64x32 batch of quantized keys in [0,8), 64/64 rows disagree with torch stable argsort indices while the sorted values themselves are correct and non-decreasing, isolating the defect to tie order. Results were deterministic across repeats, so this is a systematic ordering rule, not a race. Additionally (t6 case B, W=7, non-power-of-two row): keys [1,1,1,0,0,5,5] produce kernel sorted output [0,1,0,1,1,5,5], which violates even the basic 'sorted_keys[n,:] is non-decreasing' requirement. Both failures lie squarely in the contract's declared input domain (arbitrary int64 keys with expected duplicates).",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.96,
+    "created_at": "2026-09-08T14:54:38Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The contract explicitly requires a STABLE sort ('When two entries of a row hold the same key, the one with the LOWER original index must come first') and declares duplicate keys within a row to be expected. Kernel line 41 computes my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm)), i.e. among equal keys it treats the HIGHER original index as smaller \u2014 the inverse of stability. Probe t6 on the real kernel confirmed this at runtime: for keys=[2]*8 the kernel returns perm=[7,6,5,4,3,2,1,0] where stability requires [0,1,2,3,4,5,6,7]; for [5,5,5,5,1,1,3,3] it returns perm=[5,4,7,6,3,2,1,0] vs the required [4,5,6,7,0,1,2,3] (each tied group reversed); on a 64x32 batch of quantized keys in [0,8), 64/64 rows disagree with torch stable argsort indices while the sorted values themselves are correct and non-decreasing, isolating the defect to tie order. Results were deterministic across repeats, so this is a systematic ordering rule, not a race. Additionally (t6 case B, W=7, non-power-of-two row): keys [1,1,1,0,0,5,5] produce kernel sorted output [0,1,0,1,1,5,5], which violates even the basic 'sorted_keys[n,:] is non-decreasing' requirement. Both failures lie squarely in the contract's declared input domain (arbitrary int64 keys with expected duplicates).",
+    "verdict": "reject"
+  }
+}

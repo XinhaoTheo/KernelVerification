@@ -1,56 +1,42 @@
 
-import torch, numpy as np, importlib.util, json, traceback
-torch.backends.cuda.matmul.allow_tf32=False
-spec=importlib.util.spec_from_file_location("k","/root/cases/case_33/kernel.py")
-m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+import json, importlib.util, torch
+spec = importlib.util.spec_from_file_location("kmod", "/root/cases/case_33/kernel.py")
+kmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(kmod)
 
-def pack_k(q):
-    K,N=q.shape; Kp=K//8
-    out=np.zeros((Kp,N),np.uint32); qr=q.reshape(Kp,8,N).astype(np.uint32)
-    for j in range(8): out |= (qr[:,j,:]<<(4*j))
-    return out.view(np.int32)
-def pack_n(z):
-    G,N=z.shape; Nc=N//8
-    out=np.zeros((G,Nc),np.uint32); zr=z.reshape(G,Nc,8).astype(np.uint32)
-    for j in range(8): out |= (zr[:,:,j]<<(4*j))
-    return out.view(np.int32)
-
-out_json={}
+out={}
 try:
-    M,N,K,gs=64,64,16,32   # K multiple of BLOCK_SIZE_K=16 -> no k-tail confound
-    rng=np.random.default_rng(1)
-    q=rng.integers(0,16,size=(K,N)).astype(np.int64)
-    G=(K+gs-1)//gs   # == 1
-    # real group row 0 + one SENTINEL row stored physically BEFORE it
-    z_all=np.stack([np.full((N,),3,dtype=np.int64), rng.integers(0,15,size=(N,)).astype(np.int64)])
-    s_all=np.stack([np.full((N,),5.0,dtype=np.float32), (rng.random((N,))*0.2+0.02).astype(np.float32)])
-    zp_all=torch.from_numpy(pack_n(z_all)).cuda().contiguous()
-    st_all=torch.from_numpy(s_all).cuda().contiguous()
-    zp=zp_all[1:]; st=st_all[1:]         # supplied tensors: row0 == real group 0
     torch.manual_seed(1)
-    a=torch.randn(M,K,device='cuda',dtype=torch.float32)
-    bp=torch.from_numpy(pack_k(q)).cuda().contiguous()
-    qt=torch.from_numpy(q).cuda().float()
-    zt_all=torch.from_numpy(z_all).cuda().float(); s_allt=torch.from_numpy(s_all).cuda()
-    # contract: every k uses supplied row 0 (= physical row 1)
-    deq_c=(qt-(zt_all[1]+1))*s_allt[1]
-    # sentinel model: every k uses physical row 0 (below base)
-    deq_s=(qt-(zt_all[0]+1))*s_allt[0]
-    ref_c=a@deq_c; ref_s=a@deq_s
-    ng=K//gs
-    gidx=torch.clamp(torch.arange(K)//gs,max=ng-1)
-    o=m.gptq_matmul(a,bp,st,zp,gs,4); torch.cuda.synchronize()
-    o2=m.gptq_matmul(a,bp,st,zp,gs,4); torch.cuda.synchronize()
-    out_json=dict(status="ran",M=M,N=N,K=K,gs=gs,G_supplied=G,num_groups_kernel=ng,
-      gidx_unique=sorted(set(gidx.tolist())),
-      scales_stride0=st.stride(0), zeros_stride0=zp.stride(0),
-      ref_contract_absmax=float(ref_c.abs().max()),
-      max_abs_err_vs_contract=float((o-ref_c).abs().max()),
-      max_abs_err_vs_sentinel_belowbase=float((o-ref_s).abs().max()),
-      allclose_contract=bool(torch.allclose(o,ref_c,rtol=1e-3,atol=1e-3)),
-      allclose_sentinel=bool(torch.allclose(o,ref_s,rtol=1e-3,atol=1e-3)),
-      deterministic_across_runs=bool(torch.equal(o,o2)),
-      out_absmax=float(o.abs().max()), out_has_nan=bool(torch.isnan(o).any()))
+    dev='cuda'
+    M,N,K,gs,bits = 32,32,40,40,4      # ceil(K/gs)==floor(K/gs)==1 -> c1 bug inactive
+    G = -(-K//gs)
+    a_big = torch.randn(M,48,device=dev,dtype=torch.float32)
+    a_big[:,40:] = 7.0                  # known padding so tail overread is defined memory
+    a = a_big[:, :K]
+    b_big = torch.randint(-2**31,2**31-1,(6,N),device=dev,dtype=torch.int32)
+    b_packed = b_big[:5]                # K//8 = 5 valid rows; row 5 is the overread
+    zeros_packed = torch.randint(-2**31,2**31-1,(G,N//8),device=dev,dtype=torch.int32)
+    scales = torch.full((G,N),0.05,device=dev,dtype=torch.float32)
+
+    k_idx=torch.arange(K,device=dev); n_idx=torch.arange(N,device=dev)
+    q=(b_packed[(k_idx//8),:] >> ((k_idx%8)*4).unsqueeze(1)) & 15
+    zq=(zeros_packed[:,(n_idx//8)] >> ((n_idx%8)*4).unsqueeze(0)) & 15
+    z=(zq+1).float()
+    gmap=torch.clamp(k_idx//gs,max=G-1)
+    c_ref = a @ ((q.float()-z[gmap])*scales[gmap])
+
+    c = kmod.gptq_matmul(a, b_packed, scales, zeros_packed, gs, bits=bits)
+    torch.cuda.synchronize()
+    err=(c-c_ref).abs().max().item(); den=c_ref.abs().max().item()
+    out.update({
+      "M":M,"N":N,"K":K,"group_size":gs,"BLOCK_SIZE_K":16,
+      "k_iters":( -(-K//16) ),"k_covered":3*16,
+      "packed_rows_valid":5,
+      "max_abs_err":err,"max_abs_ref":den,"max_rel_err":err/max(den,1e-12),
+      "n_mismatch_1e-3":int((c-c_ref).abs().gt(1e-3).sum().item()),
+      "numel":c.numel(),
+      "crashed":False,
+      "metric":"max abs err of C vs reference with correct single-group mapping; only tail masking can explain error"
+    })
 except Exception as e:
-    out_json=dict(status="exception",err=repr(e),tb=traceback.format_exc()[-1200:])
-print(json.dumps(out_json))
+    out.update({"crashed":True,"error":repr(e)[:400]})
+print(json.dumps(out))

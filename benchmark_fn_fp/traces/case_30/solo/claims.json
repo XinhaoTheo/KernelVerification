@@ -1,0 +1,79 @@
+[
+  {
+    "created_at": "2026-09-08T14:52:58Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:53:28Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "8261d32a61babf5b62e8f0dbaf4e7dfe2e3f00bb07bd760a0b7078e97acacabe"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "388388c78299003e15fbab01ba37a11d7ba292faacf576d75659ef04a3244918"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "caseA_expected_lowest": [
+            1,
+            0,
+            3,
+            0
+          ],
+          "caseA_kernel": [
+            2,
+            3,
+            3,
+            2
+          ],
+          "caseB_mismatches_vs_highest": 0,
+          "caseB_mismatches_vs_lowest": 1174,
+          "caseB_rows": 4096,
+          "caseB_rows_with_ties": 1174,
+          "caseB_selected_value_wrong": 0,
+          "duration_s": 8.500285,
+          "exit_code": 0,
+          "expected_signal": "If kernel violates the tie rule, caseA returns [2,3,3,2] and caseB mismatches_vs_lowest > 0 while mismatches_vs_highest == 0.",
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "metric": "exact index under contract-specified lowest-index tie rule",
+          "stderr": "",
+          "stdout": "{\n  \"caseA_kernel\": [\n    2,\n    3,\n    3,\n    2\n  ],\n  \"caseA_expected_lowest\": [\n    1,\n    0,\n    3,\n    0\n  ],\n  \"caseB_num_rows\": 4096,\n  \"caseB_rows_with_ties\": 1174,\n  \"caseB_mismatches_vs_lowest\": 1174,\n  \"caseB_mismatches_vs_highest\": 0,\n  \"caseB_selected_value_wrong\": 0,\n  \"metric\": \"exact index under lowest-index tie rule (contract-specified)\"\n}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Kernel returns the HIGHEST tied index, not the lowest. Case A (fp16 explicit ties): kernel [2,3,3,2] vs contract-required lowest-index [1,0,3,0] \u2014 wrong on all 3 tied rows. Case B (4096x8 coarsely quantized fp16 logits): 1174 rows had ties; mismatches vs lowest-index rule = 1174 (100% of tied rows), mismatches vs highest-index rule = 0, and selected value always equaled the row max. So the kernel computes a correct max value but the exactly-inverted tie-break, matching the `v >= best` source defect.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Line 17 uses >= rather than >; with a sequential scan over e, >= makes equal values replace the current best, selecting the last (largest) tied index.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: on ties for the largest logit the LOWEST expert index must win; ties are described as a normal occurrence due to reduced-precision logits."
+      }
+    ],
+    "scope_rationale": "The problem statement explicitly makes the tie rule part of the contract: \"When several experts share the largest logit, the contract requires the LOWEST expert index to win\". It also states ties are routine in reduced-precision router logits, so tied inputs are within the declared domain.",
+    "statement": "On ties for the maximum logit, _route_kernel uses `v >= best` so a later (higher-index) expert overwrites the incumbent, returning the HIGHEST tied index instead of the contract-required LOWEST index.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:53:28Z"
+  }
+]

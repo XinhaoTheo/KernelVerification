@@ -1,0 +1,285 @@
+[
+  {
+    "created_at": "2026-09-08T16:37:40Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T16:38:41Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "ecb6d670c64e011c903253f9efdefcae9916e65ce1d8683c6acf6fa24195a655"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "aef677f838250261b1169eca8d4f9cd813c9ac7b210bc1043fd5f1857a52b928"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "ec043b004fe16fcb1b37fe2916a422d38c251c795d6df8c8220aef8a693159f6"
+            }
+          ],
+          "decisive_metric": "isfinite + exact-zero on empty-mask row",
+          "dtype": "torch.float32",
+          "duration_s": 8.65442,
+          "empty_row_all_finite": false,
+          "empty_row_all_zero": false,
+          "empty_row_num_inf": 0,
+          "empty_row_num_nan": 8,
+          "exit_code": 0,
+          "expected_signal": "Row with all-False mask yields NaN (non-finite, non-zero) instead of all-zero row",
+          "json_parse_error": null,
+          "json_result": {
+            "dtype": "torch.float32",
+            "empty_row_all_finite": false,
+            "empty_row_all_zero": false,
+            "empty_row_num_inf": 0,
+            "empty_row_num_nan": 8,
+            "empty_row_values": [
+              NaN,
+              NaN,
+              NaN,
+              NaN,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "kept_counts_per_row": [
+              0,
+              8,
+              7,
+              4
+            ],
+            "metric": "finiteness + exact-zero on empty-mask row (contract: all-zero, all-finite)",
+            "nonempty_rows_max_abs_err": 2.9802322387695312e-08,
+            "shape": [
+              4,
+              8
+            ],
+            "whole_tensor_num_nonfinite": 8
+          },
+          "kept_counts_per_row": [
+            0,
+            8,
+            7,
+            4
+          ],
+          "nonempty_rows_max_abs_err": 2.9802322387695312e-08,
+          "required_empty_row": "all zeros, all finite",
+          "shape": [
+            4,
+            8
+          ],
+          "stderr": "",
+          "stdout": "{\"metric\": \"finiteness + exact-zero on empty-mask row (contract: all-zero, all-finite)\", \"kept_counts_per_row\": [0, 8, 7, 4], \"empty_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"empty_row_num_nan\": 8, \"empty_row_num_inf\": 0, \"empty_row_all_zero\": false, \"empty_row_all_finite\": false, \"whole_tensor_num_nonfinite\": 8, \"nonempty_rows_max_abs_err\": 2.9802322387695312e-08, \"shape\": [4, 8], \"dtype\": \"torch.float32\"}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "whole_tensor_num_nonfinite": 8
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "4x8 fp32 input with row 0 mask all-False (kept_counts=[0,8,7,4]): masked_softmax returned NaN in all 8 columns of row 0 (empty_row_num_nan=8, all_finite=False, all_zero=False), while the contract requires an all-zero, all-finite row. Whole-tensor non-finite count = 8, all in the empty row; the other three rows matched the spec reference to 3e-8. This directly executes the predicted 0.0/0.0 at kernel.py:16 (e / tl.sum(e) with sum==0 and no guard) and violates both the empty-row clause and the global 'every returned value must be finite' clause of problem.txt.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "Line 13 forces every lane to -inf when keep is false, line 15 forces e = 0 for all lanes, so tl.sum(e) is exactly 0 for an empty-mask row; the final division has no epsilon or where-guard, giving 0.0/0.0 = NaN stored into all valid columns.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Input domain paragraph declares empty-mask rows in-domain and requires an all-zero output row for them."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Standalone requirement line: 'Every returned value must be finite.'"
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly places fully-masked rows in the input domain (\"a row may keep NO positions at all\") and states the required output (\"the specification requires an all-zero output row\") plus a global invariant (\"Every returned value must be finite\"). No test.py exists, so problem.txt is the operative contract; a representative admitted input is a small 2D float32 tensor (e.g. 4x8) with one row's mask entirely False and the other rows mixed.",
+    "statement": "For an input row whose mask keeps no positions, masked_softmax returns NaN in every column of that row (kernel.py:16 computes e / tl.sum(e) with sum == 0.0 and no zero-denominator guard) instead of the contractually required all-zero, all-finite row. Decisive metric: torch.isfinite(y[row]).all() and y[row] == 0 exactly; a single NaN confirms the claim.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T16:38:41Z"
+  },
+  {
+    "created_at": "2026-09-08T16:37:40Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T16:38:41Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "2d31c8b7d218d81a423c00e881ad452185f83d7c4cd943fa263b6c2e14d93551"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "37c6e14d0594ac84312928331a4927a9a138744ccb58d02ac723efdb03994cf8"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "197ea3268be561a1b3aabf7c4c887cc30688869d563d2fc0b0dcf29b02fe21ec"
+            }
+          ],
+          "conclusion": "defect isolated to zero-denominator path; non-empty rows spec-correct",
+          "duration_s": 7.667097,
+          "exit_code": 0,
+          "expected_signal": "All rows keep >=1 position: max abs err vs spec <=1e-6 and dropped entries exactly 0.0, confirming defect confined to empty rows",
+          "extreme_case_max_abs_err": 0.0,
+          "extreme_case_nonfinite": 0,
+          "extreme_case_row_example": [
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.0
+          ],
+          "json_parse_error": null,
+          "json_result": {
+            "extreme_case": {
+              "dropped_nonzero": 0,
+              "max_abs_err": 0.0,
+              "nonfinite": 0,
+              "row_examples": [
+                [
+                  0.25,
+                  0.25,
+                  0.25,
+                  0.25,
+                  0.0
+                ],
+                [
+                  0.25,
+                  0.25,
+                  0.25,
+                  0.25,
+                  0.0
+                ],
+                [
+                  0.25,
+                  0.25,
+                  0.25,
+                  0.25,
+                  0.0
+                ]
+              ]
+            },
+            "metric": "max abs err vs spec reference on rows keeping >=1 position; dropped entries exactly 0",
+            "per_shape": {
+              "16x33": {
+                "dropped_nonzero": 0,
+                "max_abs_err": 5.960464477539063e-08,
+                "max_rowsum_dev": 1.1920928955078125e-07,
+                "nonfinite": 0
+              },
+              "3x1": {
+                "dropped_nonzero": 0,
+                "max_abs_err": 0.0,
+                "max_rowsum_dev": 0.0,
+                "nonfinite": 0
+              },
+              "4x5": {
+                "dropped_nonzero": 0,
+                "max_abs_err": 5.960464477539063e-08,
+                "max_rowsum_dev": 1.1920928955078125e-07,
+                "nonfinite": 0
+              },
+              "5x64": {
+                "dropped_nonzero": 0,
+                "max_abs_err": 1.1920928955078125e-07,
+                "max_rowsum_dev": 1.1920928955078125e-07,
+                "nonfinite": 0
+              },
+              "6x129": {
+                "dropped_nonzero": 0,
+                "max_abs_err": 2.384185791015625e-07,
+                "max_rowsum_dev": 1.1920928955078125e-07,
+                "nonfinite": 0
+              },
+              "7x1000": {
+                "dropped_nonzero": 0,
+                "max_abs_err": 5.960464477539063e-08,
+                "max_rowsum_dev": 2.384185791015625e-07,
+                "nonfinite": 0
+              },
+              "8x7": {
+                "dropped_nonzero": 0,
+                "max_abs_err": 5.960464477539063e-08,
+                "max_rowsum_dev": 1.1920928955078125e-07,
+                "nonfinite": 0
+              }
+            },
+            "total_dropped_nonzero": 0,
+            "total_nonfinite": 0,
+            "worst_max_abs_err": 2.384185791015625e-07
+          },
+          "max_rowsum_dev_overall": 2.384185791015625e-07,
+          "shapes_tested": [
+            "4x5",
+            "8x7",
+            "16x33",
+            "3x1",
+            "5x64",
+            "6x129",
+            "7x1000"
+          ],
+          "stderr": "",
+          "stdout": "{\"metric\": \"max abs err vs spec reference on rows keeping >=1 position; dropped entries exactly 0\", \"per_shape\": {\"4x5\": {\"max_abs_err\": 5.960464477539063e-08, \"dropped_nonzero\": 0, \"nonfinite\": 0, \"max_rowsum_dev\": 1.1920928955078125e-07}, \"8x7\": {\"max_abs_err\": 5.960464477539063e-08, \"dropped_nonzero\": 0, \"nonfinite\": 0, \"max_rowsum_dev\": 1.1920928955078125e-07}, \"16x33\": {\"max_abs_err\": 5.960464477539063e-08, \"dropped_nonzero\": 0, \"nonfinite\": 0, \"max_rowsum_dev\": 1.1920928955078125e-07}, \"3x1\": {\"max_abs_err\": 0.0, \"dropped_nonzero\": 0, \"nonfinite\": 0, \"max_rowsum_dev\": 0.0}, \"5x64\": {\"max_abs_err\": 1.1920928955078125e-07, \"dropped_nonzero\": 0, \"nonfinite\": 0, \"max_rowsum_dev\": 1.1920928955078125e-07}, \"6x129\": {\"max_abs_err\": 2.384185791015625e-07, \"dropped_nonzero\": 0, \"nonfinite\": 0, \"max_rowsum_dev\": 1.1920928955078125e-07}, \"7x1000\": {\"max_abs_err\": 5.960464477539063e-08, \"dropped_nonzero\": 0, \"nonfinite\": 0, \"max_rowsum_dev\": 2.384185791015625e-07}}, \"worst_max_abs_err\": 2.384185791015625e-07, \"total_dropped_nonzero\": 0, \"total_nonfinite\": 0, \"extreme_case\": {\"max_abs_err\": 0.0, \"nonfinite\": 0, \"dropped_nonzero\": 0, \"row_examples\": [[0.25, 0.25, 0.25, 0.25, 0.0], [0.25, 0.25, 0.25, 0.25, 0.0], [0.25, 0.25, 0.25, 0.25, 0.0]]}}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 1e-06,
+          "total_dropped_nonzero": 0,
+          "total_nonfinite": 0,
+          "worst_max_abs_err": 2.384185791015625e-07
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Control probe over 7 shapes (4x5, 8x7, 16x33, 3x1, 5x64, 6x129, 7x1000, including non-power-of-two n_cols so padded lanes are exercised) with every row forced to keep >=1 position: worst max abs error vs the spec reference was 2.38e-07, all dropped positions exactly 0.0 (total_dropped_nonzero=0), zero non-finite values (total_nonfinite=0), and row sums within 2.4e-07 of 1. The extreme case (all-logits -1e30 / 0.0 / 1e2, 4 kept of 16) gave exact 0.25 uniform rows with max_abs_err=0.0 and no non-finites, so no secondary underflow-to-zero denominator exists for finite inputs. The defect is confined to empty-mask rows.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "Separating the control path from the suspected path prevents a single all-NaN probe from being read as a global miscompute, and tests whether the -inf/max/where sequence also corrupts ordinary rows (e.g. NaN leaking across the block reduction from padded lanes when n_cols is not a power of two).",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "States y[j] = exp(x[j]) / sum over kept k of exp(x[k]) if mask[j], else 0, for arbitrary masks."
+      }
+    ],
+    "scope_rationale": "problem.txt's formula for mask[j] true/false is the stated behavior for all rows; a representative admitted input is a float32 matrix with non-power-of-two n_cols (e.g. 4x5) and randomly masked rows each keeping >= 1 position.",
+    "statement": "The failure is confined to empty-mask rows: for rows that keep at least one position, masked_softmax matches the spec (kept entries = exp(x)/sum over kept exp(x), dropped entries exactly 0.0). If a probe finds max abs error > ~1e-6 on such rows, or dropped positions that are nonzero/NaN, the defect is broader than the zero-denominator site and a different root cause is present.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T16:38:41Z"
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "confidence": 0.97,
+  "created_at": "2026-09-08T14:51:30Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The contract explicitly requires q = round(x/scale) \"to the nearest representable level\" and states that \"the rounding must be to nearest, so the round trip is unbiased: repeated application must not push the tensor systematically toward zero or away from it.\" kernel.py:14 instead computes q = tl.floor(x / scale), a directed rounding mode. Probe t6 (finalized as evidence c1.e1 via t7) ran the actual kernel on a 4096-element float32 CUDA tensor against a round-to-nearest reference using identical per-block (BLOCK=1024) absmax scaling: the kernel's mean signed error vs the input is -0.4827 LSB (scale=0.0261075), the exact -0.5 LSB signature of floor, while the reference gives -0.0062 LSB; 49.07% of elements differ from the reference with max deviation 0.02611 = exactly one full quantization step. Repeated application shows the forbidden compounding bias: mean -0.015690 (input) -> -0.027898 (1 step) -> -0.044454 (5) -> -0.053711 (20), whereas the round-to-nearest reference is a fixed point after the first step (-0.015744 at steps 1, 5 and 20). This is a violation of a behaviour the contract explicitly mandates (both the stated formula and the unbiasedness invariant), on ordinary 1-D float32 input which is precisely the documented domain of requantize().",
+  "verdict": "reject"
+}

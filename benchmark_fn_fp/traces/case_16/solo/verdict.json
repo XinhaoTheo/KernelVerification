@@ -1,0 +1,9 @@
+{
+  "confidence": 0.97,
+  "created_at": "2026-09-08T14:49:39Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The contract explicitly states K may be any positive integer and need not be a multiple of the kernel's K block size, with the partial final tile's first (K mod BLOCK_K) entries participating in the sum. The kernel's K loop is `for _ in range(0, K // BLOCK_K)` with no masked epilogue and no K-bound mask on offs_k, so the tail is silently dropped. Probe t7 confirmed this on the real GPU: for M=64,N=64,K=40, max|C - A@B| = 12.57 against ref absmax 26.17, while max|C - A[:, :32]@B[:32,:]| = 0.0 exactly; for M=100,N=70,K=100 (Ktrunc=96), err vs full A@B = 10.94 (ref absmax 41.10) vs 1.3e-5 against the truncated product (fp32 reduction noise); for K=16 the output is entirely zero (err vs full = 18.52 = ref absmax). The same probe showed K=64 and K=128 (with M=70,N=100 non-multiples of the 64 tile) match torch.matmul to 9.5e-6 / 1.5e-5, so M/N masking and pointer arithmetic are fine and the defect is isolated to the required K-tail handling (claim c2). This is a direct violation of the stated formula on inputs the contract expressly admits.",
+  "verdict": "reject"
+}

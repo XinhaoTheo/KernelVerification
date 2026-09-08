@@ -1,0 +1,291 @@
+[
+  {
+    "created_at": "2026-09-08T16:38:15Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T16:39:36Z",
+        "data": {
+          "absmax_ref_rel_l2_max": 0.042551,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "607a28c8eed13e2f9aad84cf201c9b60ae3bdb500484df37b0cc883c33c7e548"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "bd3d2888b2b44aa78cadc867b042eb45c68fcafbc783f22733080a477f15cea2"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "7a1e48bcacaad748a1e4ae510bf2ebd63b8cc4bf1c5361fc194270842ebae2e8"
+            }
+          ],
+          "dtype": "float32",
+          "duration_s": 7.122446,
+          "exit_code": 0,
+          "expected_signal": "If c1 holds, kernel per-row rel L2 >> 0.05 on heavy-tailed rows while absmax reference stays <1%.",
+          "json_parse_error": null,
+          "json_result": {
+            "absmax_ref_rel_l2_max": 0.042551,
+            "dtype": "float32",
+            "kernel_rel_l2_max": 0.62301,
+            "kernel_rel_l2_per_row": [
+              0.62301,
+              0.6217,
+              0.62157,
+              0.62117,
+              0.62294,
+              0.62147,
+              0.62287,
+              0.62142
+            ],
+            "max_abs_out_over_max_abs_in_row0": 0.3,
+            "pctl_levels": 2,
+            "rows_exceeding_tolerance": 8,
+            "shape": [
+              8,
+              512
+            ],
+            "tolerance": 0.05,
+            "top3_absmag_row0": [
+              100.0,
+              60.0,
+              30.0
+            ]
+          },
+          "kernel_rel_l2_max": 0.62301,
+          "kernel_rel_l2_min": 0.62117,
+          "max_abs_out_over_max_abs_in_row0": 0.3,
+          "pctl_levels": 2,
+          "rows_exceeding_tolerance": 8,
+          "rows_total": 8,
+          "shape": [
+            8,
+            512
+          ],
+          "stderr": "",
+          "stdout": "{\"shape\": [8, 512], \"dtype\": \"float32\", \"pctl_levels\": 2, \"kernel_rel_l2_per_row\": [0.62301, 0.6217, 0.62157, 0.62117, 0.62294, 0.62147, 0.62287, 0.62142], \"kernel_rel_l2_max\": 0.62301, \"absmax_ref_rel_l2_max\": 0.042551, \"tolerance\": 0.05, \"rows_exceeding_tolerance\": 8, \"max_abs_out_over_max_abs_in_row0\": 0.3, \"top3_absmag_row0\": [100.0, 60.0, 30.0]}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.05,
+          "top3_absmag_row0": [
+            100.0,
+            60.0,
+            30.0
+          ]
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Heavy-tailed 8x512 fp32 rows (bulk N(0,1), 3 outlier channels at 30x/60x/100x) at the public default pctl_levels=2: all 8 rows exceed the 5% per-row relative L2 bound, with rel L2 ~0.621-0.623 (12x the tolerance). Max |output| in row 0 is only 0.3x max |input|, i.e. the top-magnitude entries were clamped down to the 3rd-largest distinct |x| exactly as predicted by kernel.py:16-23. An absmax-calibrated reference on the identical input stays at 0.0426 (under the bound).",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "kernel.py:16-21 sets the full-scale point below absmax by iteratively taking the max of entries strictly below the current threshold; kernel.py:23 then clamps everything above it. Clamping removes the entire magnitude of the largest channels, which dominates the row L2 residual when those channels are 10x-100x the bulk.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Declares input domain as heavy-tailed transformer activations with a few channels 1-2 orders of magnitude above the bulk, and the acceptance metric as per-row relative Euclidean error <= 5%, explicitly noting the tolerance cannot absorb a clamped-away value."
+      },
+      {
+        "source": "kernel.py:16-23",
+        "summary": "thresh is reduced below absmax by PCTL_LEVELS max-below iterations, then q is clamped to +/-127, so any |x| > thresh is clamped."
+      }
+    ],
+    "scope_rationale": "problem.txt names the input domain as real transformer activations with heavy-tailed per-channel magnitudes, explicitly stating that a few channels one or two orders of magnitude above the bulk are normal, and fixes the acceptance metric as per-row ||y-x||/||x|| <= 5%. It also states directly that this tolerance does not absorb a clamped entry. A 512-column fp32 row with a handful of 30x-100x outliers is a representative instance of that declared domain, tested at the wrapper's public default pctl_levels=2.",
+    "statement": "With the default pctl_levels=2, thresh becomes the 3rd-largest distinct |x| of the row, so on a heavy-tailed row (e.g. 1x512 fp32 with bulk ~N(0,1) and 2-3 channels at 30x-100x the bulk) the top-magnitude entries are clamped to +/-thresh and the per-row relative Euclidean error ||y-x||/||x|| exceeds the stated 5% bound (expected to land in the tens of percent).",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T16:39:36Z"
+  },
+  {
+    "created_at": "2026-09-08T16:38:15Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T16:39:36Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "a782c462a696d8b0f0ca3dc9d32110a659fe5d237f5a07a33a516ede0be04bd2"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "8a2e9b80f65715ae59ac9e0b8eb589b907d57a6c9f01967a863b5647844a63a0"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "6b67f5e748f2dd402f1e4ca67b207ef7588d66ef479a6179e1a753444adaec33"
+            }
+          ],
+          "cols": 512,
+          "distinct_max_abs_in": 60.0,
+          "distinct_max_abs_out": 50.0,
+          "distinct_outliers_rel_l2": 0.11667,
+          "duration_s": 6.034217,
+          "exit_code": 0,
+          "expected_signal": "Tied-magnitude row shows thresh collapsing far below absmax (max|y| near bulk level) and rel L2 larger than the distinct-outlier row.",
+          "json_parse_error": null,
+          "json_result": {
+            "distinct_max_abs_in": 60.0,
+            "distinct_max_abs_out": 50.0,
+            "distinct_outliers_rel_l2": 0.11667,
+            "n_tied_outlier_cols": 4,
+            "tied_max_abs_in": 55.0,
+            "tied_max_abs_out": 2.78845,
+            "tied_outliers_rel_l2": 0.92906,
+            "tied_worse_than_distinct": true,
+            "tolerance": 0.05
+          },
+          "n_tied_outlier_cols": 4,
+          "stderr": "",
+          "stdout": "{\"distinct_outliers_rel_l2\": 0.11667, \"tied_outliers_rel_l2\": 0.92906, \"tolerance\": 0.05, \"distinct_max_abs_out\": 50.0, \"tied_max_abs_out\": 2.78845, \"distinct_max_abs_in\": 60.0, \"tied_max_abs_in\": 55.0, \"tied_worse_than_distinct\": true, \"n_tied_outlier_cols\": 4}\n",
+          "tied_max_abs_in": 55.0,
+          "tied_max_abs_out": 2.78845,
+          "tied_outliers_rel_l2": 0.92906,
+          "tied_worse_than_distinct": true,
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.05
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Tie amplification confirmed. Row with 3 distinct outliers (50/55/60 in a 1x512 N(0,1) bulk) gives rel L2 0.1167 and max|out|=50.0 vs max|in|=60.0 (top two clamped). Row where one magnitude 55 is duplicated across 4 columns collapses thresh to the bulk level: max|out| = 2.788 vs max|in| = 55.0, rel L2 = 0.929. Strict `ax < thresh` at kernel.py:18 removes all tied entries in one iteration, so the tied case is ~8x worse; both far exceed the 5% bound.",
+        "supports": "confirmed",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "kernel.py:18 uses a strict `<` comparison against a scalar threshold, so the iteration walks distinct absolute values, not order statistics. Duplicated magnitudes therefore cost one level for arbitrarily many entries, amplifying the clamping loss.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Input domain is real transformer activations with heavy-tailed per-channel magnitudes; the acceptance bound is per-row ||y-x||/||x|| <= 5% and explicitly does not absorb clamped entries."
+      },
+      {
+        "source": "kernel.py:18-19",
+        "summary": "below = where(ax < thresh, ax, 0.0) then max: strict inequality removes all entries tied at thresh in one iteration, so the loop descends distinct values rather than order statistics."
+      }
+    ],
+    "scope_rationale": "The contract's input domain is heavy-tailed per-channel activations with the acceptance metric per-row relative L2 <= 5%; nothing in problem.txt restricts outlier magnitudes to being pairwise distinct, and repeated magnitudes are ordinary for real activation tensors. Same shape/dtype family and default pctl_levels as claim 1, so it is an in-domain variation of the stated input, not a shape/dtype change.",
+    "statement": "Because `ax < thresh` drops all entries tied at the current threshold, a row whose outlier magnitude is duplicated across several channels (e.g. the same large |value| in 4 columns, as happens with repeated/saturated activation channels) loses every tied entry in a single loop iteration, so thresh falls even further and many more entries are clamped, making the per-row ||y-x||/||x|| error larger than in the distinct-outlier case.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T16:39:36Z"
+  },
+  {
+    "created_at": "2026-09-08T16:38:15Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T16:39:36Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "225d7052dca99d9a1a61020e87c4884bcd71fe77a0b2f654c912cac5d9cae8d0"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "77b183b0aba826aa89cad3cc3e7e86c8025e79da1176503571b51a559431df90"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "6bdaab171118a85a92f3abbd7fa44ec98ade29e253e4e3b465fe193a3a986888"
+            }
+          ],
+          "claim_scope": "unknown",
+          "constant_row_out_all_zero": true,
+          "duration_s": 6.641618,
+          "exit_code": 0,
+          "expected_signal": "Rows with <=3 distinct |values| collapse thresh to 0, scale=1.0, output all zeros, rel L2 ~1.0.",
+          "json_parse_error": null,
+          "json_result": {
+            "constant_row_max_abs_out": 0.0,
+            "constant_row_out_all_zero": true,
+            "n_distinct_abs_row0": 1,
+            "n_distinct_abs_row1": 3,
+            "rel_l2_constant_row": 1.0,
+            "rel_l2_sparse_2mag_row": 1.0,
+            "shape": [
+              2,
+              256
+            ],
+            "sparse_row_max_abs_out": 0.0,
+            "sparse_row_out_all_zero": true,
+            "tolerance": 0.05
+          },
+          "n_distinct_abs_row0": 1,
+          "n_distinct_abs_row1": 3,
+          "rel_l2_constant_row": 1.0,
+          "rel_l2_sparse_2mag_row": 1.0,
+          "shape": [
+            2,
+            256
+          ],
+          "sparse_row_out_all_zero": true,
+          "stderr": "",
+          "stdout": "{\"shape\": [2, 256], \"rel_l2_constant_row\": 1.0, \"rel_l2_sparse_2mag_row\": 1.0, \"tolerance\": 0.05, \"constant_row_out_all_zero\": true, \"sparse_row_out_all_zero\": true, \"constant_row_max_abs_out\": 0.0, \"sparse_row_max_abs_out\": 0.0, \"n_distinct_abs_row0\": 1, \"n_distinct_abs_row1\": 3}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.05
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "Degenerate collapse confirmed as a mechanism. A 1x256 row of constant magnitude +/-0.3 (1 distinct |value|) and a sparse post-ReLU-style row with values {0, 0.2, 0.4} (3 distinct |values|) both produce an entirely zero output, per-row relative L2 = 1.0 (20x the 5% bound). This is the thresh->0 / scale=1.0 path at kernel.py:21 combined with floor(x+0.5)=0 for |x|<0.5. Note the claim's own scope field is \"unknown\": problem.txt does not establish that such few-distinct-value rows appear in the evaluation set, so this is a corroborating mechanism rather than an independently in-scope failure.",
+        "supports": "confirmed",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "kernel.py:21 substitutes scale=1.0 when thresh==0, which is a raw-integer grid unrelated to the row's magnitude; masked padding lanes loaded as 0.0 also feed the `below` reduction, making thresh collapse to 0 easier for short rows.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt states the acceptance bound per row and describes the domain as real transformer activations but does not say whether near-constant or few-distinct-value rows (e.g. post-ReLU sparse rows) appear in the evaluation set, and there is no test.py or get_inputs to pin the distribution. The failure mode follows from the contract's own per-row metric if such a row occurs, so scope is unknown rather than in_scope.",
+    "statement": "For a row with at most PCTL_LEVELS+1 = 3 distinct absolute values (e.g. a near-constant or heavily sparse activation row such as all entries +/-0.3, or two magnitudes plus zeros), the loop drives thresh to 0.0, so scale is forced to 1.0 and q = floor(x + 0.5) rounds all sub-0.5 magnitudes to 0, producing an all-zero (or grossly truncated) output with per-row relative error near 100%.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T16:39:36Z"
+  }
+]

@@ -1,53 +1,47 @@
 
-import torch, numpy as np, importlib.util, json
-torch.backends.cuda.matmul.allow_tf32=False
-spec=importlib.util.spec_from_file_location("k","/root/cases/case_33/kernel.py")
-m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+import json, importlib.util, torch, math
+spec = importlib.util.spec_from_file_location("kmod", "/root/cases/case_33/kernel.py")
+kmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(kmod)
 
-def pack_k(q):
-    K,N=q.shape; Kp=K//8
-    out=np.zeros((Kp,N),np.uint32); qr=q.reshape(Kp,8,N).astype(np.uint32)
-    for j in range(8): out |= (qr[:,j,:]<<(4*j))
-    return out.view(np.int32)
-def pack_n(z):
-    G,N=z.shape; Nc=N//8
-    out=np.zeros((G,Nc),np.uint32); zr=z.reshape(G,Nc,8).astype(np.uint32)
-    for j in range(8): out |= (zr[:,:,j]<<(4*j))
-    return out.view(np.int32)
+torch.manual_seed(0)
+dev='cuda'
+M,N,K,gs,bits = 32,32,48,32,4
+G = -(-K//gs)   # ceil = 2
+a = torch.randn(M,K,device=dev,dtype=torch.float32)
+b_packed = torch.randint(-2**31, 2**31-1, (K//8, N), device=dev, dtype=torch.int32)
+zeros_packed = torch.randint(-2**31, 2**31-1, (G, N//8), device=dev, dtype=torch.int32)
+# make the trailing (short) group's scale row very different from group 0
+scales = torch.stack([torch.full((N,),0.01,device=dev), torch.full((N,),0.5,device=dev)]).contiguous()
 
-def run_case(M,N,K,gs,seed=0):
-    rng=np.random.default_rng(seed)
-    q=rng.integers(0,16,size=(K,N)).astype(np.int64)
-    G=(K+gs-1)//gs
-    z=rng.integers(0,15,size=(G,N)).astype(np.int64)
-    s=(rng.random((G,N))*0.2+0.02).astype(np.float32)
-    torch.manual_seed(seed)
-    a=torch.randn(M,K,device='cuda',dtype=torch.float32)
-    bp=torch.from_numpy(pack_k(q)).cuda().contiguous()
-    zp=torch.from_numpy(pack_n(z)).cuda().contiguous()
-    st=torch.from_numpy(s).cuda().contiguous()
-    qt=torch.from_numpy(q).cuda().float(); zt=torch.from_numpy(z).cuda().float()
-    ar=torch.arange(K,device='cuda')
-    gc=ar//gs
-    ng=K//gs
-    gk=torch.clamp(ar//gs,max=ng-1)
-    deq_c=(qt-(zt[gc]+1))*st[gc]
-    deq_k=(qt-(zt[gk]+1))*st[gk]
-    ref_c=a@deq_c; ref_k=a@deq_k
-    out=m.gptq_matmul(a,bp,st,zp,gs,4); torch.cuda.synchronize()
-    d_c=(out-ref_c).abs(); d_k=(out-ref_k).abs()
-    return dict(M=M,N=N,K=K,gs=gs,G_supplied=G,num_groups_kernel=ng,
-                gidx_last8=gk[-8:].tolist(), gidx_contract_last8=gc[-8:].tolist(),
-                ref_absmax=float(ref_c.abs().max()),
-                max_abs_err_vs_contract=float(d_c.max()),
-                rel_err_vs_contract=float(d_c.max()/ref_c.abs().max()),
-                max_abs_err_vs_clamped_model=float(d_k.max()),
-                rel_err_vs_clamped_model=float(d_k.max()/ref_c.abs().max()),
-                allclose_contract=bool(torch.allclose(out,ref_c,rtol=1e-3,atol=1e-3)),
-                allclose_clamped=bool(torch.allclose(out,ref_k,rtol=1e-3,atol=1e-3)))
+k_idx = torch.arange(K, device=dev)
+n_idx = torch.arange(N, device=dev)
+q = (b_packed[(k_idx//8), :] >> ((k_idx%8)*4).unsqueeze(1)) & 15
+zq = (zeros_packed[:, (n_idx//8)] >> ((n_idx%8)*4).unsqueeze(0)) & 15
+z = (zq + 1).float()
 
-res={}
-res['bug_case_K48_gs32']=run_case(64,64,48,32)
-res['control_K64_gs32']=run_case(64,64,64,32)
-res['control_K32_gs32']=run_case(64,64,32,32)
-print(json.dumps(res))
+def deq(gmap):
+    return (q.float() - z[gmap]) * scales[gmap]
+
+gmap_true  = torch.clamp(k_idx//gs, max=G-1)                 # 0..31 ->0, 32..47 ->1
+gmap_wrong = torch.clamp(k_idx//gs, max=(K//gs)-1)           # kernel's floor model -> all 0
+c_ref   = a @ deq(gmap_true)
+c_wrong = a @ deq(gmap_wrong)
+
+c = kmod.gptq_matmul(a, b_packed, scales, zeros_packed, gs, bits=bits)
+torch.cuda.synchronize()
+
+err_ref   = (c-c_ref).abs().max().item()
+err_wrong = (c-c_wrong).abs().max().item()
+den = c_ref.abs().max().item()
+print(json.dumps({
+ "M":M,"N":N,"K":K,"group_size":gs,"ceil_groups":G,"floor_groups":K//gs,
+ "g_idx_unique_kernel":sorted(set(gmap_wrong.tolist())),
+ "g_idx_unique_contract":sorted(set(gmap_true.tolist())),
+ "max_abs_err_vs_contract_ref":err_ref,
+ "max_abs_err_vs_floor_model":err_wrong,
+ "max_abs_ref":den,
+ "max_rel_err_vs_contract_ref":err_ref/max(den,1e-12),
+ "matches_floor_model":bool(err_wrong<1e-3),
+ "matches_contract_ref":bool(err_ref<1e-3),
+ "metric":"elementwise max abs err of C vs two candidate group-mapping references"
+}))

@@ -1,0 +1,2045 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_17",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _chunked_scan_kernel(X, OUT, stride_xb, stride_ob, seqlen, CHUNK: tl.constexpr):\n    b = tl.program_id(0)\n    x_row = X + b * stride_xb\n    o_row = OUT + b * stride_ob\n    n_chunks = seqlen // CHUNK\n\n    carry = 0.0\n    for c in range(n_chunks):\n        offs = c * CHUNK + tl.arange(0, CHUNK)\n        x = tl.load(x_row + offs, mask=offs < seqlen, other=0.0)\n        local = tl.cumsum(x, axis=0)\n        tl.store(o_row + offs, local + carry, mask=offs < seqlen)\n        carry += tl.sum(x, axis=0)\n\n\ndef chunked_cumsum(x: torch.Tensor, chunk: int = 64) -> torch.Tensor:\n    \"\"\"Cumulative sum along the sequence axis, carried across fixed-size chunks.\"\"\"\n    batch, seqlen = x.shape\n    out = torch.zeros_like(x)\n    _chunked_scan_kernel[(batch,)](x, out, x.stride(0), out.stride(0), seqlen, CHUNK=chunk)\n    return out\n",
+    "passed": null,
+    "problem_text": "Operation: cumulative sum along the sequence axis of a 2-D float32 tensor,\ncomputed chunk by chunk with a running carry (the chunked-scan structure used by\nstate-space and linear-attention kernels).\n\n    y[b, t] = sum over s <= t of x[b, s]\n\nInput domain: `seqlen` may be any positive integer. It is NOT required to be a\nmultiple of `chunk`; when it is not, the trailing positions form a shorter final\nchunk whose outputs must still be produced.\n\nDoes chunked_cumsum() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_17",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T15:02:59Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:03:50Z",
+          "data": {
+            "aligned_control_2x128_c64_allclose": true,
+            "aligned_control_2x128_c64_max_abs_err": 3.814697265625e-06,
+            "allclose_tol": "atol=1e-4, rtol=1e-4",
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6caed58140d51cf38d3cdb35ab80b84813e05b0e5eb6be1527672bed05bf5b9a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "905796fe63365e056ff380a1576469312dda9caf5f6c30e0524a99016a5ded4e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "82416f120d30f26a472a60e4eba1452aed575000ec9ad0d23c2d05ee496b3495"
+              }
+            ],
+            "case_2x200_c64_head_max_abs_err": 3.814697265625e-06,
+            "case_2x200_c64_n_chunks": 3,
+            "case_2x200_c64_n_tail_elems": 16,
+            "case_2x200_c64_tail_bitwise_all_zero": true,
+            "case_2x200_c64_tail_max_abs_err": 25.601417541503906,
+            "case_2x65_c64_head_max_abs_err": 9.5367431640625e-07,
+            "case_2x65_c64_n_tail_elems": 2,
+            "case_2x65_c64_tail_bitwise_all_zero": true,
+            "case_2x65_c64_tail_max_abs_err": 16.523725509643555,
+            "case_4x100_c64_head_max_abs_err": 1.9073486328125e-06,
+            "case_4x100_c64_n_chunks": 1,
+            "case_4x100_c64_n_tail_elems": 144,
+            "case_4x100_c64_tail_bitwise_all_zero": true,
+            "case_4x100_c64_tail_max_abs_err": 10.053009033203125,
+            "case_4x100_c64_tail_ref_min_abs": 0.06468510627746582,
+            "device": "cuda",
+            "dtype": "float32",
+            "duration_s": 5.691739,
+            "exit_code": 0,
+            "expected_signal": "For (4,100)/chunk=64, (2,65), (2,200)/chunk=64: head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding while tail slice [n_chunks*chunk, seqlen) is exactly 0.0 with large max abs error; aligned (2,128) control passes.",
+            "json_parse_error": null,
+            "json_result": {
+              "cases": [
+                {
+                  "batch": 4,
+                  "chunk": 64,
+                  "cut": 64,
+                  "global_allclose": false,
+                  "head_max_abs_err": 1.9073486328125e-06,
+                  "n_chunks": 1,
+                  "n_tail_elems": 144,
+                  "seqlen": 100,
+                  "tail_bitwise_all_zero": true,
+                  "tail_max_abs_err": 10.053009033203125,
+                  "tail_ref_min_abs": 0.06468510627746582
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "cut": 64,
+                  "global_allclose": false,
+                  "head_max_abs_err": 9.5367431640625e-07,
+                  "n_chunks": 1,
+                  "n_tail_elems": 2,
+                  "seqlen": 65,
+                  "tail_bitwise_all_zero": true,
+                  "tail_max_abs_err": 16.523725509643555,
+                  "tail_ref_min_abs": 1.586843490600586
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "cut": 192,
+                  "global_allclose": false,
+                  "head_max_abs_err": 3.814697265625e-06,
+                  "n_chunks": 3,
+                  "n_tail_elems": 16,
+                  "seqlen": 200,
+                  "tail_bitwise_all_zero": true,
+                  "tail_max_abs_err": 25.601417541503906,
+                  "tail_ref_min_abs": 1.2080295085906982
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "cut": 128,
+                  "global_allclose": true,
+                  "head_max_abs_err": 3.814697265625e-06,
+                  "n_chunks": 2,
+                  "n_tail_elems": 0,
+                  "seqlen": 128,
+                  "tail_bitwise_all_zero": null,
+                  "tail_max_abs_err": null,
+                  "tail_ref_min_abs": null
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"cases\": [{\"batch\": 4, \"seqlen\": 100, \"chunk\": 64, \"n_chunks\": 1, \"cut\": 64, \"head_max_abs_err\": 1.9073486328125e-06, \"tail_max_abs_err\": 10.053009033203125, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 0.06468510627746582, \"n_tail_elems\": 144, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 65, \"chunk\": 64, \"n_chunks\": 1, \"cut\": 64, \"head_max_abs_err\": 9.5367431640625e-07, \"tail_max_abs_err\": 16.523725509643555, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 1.586843490600586, \"n_tail_elems\": 2, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 200, \"chunk\": 64, \"n_chunks\": 3, \"cut\": 192, \"head_max_abs_err\": 3.814697265625e-06, \"tail_max_abs_err\": 25.601417541503906, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 1.2080295085906982, \"n_tail_elems\": 16, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 128, \"chunk\": 64, \"n_chunks\": 2, \"cut\": 128, \"head_max_abs_err\": 3.814697265625e-06, \"tail_max_abs_err\": null, \"tail_bitwise_all_zero\": null, \"tail_ref_min_abs\": null, \"n_tail_elems\": 0, \"global_allclose\": true}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Tail truncation confirmed on GPU. For (4,100)/chunk=64, (2,65)/chunk=64 and (2,200)/chunk=64 the head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding (max abs err 1e-6..4e-6) while the tail slice [n_chunks*chunk, seqlen) is bitwise all-zero, giving tail max abs errors of 10.05, 16.52 and 25.60 against nonzero reference values (tail |ref| min 0.065, 1.59, 1.21 respectively). The aligned control (2,128)/chunk=64 passes allclose(atol=rtol=1e-4), isolating the defect to the partial final chunk rather than to numeric drift or carry propagation.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "n_chunks = seqlen // CHUNK truncates the partial final chunk, and the mask `offs < seqlen` can never be partial for c < seqlen//CHUNK, so it provides no tail coverage \u2014 the masking is cosmetic. No epilogue handles the remainder.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.\""
+        },
+        {
+          "source": "kernel.py:22-27",
+          "summary": "Wrapper signature chunked_cumsum(x, chunk=64) takes a 2-D tensor and defaults chunk=64, so seqlen=100 with the default chunk is an ordinary in-contract call."
+        }
+      ],
+      "scope_rationale": "problem.txt is the sole contract authority here (no test.py exists) and it explicitly states seqlen may be any positive integer, is NOT required to be a multiple of chunk, and that the trailing shorter final chunk's outputs \"must still be produced\". A 2-D float32 tensor with seqlen=100 and the wrapper's own default chunk=64 is a representative input the contract admits, with no dtype, rank, or stride deviation.",
+      "statement": "For seqlen not a multiple of chunk (e.g. x of shape (4, 100) with default chunk=64, or (2, 65), or (2, 200) with chunk=64), chunked_cumsum leaves the trailing seqlen % chunk output positions at exactly 0.0 instead of the required prefix sums, because the loop runs only c in [0, seqlen // CHUNK) (kernel.py:11,14) and out is pre-filled by torch.zeros_like (kernel.py:25). Decisive metric: compare out[:, n_chunks*chunk:] against torch.cumsum(x, dim=1)[:, n_chunks*chunk:] elementwise; the claim is confirmed if those entries are identically 0.0 while the reference values are nonzero (report max abs error over the tail slice and separately over the head slice, which should match to fp32 rounding).",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T15:03:50Z"
+    },
+    {
+      "created_at": "2026-09-08T15:02:59Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:03:50Z",
+          "data": {
+            "all_cases_out_bitwise_all_zero": true,
+            "all_cases_ref_all_zero": false,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "52c649f6c8aee96a92f64dcf9ed855041b9735481633d7fce454c588e71fae40"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "510b5e15ddea5500e7d65b5c7569c35108a03d0eb1b8e11f2d96ea26b202ef0e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "f3249c60b02aff331876e1ee425431bf2b508c5fae0eebe706520e0bd8558457"
+              }
+            ],
+            "case_1x1_c64_max_abs_err": 0.633983850479126,
+            "case_1x1_c64_out_nonzero_count": 0,
+            "case_1x1_c64_out_numel": 1,
+            "case_1x1_c64_ref_max_abs": 0.633983850479126,
+            "case_2x63_c64_max_abs_err": 8.95738410949707,
+            "case_2x63_c64_out_nonzero_count": 0,
+            "case_2x63_c64_out_numel": 126,
+            "case_2x63_c64_ref_max_abs": 8.95738410949707,
+            "case_3x40_c64_max_abs_err": 10.293733596801758,
+            "case_3x40_c64_n_chunks": 0,
+            "case_3x40_c64_out_nonzero_count": 0,
+            "case_3x40_c64_out_numel": 120,
+            "case_3x40_c64_ref_max_abs": 10.293733596801758,
+            "device": "cuda",
+            "dtype": "float32",
+            "duration_s": 5.645865,
+            "exit_code": 0,
+            "expected_signal": "For (3,40) and (1,1) with chunk=64: output bitwise all-zero, nonzero count 0, max abs err equal to max |cumsum| of reference.",
+            "json_parse_error": null,
+            "json_result": {
+              "cases": [
+                {
+                  "batch": 3,
+                  "chunk": 64,
+                  "max_abs_err": 10.293733596801758,
+                  "n_chunks": 0,
+                  "out_bitwise_all_zero": true,
+                  "out_nonzero_count": 0,
+                  "out_numel": 120,
+                  "ref_all_zero": false,
+                  "ref_max_abs": 10.293733596801758,
+                  "seqlen": 40
+                },
+                {
+                  "batch": 1,
+                  "chunk": 64,
+                  "max_abs_err": 0.633983850479126,
+                  "n_chunks": 0,
+                  "out_bitwise_all_zero": true,
+                  "out_nonzero_count": 0,
+                  "out_numel": 1,
+                  "ref_all_zero": false,
+                  "ref_max_abs": 0.633983850479126,
+                  "seqlen": 1
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "max_abs_err": 8.95738410949707,
+                  "n_chunks": 0,
+                  "out_bitwise_all_zero": true,
+                  "out_nonzero_count": 0,
+                  "out_numel": 126,
+                  "ref_all_zero": false,
+                  "ref_max_abs": 8.95738410949707,
+                  "seqlen": 63
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"cases\": [{\"batch\": 3, \"seqlen\": 40, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 120, \"out_bitwise_all_zero\": true, \"max_abs_err\": 10.293733596801758, \"ref_max_abs\": 10.293733596801758, \"ref_all_zero\": false}, {\"batch\": 1, \"seqlen\": 1, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 1, \"out_bitwise_all_zero\": true, \"max_abs_err\": 0.633983850479126, \"ref_max_abs\": 0.633983850479126, \"ref_all_zero\": false}, {\"batch\": 2, \"seqlen\": 63, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 126, \"out_bitwise_all_zero\": true, \"max_abs_err\": 8.95738410949707, \"ref_max_abs\": 8.95738410949707, \"ref_all_zero\": false}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Zero-trip-count case confirmed. For (3,40), (1,1) and (2,63) with default chunk=64, n_chunks = seqlen//CHUNK == 0 and the returned tensor is bitwise all-zero (nonzero count 0 of 120, 1 and 126 elements). Max abs error equals the reference max |cumsum| exactly (10.2937, 0.6340, 8.9574), i.e. the output carries no information at all; the reference is not all-zero in any case, so this is not a reference-undefined artifact.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "Zero trip count for the only loop means no store ever issues, so the zeros_like allocation is returned unchanged; this is the extreme form of the tail truncation and fails even for the trivial seqlen=1 case.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"`seqlen` may be any positive integer\" \u2014 seqlen in [1, 63] with chunk=64 is inside the stated input domain and its outputs must still be produced."
+        },
+        {
+          "source": "kernel.py:11",
+          "summary": "n_chunks = seqlen // CHUNK is 0 whenever seqlen < CHUNK, giving the range() loop a zero trip count so no tl.store is ever reached."
+        }
+      ],
+      "scope_rationale": "problem.txt states seqlen may be ANY positive integer, which directly admits seqlen < chunk; these are non-empty 2-D float32 tensors, not zero-size or dtype/stride variants, so no default-out-of-scope category applies. chunk=64 is the wrapper's own default.",
+      "statement": "For any seqlen strictly less than chunk (e.g. x of shape (3, 40) or (1, 1) with default chunk=64), n_chunks = seqlen // CHUNK evaluates to 0, the loop body at kernel.py:14-19 never executes, and chunked_cumsum returns an all-zero tensor. Decisive metric: assert out is bitwise all-zero while torch.cumsum(x, dim=1) is not; report count of nonzero entries in out and max abs error.",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T15:03:50Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Compute y[b,t] = sum_{s<=t} x[b,s] for a 2-D float32 tensor, i.e. an exact per-row prefix sum along dim 1 (equivalent to torch.cumsum(x, dim=1)).",
+      "The problem text explicitly states seqlen may be any positive integer and is NOT required to be a multiple of chunk.",
+      "When seqlen % chunk != 0, the trailing positions form a shorter final chunk whose outputs must still be produced (i.e. every one of the batch*seqlen output entries must be written with the correct prefix sum).",
+      "The chunked-scan structure (local cumsum + cross-chunk carry) is the prescribed implementation shape, so carry propagation across chunk boundaries must be exact.",
+      "No test_code is supplied in the artifact; problem.txt is the operative contract and asks directly whether chunked_cumsum() satisfies it."
+    ],
+    "kernel_model": [
+      "Host wrapper chunked_cumsum (kernel.py:22-27) reads batch, seqlen from x.shape, allocates out = torch.zeros_like(x), and launches grid=(batch,) with CHUNK=chunk (default 64).",
+      "Only stride(0) of x and out is passed; the kernel indexes within a row as x_row + offs, i.e. it assumes the sequence axis is contiguous with stride 1 (kernel.py:9-10, 16, 18).",
+      "Loop bound is n_chunks = seqlen // CHUNK (kernel.py:11), integer floor division, and the loop c ranges over [0, n_chunks) (kernel.py:14).",
+      "Per chunk: offs = c*CHUNK + arange(0,CHUNK); load with mask offs < seqlen; local = tl.cumsum(x, axis=0); store local + carry; then carry += tl.sum(x) (kernel.py:15-19).",
+      "Because the loop stops after the last full chunk, the masks `offs < seqlen` on load/store are never actually partial: for every c < seqlen//CHUNK, all CHUNK lanes satisfy offs < seqlen. The masking is therefore dead code that gives the appearance of tail handling without providing it.",
+      "Consequence implied by the source: when seqlen % CHUNK != 0, positions [n_chunks*CHUNK, seqlen) are never stored to, and retain the zeros from torch.zeros_like rather than their prefix sums.",
+      "carry is a scalar Python/Triton float initialized to 0.0 and accumulated sequentially, so cross-chunk propagation across the chunks it does visit looks structurally correct.",
+      "Kernel assumes CHUNK is a compile-time power-of-two-friendly constexpr suitable for tl.arange; passing a non-power-of-2 chunk from the wrapper is unconstrained by any validation."
+    ],
+    "open_questions": [
+      "Does the (absent) evaluation harness actually exercise a seqlen that is not a multiple of chunk, or does it only use aligned shapes? With test_code empty, this cannot be resolved from the artifact and affects whether the suspected defect is observed by the grader.",
+      "Confirm empirically that the tail region is left at exactly 0.0 rather than partially written, and confirm the seqlen<chunk all-zeros case.",
+      "What chunk values are expected to be passed by callers, and is non-power-of-2 chunk a compile error or a silent miscomputation?",
+      "Are non-contiguous inputs ever passed to chunked_cumsum in the intended use, given only stride(0) is threaded through?"
+    ],
+    "risk_map": [
+      "Primary surface: n_chunks = seqlen // CHUNK truncates the tail. For seqlen not a multiple of chunk (e.g. 100 with chunk 64, or 65, or 63), the trailing seqlen % chunk outputs should be nonzero prefix sums but appear to be left as zeros. A probe should compare against torch.cumsum on such shapes and inspect specifically the tail slice, not just a global mean error.",
+      "Degenerate case seqlen < chunk (e.g. seqlen=1..63 with default chunk=64): n_chunks == 0, the loop body never executes, and the entire output would be all zeros. This is the most extreme form of the same bug and is worth its own probe.",
+      "A benign probe using seqlen that is a multiple of chunk (128, 256, 512) would pass and would NOT be evidence about the contract's stated non-multiple domain. Do not let one aligned-shape allclose stand in for the tail requirement.",
+      "Numerical: local tl.cumsum in fp32 plus a scalar carry can diverge slightly from torch.cumsum's own summation order; a strict allclose with tiny atol on long sequences or large-magnitude inputs may show benign drift that must not be confused with the structural tail bug. Separate 'wrong by rounding' from 'exactly zero where a nonzero value is required'.",
+      "Contiguity: only stride(0) is passed and the inner axis is assumed unit-stride. A non-contiguous / transposed / sliced input would be read incorrectly, though it is unclear whether such inputs are in scope.",
+      "chunk values that are not powers of two may fail tl.arange constraints at compile time rather than producing wrong numbers; this is a distinct failure mode from silent zeros.",
+      "Masking-as-camouflage: reviewers may see mask=offs < seqlen and conclude tail handling exists. Evidence should test behavior, not the presence of the mask."
+    ],
+    "scope_notes": [
+      "The problem statement itself widens the input domain in an unusually explicit way ('seqlen may be any positive integer... It is NOT required to be a multiple of chunk'), so non-multiple seqlen is squarely in scope rather than an adversarial out-of-contract stress case.",
+      "dtype scope is float32 2-D tensors only; fp16/bf16/3-D inputs are not part of the stated contract.",
+      "chunk is a wrapper argument with default 64; the contract phrases the requirement relative to whatever chunk is used, so the tail question applies at the default and at caller-supplied chunk values.",
+      "No test_code is present in the artifact, so there is no harness-selected shape list to narrow the domain; the contract text is the only scoping authority here.",
+      "Performance/occupancy (one program per batch row, fully sequential inner loop) is not a correctness concern for this contract."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Compute y[b,t] = sum_{s<=t} x[b,s] for a 2-D float32 tensor, i.e. an exact per-row prefix sum along dim 1 (equivalent to torch.cumsum(x, dim=1)).",
+        "The problem text explicitly states seqlen may be any positive integer and is NOT required to be a multiple of chunk.",
+        "When seqlen % chunk != 0, the trailing positions form a shorter final chunk whose outputs must still be produced (i.e. every one of the batch*seqlen output entries must be written with the correct prefix sum).",
+        "The chunked-scan structure (local cumsum + cross-chunk carry) is the prescribed implementation shape, so carry propagation across chunk boundaries must be exact.",
+        "No test_code is supplied in the artifact; problem.txt is the operative contract and asks directly whether chunked_cumsum() satisfies it."
+      ],
+      "created_at": "2026-09-08T15:02:39Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Host wrapper chunked_cumsum (kernel.py:22-27) reads batch, seqlen from x.shape, allocates out = torch.zeros_like(x), and launches grid=(batch,) with CHUNK=chunk (default 64).",
+        "Only stride(0) of x and out is passed; the kernel indexes within a row as x_row + offs, i.e. it assumes the sequence axis is contiguous with stride 1 (kernel.py:9-10, 16, 18).",
+        "Loop bound is n_chunks = seqlen // CHUNK (kernel.py:11), integer floor division, and the loop c ranges over [0, n_chunks) (kernel.py:14).",
+        "Per chunk: offs = c*CHUNK + arange(0,CHUNK); load with mask offs < seqlen; local = tl.cumsum(x, axis=0); store local + carry; then carry += tl.sum(x) (kernel.py:15-19).",
+        "Because the loop stops after the last full chunk, the masks `offs < seqlen` on load/store are never actually partial: for every c < seqlen//CHUNK, all CHUNK lanes satisfy offs < seqlen. The masking is therefore dead code that gives the appearance of tail handling without providing it.",
+        "Consequence implied by the source: when seqlen % CHUNK != 0, positions [n_chunks*CHUNK, seqlen) are never stored to, and retain the zeros from torch.zeros_like rather than their prefix sums.",
+        "carry is a scalar Python/Triton float initialized to 0.0 and accumulated sequentially, so cross-chunk propagation across the chunks it does visit looks structurally correct.",
+        "Kernel assumes CHUNK is a compile-time power-of-two-friendly constexpr suitable for tl.arange; passing a non-power-of-2 chunk from the wrapper is unconstrained by any validation."
+      ],
+      "open_questions": [
+        "Does the (absent) evaluation harness actually exercise a seqlen that is not a multiple of chunk, or does it only use aligned shapes? With test_code empty, this cannot be resolved from the artifact and affects whether the suspected defect is observed by the grader.",
+        "Confirm empirically that the tail region is left at exactly 0.0 rather than partially written, and confirm the seqlen<chunk all-zeros case.",
+        "What chunk values are expected to be passed by callers, and is non-power-of-2 chunk a compile error or a silent miscomputation?",
+        "Are non-contiguous inputs ever passed to chunked_cumsum in the intended use, given only stride(0) is threaded through?"
+      ],
+      "risk_map": [
+        "Primary surface: n_chunks = seqlen // CHUNK truncates the tail. For seqlen not a multiple of chunk (e.g. 100 with chunk 64, or 65, or 63), the trailing seqlen % chunk outputs should be nonzero prefix sums but appear to be left as zeros. A probe should compare against torch.cumsum on such shapes and inspect specifically the tail slice, not just a global mean error.",
+        "Degenerate case seqlen < chunk (e.g. seqlen=1..63 with default chunk=64): n_chunks == 0, the loop body never executes, and the entire output would be all zeros. This is the most extreme form of the same bug and is worth its own probe.",
+        "A benign probe using seqlen that is a multiple of chunk (128, 256, 512) would pass and would NOT be evidence about the contract's stated non-multiple domain. Do not let one aligned-shape allclose stand in for the tail requirement.",
+        "Numerical: local tl.cumsum in fp32 plus a scalar carry can diverge slightly from torch.cumsum's own summation order; a strict allclose with tiny atol on long sequences or large-magnitude inputs may show benign drift that must not be confused with the structural tail bug. Separate 'wrong by rounding' from 'exactly zero where a nonzero value is required'.",
+        "Contiguity: only stride(0) is passed and the inner axis is assumed unit-stride. A non-contiguous / transposed / sliced input would be read incorrectly, though it is unclear whether such inputs are in scope.",
+        "chunk values that are not powers of two may fail tl.arange constraints at compile time rather than producing wrong numbers; this is a distinct failure mode from silent zeros.",
+        "Masking-as-camouflage: reviewers may see mask=offs < seqlen and conclude tail handling exists. Evidence should test behavior, not the presence of the mask."
+      ],
+      "scope_notes": [
+        "The problem statement itself widens the input domain in an unusually explicit way ('seqlen may be any positive integer... It is NOT required to be a multiple of chunk'), so non-multiple seqlen is squarely in scope rather than an adversarial out-of-contract stress case.",
+        "dtype scope is float32 2-D tensors only; fp16/bf16/3-D inputs are not part of the stated contract.",
+        "chunk is a wrapper argument with default 64; the contract phrases the requirement relative to whatever chunk is used, so the tail question applies at the default and at caller-supplied chunk values.",
+        "No test_code is present in the artifact, so there is no harness-selected shape list to narrow the domain; the contract text is the only scoping authority here.",
+        "Performance/occupancy (one program per batch row, fully sequential inner loop) is not a correctness concern for this contract."
+      ],
+      "summary": "case_17 implements a batched chunked cumulative sum along the sequence axis with a running scalar carry. The kernel launches one program per batch row and iterates only over floor(seqlen/CHUNK) full chunks, which is the key place where the contract's explicit \"seqlen need not be a multiple of chunk\" requirement is at stake.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_17",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_17"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_17"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_17"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_17",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 36.5454337000001,
+      "role": "describer",
+      "round": 2,
+      "text": "The artifact context is fully loaded; I'll record the structured description model directly, focusing on the tail-chunk handling implied by the problem's explicit non-multiple `seqlen` clause.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Compute y[b,t] = sum_{s<=t} x[b,s] for a 2-D float32 tensor, i.e. an exact per-row prefix sum along dim 1 (equivalent to torch.cumsum(x, dim=1)).",
+              "The problem text explicitly states seqlen may be any positive integer and is NOT required to be a multiple of chunk.",
+              "When seqlen % chunk != 0, the trailing positions form a shorter final chunk whose outputs must still be produced (i.e. every one of the batch*seqlen output entries must be written with the correct prefix sum).",
+              "The chunked-scan structure (local cumsum + cross-chunk carry) is the prescribed implementation shape, so carry propagation across chunk boundaries must be exact.",
+              "No test_code is supplied in the artifact; problem.txt is the operative contract and asks directly whether chunked_cumsum() satisfies it."
+            ],
+            "kernel_model": [
+              "Host wrapper chunked_cumsum (kernel.py:22-27) reads batch, seqlen from x.shape, allocates out = torch.zeros_like(x), and launches grid=(batch,) with CHUNK=chunk (default 64).",
+              "Only stride(0) of x and out is passed; the kernel indexes within a row as x_row + offs, i.e. it assumes the sequence axis is contiguous with stride 1 (kernel.py:9-10, 16, 18).",
+              "Loop bound is n_chunks = seqlen // CHUNK (kernel.py:11), integer floor division, and the loop c ranges over [0, n_chunks) (kernel.py:14).",
+              "Per chunk: offs = c*CHUNK + arange(0,CHUNK); load with mask offs < seqlen; local = tl.cumsum(x, axis=0); store local + carry; then carry += tl.sum(x) (kernel.py:15-19).",
+              "Because the loop stops after the last full chunk, the masks `offs < seqlen` on load/store are never actually partial: for every c < seqlen//CHUNK, all CHUNK lanes satisfy offs < seqlen. The masking is therefore dead code that gives the appearance of tail handling without providing it.",
+              "Consequence implied by the source: when seqlen % CHUNK != 0, positions [n_chunks*CHUNK, seqlen) are never stored to, and retain the zeros from torch.zeros_like rather than their prefix sums.",
+              "carry is a scalar Python/Triton float initialized to 0.0 and accumulated sequentially, so cross-chunk propagation across the chunks it does visit looks structurally correct.",
+              "Kernel assumes CHUNK is a compile-time power-of-two-friendly constexpr suitable for tl.arange; passing a non-power-of-2 chunk from the wrapper is unconstrained by any validation."
+            ],
+            "open_questions": [
+              "Does the (absent) evaluation harness actually exercise a seqlen that is not a multiple of chunk, or does it only use aligned shapes? With test_code empty, this cannot be resolved from the artifact and affects whether the suspected defect is observed by the grader.",
+              "Confirm empirically that the tail region is left at exactly 0.0 rather than partially written, and confirm the seqlen<chunk all-zeros case.",
+              "What chunk values are expected to be passed by callers, and is non-power-of-2 chunk a compile error or a silent miscomputation?",
+              "Are non-contiguous inputs ever passed to chunked_cumsum in the intended use, given only stride(0) is threaded through?"
+            ],
+            "risk_map": [
+              "Primary surface: n_chunks = seqlen // CHUNK truncates the tail. For seqlen not a multiple of chunk (e.g. 100 with chunk 64, or 65, or 63), the trailing seqlen % chunk outputs should be nonzero prefix sums but appear to be left as zeros. A probe should compare against torch.cumsum on such shapes and inspect specifically the tail slice, not just a global mean error.",
+              "Degenerate case seqlen < chunk (e.g. seqlen=1..63 with default chunk=64): n_chunks == 0, the loop body never executes, and the entire output would be all zeros. This is the most extreme form of the same bug and is worth its own probe.",
+              "A benign probe using seqlen that is a multiple of chunk (128, 256, 512) would pass and would NOT be evidence about the contract's stated non-multiple domain. Do not let one aligned-shape allclose stand in for the tail requirement.",
+              "Numerical: local tl.cumsum in fp32 plus a scalar carry can diverge slightly from torch.cumsum's own summation order; a strict allclose with tiny atol on long sequences or large-magnitude inputs may show benign drift that must not be confused with the structural tail bug. Separate 'wrong by rounding' from 'exactly zero where a nonzero value is required'.",
+              "Contiguity: only stride(0) is passed and the inner axis is assumed unit-stride. A non-contiguous / transposed / sliced input would be read incorrectly, though it is unclear whether such inputs are in scope.",
+              "chunk values that are not powers of two may fail tl.arange constraints at compile time rather than producing wrong numbers; this is a distinct failure mode from silent zeros.",
+              "Masking-as-camouflage: reviewers may see mask=offs < seqlen and conclude tail handling exists. Evidence should test behavior, not the presence of the mask."
+            ],
+            "scope_notes": [
+              "The problem statement itself widens the input domain in an unusually explicit way ('seqlen may be any positive integer... It is NOT required to be a multiple of chunk'), so non-multiple seqlen is squarely in scope rather than an adversarial out-of-contract stress case.",
+              "dtype scope is float32 2-D tensors only; fp16/bf16/3-D inputs are not part of the stated contract.",
+              "chunk is a wrapper argument with default 64; the contract phrases the requirement relative to whatever chunk is used, so the tail question applies at the default and at caller-supplied chunk values.",
+              "No test_code is present in the artifact, so there is no harness-selected shape list to narrow the domain; the contract text is the only scoping authority here.",
+              "Performance/occupancy (one program per batch row, fully sequential inner loop) is not a correctness concern for this contract."
+            ],
+            "summary": "case_17 implements a batched chunked cumulative sum along the sequence axis with a running scalar carry. The kernel launches one program per batch row and iterates only over floor(seqlen/CHUNK) full chunks, which is the key place where the contract's explicit \"seqlen need not be a multiple of chunk\" requirement is at stake."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 3192,
+        "duration_s": 36.545,
+        "input_tokens": 3214,
+        "output_tokens": 2532
+      }
+    },
+    {
+      "duration_s": 20.773119727999983,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The contract explicitly widens the domain to non-multiple `seqlen`, and the loop bound `seqlen // CHUNK` plus never-partial masks point straight at an unwritten tail. Recording the two concrete, directly testable forms of that defect.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "n_chunks = seqlen // CHUNK truncates the partial final chunk, and the mask `offs < seqlen` can never be partial for c < seqlen//CHUNK, so it provides no tail coverage \u2014 the masking is cosmetic. No epilogue handles the remainder.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.\""
+              },
+              {
+                "source": "kernel.py:22-27",
+                "summary": "Wrapper signature chunked_cumsum(x, chunk=64) takes a 2-D tensor and defaults chunk=64, so seqlen=100 with the default chunk is an ordinary in-contract call."
+              }
+            ],
+            "scope_rationale": "problem.txt is the sole contract authority here (no test.py exists) and it explicitly states seqlen may be any positive integer, is NOT required to be a multiple of chunk, and that the trailing shorter final chunk's outputs \"must still be produced\". A 2-D float32 tensor with seqlen=100 and the wrapper's own default chunk=64 is a representative input the contract admits, with no dtype, rank, or stride deviation.",
+            "statement": "For seqlen not a multiple of chunk (e.g. x of shape (4, 100) with default chunk=64, or (2, 65), or (2, 200) with chunk=64), chunked_cumsum leaves the trailing seqlen % chunk output positions at exactly 0.0 instead of the required prefix sums, because the loop runs only c in [0, seqlen // CHUNK) (kernel.py:11,14) and out is pre-filled by torch.zeros_like (kernel.py:25). Decisive metric: compare out[:, n_chunks*chunk:] against torch.cumsum(x, dim=1)[:, n_chunks*chunk:] elementwise; the claim is confirmed if those entries are identically 0.0 while the reference values are nonzero (report max abs error over the tail slice and separately over the head slice, which should match to fp32 rounding)."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Zero trip count for the only loop means no store ever issues, so the zeros_like allocation is returned unchanged; this is the extreme form of the tail truncation and fails even for the trivial seqlen=1 case.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"`seqlen` may be any positive integer\" \u2014 seqlen in [1, 63] with chunk=64 is inside the stated input domain and its outputs must still be produced."
+              },
+              {
+                "source": "kernel.py:11",
+                "summary": "n_chunks = seqlen // CHUNK is 0 whenever seqlen < CHUNK, giving the range() loop a zero trip count so no tl.store is ever reached."
+              }
+            ],
+            "scope_rationale": "problem.txt states seqlen may be ANY positive integer, which directly admits seqlen < chunk; these are non-empty 2-D float32 tensors, not zero-size or dtype/stride variants, so no default-out-of-scope category applies. chunk=64 is the wrapper's own default.",
+            "statement": "For any seqlen strictly less than chunk (e.g. x of shape (3, 40) or (1, 1) with default chunk=64), n_chunks = seqlen // CHUNK evaluates to 0, the loop body at kernel.py:14-19 never executes, and chunked_cumsum returns an all-zero tensor. Decisive metric: assert out is bitwise all-zero while torch.cumsum(x, dim=1) is not; report count of nonzero entries in out and max abs error."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5644,
+        "duration_s": 20.773,
+        "input_tokens": 17286,
+        "output_tokens": 1644
+      }
+    },
+    {
+      "duration_s": 18.73323067199999,
+      "role": "experimenter",
+      "round": 4,
+      "text": "Both claims are independent (different shape regimes, no confounding), so I'm launching both probes in the same response: c1 tests non-multiple `seqlen` tail slices with an aligned-shape control, c2 tests `seqlen < chunk`.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_17/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(0)\nres = []\nfor (b, s, ch) in [(4,100,64), (2,65,64), (2,200,64), (2,128,64)]:\n    x = torch.randn(b, s, device=\"cuda\", dtype=torch.float32)\n    ref = torch.cumsum(x, dim=1)\n    out = m.chunked_cumsum(x, chunk=ch)\n    nc = s // ch\n    cut = nc * ch\n    head_err = float((out[:, :cut] - ref[:, :cut]).abs().max()) if cut > 0 else None\n    if cut < s:\n        tail_out = out[:, cut:]\n        tail_ref = ref[:, cut:]\n        tail_err = float((tail_out - tail_ref).abs().max())\n        tail_all_zero = bool((tail_out == 0).all())\n        tail_ref_absmin = float(tail_ref.abs().min())\n        n_tail = tail_out.numel()\n    else:\n        tail_err = None; tail_all_zero = None; tail_ref_absmin = None; n_tail = 0\n    res.append(dict(batch=b, seqlen=s, chunk=ch, n_chunks=nc, cut=cut,\n                    head_max_abs_err=head_err, tail_max_abs_err=tail_err,\n                    tail_bitwise_all_zero=tail_all_zero,\n                    tail_ref_min_abs=tail_ref_absmin, n_tail_elems=n_tail,\n                    global_allclose=bool(torch.allclose(out, ref, atol=1e-4, rtol=1e-4))))\nprint(json.dumps({\"cases\": res}))\n",
+            "expected_signal": "For (4,100)/chunk=64, (2,65), (2,200)/chunk=64: head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding while tail slice [n_chunks*chunk, seqlen) is exactly 0.0 with large max abs error; aligned (2,128) control passes."
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_17/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(1)\nres = []\nfor (b, s, ch) in [(3,40,64), (1,1,64), (2,63,64)]:\n    x = torch.randn(b, s, device=\"cuda\", dtype=torch.float32)\n    ref = torch.cumsum(x, dim=1)\n    out = m.chunked_cumsum(x, chunk=ch)\n    res.append(dict(batch=b, seqlen=s, chunk=ch, n_chunks=s//ch,\n                    out_nonzero_count=int((out != 0).sum()),\n                    out_numel=int(out.numel()),\n                    out_bitwise_all_zero=bool((out == 0).all()),\n                    max_abs_err=float((out - ref).abs().max()),\n                    ref_max_abs=float(ref.abs().max()),\n                    ref_all_zero=bool((ref == 0).all())))\nprint(json.dumps({\"cases\": res}))\n",
+            "expected_signal": "For (3,40) and (1,1) with chunk=64: output bitwise all-zero, nonzero count 0, max abs err equal to max |cumsum| of reference."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6263,
+        "duration_s": 18.733,
+        "input_tokens": 23332,
+        "output_tokens": 1585
+      }
+    },
+    {
+      "duration_s": 20.316986918999874,
+      "role": "experimenter",
+      "round": 5,
+      "text": "Both probe results are in and decisive: c1's tail slices are bitwise zero with head slices matching to fp32 rounding (aligned 128 control passes), and c2's sub-chunk shapes return entirely zero output. Finalizing both; no further probes are needed since both claims are now confirmed with in-scope inputs.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "aligned_control_2x128_c64_allclose": true,
+              "aligned_control_2x128_c64_max_abs_err": 3.814697265625e-06,
+              "allclose_tol": "atol=1e-4, rtol=1e-4",
+              "case_2x200_c64_head_max_abs_err": 3.814697265625e-06,
+              "case_2x200_c64_n_chunks": 3,
+              "case_2x200_c64_n_tail_elems": 16,
+              "case_2x200_c64_tail_bitwise_all_zero": true,
+              "case_2x200_c64_tail_max_abs_err": 25.601417541503906,
+              "case_2x65_c64_head_max_abs_err": 9.5367431640625e-07,
+              "case_2x65_c64_n_tail_elems": 2,
+              "case_2x65_c64_tail_bitwise_all_zero": true,
+              "case_2x65_c64_tail_max_abs_err": 16.523725509643555,
+              "case_4x100_c64_head_max_abs_err": 1.9073486328125e-06,
+              "case_4x100_c64_n_chunks": 1,
+              "case_4x100_c64_n_tail_elems": 144,
+              "case_4x100_c64_tail_bitwise_all_zero": true,
+              "case_4x100_c64_tail_max_abs_err": 10.053009033203125,
+              "case_4x100_c64_tail_ref_min_abs": 0.06468510627746582,
+              "device": "cuda",
+              "dtype": "float32"
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "Tail truncation confirmed on GPU. For (4,100)/chunk=64, (2,65)/chunk=64 and (2,200)/chunk=64 the head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding (max abs err 1e-6..4e-6) while the tail slice [n_chunks*chunk, seqlen) is bitwise all-zero, giving tail max abs errors of 10.05, 16.52 and 25.60 against nonzero reference values (tail |ref| min 0.065, 1.59, 1.21 respectively). The aligned control (2,128)/chunk=64 passes allclose(atol=rtol=1e-4), isolating the defect to the partial final chunk rather than to numeric drift or carry propagation.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "all_cases_out_bitwise_all_zero": true,
+              "all_cases_ref_all_zero": false,
+              "case_1x1_c64_max_abs_err": 0.633983850479126,
+              "case_1x1_c64_out_nonzero_count": 0,
+              "case_1x1_c64_out_numel": 1,
+              "case_1x1_c64_ref_max_abs": 0.633983850479126,
+              "case_2x63_c64_max_abs_err": 8.95738410949707,
+              "case_2x63_c64_out_nonzero_count": 0,
+              "case_2x63_c64_out_numel": 126,
+              "case_2x63_c64_ref_max_abs": 8.95738410949707,
+              "case_3x40_c64_max_abs_err": 10.293733596801758,
+              "case_3x40_c64_n_chunks": 0,
+              "case_3x40_c64_out_nonzero_count": 0,
+              "case_3x40_c64_out_numel": 120,
+              "case_3x40_c64_ref_max_abs": 10.293733596801758,
+              "device": "cuda",
+              "dtype": "float32"
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "Zero-trip-count case confirmed. For (3,40), (1,1) and (2,63) with default chunk=64, n_chunks = seqlen//CHUNK == 0 and the returned tensor is bitwise all-zero (nonzero count 0 of 120, 1 and 126 elements). Max abs error equals the reference max |cumsum| exactly (10.2937, 0.6340, 8.9574), i.e. the output carries no information at all; the reference is not all-zero in any case, so this is not a reference-undefined artifact.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6263,
+        "duration_s": 20.317,
+        "input_tokens": 34240,
+        "output_tokens": 1709
+      }
+    },
+    {
+      "duration_s": 8.754415102000166,
+      "role": "skeptic",
+      "round": 6,
+      "text": "Both claims are confirmed with in-scope evidence covering the tail-truncation defect in both its partial-chunk and zero-trip-count forms. Nothing in the new evidence points to an additional distinct defect worth holding up the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Review turn: both recorded claims (c1 partial final chunk left at 0.0; c2 seqlen<chunk returning an all-zero tensor) are confirmed by GPU probes with in-scope inputs drawn directly from problem.txt's stated domain, and the aligned (2,128) control passing isolates the defect to the missing tail epilogue rather than numeric drift or carry propagation. Remaining surfaces noted by the describer (non-contiguous inputs, non-power-of-2 chunk) are not required by the stated contract and would not change the verdict, which is already decided by the two confirmed in-scope failures. No additional high-quality in-scope claim to add.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5644,
+        "duration_s": 8.754,
+        "input_tokens": 54244,
+        "output_tokens": 386
+      }
+    },
+    {
+      "duration_s": 15.159367029000123,
+      "role": "judge",
+      "round": 7,
+      "text": "Both claims are confirmed with GPU evidence, both are in-scope under problem.txt (the operative contract, since no test.py exists), and the Skeptic has reviewed the latest evidence with no new claims. Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "problem.txt is the operative contract (the artifact contains only kernel.py, meta.json, problem.txt; no test.py or get_inputs narrows the domain) and it explicitly requires: \"`seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.\" The kernel violates exactly that clause. n_chunks = seqlen // CHUNK (kernel.py:11) truncates the partial final chunk, and the `offs < seqlen` masks are never partial for c < seqlen//CHUNK, so they provide no tail coverage; out is pre-filled by torch.zeros_like (kernel.py:25) and the tail is never stored.\n\nc1 (confirmed, in_scope, t8): for (4,100), (2,65) and (2,200) with the wrapper's own default chunk=64, the head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding (1e-6..4e-6) while the tail slice is bitwise all-zero, giving tail max abs errors of 10.05, 16.52 and 25.60 against nonzero reference values (tail |ref| min 0.065, 1.59, 1.21). The aligned (2,128) control passes allclose(1e-4), which isolates the defect to the missing tail epilogue and rules out both numeric drift and a carry-propagation explanation. This is not a tolerable reduction-order/rounding difference \u2014 the required values are simply absent.\n\nc2 (confirmed, in_scope, t9): for seqlen < chunk \u2014 (3,40), (1,1), (2,63) at chunk=64 \u2014 n_chunks == 0, the loop body never runs, and the returned tensor is bitwise all-zero (0 nonzero of 120, 1 and 126 elements) while the reference is not all-zero; max abs error equals the reference max |cumsum| exactly. These are ordinary non-empty 2-D float32 inputs squarely inside \"any positive integer\", not zero-size, dtype, rank or stride variants, so no default-out-of-scope category applies.\n\nNeither failure is a case the contract leaves unspecified and the reference is well-defined and finite throughout. Generalization surfaces the Describer flagged but nobody claimed (non-contiguous inputs via the stride(0)-only threading, non-power-of-2 chunk) are set aside as unlitigated notes; they are immaterial here because the verdict is already decided by two confirmed in-scope contract violations. Skeptic reviewed the latest evidence and recorded no new claims.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5846,
+        "duration_s": 15.159,
+        "input_tokens": 55740,
+        "output_tokens": 1105
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-08T15:03:59Z",
+    "decision": "no_new_claims",
+    "reason": "Review turn: both recorded claims (c1 partial final chunk left at 0.0; c2 seqlen<chunk returning an all-zero tensor) are confirmed by GPU probes with in-scope inputs drawn directly from problem.txt's stated domain, and the aligned (2,128) control passing isolates the defect to the missing tail epilogue rather than numeric drift or carry propagation. Remaining surfaces noted by the describer (non-contiguous inputs, non-power-of-2 chunk) are not required by the stated contract and would not change the verdict, which is already decided by the two confirmed in-scope failures. No additional high-quality in-scope claim to add.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 11,
+    "tool_event_id": "t12",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_17"
+      },
+      "created_at": "2026-09-08T15:02:02Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_17",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _chunked_scan_kernel(X, OUT, stride_xb, stride_ob, seqlen, CHUNK: tl.constexpr):\n    b = tl.program_id(0)\n    x_row = X + b * stride_xb\n    o_row = OUT + b * stride_ob\n    n_chunks = seqlen // CHUNK\n\n    carry = 0.0\n    for c in range(n_chunks):\n        offs = c * CHUNK + tl.arange(0, CHUNK)\n        x = tl.load(x_row + offs, mask=offs < seqlen, other=0.0)\n        local = tl.cumsum(x, axis=0)\n        tl.store(o_row + offs, local + carry, mask=offs < seqlen)\n        carry += tl.sum(x, axis=0)\n\n\ndef chunked_cumsum(x: torch.Tensor, chunk: int = 64) -> torch.Tensor:\n    \"\"\"Cumulative sum along the sequence axis, carried across fixed-size chunks.\"\"\"\n    batch, seqlen = x.shape\n    out = torch.zeros_like(x)\n    _chunked_scan_kernel[(batch,)](x, out, x.stride(0), out.stride(0), seqlen, CHUNK=chunk)\n    return out\n",
+        "passed": null,
+        "problem_text": "Operation: cumulative sum along the sequence axis of a 2-D float32 tensor,\ncomputed chunk by chunk with a running carry (the chunked-scan structure used by\nstate-space and linear-attention kernels).\n\n    y[b, t] = sum over s <= t of x[b, s]\n\nInput domain: `seqlen` may be any positive integer. It is NOT required to be a\nmultiple of `chunk`; when it is not, the trailing positions form a shorter final\nchunk whose outputs must still be produced.\n\nDoes chunked_cumsum() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_17",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_17"
+      },
+      "created_at": "2026-09-08T15:02:02Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: cumulative sum along the sequence axis of a 2-D float32 tensor,\ncomputed chunk by chunk with a running carry (the chunked-scan structure used by\nstate-space and linear-attention kernels).\n\n    y[b, t] = sum over s <= t of x[b, s]\n\nInput domain: `seqlen` may be any positive integer. It is NOT required to be a\nmultiple of `chunk`; when it is not, the trailing positions form a shorter final\nchunk whose outputs must still be produced.\n\nDoes chunked_cumsum() satisfy this contract?\n",
+        "entry": "case_17",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_17"
+      },
+      "created_at": "2026-09-08T15:02:02Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_17",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 891
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 492
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_17",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T15:02:02Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_17\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_17",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Compute y[b,t] = sum_{s<=t} x[b,s] for a 2-D float32 tensor, i.e. an exact per-row prefix sum along dim 1 (equivalent to torch.cumsum(x, dim=1)).",
+          "The problem text explicitly states seqlen may be any positive integer and is NOT required to be a multiple of chunk.",
+          "When seqlen % chunk != 0, the trailing positions form a shorter final chunk whose outputs must still be produced (i.e. every one of the batch*seqlen output entries must be written with the correct prefix sum).",
+          "The chunked-scan structure (local cumsum + cross-chunk carry) is the prescribed implementation shape, so carry propagation across chunk boundaries must be exact.",
+          "No test_code is supplied in the artifact; problem.txt is the operative contract and asks directly whether chunked_cumsum() satisfies it."
+        ],
+        "kernel_model": [
+          "Host wrapper chunked_cumsum (kernel.py:22-27) reads batch, seqlen from x.shape, allocates out = torch.zeros_like(x), and launches grid=(batch,) with CHUNK=chunk (default 64).",
+          "Only stride(0) of x and out is passed; the kernel indexes within a row as x_row + offs, i.e. it assumes the sequence axis is contiguous with stride 1 (kernel.py:9-10, 16, 18).",
+          "Loop bound is n_chunks = seqlen // CHUNK (kernel.py:11), integer floor division, and the loop c ranges over [0, n_chunks) (kernel.py:14).",
+          "Per chunk: offs = c*CHUNK + arange(0,CHUNK); load with mask offs < seqlen; local = tl.cumsum(x, axis=0); store local + carry; then carry += tl.sum(x) (kernel.py:15-19).",
+          "Because the loop stops after the last full chunk, the masks `offs < seqlen` on load/store are never actually partial: for every c < seqlen//CHUNK, all CHUNK lanes satisfy offs < seqlen. The masking is therefore dead code that gives the appearance of tail handling without providing it.",
+          "Consequence implied by the source: when seqlen % CHUNK != 0, positions [n_chunks*CHUNK, seqlen) are never stored to, and retain the zeros from torch.zeros_like rather than their prefix sums.",
+          "carry is a scalar Python/Triton float initialized to 0.0 and accumulated sequentially, so cross-chunk propagation across the chunks it does visit looks structurally correct.",
+          "Kernel assumes CHUNK is a compile-time power-of-two-friendly constexpr suitable for tl.arange; passing a non-power-of-2 chunk from the wrapper is unconstrained by any validation."
+        ],
+        "open_questions": [
+          "Does the (absent) evaluation harness actually exercise a seqlen that is not a multiple of chunk, or does it only use aligned shapes? With test_code empty, this cannot be resolved from the artifact and affects whether the suspected defect is observed by the grader.",
+          "Confirm empirically that the tail region is left at exactly 0.0 rather than partially written, and confirm the seqlen<chunk all-zeros case.",
+          "What chunk values are expected to be passed by callers, and is non-power-of-2 chunk a compile error or a silent miscomputation?",
+          "Are non-contiguous inputs ever passed to chunked_cumsum in the intended use, given only stride(0) is threaded through?"
+        ],
+        "risk_map": [
+          "Primary surface: n_chunks = seqlen // CHUNK truncates the tail. For seqlen not a multiple of chunk (e.g. 100 with chunk 64, or 65, or 63), the trailing seqlen % chunk outputs should be nonzero prefix sums but appear to be left as zeros. A probe should compare against torch.cumsum on such shapes and inspect specifically the tail slice, not just a global mean error.",
+          "Degenerate case seqlen < chunk (e.g. seqlen=1..63 with default chunk=64): n_chunks == 0, the loop body never executes, and the entire output would be all zeros. This is the most extreme form of the same bug and is worth its own probe.",
+          "A benign probe using seqlen that is a multiple of chunk (128, 256, 512) would pass and would NOT be evidence about the contract's stated non-multiple domain. Do not let one aligned-shape allclose stand in for the tail requirement.",
+          "Numerical: local tl.cumsum in fp32 plus a scalar carry can diverge slightly from torch.cumsum's own summation order; a strict allclose with tiny atol on long sequences or large-magnitude inputs may show benign drift that must not be confused with the structural tail bug. Separate 'wrong by rounding' from 'exactly zero where a nonzero value is required'.",
+          "Contiguity: only stride(0) is passed and the inner axis is assumed unit-stride. A non-contiguous / transposed / sliced input would be read incorrectly, though it is unclear whether such inputs are in scope.",
+          "chunk values that are not powers of two may fail tl.arange constraints at compile time rather than producing wrong numbers; this is a distinct failure mode from silent zeros.",
+          "Masking-as-camouflage: reviewers may see mask=offs < seqlen and conclude tail handling exists. Evidence should test behavior, not the presence of the mask."
+        ],
+        "scope_notes": [
+          "The problem statement itself widens the input domain in an unusually explicit way ('seqlen may be any positive integer... It is NOT required to be a multiple of chunk'), so non-multiple seqlen is squarely in scope rather than an adversarial out-of-contract stress case.",
+          "dtype scope is float32 2-D tensors only; fp16/bf16/3-D inputs are not part of the stated contract.",
+          "chunk is a wrapper argument with default 64; the contract phrases the requirement relative to whatever chunk is used, so the tail question applies at the default and at caller-supplied chunk values.",
+          "No test_code is present in the artifact, so there is no harness-selected shape list to narrow the domain; the contract text is the only scoping authority here.",
+          "Performance/occupancy (one program per batch row, fully sequential inner loop) is not a correctness concern for this contract."
+        ],
+        "summary": "case_17 implements a batched chunked cumulative sum along the sequence axis with a running scalar carry. The kernel launches one program per batch row and iterates only over floor(seqlen/CHUNK) full chunks, which is the key place where the contract's explicit \"seqlen need not be a multiple of chunk\" requirement is at stake."
+      },
+      "created_at": "2026-09-08T15:02:39Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Compute y[b,t] = sum_{s<=t} x[b,s] for a 2-D float32 tensor, i.e. an exact per-row prefix sum along dim 1 (equivalent to torch.cumsum(x, dim=1)).",
+            "The problem text explicitly states seqlen may be any positive integer and is NOT required to be a multiple of chunk.",
+            "When seqlen % chunk != 0, the trailing positions form a shorter final chunk whose outputs must still be produced (i.e. every one of the batch*seqlen output entries must be written with the correct prefix sum).",
+            "The chunked-scan structure (local cumsum + cross-chunk carry) is the prescribed implementation shape, so carry propagation across chunk boundaries must be exact.",
+            "No test_code is supplied in the artifact; problem.txt is the operative contract and asks directly whether chunked_cumsum() satisfies it."
+          ],
+          "kernel_model": [
+            "Host wrapper chunked_cumsum (kernel.py:22-27) reads batch, seqlen from x.shape, allocates out = torch.zeros_like(x), and launches grid=(batch,) with CHUNK=chunk (default 64).",
+            "Only stride(0) of x and out is passed; the kernel indexes within a row as x_row + offs, i.e. it assumes the sequence axis is contiguous with stride 1 (kernel.py:9-10, 16, 18).",
+            "Loop bound is n_chunks = seqlen // CHUNK (kernel.py:11), integer floor division, and the loop c ranges over [0, n_chunks) (kernel.py:14).",
+            "Per chunk: offs = c*CHUNK + arange(0,CHUNK); load with mask offs < seqlen; local = tl.cumsum(x, axis=0); store local + carry; then carry += tl.sum(x) (kernel.py:15-19).",
+            "Because the loop stops after the last full chunk, the masks `offs < seqlen` on load/store are never actually partial: for every c < seqlen//CHUNK, all CHUNK lanes satisfy offs < seqlen. The masking is therefore dead code that gives the appearance of tail handling without providing it.",
+            "Consequence implied by the source: when seqlen % CHUNK != 0, positions [n_chunks*CHUNK, seqlen) are never stored to, and retain the zeros from torch.zeros_like rather than their prefix sums.",
+            "carry is a scalar Python/Triton float initialized to 0.0 and accumulated sequentially, so cross-chunk propagation across the chunks it does visit looks structurally correct.",
+            "Kernel assumes CHUNK is a compile-time power-of-two-friendly constexpr suitable for tl.arange; passing a non-power-of-2 chunk from the wrapper is unconstrained by any validation."
+          ],
+          "open_questions": [
+            "Does the (absent) evaluation harness actually exercise a seqlen that is not a multiple of chunk, or does it only use aligned shapes? With test_code empty, this cannot be resolved from the artifact and affects whether the suspected defect is observed by the grader.",
+            "Confirm empirically that the tail region is left at exactly 0.0 rather than partially written, and confirm the seqlen<chunk all-zeros case.",
+            "What chunk values are expected to be passed by callers, and is non-power-of-2 chunk a compile error or a silent miscomputation?",
+            "Are non-contiguous inputs ever passed to chunked_cumsum in the intended use, given only stride(0) is threaded through?"
+          ],
+          "risk_map": [
+            "Primary surface: n_chunks = seqlen // CHUNK truncates the tail. For seqlen not a multiple of chunk (e.g. 100 with chunk 64, or 65, or 63), the trailing seqlen % chunk outputs should be nonzero prefix sums but appear to be left as zeros. A probe should compare against torch.cumsum on such shapes and inspect specifically the tail slice, not just a global mean error.",
+            "Degenerate case seqlen < chunk (e.g. seqlen=1..63 with default chunk=64): n_chunks == 0, the loop body never executes, and the entire output would be all zeros. This is the most extreme form of the same bug and is worth its own probe.",
+            "A benign probe using seqlen that is a multiple of chunk (128, 256, 512) would pass and would NOT be evidence about the contract's stated non-multiple domain. Do not let one aligned-shape allclose stand in for the tail requirement.",
+            "Numerical: local tl.cumsum in fp32 plus a scalar carry can diverge slightly from torch.cumsum's own summation order; a strict allclose with tiny atol on long sequences or large-magnitude inputs may show benign drift that must not be confused with the structural tail bug. Separate 'wrong by rounding' from 'exactly zero where a nonzero value is required'.",
+            "Contiguity: only stride(0) is passed and the inner axis is assumed unit-stride. A non-contiguous / transposed / sliced input would be read incorrectly, though it is unclear whether such inputs are in scope.",
+            "chunk values that are not powers of two may fail tl.arange constraints at compile time rather than producing wrong numbers; this is a distinct failure mode from silent zeros.",
+            "Masking-as-camouflage: reviewers may see mask=offs < seqlen and conclude tail handling exists. Evidence should test behavior, not the presence of the mask."
+          ],
+          "scope_notes": [
+            "The problem statement itself widens the input domain in an unusually explicit way ('seqlen may be any positive integer... It is NOT required to be a multiple of chunk'), so non-multiple seqlen is squarely in scope rather than an adversarial out-of-contract stress case.",
+            "dtype scope is float32 2-D tensors only; fp16/bf16/3-D inputs are not part of the stated contract.",
+            "chunk is a wrapper argument with default 64; the contract phrases the requirement relative to whatever chunk is used, so the tail question applies at the default and at caller-supplied chunk values.",
+            "No test_code is present in the artifact, so there is no harness-selected shape list to narrow the domain; the contract text is the only scoping authority here.",
+            "Performance/occupancy (one program per batch row, fully sequential inner loop) is not a correctness concern for this contract."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Compute y[b,t] = sum_{s<=t} x[b,s] for a 2-D float32 tensor, i.e. an exact per-row prefix sum along dim 1 (equivalent to torch.cumsum(x, dim=1)).",
+            "The problem text explicitly states seqlen may be any positive integer and is NOT required to be a multiple of chunk.",
+            "When seqlen % chunk != 0, the trailing positions form a shorter final chunk whose outputs must still be produced (i.e. every one of the batch*seqlen output entries must be written with the correct prefix sum).",
+            "The chunked-scan structure (local cumsum + cross-chunk carry) is the prescribed implementation shape, so carry propagation across chunk boundaries must be exact.",
+            "No test_code is supplied in the artifact; problem.txt is the operative contract and asks directly whether chunked_cumsum() satisfies it."
+          ],
+          "created_at": "2026-09-08T15:02:39Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Host wrapper chunked_cumsum (kernel.py:22-27) reads batch, seqlen from x.shape, allocates out = torch.zeros_like(x), and launches grid=(batch,) with CHUNK=chunk (default 64).",
+            "Only stride(0) of x and out is passed; the kernel indexes within a row as x_row + offs, i.e. it assumes the sequence axis is contiguous with stride 1 (kernel.py:9-10, 16, 18).",
+            "Loop bound is n_chunks = seqlen // CHUNK (kernel.py:11), integer floor division, and the loop c ranges over [0, n_chunks) (kernel.py:14).",
+            "Per chunk: offs = c*CHUNK + arange(0,CHUNK); load with mask offs < seqlen; local = tl.cumsum(x, axis=0); store local + carry; then carry += tl.sum(x) (kernel.py:15-19).",
+            "Because the loop stops after the last full chunk, the masks `offs < seqlen` on load/store are never actually partial: for every c < seqlen//CHUNK, all CHUNK lanes satisfy offs < seqlen. The masking is therefore dead code that gives the appearance of tail handling without providing it.",
+            "Consequence implied by the source: when seqlen % CHUNK != 0, positions [n_chunks*CHUNK, seqlen) are never stored to, and retain the zeros from torch.zeros_like rather than their prefix sums.",
+            "carry is a scalar Python/Triton float initialized to 0.0 and accumulated sequentially, so cross-chunk propagation across the chunks it does visit looks structurally correct.",
+            "Kernel assumes CHUNK is a compile-time power-of-two-friendly constexpr suitable for tl.arange; passing a non-power-of-2 chunk from the wrapper is unconstrained by any validation."
+          ],
+          "open_questions": [
+            "Does the (absent) evaluation harness actually exercise a seqlen that is not a multiple of chunk, or does it only use aligned shapes? With test_code empty, this cannot be resolved from the artifact and affects whether the suspected defect is observed by the grader.",
+            "Confirm empirically that the tail region is left at exactly 0.0 rather than partially written, and confirm the seqlen<chunk all-zeros case.",
+            "What chunk values are expected to be passed by callers, and is non-power-of-2 chunk a compile error or a silent miscomputation?",
+            "Are non-contiguous inputs ever passed to chunked_cumsum in the intended use, given only stride(0) is threaded through?"
+          ],
+          "risk_map": [
+            "Primary surface: n_chunks = seqlen // CHUNK truncates the tail. For seqlen not a multiple of chunk (e.g. 100 with chunk 64, or 65, or 63), the trailing seqlen % chunk outputs should be nonzero prefix sums but appear to be left as zeros. A probe should compare against torch.cumsum on such shapes and inspect specifically the tail slice, not just a global mean error.",
+            "Degenerate case seqlen < chunk (e.g. seqlen=1..63 with default chunk=64): n_chunks == 0, the loop body never executes, and the entire output would be all zeros. This is the most extreme form of the same bug and is worth its own probe.",
+            "A benign probe using seqlen that is a multiple of chunk (128, 256, 512) would pass and would NOT be evidence about the contract's stated non-multiple domain. Do not let one aligned-shape allclose stand in for the tail requirement.",
+            "Numerical: local tl.cumsum in fp32 plus a scalar carry can diverge slightly from torch.cumsum's own summation order; a strict allclose with tiny atol on long sequences or large-magnitude inputs may show benign drift that must not be confused with the structural tail bug. Separate 'wrong by rounding' from 'exactly zero where a nonzero value is required'.",
+            "Contiguity: only stride(0) is passed and the inner axis is assumed unit-stride. A non-contiguous / transposed / sliced input would be read incorrectly, though it is unclear whether such inputs are in scope.",
+            "chunk values that are not powers of two may fail tl.arange constraints at compile time rather than producing wrong numbers; this is a distinct failure mode from silent zeros.",
+            "Masking-as-camouflage: reviewers may see mask=offs < seqlen and conclude tail handling exists. Evidence should test behavior, not the presence of the mask."
+          ],
+          "scope_notes": [
+            "The problem statement itself widens the input domain in an unusually explicit way ('seqlen may be any positive integer... It is NOT required to be a multiple of chunk'), so non-multiple seqlen is squarely in scope rather than an adversarial out-of-contract stress case.",
+            "dtype scope is float32 2-D tensors only; fp16/bf16/3-D inputs are not part of the stated contract.",
+            "chunk is a wrapper argument with default 64; the contract phrases the requirement relative to whatever chunk is used, so the tail question applies at the default and at caller-supplied chunk values.",
+            "No test_code is present in the artifact, so there is no harness-selected shape list to narrow the domain; the contract text is the only scoping authority here.",
+            "Performance/occupancy (one program per batch row, fully sequential inner loop) is not a correctness concern for this contract."
+          ],
+          "summary": "case_17 implements a batched chunked cumulative sum along the sequence axis with a running scalar carry. The kernel launches one program per batch row and iterates only over floor(seqlen/CHUNK) full chunks, which is the key place where the contract's explicit \"seqlen need not be a multiple of chunk\" requirement is at stake.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "n_chunks = seqlen // CHUNK truncates the partial final chunk, and the mask `offs < seqlen` can never be partial for c < seqlen//CHUNK, so it provides no tail coverage \u2014 the masking is cosmetic. No epilogue handles the remainder.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.\""
+          },
+          {
+            "source": "kernel.py:22-27",
+            "summary": "Wrapper signature chunked_cumsum(x, chunk=64) takes a 2-D tensor and defaults chunk=64, so seqlen=100 with the default chunk is an ordinary in-contract call."
+          }
+        ],
+        "scope_rationale": "problem.txt is the sole contract authority here (no test.py exists) and it explicitly states seqlen may be any positive integer, is NOT required to be a multiple of chunk, and that the trailing shorter final chunk's outputs \"must still be produced\". A 2-D float32 tensor with seqlen=100 and the wrapper's own default chunk=64 is a representative input the contract admits, with no dtype, rank, or stride deviation.",
+        "statement": "For seqlen not a multiple of chunk (e.g. x of shape (4, 100) with default chunk=64, or (2, 65), or (2, 200) with chunk=64), chunked_cumsum leaves the trailing seqlen % chunk output positions at exactly 0.0 instead of the required prefix sums, because the loop runs only c in [0, seqlen // CHUNK) (kernel.py:11,14) and out is pre-filled by torch.zeros_like (kernel.py:25). Decisive metric: compare out[:, n_chunks*chunk:] against torch.cumsum(x, dim=1)[:, n_chunks*chunk:] elementwise; the claim is confirmed if those entries are identically 0.0 while the reference values are nonzero (report max abs error over the tail slice and separately over the head slice, which should match to fp32 rounding)."
+      },
+      "created_at": "2026-09-08T15:02:59Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-08T15:02:59Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "n_chunks = seqlen // CHUNK truncates the partial final chunk, and the mask `offs < seqlen` can never be partial for c < seqlen//CHUNK, so it provides no tail coverage \u2014 the masking is cosmetic. No epilogue handles the remainder.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.\""
+          },
+          {
+            "source": "kernel.py:22-27",
+            "summary": "Wrapper signature chunked_cumsum(x, chunk=64) takes a 2-D tensor and defaults chunk=64, so seqlen=100 with the default chunk is an ordinary in-contract call."
+          }
+        ],
+        "scope_rationale": "problem.txt is the sole contract authority here (no test.py exists) and it explicitly states seqlen may be any positive integer, is NOT required to be a multiple of chunk, and that the trailing shorter final chunk's outputs \"must still be produced\". A 2-D float32 tensor with seqlen=100 and the wrapper's own default chunk=64 is a representative input the contract admits, with no dtype, rank, or stride deviation.",
+        "statement": "For seqlen not a multiple of chunk (e.g. x of shape (4, 100) with default chunk=64, or (2, 65), or (2, 200) with chunk=64), chunked_cumsum leaves the trailing seqlen % chunk output positions at exactly 0.0 instead of the required prefix sums, because the loop runs only c in [0, seqlen // CHUNK) (kernel.py:11,14) and out is pre-filled by torch.zeros_like (kernel.py:25). Decisive metric: compare out[:, n_chunks*chunk:] against torch.cumsum(x, dim=1)[:, n_chunks*chunk:] elementwise; the claim is confirmed if those entries are identically 0.0 while the reference values are nonzero (report max abs error over the tail slice and separately over the head slice, which should match to fp32 rounding).",
+        "status": "open",
+        "updated_at": "2026-09-08T15:02:59Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Zero trip count for the only loop means no store ever issues, so the zeros_like allocation is returned unchanged; this is the extreme form of the tail truncation and fails even for the trivial seqlen=1 case.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"`seqlen` may be any positive integer\" \u2014 seqlen in [1, 63] with chunk=64 is inside the stated input domain and its outputs must still be produced."
+          },
+          {
+            "source": "kernel.py:11",
+            "summary": "n_chunks = seqlen // CHUNK is 0 whenever seqlen < CHUNK, giving the range() loop a zero trip count so no tl.store is ever reached."
+          }
+        ],
+        "scope_rationale": "problem.txt states seqlen may be ANY positive integer, which directly admits seqlen < chunk; these are non-empty 2-D float32 tensors, not zero-size or dtype/stride variants, so no default-out-of-scope category applies. chunk=64 is the wrapper's own default.",
+        "statement": "For any seqlen strictly less than chunk (e.g. x of shape (3, 40) or (1, 1) with default chunk=64), n_chunks = seqlen // CHUNK evaluates to 0, the loop body at kernel.py:14-19 never executes, and chunked_cumsum returns an all-zero tensor. Decisive metric: assert out is bitwise all-zero while torch.cumsum(x, dim=1) is not; report count of nonzero entries in out and max abs error."
+      },
+      "created_at": "2026-09-08T15:02:59Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-08T15:02:59Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "Zero trip count for the only loop means no store ever issues, so the zeros_like allocation is returned unchanged; this is the extreme form of the tail truncation and fails even for the trivial seqlen=1 case.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"`seqlen` may be any positive integer\" \u2014 seqlen in [1, 63] with chunk=64 is inside the stated input domain and its outputs must still be produced."
+          },
+          {
+            "source": "kernel.py:11",
+            "summary": "n_chunks = seqlen // CHUNK is 0 whenever seqlen < CHUNK, giving the range() loop a zero trip count so no tl.store is ever reached."
+          }
+        ],
+        "scope_rationale": "problem.txt states seqlen may be ANY positive integer, which directly admits seqlen < chunk; these are non-empty 2-D float32 tensors, not zero-size or dtype/stride variants, so no default-out-of-scope category applies. chunk=64 is the wrapper's own default.",
+        "statement": "For any seqlen strictly less than chunk (e.g. x of shape (3, 40) or (1, 1) with default chunk=64), n_chunks = seqlen // CHUNK evaluates to 0, the loop body at kernel.py:14-19 never executes, and chunked_cumsum returns an all-zero tensor. Decisive metric: assert out is bitwise all-zero while torch.cumsum(x, dim=1) is not; report count of nonzero entries in out and max abs error.",
+        "status": "open",
+        "updated_at": "2026-09-08T15:02:59Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_17/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(0)\nres = []\nfor (b, s, ch) in [(4,100,64), (2,65,64), (2,200,64), (2,128,64)]:\n    x = torch.randn(b, s, device=\"cuda\", dtype=torch.float32)\n    ref = torch.cumsum(x, dim=1)\n    out = m.chunked_cumsum(x, chunk=ch)\n    nc = s // ch\n    cut = nc * ch\n    head_err = float((out[:, :cut] - ref[:, :cut]).abs().max()) if cut > 0 else None\n    if cut < s:\n        tail_out = out[:, cut:]\n        tail_ref = ref[:, cut:]\n        tail_err = float((tail_out - tail_ref).abs().max())\n        tail_all_zero = bool((tail_out == 0).all())\n        tail_ref_absmin = float(tail_ref.abs().min())\n        n_tail = tail_out.numel()\n    else:\n        tail_err = None; tail_all_zero = None; tail_ref_absmin = None; n_tail = 0\n    res.append(dict(batch=b, seqlen=s, chunk=ch, n_chunks=nc, cut=cut,\n                    head_max_abs_err=head_err, tail_max_abs_err=tail_err,\n                    tail_bitwise_all_zero=tail_all_zero,\n                    tail_ref_min_abs=tail_ref_absmin, n_tail_elems=n_tail,\n                    global_allclose=bool(torch.allclose(out, ref, atol=1e-4, rtol=1e-4))))\nprint(json.dumps({\"cases\": res}))\n",
+        "expected_signal": "For (4,100)/chunk=64, (2,65), (2,200)/chunk=64: head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding while tail slice [n_chunks*chunk, seqlen) is exactly 0.0 with large max abs error; aligned (2,128) control passes."
+      },
+      "created_at": "2026-09-08T15:03:24Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "6caed58140d51cf38d3cdb35ab80b84813e05b0e5eb6be1527672bed05bf5b9a"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "905796fe63365e056ff380a1576469312dda9caf5f6c30e0524a99016a5ded4e"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "82416f120d30f26a472a60e4eba1452aed575000ec9ad0d23c2d05ee496b3495"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For seqlen not a multiple of chunk (e.g. x of shape (4, 100) with default chunk=64, or (2, 65), or (2, 200) with chunk=64), chunked_cumsum leaves the trailing seqlen % chunk output positions at exactly 0.0 instead of the required prefix sums, because the loop runs only c in [0, seqlen // CHUNK) (kernel.py:11,14) and out is pre-filled by torch.zeros_like (kernel.py:25). Decisive metric: compare out[:, n_chunks*chunk:] against torch.cumsum(x, dim=1)[:, n_chunks*chunk:] elementwise; the claim is confirmed if those entries are identically 0.0 while the reference values are nonzero (report max abs error over the tail slice and separately over the head slice, which should match to fp32 rounding).",
+        "cwd": "/root/cases/case_17",
+        "duration_s": 5.691739,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6caed58140d51cf38d3cdb35ab80b84813e05b0e5eb6be1527672bed05bf5b9a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "905796fe63365e056ff380a1576469312dda9caf5f6c30e0524a99016a5ded4e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "82416f120d30f26a472a60e4eba1452aed575000ec9ad0d23c2d05ee496b3495"
+              }
+            ],
+            "duration_s": 5.691739,
+            "exit_code": 0,
+            "expected_signal": "For (4,100)/chunk=64, (2,65), (2,200)/chunk=64: head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding while tail slice [n_chunks*chunk, seqlen) is exactly 0.0 with large max abs error; aligned (2,128) control passes.",
+            "json_parse_error": null,
+            "json_result": {
+              "cases": [
+                {
+                  "batch": 4,
+                  "chunk": 64,
+                  "cut": 64,
+                  "global_allclose": false,
+                  "head_max_abs_err": 1.9073486328125e-06,
+                  "n_chunks": 1,
+                  "n_tail_elems": 144,
+                  "seqlen": 100,
+                  "tail_bitwise_all_zero": true,
+                  "tail_max_abs_err": 10.053009033203125,
+                  "tail_ref_min_abs": 0.06468510627746582
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "cut": 64,
+                  "global_allclose": false,
+                  "head_max_abs_err": 9.5367431640625e-07,
+                  "n_chunks": 1,
+                  "n_tail_elems": 2,
+                  "seqlen": 65,
+                  "tail_bitwise_all_zero": true,
+                  "tail_max_abs_err": 16.523725509643555,
+                  "tail_ref_min_abs": 1.586843490600586
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "cut": 192,
+                  "global_allclose": false,
+                  "head_max_abs_err": 3.814697265625e-06,
+                  "n_chunks": 3,
+                  "n_tail_elems": 16,
+                  "seqlen": 200,
+                  "tail_bitwise_all_zero": true,
+                  "tail_max_abs_err": 25.601417541503906,
+                  "tail_ref_min_abs": 1.2080295085906982
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "cut": 128,
+                  "global_allclose": true,
+                  "head_max_abs_err": 3.814697265625e-06,
+                  "n_chunks": 2,
+                  "n_tail_elems": 0,
+                  "seqlen": 128,
+                  "tail_bitwise_all_zero": null,
+                  "tail_max_abs_err": null,
+                  "tail_ref_min_abs": null
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"cases\": [{\"batch\": 4, \"seqlen\": 100, \"chunk\": 64, \"n_chunks\": 1, \"cut\": 64, \"head_max_abs_err\": 1.9073486328125e-06, \"tail_max_abs_err\": 10.053009033203125, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 0.06468510627746582, \"n_tail_elems\": 144, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 65, \"chunk\": 64, \"n_chunks\": 1, \"cut\": 64, \"head_max_abs_err\": 9.5367431640625e-07, \"tail_max_abs_err\": 16.523725509643555, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 1.586843490600586, \"n_tail_elems\": 2, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 200, \"chunk\": 64, \"n_chunks\": 3, \"cut\": 192, \"head_max_abs_err\": 3.814697265625e-06, \"tail_max_abs_err\": 25.601417541503906, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 1.2080295085906982, \"n_tail_elems\": 16, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 128, \"chunk\": 64, \"n_chunks\": 2, \"cut\": 128, \"head_max_abs_err\": 3.814697265625e-06, \"tail_max_abs_err\": null, \"tail_bitwise_all_zero\": null, \"tail_ref_min_abs\": null, \"n_tail_elems\": 0, \"global_allclose\": true}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "For (4,100)/chunk=64, (2,65), (2,200)/chunk=64: head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding while tail slice [n_chunks*chunk, seqlen) is exactly 0.0 with large max abs error; aligned (2,128) control passes.",
+        "json_parse_error": null,
+        "json_result": {
+          "cases": [
+            {
+              "batch": 4,
+              "chunk": 64,
+              "cut": 64,
+              "global_allclose": false,
+              "head_max_abs_err": 1.9073486328125e-06,
+              "n_chunks": 1,
+              "n_tail_elems": 144,
+              "seqlen": 100,
+              "tail_bitwise_all_zero": true,
+              "tail_max_abs_err": 10.053009033203125,
+              "tail_ref_min_abs": 0.06468510627746582
+            },
+            {
+              "batch": 2,
+              "chunk": 64,
+              "cut": 64,
+              "global_allclose": false,
+              "head_max_abs_err": 9.5367431640625e-07,
+              "n_chunks": 1,
+              "n_tail_elems": 2,
+              "seqlen": 65,
+              "tail_bitwise_all_zero": true,
+              "tail_max_abs_err": 16.523725509643555,
+              "tail_ref_min_abs": 1.586843490600586
+            },
+            {
+              "batch": 2,
+              "chunk": 64,
+              "cut": 192,
+              "global_allclose": false,
+              "head_max_abs_err": 3.814697265625e-06,
+              "n_chunks": 3,
+              "n_tail_elems": 16,
+              "seqlen": 200,
+              "tail_bitwise_all_zero": true,
+              "tail_max_abs_err": 25.601417541503906,
+              "tail_ref_min_abs": 1.2080295085906982
+            },
+            {
+              "batch": 2,
+              "chunk": 64,
+              "cut": 128,
+              "global_allclose": true,
+              "head_max_abs_err": 3.814697265625e-06,
+              "n_chunks": 2,
+              "n_tail_elems": 0,
+              "seqlen": 128,
+              "tail_bitwise_all_zero": null,
+              "tail_max_abs_err": null,
+              "tail_ref_min_abs": null
+            }
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"cases\": [{\"batch\": 4, \"seqlen\": 100, \"chunk\": 64, \"n_chunks\": 1, \"cut\": 64, \"head_max_abs_err\": 1.9073486328125e-06, \"tail_max_abs_err\": 10.053009033203125, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 0.06468510627746582, \"n_tail_elems\": 144, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 65, \"chunk\": 64, \"n_chunks\": 1, \"cut\": 64, \"head_max_abs_err\": 9.5367431640625e-07, \"tail_max_abs_err\": 16.523725509643555, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 1.586843490600586, \"n_tail_elems\": 2, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 200, \"chunk\": 64, \"n_chunks\": 3, \"cut\": 192, \"head_max_abs_err\": 3.814697265625e-06, \"tail_max_abs_err\": 25.601417541503906, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 1.2080295085906982, \"n_tail_elems\": 16, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 128, \"chunk\": 64, \"n_chunks\": 2, \"cut\": 128, \"head_max_abs_err\": 3.814697265625e-06, \"tail_max_abs_err\": null, \"tail_bitwise_all_zero\": null, \"tail_ref_min_abs\": null, \"n_tail_elems\": 0, \"global_allclose\": true}]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_17/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(1)\nres = []\nfor (b, s, ch) in [(3,40,64), (1,1,64), (2,63,64)]:\n    x = torch.randn(b, s, device=\"cuda\", dtype=torch.float32)\n    ref = torch.cumsum(x, dim=1)\n    out = m.chunked_cumsum(x, chunk=ch)\n    res.append(dict(batch=b, seqlen=s, chunk=ch, n_chunks=s//ch,\n                    out_nonzero_count=int((out != 0).sum()),\n                    out_numel=int(out.numel()),\n                    out_bitwise_all_zero=bool((out == 0).all()),\n                    max_abs_err=float((out - ref).abs().max()),\n                    ref_max_abs=float(ref.abs().max()),\n                    ref_all_zero=bool((ref == 0).all())))\nprint(json.dumps({\"cases\": res}))\n",
+        "expected_signal": "For (3,40) and (1,1) with chunk=64: output bitwise all-zero, nonzero count 0, max abs err equal to max |cumsum| of reference."
+      },
+      "created_at": "2026-09-08T15:03:30Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "52c649f6c8aee96a92f64dcf9ed855041b9735481633d7fce454c588e71fae40"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "510b5e15ddea5500e7d65b5c7569c35108a03d0eb1b8e11f2d96ea26b202ef0e"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "f3249c60b02aff331876e1ee425431bf2b508c5fae0eebe706520e0bd8558457"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "For any seqlen strictly less than chunk (e.g. x of shape (3, 40) or (1, 1) with default chunk=64), n_chunks = seqlen // CHUNK evaluates to 0, the loop body at kernel.py:14-19 never executes, and chunked_cumsum returns an all-zero tensor. Decisive metric: assert out is bitwise all-zero while torch.cumsum(x, dim=1) is not; report count of nonzero entries in out and max abs error.",
+        "cwd": "/root/cases/case_17",
+        "duration_s": 5.645865,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "52c649f6c8aee96a92f64dcf9ed855041b9735481633d7fce454c588e71fae40"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "510b5e15ddea5500e7d65b5c7569c35108a03d0eb1b8e11f2d96ea26b202ef0e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "f3249c60b02aff331876e1ee425431bf2b508c5fae0eebe706520e0bd8558457"
+              }
+            ],
+            "duration_s": 5.645865,
+            "exit_code": 0,
+            "expected_signal": "For (3,40) and (1,1) with chunk=64: output bitwise all-zero, nonzero count 0, max abs err equal to max |cumsum| of reference.",
+            "json_parse_error": null,
+            "json_result": {
+              "cases": [
+                {
+                  "batch": 3,
+                  "chunk": 64,
+                  "max_abs_err": 10.293733596801758,
+                  "n_chunks": 0,
+                  "out_bitwise_all_zero": true,
+                  "out_nonzero_count": 0,
+                  "out_numel": 120,
+                  "ref_all_zero": false,
+                  "ref_max_abs": 10.293733596801758,
+                  "seqlen": 40
+                },
+                {
+                  "batch": 1,
+                  "chunk": 64,
+                  "max_abs_err": 0.633983850479126,
+                  "n_chunks": 0,
+                  "out_bitwise_all_zero": true,
+                  "out_nonzero_count": 0,
+                  "out_numel": 1,
+                  "ref_all_zero": false,
+                  "ref_max_abs": 0.633983850479126,
+                  "seqlen": 1
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "max_abs_err": 8.95738410949707,
+                  "n_chunks": 0,
+                  "out_bitwise_all_zero": true,
+                  "out_nonzero_count": 0,
+                  "out_numel": 126,
+                  "ref_all_zero": false,
+                  "ref_max_abs": 8.95738410949707,
+                  "seqlen": 63
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"cases\": [{\"batch\": 3, \"seqlen\": 40, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 120, \"out_bitwise_all_zero\": true, \"max_abs_err\": 10.293733596801758, \"ref_max_abs\": 10.293733596801758, \"ref_all_zero\": false}, {\"batch\": 1, \"seqlen\": 1, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 1, \"out_bitwise_all_zero\": true, \"max_abs_err\": 0.633983850479126, \"ref_max_abs\": 0.633983850479126, \"ref_all_zero\": false}, {\"batch\": 2, \"seqlen\": 63, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 126, \"out_bitwise_all_zero\": true, \"max_abs_err\": 8.95738410949707, \"ref_max_abs\": 8.95738410949707, \"ref_all_zero\": false}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "For (3,40) and (1,1) with chunk=64: output bitwise all-zero, nonzero count 0, max abs err equal to max |cumsum| of reference.",
+        "json_parse_error": null,
+        "json_result": {
+          "cases": [
+            {
+              "batch": 3,
+              "chunk": 64,
+              "max_abs_err": 10.293733596801758,
+              "n_chunks": 0,
+              "out_bitwise_all_zero": true,
+              "out_nonzero_count": 0,
+              "out_numel": 120,
+              "ref_all_zero": false,
+              "ref_max_abs": 10.293733596801758,
+              "seqlen": 40
+            },
+            {
+              "batch": 1,
+              "chunk": 64,
+              "max_abs_err": 0.633983850479126,
+              "n_chunks": 0,
+              "out_bitwise_all_zero": true,
+              "out_nonzero_count": 0,
+              "out_numel": 1,
+              "ref_all_zero": false,
+              "ref_max_abs": 0.633983850479126,
+              "seqlen": 1
+            },
+            {
+              "batch": 2,
+              "chunk": 64,
+              "max_abs_err": 8.95738410949707,
+              "n_chunks": 0,
+              "out_bitwise_all_zero": true,
+              "out_nonzero_count": 0,
+              "out_numel": 126,
+              "ref_all_zero": false,
+              "ref_max_abs": 8.95738410949707,
+              "seqlen": 63
+            }
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"cases\": [{\"batch\": 3, \"seqlen\": 40, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 120, \"out_bitwise_all_zero\": true, \"max_abs_err\": 10.293733596801758, \"ref_max_abs\": 10.293733596801758, \"ref_all_zero\": false}, {\"batch\": 1, \"seqlen\": 1, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 1, \"out_bitwise_all_zero\": true, \"max_abs_err\": 0.633983850479126, \"ref_max_abs\": 0.633983850479126, \"ref_all_zero\": false}, {\"batch\": 2, \"seqlen\": 63, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 126, \"out_bitwise_all_zero\": true, \"max_abs_err\": 8.95738410949707, \"ref_max_abs\": 8.95738410949707, \"ref_all_zero\": false}]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "aligned_control_2x128_c64_allclose": true,
+          "aligned_control_2x128_c64_max_abs_err": 3.814697265625e-06,
+          "allclose_tol": "atol=1e-4, rtol=1e-4",
+          "case_2x200_c64_head_max_abs_err": 3.814697265625e-06,
+          "case_2x200_c64_n_chunks": 3,
+          "case_2x200_c64_n_tail_elems": 16,
+          "case_2x200_c64_tail_bitwise_all_zero": true,
+          "case_2x200_c64_tail_max_abs_err": 25.601417541503906,
+          "case_2x65_c64_head_max_abs_err": 9.5367431640625e-07,
+          "case_2x65_c64_n_tail_elems": 2,
+          "case_2x65_c64_tail_bitwise_all_zero": true,
+          "case_2x65_c64_tail_max_abs_err": 16.523725509643555,
+          "case_4x100_c64_head_max_abs_err": 1.9073486328125e-06,
+          "case_4x100_c64_n_chunks": 1,
+          "case_4x100_c64_n_tail_elems": 144,
+          "case_4x100_c64_tail_bitwise_all_zero": true,
+          "case_4x100_c64_tail_max_abs_err": 10.053009033203125,
+          "case_4x100_c64_tail_ref_min_abs": 0.06468510627746582,
+          "device": "cuda",
+          "dtype": "float32"
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "Tail truncation confirmed on GPU. For (4,100)/chunk=64, (2,65)/chunk=64 and (2,200)/chunk=64 the head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding (max abs err 1e-6..4e-6) while the tail slice [n_chunks*chunk, seqlen) is bitwise all-zero, giving tail max abs errors of 10.05, 16.52 and 25.60 against nonzero reference values (tail |ref| min 0.065, 1.59, 1.21 respectively). The aligned control (2,128)/chunk=64 passes allclose(atol=rtol=1e-4), isolating the defect to the partial final chunk rather than to numeric drift or carry propagation.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T15:03:50Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T15:02:59Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T15:03:50Z",
+              "data": {
+                "aligned_control_2x128_c64_allclose": true,
+                "aligned_control_2x128_c64_max_abs_err": 3.814697265625e-06,
+                "allclose_tol": "atol=1e-4, rtol=1e-4",
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "6caed58140d51cf38d3cdb35ab80b84813e05b0e5eb6be1527672bed05bf5b9a"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "905796fe63365e056ff380a1576469312dda9caf5f6c30e0524a99016a5ded4e"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "82416f120d30f26a472a60e4eba1452aed575000ec9ad0d23c2d05ee496b3495"
+                  }
+                ],
+                "case_2x200_c64_head_max_abs_err": 3.814697265625e-06,
+                "case_2x200_c64_n_chunks": 3,
+                "case_2x200_c64_n_tail_elems": 16,
+                "case_2x200_c64_tail_bitwise_all_zero": true,
+                "case_2x200_c64_tail_max_abs_err": 25.601417541503906,
+                "case_2x65_c64_head_max_abs_err": 9.5367431640625e-07,
+                "case_2x65_c64_n_tail_elems": 2,
+                "case_2x65_c64_tail_bitwise_all_zero": true,
+                "case_2x65_c64_tail_max_abs_err": 16.523725509643555,
+                "case_4x100_c64_head_max_abs_err": 1.9073486328125e-06,
+                "case_4x100_c64_n_chunks": 1,
+                "case_4x100_c64_n_tail_elems": 144,
+                "case_4x100_c64_tail_bitwise_all_zero": true,
+                "case_4x100_c64_tail_max_abs_err": 10.053009033203125,
+                "case_4x100_c64_tail_ref_min_abs": 0.06468510627746582,
+                "device": "cuda",
+                "dtype": "float32",
+                "duration_s": 5.691739,
+                "exit_code": 0,
+                "expected_signal": "For (4,100)/chunk=64, (2,65), (2,200)/chunk=64: head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding while tail slice [n_chunks*chunk, seqlen) is exactly 0.0 with large max abs error; aligned (2,128) control passes.",
+                "json_parse_error": null,
+                "json_result": {
+                  "cases": [
+                    {
+                      "batch": 4,
+                      "chunk": 64,
+                      "cut": 64,
+                      "global_allclose": false,
+                      "head_max_abs_err": 1.9073486328125e-06,
+                      "n_chunks": 1,
+                      "n_tail_elems": 144,
+                      "seqlen": 100,
+                      "tail_bitwise_all_zero": true,
+                      "tail_max_abs_err": 10.053009033203125,
+                      "tail_ref_min_abs": 0.06468510627746582
+                    },
+                    {
+                      "batch": 2,
+                      "chunk": 64,
+                      "cut": 64,
+                      "global_allclose": false,
+                      "head_max_abs_err": 9.5367431640625e-07,
+                      "n_chunks": 1,
+                      "n_tail_elems": 2,
+                      "seqlen": 65,
+                      "tail_bitwise_all_zero": true,
+                      "tail_max_abs_err": 16.523725509643555,
+                      "tail_ref_min_abs": 1.586843490600586
+                    },
+                    {
+                      "batch": 2,
+                      "chunk": 64,
+                      "cut": 192,
+                      "global_allclose": false,
+                      "head_max_abs_err": 3.814697265625e-06,
+                      "n_chunks": 3,
+                      "n_tail_elems": 16,
+                      "seqlen": 200,
+                      "tail_bitwise_all_zero": true,
+                      "tail_max_abs_err": 25.601417541503906,
+                      "tail_ref_min_abs": 1.2080295085906982
+                    },
+                    {
+                      "batch": 2,
+                      "chunk": 64,
+                      "cut": 128,
+                      "global_allclose": true,
+                      "head_max_abs_err": 3.814697265625e-06,
+                      "n_chunks": 2,
+                      "n_tail_elems": 0,
+                      "seqlen": 128,
+                      "tail_bitwise_all_zero": null,
+                      "tail_max_abs_err": null,
+                      "tail_ref_min_abs": null
+                    }
+                  ]
+                },
+                "stderr": "",
+                "stdout": "{\"cases\": [{\"batch\": 4, \"seqlen\": 100, \"chunk\": 64, \"n_chunks\": 1, \"cut\": 64, \"head_max_abs_err\": 1.9073486328125e-06, \"tail_max_abs_err\": 10.053009033203125, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 0.06468510627746582, \"n_tail_elems\": 144, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 65, \"chunk\": 64, \"n_chunks\": 1, \"cut\": 64, \"head_max_abs_err\": 9.5367431640625e-07, \"tail_max_abs_err\": 16.523725509643555, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 1.586843490600586, \"n_tail_elems\": 2, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 200, \"chunk\": 64, \"n_chunks\": 3, \"cut\": 192, \"head_max_abs_err\": 3.814697265625e-06, \"tail_max_abs_err\": 25.601417541503906, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 1.2080295085906982, \"n_tail_elems\": 16, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 128, \"chunk\": 64, \"n_chunks\": 2, \"cut\": 128, \"head_max_abs_err\": 3.814697265625e-06, \"tail_max_abs_err\": null, \"tail_bitwise_all_zero\": null, \"tail_ref_min_abs\": null, \"n_tail_elems\": 0, \"global_allclose\": true}]}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Tail truncation confirmed on GPU. For (4,100)/chunk=64, (2,65)/chunk=64 and (2,200)/chunk=64 the head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding (max abs err 1e-6..4e-6) while the tail slice [n_chunks*chunk, seqlen) is bitwise all-zero, giving tail max abs errors of 10.05, 16.52 and 25.60 against nonzero reference values (tail |ref| min 0.065, 1.59, 1.21 respectively). The aligned control (2,128)/chunk=64 passes allclose(atol=rtol=1e-4), isolating the defect to the partial final chunk rather than to numeric drift or carry propagation.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "n_chunks = seqlen // CHUNK truncates the partial final chunk, and the mask `offs < seqlen` can never be partial for c < seqlen//CHUNK, so it provides no tail coverage \u2014 the masking is cosmetic. No epilogue handles the remainder.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.\""
+            },
+            {
+              "source": "kernel.py:22-27",
+              "summary": "Wrapper signature chunked_cumsum(x, chunk=64) takes a 2-D tensor and defaults chunk=64, so seqlen=100 with the default chunk is an ordinary in-contract call."
+            }
+          ],
+          "scope_rationale": "problem.txt is the sole contract authority here (no test.py exists) and it explicitly states seqlen may be any positive integer, is NOT required to be a multiple of chunk, and that the trailing shorter final chunk's outputs \"must still be produced\". A 2-D float32 tensor with seqlen=100 and the wrapper's own default chunk=64 is a representative input the contract admits, with no dtype, rank, or stride deviation.",
+          "statement": "For seqlen not a multiple of chunk (e.g. x of shape (4, 100) with default chunk=64, or (2, 65), or (2, 200) with chunk=64), chunked_cumsum leaves the trailing seqlen % chunk output positions at exactly 0.0 instead of the required prefix sums, because the loop runs only c in [0, seqlen // CHUNK) (kernel.py:11,14) and out is pre-filled by torch.zeros_like (kernel.py:25). Decisive metric: compare out[:, n_chunks*chunk:] against torch.cumsum(x, dim=1)[:, n_chunks*chunk:] elementwise; the claim is confirmed if those entries are identically 0.0 while the reference values are nonzero (report max abs error over the tail slice and separately over the head slice, which should match to fp32 rounding).",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T15:03:50Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:03:50Z",
+          "data": {
+            "aligned_control_2x128_c64_allclose": true,
+            "aligned_control_2x128_c64_max_abs_err": 3.814697265625e-06,
+            "allclose_tol": "atol=1e-4, rtol=1e-4",
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6caed58140d51cf38d3cdb35ab80b84813e05b0e5eb6be1527672bed05bf5b9a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "905796fe63365e056ff380a1576469312dda9caf5f6c30e0524a99016a5ded4e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "82416f120d30f26a472a60e4eba1452aed575000ec9ad0d23c2d05ee496b3495"
+              }
+            ],
+            "case_2x200_c64_head_max_abs_err": 3.814697265625e-06,
+            "case_2x200_c64_n_chunks": 3,
+            "case_2x200_c64_n_tail_elems": 16,
+            "case_2x200_c64_tail_bitwise_all_zero": true,
+            "case_2x200_c64_tail_max_abs_err": 25.601417541503906,
+            "case_2x65_c64_head_max_abs_err": 9.5367431640625e-07,
+            "case_2x65_c64_n_tail_elems": 2,
+            "case_2x65_c64_tail_bitwise_all_zero": true,
+            "case_2x65_c64_tail_max_abs_err": 16.523725509643555,
+            "case_4x100_c64_head_max_abs_err": 1.9073486328125e-06,
+            "case_4x100_c64_n_chunks": 1,
+            "case_4x100_c64_n_tail_elems": 144,
+            "case_4x100_c64_tail_bitwise_all_zero": true,
+            "case_4x100_c64_tail_max_abs_err": 10.053009033203125,
+            "case_4x100_c64_tail_ref_min_abs": 0.06468510627746582,
+            "device": "cuda",
+            "dtype": "float32",
+            "duration_s": 5.691739,
+            "exit_code": 0,
+            "expected_signal": "For (4,100)/chunk=64, (2,65), (2,200)/chunk=64: head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding while tail slice [n_chunks*chunk, seqlen) is exactly 0.0 with large max abs error; aligned (2,128) control passes.",
+            "json_parse_error": null,
+            "json_result": {
+              "cases": [
+                {
+                  "batch": 4,
+                  "chunk": 64,
+                  "cut": 64,
+                  "global_allclose": false,
+                  "head_max_abs_err": 1.9073486328125e-06,
+                  "n_chunks": 1,
+                  "n_tail_elems": 144,
+                  "seqlen": 100,
+                  "tail_bitwise_all_zero": true,
+                  "tail_max_abs_err": 10.053009033203125,
+                  "tail_ref_min_abs": 0.06468510627746582
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "cut": 64,
+                  "global_allclose": false,
+                  "head_max_abs_err": 9.5367431640625e-07,
+                  "n_chunks": 1,
+                  "n_tail_elems": 2,
+                  "seqlen": 65,
+                  "tail_bitwise_all_zero": true,
+                  "tail_max_abs_err": 16.523725509643555,
+                  "tail_ref_min_abs": 1.586843490600586
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "cut": 192,
+                  "global_allclose": false,
+                  "head_max_abs_err": 3.814697265625e-06,
+                  "n_chunks": 3,
+                  "n_tail_elems": 16,
+                  "seqlen": 200,
+                  "tail_bitwise_all_zero": true,
+                  "tail_max_abs_err": 25.601417541503906,
+                  "tail_ref_min_abs": 1.2080295085906982
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "cut": 128,
+                  "global_allclose": true,
+                  "head_max_abs_err": 3.814697265625e-06,
+                  "n_chunks": 2,
+                  "n_tail_elems": 0,
+                  "seqlen": 128,
+                  "tail_bitwise_all_zero": null,
+                  "tail_max_abs_err": null,
+                  "tail_ref_min_abs": null
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"cases\": [{\"batch\": 4, \"seqlen\": 100, \"chunk\": 64, \"n_chunks\": 1, \"cut\": 64, \"head_max_abs_err\": 1.9073486328125e-06, \"tail_max_abs_err\": 10.053009033203125, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 0.06468510627746582, \"n_tail_elems\": 144, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 65, \"chunk\": 64, \"n_chunks\": 1, \"cut\": 64, \"head_max_abs_err\": 9.5367431640625e-07, \"tail_max_abs_err\": 16.523725509643555, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 1.586843490600586, \"n_tail_elems\": 2, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 200, \"chunk\": 64, \"n_chunks\": 3, \"cut\": 192, \"head_max_abs_err\": 3.814697265625e-06, \"tail_max_abs_err\": 25.601417541503906, \"tail_bitwise_all_zero\": true, \"tail_ref_min_abs\": 1.2080295085906982, \"n_tail_elems\": 16, \"global_allclose\": false}, {\"batch\": 2, \"seqlen\": 128, \"chunk\": 64, \"n_chunks\": 2, \"cut\": 128, \"head_max_abs_err\": 3.814697265625e-06, \"tail_max_abs_err\": null, \"tail_bitwise_all_zero\": null, \"tail_ref_min_abs\": null, \"n_tail_elems\": 0, \"global_allclose\": true}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Tail truncation confirmed on GPU. For (4,100)/chunk=64, (2,65)/chunk=64 and (2,200)/chunk=64 the head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding (max abs err 1e-6..4e-6) while the tail slice [n_chunks*chunk, seqlen) is bitwise all-zero, giving tail max abs errors of 10.05, 16.52 and 25.60 against nonzero reference values (tail |ref| min 0.065, 1.59, 1.21 respectively). The aligned control (2,128)/chunk=64 passes allclose(atol=rtol=1e-4), isolating the defect to the partial final chunk rather than to numeric drift or carry propagation.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "all_cases_out_bitwise_all_zero": true,
+          "all_cases_ref_all_zero": false,
+          "case_1x1_c64_max_abs_err": 0.633983850479126,
+          "case_1x1_c64_out_nonzero_count": 0,
+          "case_1x1_c64_out_numel": 1,
+          "case_1x1_c64_ref_max_abs": 0.633983850479126,
+          "case_2x63_c64_max_abs_err": 8.95738410949707,
+          "case_2x63_c64_out_nonzero_count": 0,
+          "case_2x63_c64_out_numel": 126,
+          "case_2x63_c64_ref_max_abs": 8.95738410949707,
+          "case_3x40_c64_max_abs_err": 10.293733596801758,
+          "case_3x40_c64_n_chunks": 0,
+          "case_3x40_c64_out_nonzero_count": 0,
+          "case_3x40_c64_out_numel": 120,
+          "case_3x40_c64_ref_max_abs": 10.293733596801758,
+          "device": "cuda",
+          "dtype": "float32"
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "Zero-trip-count case confirmed. For (3,40), (1,1) and (2,63) with default chunk=64, n_chunks = seqlen//CHUNK == 0 and the returned tensor is bitwise all-zero (nonzero count 0 of 120, 1 and 126 elements). Max abs error equals the reference max |cumsum| exactly (10.2937, 0.6340, 8.9574), i.e. the output carries no information at all; the reference is not all-zero in any case, so this is not a reference-undefined artifact.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T15:03:50Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T15:02:59Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T15:03:50Z",
+              "data": {
+                "all_cases_out_bitwise_all_zero": true,
+                "all_cases_ref_all_zero": false,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "52c649f6c8aee96a92f64dcf9ed855041b9735481633d7fce454c588e71fae40"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "510b5e15ddea5500e7d65b5c7569c35108a03d0eb1b8e11f2d96ea26b202ef0e"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "f3249c60b02aff331876e1ee425431bf2b508c5fae0eebe706520e0bd8558457"
+                  }
+                ],
+                "case_1x1_c64_max_abs_err": 0.633983850479126,
+                "case_1x1_c64_out_nonzero_count": 0,
+                "case_1x1_c64_out_numel": 1,
+                "case_1x1_c64_ref_max_abs": 0.633983850479126,
+                "case_2x63_c64_max_abs_err": 8.95738410949707,
+                "case_2x63_c64_out_nonzero_count": 0,
+                "case_2x63_c64_out_numel": 126,
+                "case_2x63_c64_ref_max_abs": 8.95738410949707,
+                "case_3x40_c64_max_abs_err": 10.293733596801758,
+                "case_3x40_c64_n_chunks": 0,
+                "case_3x40_c64_out_nonzero_count": 0,
+                "case_3x40_c64_out_numel": 120,
+                "case_3x40_c64_ref_max_abs": 10.293733596801758,
+                "device": "cuda",
+                "dtype": "float32",
+                "duration_s": 5.645865,
+                "exit_code": 0,
+                "expected_signal": "For (3,40) and (1,1) with chunk=64: output bitwise all-zero, nonzero count 0, max abs err equal to max |cumsum| of reference.",
+                "json_parse_error": null,
+                "json_result": {
+                  "cases": [
+                    {
+                      "batch": 3,
+                      "chunk": 64,
+                      "max_abs_err": 10.293733596801758,
+                      "n_chunks": 0,
+                      "out_bitwise_all_zero": true,
+                      "out_nonzero_count": 0,
+                      "out_numel": 120,
+                      "ref_all_zero": false,
+                      "ref_max_abs": 10.293733596801758,
+                      "seqlen": 40
+                    },
+                    {
+                      "batch": 1,
+                      "chunk": 64,
+                      "max_abs_err": 0.633983850479126,
+                      "n_chunks": 0,
+                      "out_bitwise_all_zero": true,
+                      "out_nonzero_count": 0,
+                      "out_numel": 1,
+                      "ref_all_zero": false,
+                      "ref_max_abs": 0.633983850479126,
+                      "seqlen": 1
+                    },
+                    {
+                      "batch": 2,
+                      "chunk": 64,
+                      "max_abs_err": 8.95738410949707,
+                      "n_chunks": 0,
+                      "out_bitwise_all_zero": true,
+                      "out_nonzero_count": 0,
+                      "out_numel": 126,
+                      "ref_all_zero": false,
+                      "ref_max_abs": 8.95738410949707,
+                      "seqlen": 63
+                    }
+                  ]
+                },
+                "stderr": "",
+                "stdout": "{\"cases\": [{\"batch\": 3, \"seqlen\": 40, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 120, \"out_bitwise_all_zero\": true, \"max_abs_err\": 10.293733596801758, \"ref_max_abs\": 10.293733596801758, \"ref_all_zero\": false}, {\"batch\": 1, \"seqlen\": 1, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 1, \"out_bitwise_all_zero\": true, \"max_abs_err\": 0.633983850479126, \"ref_max_abs\": 0.633983850479126, \"ref_all_zero\": false}, {\"batch\": 2, \"seqlen\": 63, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 126, \"out_bitwise_all_zero\": true, \"max_abs_err\": 8.95738410949707, \"ref_max_abs\": 8.95738410949707, \"ref_all_zero\": false}]}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Zero-trip-count case confirmed. For (3,40), (1,1) and (2,63) with default chunk=64, n_chunks = seqlen//CHUNK == 0 and the returned tensor is bitwise all-zero (nonzero count 0 of 120, 1 and 126 elements). Max abs error equals the reference max |cumsum| exactly (10.2937, 0.6340, 8.9574), i.e. the output carries no information at all; the reference is not all-zero in any case, so this is not a reference-undefined artifact.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "Zero trip count for the only loop means no store ever issues, so the zeros_like allocation is returned unchanged; this is the extreme form of the tail truncation and fails even for the trivial seqlen=1 case.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"`seqlen` may be any positive integer\" \u2014 seqlen in [1, 63] with chunk=64 is inside the stated input domain and its outputs must still be produced."
+            },
+            {
+              "source": "kernel.py:11",
+              "summary": "n_chunks = seqlen // CHUNK is 0 whenever seqlen < CHUNK, giving the range() loop a zero trip count so no tl.store is ever reached."
+            }
+          ],
+          "scope_rationale": "problem.txt states seqlen may be ANY positive integer, which directly admits seqlen < chunk; these are non-empty 2-D float32 tensors, not zero-size or dtype/stride variants, so no default-out-of-scope category applies. chunk=64 is the wrapper's own default.",
+          "statement": "For any seqlen strictly less than chunk (e.g. x of shape (3, 40) or (1, 1) with default chunk=64), n_chunks = seqlen // CHUNK evaluates to 0, the loop body at kernel.py:14-19 never executes, and chunked_cumsum returns an all-zero tensor. Decisive metric: assert out is bitwise all-zero while torch.cumsum(x, dim=1) is not; report count of nonzero entries in out and max abs error.",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T15:03:50Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:03:50Z",
+          "data": {
+            "all_cases_out_bitwise_all_zero": true,
+            "all_cases_ref_all_zero": false,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "52c649f6c8aee96a92f64dcf9ed855041b9735481633d7fce454c588e71fae40"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "510b5e15ddea5500e7d65b5c7569c35108a03d0eb1b8e11f2d96ea26b202ef0e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "f3249c60b02aff331876e1ee425431bf2b508c5fae0eebe706520e0bd8558457"
+              }
+            ],
+            "case_1x1_c64_max_abs_err": 0.633983850479126,
+            "case_1x1_c64_out_nonzero_count": 0,
+            "case_1x1_c64_out_numel": 1,
+            "case_1x1_c64_ref_max_abs": 0.633983850479126,
+            "case_2x63_c64_max_abs_err": 8.95738410949707,
+            "case_2x63_c64_out_nonzero_count": 0,
+            "case_2x63_c64_out_numel": 126,
+            "case_2x63_c64_ref_max_abs": 8.95738410949707,
+            "case_3x40_c64_max_abs_err": 10.293733596801758,
+            "case_3x40_c64_n_chunks": 0,
+            "case_3x40_c64_out_nonzero_count": 0,
+            "case_3x40_c64_out_numel": 120,
+            "case_3x40_c64_ref_max_abs": 10.293733596801758,
+            "device": "cuda",
+            "dtype": "float32",
+            "duration_s": 5.645865,
+            "exit_code": 0,
+            "expected_signal": "For (3,40) and (1,1) with chunk=64: output bitwise all-zero, nonzero count 0, max abs err equal to max |cumsum| of reference.",
+            "json_parse_error": null,
+            "json_result": {
+              "cases": [
+                {
+                  "batch": 3,
+                  "chunk": 64,
+                  "max_abs_err": 10.293733596801758,
+                  "n_chunks": 0,
+                  "out_bitwise_all_zero": true,
+                  "out_nonzero_count": 0,
+                  "out_numel": 120,
+                  "ref_all_zero": false,
+                  "ref_max_abs": 10.293733596801758,
+                  "seqlen": 40
+                },
+                {
+                  "batch": 1,
+                  "chunk": 64,
+                  "max_abs_err": 0.633983850479126,
+                  "n_chunks": 0,
+                  "out_bitwise_all_zero": true,
+                  "out_nonzero_count": 0,
+                  "out_numel": 1,
+                  "ref_all_zero": false,
+                  "ref_max_abs": 0.633983850479126,
+                  "seqlen": 1
+                },
+                {
+                  "batch": 2,
+                  "chunk": 64,
+                  "max_abs_err": 8.95738410949707,
+                  "n_chunks": 0,
+                  "out_bitwise_all_zero": true,
+                  "out_nonzero_count": 0,
+                  "out_numel": 126,
+                  "ref_all_zero": false,
+                  "ref_max_abs": 8.95738410949707,
+                  "seqlen": 63
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"cases\": [{\"batch\": 3, \"seqlen\": 40, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 120, \"out_bitwise_all_zero\": true, \"max_abs_err\": 10.293733596801758, \"ref_max_abs\": 10.293733596801758, \"ref_all_zero\": false}, {\"batch\": 1, \"seqlen\": 1, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 1, \"out_bitwise_all_zero\": true, \"max_abs_err\": 0.633983850479126, \"ref_max_abs\": 0.633983850479126, \"ref_all_zero\": false}, {\"batch\": 2, \"seqlen\": 63, \"chunk\": 64, \"n_chunks\": 0, \"out_nonzero_count\": 0, \"out_numel\": 126, \"out_bitwise_all_zero\": true, \"max_abs_err\": 8.95738410949707, \"ref_max_abs\": 8.95738410949707, \"ref_all_zero\": false}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Zero-trip-count case confirmed. For (3,40), (1,1) and (2,63) with default chunk=64, n_chunks = seqlen//CHUNK == 0 and the returned tensor is bitwise all-zero (nonzero count 0 of 120, 1 and 126 elements). Max abs error equals the reference max |cumsum| exactly (10.2937, 0.6340, 8.9574), i.e. the output carries no information at all; the reference is not all-zero in any case, so this is not a reference-undefined artifact.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Review turn: both recorded claims (c1 partial final chunk left at 0.0; c2 seqlen<chunk returning an all-zero tensor) are confirmed by GPU probes with in-scope inputs drawn directly from problem.txt's stated domain, and the aligned (2,128) control passing isolates the defect to the missing tail epilogue rather than numeric drift or carry propagation. Remaining surfaces noted by the describer (non-contiguous inputs, non-power-of-2 chunk) are not required by the stated contract and would not change the verdict, which is already decided by the two confirmed in-scope failures. No additional high-quality in-scope claim to add.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-08T15:03:59Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-09-08T15:03:59Z",
+        "decision": "no_new_claims",
+        "reason": "Review turn: both recorded claims (c1 partial final chunk left at 0.0; c2 seqlen<chunk returning an all-zero tensor) are confirmed by GPU probes with in-scope inputs drawn directly from problem.txt's stated domain, and the aligned (2,128) control passing isolates the defect to the missing tail epilogue rather than numeric drift or carry propagation. Remaining surfaces noted by the describer (non-contiguous inputs, non-power-of-2 chunk) are not required by the stated contract and would not change the verdict, which is already decided by the two confirmed in-scope failures. No additional high-quality in-scope claim to add.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 11,
+        "tool_event_id": "t12",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "problem.txt is the operative contract (the artifact contains only kernel.py, meta.json, problem.txt; no test.py or get_inputs narrows the domain) and it explicitly requires: \"`seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.\" The kernel violates exactly that clause. n_chunks = seqlen // CHUNK (kernel.py:11) truncates the partial final chunk, and the `offs < seqlen` masks are never partial for c < seqlen//CHUNK, so they provide no tail coverage; out is pre-filled by torch.zeros_like (kernel.py:25) and the tail is never stored.\n\nc1 (confirmed, in_scope, t8): for (4,100), (2,65) and (2,200) with the wrapper's own default chunk=64, the head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding (1e-6..4e-6) while the tail slice is bitwise all-zero, giving tail max abs errors of 10.05, 16.52 and 25.60 against nonzero reference values (tail |ref| min 0.065, 1.59, 1.21). The aligned (2,128) control passes allclose(1e-4), which isolates the defect to the missing tail epilogue and rules out both numeric drift and a carry-propagation explanation. This is not a tolerable reduction-order/rounding difference \u2014 the required values are simply absent.\n\nc2 (confirmed, in_scope, t9): for seqlen < chunk \u2014 (3,40), (1,1), (2,63) at chunk=64 \u2014 n_chunks == 0, the loop body never runs, and the returned tensor is bitwise all-zero (0 nonzero of 120, 1 and 126 elements) while the reference is not all-zero; max abs error equals the reference max |cumsum| exactly. These are ordinary non-empty 2-D float32 inputs squarely inside \"any positive integer\", not zero-size, dtype, rank or stride variants, so no default-out-of-scope category applies.\n\nNeither failure is a case the contract leaves unspecified and the reference is well-defined and finite throughout. Generalization surfaces the Describer flagged but nobody claimed (non-contiguous inputs via the stride(0)-only threading, non-power-of-2 chunk) are set aside as unlitigated notes; they are immaterial here because the verdict is already decided by two confirmed in-scope contract violations. Skeptic reviewed the latest evidence and recorded no new claims.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-08T15:04:14Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-08T15:04:14Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "problem.txt is the operative contract (the artifact contains only kernel.py, meta.json, problem.txt; no test.py or get_inputs narrows the domain) and it explicitly requires: \"`seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.\" The kernel violates exactly that clause. n_chunks = seqlen // CHUNK (kernel.py:11) truncates the partial final chunk, and the `offs < seqlen` masks are never partial for c < seqlen//CHUNK, so they provide no tail coverage; out is pre-filled by torch.zeros_like (kernel.py:25) and the tail is never stored.\n\nc1 (confirmed, in_scope, t8): for (4,100), (2,65) and (2,200) with the wrapper's own default chunk=64, the head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding (1e-6..4e-6) while the tail slice is bitwise all-zero, giving tail max abs errors of 10.05, 16.52 and 25.60 against nonzero reference values (tail |ref| min 0.065, 1.59, 1.21). The aligned (2,128) control passes allclose(1e-4), which isolates the defect to the missing tail epilogue and rules out both numeric drift and a carry-propagation explanation. This is not a tolerable reduction-order/rounding difference \u2014 the required values are simply absent.\n\nc2 (confirmed, in_scope, t9): for seqlen < chunk \u2014 (3,40), (1,1), (2,63) at chunk=64 \u2014 n_chunks == 0, the loop body never runs, and the returned tensor is bitwise all-zero (0 nonzero of 120, 1 and 126 elements) while the reference is not all-zero; max abs error equals the reference max |cumsum| exactly. These are ordinary non-empty 2-D float32 inputs squarely inside \"any positive integer\", not zero-size, dtype, rank or stride variants, so no default-out-of-scope category applies.\n\nNeither failure is a case the contract leaves unspecified and the reference is well-defined and finite throughout. Generalization surfaces the Describer flagged but nobody claimed (non-contiguous inputs via the stride(0)-only threading, non-power-of-2 chunk) are set aside as unlitigated notes; they are immaterial here because the verdict is already decided by two confirmed in-scope contract violations. Skeptic reviewed the latest evidence and recorded no new claims.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-08T15:04:14Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "problem.txt is the operative contract (the artifact contains only kernel.py, meta.json, problem.txt; no test.py or get_inputs narrows the domain) and it explicitly requires: \"`seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.\" The kernel violates exactly that clause. n_chunks = seqlen // CHUNK (kernel.py:11) truncates the partial final chunk, and the `offs < seqlen` masks are never partial for c < seqlen//CHUNK, so they provide no tail coverage; out is pre-filled by torch.zeros_like (kernel.py:25) and the tail is never stored.\n\nc1 (confirmed, in_scope, t8): for (4,100), (2,65) and (2,200) with the wrapper's own default chunk=64, the head slice [0, n_chunks*chunk) matches torch.cumsum to fp32 rounding (1e-6..4e-6) while the tail slice is bitwise all-zero, giving tail max abs errors of 10.05, 16.52 and 25.60 against nonzero reference values (tail |ref| min 0.065, 1.59, 1.21). The aligned (2,128) control passes allclose(1e-4), which isolates the defect to the missing tail epilogue and rules out both numeric drift and a carry-propagation explanation. This is not a tolerable reduction-order/rounding difference \u2014 the required values are simply absent.\n\nc2 (confirmed, in_scope, t9): for seqlen < chunk \u2014 (3,40), (1,1), (2,63) at chunk=64 \u2014 n_chunks == 0, the loop body never runs, and the returned tensor is bitwise all-zero (0 nonzero of 120, 1 and 126 elements) while the reference is not all-zero; max abs error equals the reference max |cumsum| exactly. These are ordinary non-empty 2-D float32 inputs squarely inside \"any positive integer\", not zero-size, dtype, rank or stride variants, so no default-out-of-scope category applies.\n\nNeither failure is a case the contract leaves unspecified and the reference is well-defined and finite throughout. Generalization surfaces the Describer flagged but nobody claimed (non-contiguous inputs via the stride(0)-only threading, non-power-of-2 chunk) are set aside as unlitigated notes; they are immaterial here because the verdict is already decided by two confirmed in-scope contract violations. Skeptic reviewed the latest evidence and recorded no new claims.",
+    "verdict": "reject"
+  }
+}

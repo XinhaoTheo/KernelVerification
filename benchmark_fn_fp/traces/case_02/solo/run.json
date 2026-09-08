@@ -1,0 +1,1108 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_02",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _state_passing_fwd_kernel(\n    states_ptr, out_ptr, final_states_ptr, dA_cs_ptr,\n    dim, nchunks,\n    stride_states_chunk, stride_states_dim,\n    stride_out_chunk, stride_out_dim,\n    stride_final_dim,\n    stride_dA_cs_chunk,\n    BLOCK_SIZE: tl.constexpr,\n):\n    offs_m = tl.arange(0, BLOCK_SIZE)\n    states_ptrs = states_ptr + offs_m * stride_states_dim\n    out_ptrs = out_ptr + offs_m * stride_out_dim\n    final_states_ptrs = final_states_ptr + offs_m * stride_final_dim\n\n    states = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)\n    tl.store(out_ptrs, states, mask=offs_m < dim)\n    out_ptrs += stride_out_chunk\n    for c in range(nchunks):\n        new_states = tl.load(states_ptrs, mask=offs_m < dim, other=0.0).to(tl.float32)\n        dA_cs = tl.load(dA_cs_ptr).to(tl.float32)\n        scale = tl.exp(dA_cs)\n        states = scale * states + new_states\n        if c < nchunks - 1:\n            tl.store(out_ptrs, states, mask=offs_m < dim)\n        else:\n            tl.store(final_states_ptrs, states, mask=offs_m < dim)\n        states_ptrs += stride_states_chunk\n        dA_cs_ptr += stride_dA_cs_chunk\n        out_ptrs += stride_out_chunk\n\n\ndef state_passing(new_states: torch.Tensor, dA_cs: torch.Tensor) -> torch.Tensor:\n    nchunks, dim = new_states.shape\n    out = torch.empty(nchunks, dim, device=new_states.device, dtype=torch.float32)\n    final_states = torch.empty(dim, device=new_states.device, dtype=torch.float32)\n    BLOCK_SIZE = triton.next_power_of_2(dim)\n    _state_passing_fwd_kernel[(1,)](\n        new_states, out, final_states, dA_cs,\n        dim, nchunks,\n        new_states.stride(0), new_states.stride(1),\n        out.stride(0), out.stride(1),\n        final_states.stride(0),\n        dA_cs.stride(0),\n        BLOCK_SIZE=BLOCK_SIZE,\n    )\n    return final_states\n",
+    "passed": null,
+    "problem_text": "Operation: the chunked state-passing recurrence of Mamba2/SSD\n(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).\n\nGiven per-chunk local states `new_states[c]` and per-chunk cumulative\nlog-decays `dA_cs[c]`:\n\n    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1\n\nstarting from state = 0, returning the final state.\n\nThe chunk boundaries are a partitioning choice, not part of the mathematical\ndefinition: subdividing one chunk into several sub-chunks whose log-decays sum\nto the original, with the local-state contribution placed on the last\nsub-chunk, describes the same recurrence.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_02",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T14:40:21Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:43:07Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "fa37f8f3b1bdc2c1e86f6eabcec4287bfea103489a032c03cc8de9b98bffa165"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "26e3dd82d144f101bdad9b4ab6963270e6ac1226493c96a3b63dac3ce570bd7b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "conclusion": "consistent with fp32 rounding, not a formula error",
+            "duration_s": 7.680516,
+            "exit_code": 0,
+            "expected_signal": "rel errors ~1e-6 or below if kernel matches contract recurrence; systematic large error indicates indexing/formula bug",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "metric": "max abs/rel error vs float64 recurrence",
+            "nonpow2_dims_ok": [
+              3,
+              100
+            ],
+            "stderr": "",
+            "stdout": "{\n \"metric\": \"max abs/rel err vs float64 recurrence\",\n \"cases\": [\n  {\n   \"case\": \"small_neg\",\n   \"nchunks\": 4,\n   \"dim\": 8,\n   \"max_abs\": 1.913588624224971e-07,\n   \"max_rel\": 3.187778611902012e-07,\n   \"ref_absmax\": 4.014314507795332,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    8\n   ]\n  },\n  {\n   \"case\": \"dim1\",\n   \"nchunks\": 16,\n   \"dim\": 1,\n   \"max_abs\": 7.285658631950298e-09,\n   \"max_rel\": 1.4786923328764055e-08,\n   \"ref_absmax\": 0.492709569797929,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    1\n   ]\n  },\n  {\n   \"case\": \"dim_nonpow2\",\n   \"nchunks\": 8,\n   \"dim\": 100,\n   \"max_abs\": 1.2299546137128914e-07,\n   \"max_rel\": 6.181416869267275e-06,\n   \"ref_absmax\": 3.4553158674527658,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    100\n   ]\n  },\n  {\n   \"case\": \"dim3\",\n   \"nchunks\": 5,\n   \"dim\": 3,\n   \"max_abs\": 7.968378068490267e-09,\n   \"max_rel\": 8.5493611974411e-09,\n   \"ref_absmax\": 1.2221800062313957,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    3\n   ]\n  },\n  {\n   \"case\": \"many_chunks\",\n   \"nchunks\": 1024,\n   \"dim\": 64,\n   \"max_abs\": 0.00010373538158603424,\n   \"max_rel\": 0.0001105485693853533,\n   \"ref_absmax\": 28.58056523745678,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"mixed_sign\",\n   \"nchunks\": 32,\n   \"dim\": 64,\n   \"max_abs\": 8.919585098965399e-06,\n   \"max_rel\": 5.066388061321824e-06,\n   \"ref_absmax\": 29.610213616240372,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"strong_decay\",\n   \"nchunks\": 64,\n   \"dim\": 128,\n   \"max_abs\": 2.240935921271614e-07,\n   \"max_rel\": 4.64932765664126e-06,\n   \"ref_absmax\": 3.1729633491824165,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    128\n   ]\n  },\n  {\n   \"case\": \"zero_decay\",\n   \"nchunks\": 64,\n   \"dim\": 64,\n   \"max_abs\": 4.380941390991211e-06,\n   \"max_rel\": 4.36253045448723e-05,\n   \"ref_absmax\": 23.552671634592116,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"big_dim\",\n   \"nchunks\": 8,\n   \"dim\": 1024,\n   \"max_abs\": 2.0666417732684295e-07,\n   \"max_rel\": 3.198402722336888e-05,\n   \"ref_absmax\": 4.585249838965914,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    1024\n   ]\n  }\n ]\n}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "typical_rel_to_scale": "<=2e-7",
+            "worst_case": {
+              "case": "many_chunks",
+              "dim": 64,
+              "max_abs": 0.00010373,
+              "nchunks": 1024,
+              "ref_absmax": 28.58,
+              "rel_to_scale": 3.6e-06
+            }
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel output matches a float64 sequential reference of the contract recurrence across 9 configurations (nchunks 4..1024, dim 1/3/8/64/100/128/1024, decays negative/zero/mixed-sign). Max abs errors scale with fp32 accumulation: e.g. nchunks=1024,dim=64 gives max_abs 1.04e-4 on values of magnitude 28.6 (rel-to-scale 3.6e-6, consistent with sqrt(N)*eps sequential accumulation); all other cases have error <=9e-6 abs with rel-to-scale <=2e-7. Non-power-of-2 dims (3, 100) are correct, so masking is right; the returned tensor is shape (dim,) fp32 as the contract's \"final state\" requires. No indexing/off-by-one signature (which would give O(1) relative error).",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel appears to implement the recurrence literally, but indexing/off-by-one of dA_cs, initial-state handling, masking for non-power-of-2 dim, or the final-store branch could be wrong. A float64 reference comparison is the direct test of the contract formula.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "'state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0, returning the final state.'"
+        }
+      ],
+      "scope_rationale": "problem.txt states the exact recurrence and that the final state is returned; any deviation from that formula on admitted inputs is a contract violation.",
+      "statement": "state_passing(new_states, dA_cs) returns a final state that deviates from the contract recurrence state <- exp(dA_cs[c])*state + new_states[c] (float64 reference) by more than fp32 rounding, for representative fp32 inputs (various nchunks, dim, decays).",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T14:43:07Z"
+    },
+    {
+      "created_at": "2026-09-08T14:40:21Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:43:07Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "3abf1311cf55bb221517427fc11b7d01c4c811f4050b2486f2019263879a7133"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "51d4afe064c35de1cafe51e94051c6954cbdeded93c7930ddb0c66a13820c583"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "conclusion": "invariance preserved to fp32 rounding",
+            "duration_s": 7.010962,
+            "exit_code": 0,
+            "exp_rel_per_step_range": [
+              1.09e-08,
+              7.4e-08
+            ],
+            "expected_signal": "If exp is accurate, rel error grows ~K*1e-7; a systematic per-step rel error >>1e-6 or subdivided output far from float64 reference relative to output scale indicates a real invariance violation.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "kernel_base_vs_sub_maxabs": {
+              "K1": 0.0,
+              "K16": 7.15e-07,
+              "K256": 2.61e-05,
+              "K4": 2.24e-07,
+              "K64": 3.7e-06
+            },
+            "ref64_subdivision_consistency_max_abs": 2.84e-14,
+            "stderr": "",
+            "stdout": "{\n \"exp_compounding\": [\n  {\n   \"d\": -0.5,\n   \"K\": 1,\n   \"got\": 0.6065306663513184,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 1.094534106199546e-08,\n   \"rel_per_step\": 1.094534106199546e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 10,\n   \"got\": 0.606530487537384,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 2.838689959591399e-07,\n   \"rel_per_step\": 2.8386899595913988e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 100,\n   \"got\": 0.606525719165802,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 8.145584649856083e-06,\n   \"rel_per_step\": 8.145584649856082e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 1000,\n   \"got\": 0.6065130829811096,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 2.897913113268298e-05,\n   \"rel_per_step\": 2.8979131132682983e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 1,\n   \"got\": 0.006737946532666683,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 6.922268516910716e-08,\n   \"rel_per_step\": 6.922268516910716e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 10,\n   \"got\": 0.006737947929650545,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 1.3810810299423526e-07,\n   \"rel_per_step\": 1.3810810299423526e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 100,\n   \"got\": 0.006737925112247467,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 3.248294770340358e-06,\n   \"rel_per_step\": 3.248294770340358e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 1000,\n   \"got\": 0.0067374212667346,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 7.802559903458586e-05,\n   \"rel_per_step\": 7.802559903458587e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 1,\n   \"got\": 2.061153470123145e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 7.389813711168034e-08,\n   \"rel_per_step\": 7.389813711168034e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 10,\n   \"got\": 2.061153470123145e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 7.389813711168034e-08,\n   \"rel_per_step\": 7.389813711168034e-09\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 100,\n   \"got\": 2.0611581330598483e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 2.188396459789312e-06,\n   \"rel_per_step\": 2.188396459789312e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 1000,\n   \"got\": 2.0610444462221267e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 5.296850037893964e-05,\n   \"rel_per_step\": 5.2968500378939646e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 1,\n   \"got\": 2.7182817459106445,\n   \"exact\": 2.718281828459045,\n   \"rel\": 3.036785946744201e-08,\n   \"rel_per_step\": 3.036785946744201e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 10,\n   \"got\": 2.718283176422119,\n   \"exact\": 2.718281828459045,\n   \"rel\": 4.958879024011908e-07,\n   \"rel_per_step\": 4.9588790240119084e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 100,\n   \"got\": 2.718285083770752,\n   \"exact\": 2.718281828459045,\n   \"rel\": 1.1975622515593678e-06,\n   \"rel_per_step\": 1.1975622515593678e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 1000,\n   \"got\": 2.718343734741211,\n   \"exact\": 2.718281828459045,\n   \"rel\": 2.2774048488173314e-05,\n   \"rel_per_step\": 2.2774048488173316e-08\n  }\n ],\n \"subdivision\": [\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 1,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 0.0,\n   \"ref_absmax\": 4.002182897938265,\n   \"base_vs_ref_maxabs\": 2.41510155429836e-07,\n   \"sub_vs_ref_maxabs\": 2.41510155429836e-07,\n   \"base_vs_sub_maxabs\": 0.0,\n   \"sub_vs_ref_rel_to_scale\": 6.034460732772871e-08\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 4,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 8.881784197001252e-16,\n   \"ref_absmax\": 4.109850699706133,\n   \"base_vs_ref_maxabs\": 3.846615590497038e-07,\n   \"sub_vs_ref_maxabs\": 3.846615590497038e-07,\n   \"base_vs_sub_maxabs\": 2.2351741790771484e-07,\n   \"sub_vs_ref_rel_to_scale\": 9.359502014932277e-08\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 16,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 8.881784197001252e-16,\n   \"ref_absmax\": 3.2840157070059846,\n   \"base_vs_ref_maxabs\": 2.6209032011337285e-07,\n   \"sub_vs_ref_maxabs\": 5.251134090888954e-07,\n   \"base_vs_sub_maxabs\": 7.152557373046875e-07,\n   \"sub_vs_ref_rel_to_scale\": 1.5989978609683258e-07\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 64,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 9.325873406851315e-15,\n   \"ref_absmax\": 2.7460458197147055,\n   \"base_vs_ref_maxabs\": 1.6850761541675752e-07,\n   \"sub_vs_ref_maxabs\": 3.697491085086213e-06,\n   \"base_vs_sub_maxabs\": 3.6954879760742188e-06,\n   \"sub_vs_ref_rel_to_scale\": 1.3464782920010986e-06\n  },\n  {\n   \"nchunks\": 16,\n   \"dim\": 32,\n   \"K\": 8,\n   \"decay_scale\": 3.0,\n   \"ref_consistency_max_abs\": 2.220446049250313e-16,\n   \"ref_absmax\": 2.278354557715631,\n   \"base_vs_ref_maxabs\": 8.705975984568681e-08,\n   \"sub_vs_ref_maxabs\": 8.705975984568681e-08,\n   \"base_vs_sub_maxabs\": 5.960464477539063e-08,\n   \"sub_vs_ref_rel_to_scale\": 3.821168200131959e-08\n  },\n  {\n   \"nchunks\": 4,\n   \"dim\": 128,\n   \"K\": 256,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 2.842170943040401e-14,\n   \"ref_absmax\": 3.4874992904639797,\n   \"base_vs_ref_maxabs\": 1.6013286741056731e-07,\n   \"sub_vs_ref_maxabs\": 2.6096333304970187e-05,\n   \"base_vs_sub_maxabs\": 2.6106834411621094e-05,\n   \"sub_vs_ref_rel_to_scale\": 7.482821108043383e-06\n  }\n ],\n \"metric\": \"compounded exp relative error; subdivided-vs-original kernel outputs both vs shared float64 reference\"\n}\n",
+            "sub_vs_ref_rel_to_scale_max": 7.48e-06,
+            "timed_out": false,
+            "timeout_s": 180
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Subdivision invariance holds to fp32 accuracy. (A) Pure exp-compounding: replacing one decay d by K decays d/K gives relative error 1.1e-8 (K=1) up to 7.8e-5 (K=1000, d=-5), i.e. per-step relative error 1e-8..8e-8 ~ 1 ulp of fp32, so tl.exp is accurate and the error is unavoidable rounding of K successive fp32 multiplies, not a low-accuracy exp. (B) Full subdivision on random problems: float64 references for the original and subdivided partitions agree to <=2.8e-14 (confirming the invariance is real), and the kernel's subdivided output tracks the same reference: K=1 identical (0.0 diff), K=4 2.2e-7, K=16 7.2e-7, K=64 3.7e-6, K=256 2.6e-5 on values of magnitude ~2.7-3.5 (rel-to-scale 6e-8 .. 7.5e-6), growing ~linearly with the number of extra fp32 multiply steps as expected. No structural loss of invariance.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "The contract explicitly declares subdivision equivalence as part of the operation's definition, so a kernel that loses this invariance (e.g. via a low-accuracy exp approximation compounding over many sub-chunks, or scale mis-application) violates a stated property.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "'subdividing one chunk into several sub-chunks whose log-decays sum to the original, with the local-state contribution placed on the last sub-chunk, describes the same recurrence.'"
+        }
+      ],
+      "scope_rationale": "problem.txt explicitly asserts subdivision describes the same recurrence, making this a contract-stated invariant.",
+      "statement": "The kernel's result is not invariant (beyond fp32 tolerance) under the chunk subdivision described in the contract: splitting chunk c into sub-chunks whose log-decays sum to dA_cs[c] with the local state on the last sub-chunk.",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T14:43:07Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_02",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_02"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_02"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_02"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_02",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 57.43411422,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll start by testing the kernel's numerics against a float64 reference and the subdivision invariance the contract highlights.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel appears to implement the recurrence literally, but indexing/off-by-one of dA_cs, initial-state handling, masking for non-power-of-2 dim, or the final-store branch could be wrong. A float64 reference comparison is the direct test of the contract formula.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "'state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0, returning the final state.'"
+              }
+            ],
+            "scope_rationale": "problem.txt states the exact recurrence and that the final state is returned; any deviation from that formula on admitted inputs is a contract violation.",
+            "statement": "state_passing(new_states, dA_cs) returns a final state that deviates from the contract recurrence state <- exp(dA_cs[c])*state + new_states[c] (float64 reference) by more than fp32 rounding, for representative fp32 inputs (various nchunks, dim, decays)."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The contract explicitly declares subdivision equivalence as part of the operation's definition, so a kernel that loses this invariance (e.g. via a low-accuracy exp approximation compounding over many sub-chunks, or scale mis-application) violates a stated property.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "'subdividing one chunk into several sub-chunks whose log-decays sum to the original, with the local-state contribution placed on the last sub-chunk, describes the same recurrence.'"
+              }
+            ],
+            "scope_rationale": "problem.txt explicitly asserts subdivision describes the same recurrence, making this a contract-stated invariant.",
+            "statement": "The kernel's result is not invariant (beyond fp32 tolerance) under the chunk subdivision described in the contract: splitting chunk c into sub-chunks whose log-decays sum to dA_cs[c] with the local state on the last sub-chunk."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 57.434,
+        "input_tokens": 4455,
+        "output_tokens": 4835
+      }
+    },
+    {
+      "duration_s": 42.584084952,
+      "role": "solo",
+      "round": 3,
+      "text": "I have the source and contract; both claims need runtime data. Starting with the direct float64-reference check across shapes and decay regimes.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util, math\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_02/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(ns, da):\n    ns = ns.double().cpu(); da = da.double().cpu()\n    st = torch.zeros(ns.shape[1], dtype=torch.float64)\n    for c in range(ns.shape[0]):\n        st = torch.exp(da[c]) * st + ns[c]\n    return st\n\nres = []\ntorch.manual_seed(0)\ncases = [\n    (\"small_neg\", 4, 8, lambda n: -torch.rand(n)),\n    (\"dim1\", 16, 1, lambda n: -torch.rand(n)),\n    (\"dim_nonpow2\", 8, 100, lambda n: -torch.rand(n)*2),\n    (\"dim3\", 5, 3, lambda n: -torch.rand(n)),\n    (\"many_chunks\", 1024, 64, lambda n: -torch.rand(n)*0.01),\n    (\"mixed_sign\", 32, 64, lambda n: (torch.rand(n)-0.5)*0.5),\n    (\"strong_decay\", 64, 128, lambda n: -torch.rand(n)*5),\n    (\"zero_decay\", 64, 64, lambda n: torch.zeros(n)),\n    (\"big_dim\", 8, 1024, lambda n: -torch.rand(n)),\n]\nfor name, nch, dim, daf in cases:\n    ns = torch.randn(nch, dim)\n    da = daf(nch)\n    out = k.state_passing(ns.cuda(), da.cuda()).cpu().double()\n    r = ref(ns, da)\n    err = (out - r).abs()\n    denom = r.abs().clamp_min(1e-30)\n    res.append(dict(case=name, nchunks=nch, dim=dim,\n                    max_abs=float(err.max()), max_rel=float((err/denom).max()),\n                    ref_absmax=float(r.abs().max()), out_dtype=str(out.dtype),\n                    out_shape=list(out.shape)))\nprint(json.dumps({\"metric\":\"max abs/rel err vs float64 recurrence\",\"cases\":res}, indent=1))\n",
+            "expected_signal": "rel errors ~1e-6 or below if kernel matches contract recurrence; systematic large error indicates indexing/formula bug"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 42.584,
+        "input_tokens": 7954,
+        "output_tokens": 3394
+      }
+    },
+    {
+      "duration_s": 45.80255113,
+      "role": "solo",
+      "round": 4,
+      "text": "Claim c1's probe (t7) shows errors consistent with fp32 accumulation. Now I'll test the contract's stated subdivision invariance directly, with a design that separates real formula error from fp32 rounding: measure compounded exp accuracy and compare both partitionings against a shared float64 reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport torch, json, importlib.util, math\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_02/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref64(ns, da):\n    ns = ns.double().cpu(); da = da.double().cpu()\n    st = torch.zeros(ns.shape[1], dtype=torch.float64)\n    for c in range(ns.shape[0]):\n        st = torch.exp(da[c]) * st + ns[c]\n    return st\n\ndef subdivide(ns, da, K):\n    nch, dim = ns.shape\n    ns2 = torch.zeros(nch*K, dim)\n    da2 = torch.zeros(nch*K)\n    for c in range(nch):\n        # split log-decay evenly; local state on LAST sub-chunk\n        da2[c*K:(c+1)*K] = da[c] / K\n        ns2[(c+1)*K - 1] = ns[c]\n    return ns2, da2\n\ntorch.manual_seed(1)\nout = {}\n\n# A) pure exp-compounding test: state=1 then K multiplications of exp(d/K)\nexpcases = []\nfor d in [-0.5, -5.0, -20.0, 1.0]:\n    for K in [1, 10, 100, 1000]:\n        nch = K+1\n        ns = torch.zeros(nch, 4); ns[0] = 1.0\n        da = torch.full((nch,), d/K); da[0] = 0.0\n        got = k.state_passing(ns.cuda(), da.cuda()).cpu().double()\n        exact = math.exp(d)\n        expcases.append(dict(d=d, K=K, got=float(got[0]), exact=exact,\n                             rel=abs(float(got[0])-exact)/abs(exact),\n                             rel_per_step=abs(float(got[0])-exact)/abs(exact)/K))\nout[\"exp_compounding\"] = expcases\n\n# B) full subdivision invariance on random problems\nsubcases = []\nfor nch, dim, K, scale in [(8,64,1,1.0),(8,64,4,1.0),(8,64,16,1.0),(8,64,64,1.0),\n                           (16,32,8,3.0),(4,128,256,1.0)]:\n    ns = torch.randn(nch, dim)\n    da = -torch.rand(nch)*scale\n    base = k.state_passing(ns.cuda(), da.cuda()).cpu().double()\n    ns2, da2 = subdivide(ns, da, K)\n    sub = k.state_passing(ns2.cuda(), da2.cuda()).cpu().double()\n    r = ref64(ns, da)\n    r2 = ref64(ns2, da2)\n    subcases.append(dict(nchunks=nch, dim=dim, K=K, decay_scale=scale,\n        ref_consistency_max_abs=float((r-r2).abs().max()),\n        ref_absmax=float(r.abs().max()),\n        base_vs_ref_maxabs=float((base-r).abs().max()),\n        sub_vs_ref_maxabs=float((sub-r).abs().max()),\n        base_vs_sub_maxabs=float((base-sub).abs().max()),\n        sub_vs_ref_rel_to_scale=float((sub-r).abs().max()/max(1e-30,float(r.abs().max()))),\n    ))\nout[\"subdivision\"] = subcases\nout[\"metric\"] = \"compounded exp relative error; subdivided-vs-original kernel outputs both vs shared float64 reference\"\nprint(json.dumps(out, indent=1))\n",
+            "expected_signal": "If exp is accurate, rel error grows ~K*1e-7; a systematic per-step rel error >>1e-6 or subdivided output far from float64 reference relative to output scale indicates a real invariance violation.",
+            "timeout_s": 180
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 45.803,
+        "input_tokens": 14327,
+        "output_tokens": 3639
+      }
+    },
+    {
+      "duration_s": 63.45846336600002,
+      "role": "solo",
+      "round": 5,
+      "text": "Both probes returned clean numerics. Let me record their interpretations against the claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "conclusion": "consistent with fp32 rounding, not a formula error",
+              "metric": "max abs/rel error vs float64 recurrence",
+              "nonpow2_dims_ok": [
+                3,
+                100
+              ],
+              "typical_rel_to_scale": "<=2e-7",
+              "worst_case": {
+                "case": "many_chunks",
+                "dim": 64,
+                "max_abs": 0.00010373,
+                "nchunks": 1024,
+                "ref_absmax": 28.58,
+                "rel_to_scale": 3.6e-06
+              }
+            },
+            "event_id": "t7",
+            "status": "rebutted",
+            "summary": "Kernel output matches a float64 sequential reference of the contract recurrence across 9 configurations (nchunks 4..1024, dim 1/3/8/64/100/128/1024, decays negative/zero/mixed-sign). Max abs errors scale with fp32 accumulation: e.g. nchunks=1024,dim=64 gives max_abs 1.04e-4 on values of magnitude 28.6 (rel-to-scale 3.6e-6, consistent with sqrt(N)*eps sequential accumulation); all other cases have error <=9e-6 abs with rel-to-scale <=2e-7. Non-power-of-2 dims (3, 100) are correct, so masking is right; the returned tensor is shape (dim,) fp32 as the contract's \"final state\" requires. No indexing/off-by-one signature (which would give O(1) relative error).",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "conclusion": "invariance preserved to fp32 rounding",
+              "exp_rel_per_step_range": [
+                1.09e-08,
+                7.4e-08
+              ],
+              "kernel_base_vs_sub_maxabs": {
+                "K1": 0.0,
+                "K16": 7.15e-07,
+                "K256": 2.61e-05,
+                "K4": 2.24e-07,
+                "K64": 3.7e-06
+              },
+              "ref64_subdivision_consistency_max_abs": 2.84e-14,
+              "sub_vs_ref_rel_to_scale_max": 7.48e-06
+            },
+            "event_id": "t8",
+            "status": "rebutted",
+            "summary": "Subdivision invariance holds to fp32 accuracy. (A) Pure exp-compounding: replacing one decay d by K decays d/K gives relative error 1.1e-8 (K=1) up to 7.8e-5 (K=1000, d=-5), i.e. per-step relative error 1e-8..8e-8 ~ 1 ulp of fp32, so tl.exp is accurate and the error is unavoidable rounding of K successive fp32 multiplies, not a low-accuracy exp. (B) Full subdivision on random problems: float64 references for the original and subdivided partitions agree to <=2.8e-14 (confirming the invariance is real), and the kernel's subdivided output tracks the same reference: K=1 identical (0.0 diff), K=4 2.2e-7, K=16 7.2e-7, K=64 3.7e-6, K=256 2.6e-5 on values of magnitude ~2.7-3.5 (rel-to-scale 6e-8 .. 7.5e-6), growing ~linearly with the number of extra fp32 multiply steps as expected. No structural loss of invariance.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 63.458,
+        "input_tokens": 23849,
+        "output_tokens": 4729
+      }
+    },
+    {
+      "duration_s": 28.67601592700001,
+      "role": "solo",
+      "round": 6,
+      "text": "Both in-scope claims are resolved with runtime evidence and no further line of inquiry would change the outcome, so I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.87,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The contract requires state <- exp(dA_cs[c])*state + new_states[c] for c=0..nchunks-1 from state=0, returning the final state, and additionally asserts invariance under chunk subdivision (log-decays summing to the original, local state on the last sub-chunk).\\n\\nc1 (event t7): I compared state_passing against a float64 sequential implementation of the contract recurrence over 9 configurations (nchunks 4..1024; dim 1, 3, 8, 64, 100, 128, 1024; decays all-negative, zero, mixed-sign, strong decay). Errors were at fp32-accumulation level: most cases max_abs <= 9e-6 with error/output-scale <= 2e-7; the worst case (nchunks=1024, dim=64) was max_abs 1.04e-4 on values of magnitude 28.6, i.e. 3.6e-6 relative to scale, consistent with sequential fp32 accumulation over 1024 steps. An indexing/off-by-one of dA_cs, a wrong initial state, or a wrong final-store branch would give O(1) relative error, which was not observed. Non-power-of-2 dims (3, 100) were correct, so the offs_m < dim masking with BLOCK_SIZE = next_power_of_2(dim) is sound, and the returned tensor is shape (dim,) fp32. Claim rebutted.\\n\\nc2 (event t8): I tested the contract's stated subdivision invariance two ways. (A) Pure exp compounding: replacing one decay d by K decays d/K gave per-step relative error 1.1e-8..7.8e-8 (~1 fp32 ulp), so tl.exp is accurate and residual error is unavoidable rounding of K successive fp32 multiplies, not an approximate exp. (B) Full subdivision on random problems: float64 references for the original and subdivided partitions agreed to <= 2.8e-14 (the invariance is real), and the kernel's subdivided output tracked that same reference \u2014 K=1 bitwise identical (0.0), K=4 2.2e-7, K=16 7.2e-7, K=64 3.7e-6, K=256 2.6e-5 on values of magnitude ~2.7-3.5 (6e-8 .. 7.5e-6 relative to scale), growing roughly linearly with the extra fp32 multiply steps as expected. No structural loss of invariance. Claim rebutted.\\n\\nSource inspection agrees: the kernel loads dA_cs at chunk c, scales the running fp32 state, adds new_states[c], stores the last iteration's state to final_states, and the Python wrapper returns final_states. The only deviations found are float32 rounding inherent to the declared computation, which the contract accounts for. No contract-required behaviour was shown to be violated.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 28.676,
+        "input_tokens": 46967,
+        "output_tokens": 1991
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_02"
+      },
+      "created_at": "2026-09-08T14:39:22Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_02",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _state_passing_fwd_kernel(\n    states_ptr, out_ptr, final_states_ptr, dA_cs_ptr,\n    dim, nchunks,\n    stride_states_chunk, stride_states_dim,\n    stride_out_chunk, stride_out_dim,\n    stride_final_dim,\n    stride_dA_cs_chunk,\n    BLOCK_SIZE: tl.constexpr,\n):\n    offs_m = tl.arange(0, BLOCK_SIZE)\n    states_ptrs = states_ptr + offs_m * stride_states_dim\n    out_ptrs = out_ptr + offs_m * stride_out_dim\n    final_states_ptrs = final_states_ptr + offs_m * stride_final_dim\n\n    states = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)\n    tl.store(out_ptrs, states, mask=offs_m < dim)\n    out_ptrs += stride_out_chunk\n    for c in range(nchunks):\n        new_states = tl.load(states_ptrs, mask=offs_m < dim, other=0.0).to(tl.float32)\n        dA_cs = tl.load(dA_cs_ptr).to(tl.float32)\n        scale = tl.exp(dA_cs)\n        states = scale * states + new_states\n        if c < nchunks - 1:\n            tl.store(out_ptrs, states, mask=offs_m < dim)\n        else:\n            tl.store(final_states_ptrs, states, mask=offs_m < dim)\n        states_ptrs += stride_states_chunk\n        dA_cs_ptr += stride_dA_cs_chunk\n        out_ptrs += stride_out_chunk\n\n\ndef state_passing(new_states: torch.Tensor, dA_cs: torch.Tensor) -> torch.Tensor:\n    nchunks, dim = new_states.shape\n    out = torch.empty(nchunks, dim, device=new_states.device, dtype=torch.float32)\n    final_states = torch.empty(dim, device=new_states.device, dtype=torch.float32)\n    BLOCK_SIZE = triton.next_power_of_2(dim)\n    _state_passing_fwd_kernel[(1,)](\n        new_states, out, final_states, dA_cs,\n        dim, nchunks,\n        new_states.stride(0), new_states.stride(1),\n        out.stride(0), out.stride(1),\n        final_states.stride(0),\n        dA_cs.stride(0),\n        BLOCK_SIZE=BLOCK_SIZE,\n    )\n    return final_states\n",
+        "passed": null,
+        "problem_text": "Operation: the chunked state-passing recurrence of Mamba2/SSD\n(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).\n\nGiven per-chunk local states `new_states[c]` and per-chunk cumulative\nlog-decays `dA_cs[c]`:\n\n    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1\n\nstarting from state = 0, returning the final state.\n\nThe chunk boundaries are a partitioning choice, not part of the mathematical\ndefinition: subdividing one chunk into several sub-chunks whose log-decays sum\nto the original, with the local-state contribution placed on the last\nsub-chunk, describes the same recurrence.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_02",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_02"
+      },
+      "created_at": "2026-09-08T14:39:22Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: the chunked state-passing recurrence of Mamba2/SSD\n(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).\n\nGiven per-chunk local states `new_states[c]` and per-chunk cumulative\nlog-decays `dA_cs[c]`:\n\n    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1\n\nstarting from state = 0, returning the final state.\n\nThe chunk boundaries are a partitioning choice, not part of the mathematical\ndefinition: subdividing one chunk into several sub-chunks whose log-decays sum\nto the original, with the local-state contribution placed on the last\nsub-chunk, describes the same recurrence.\n",
+        "entry": "case_02",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_02"
+      },
+      "created_at": "2026-09-08T14:39:22Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_02",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1859
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 650
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_02",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T14:39:22Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_02\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_02",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel appears to implement the recurrence literally, but indexing/off-by-one of dA_cs, initial-state handling, masking for non-power-of-2 dim, or the final-store branch could be wrong. A float64 reference comparison is the direct test of the contract formula.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0, returning the final state.'"
+          }
+        ],
+        "scope_rationale": "problem.txt states the exact recurrence and that the final state is returned; any deviation from that formula on admitted inputs is a contract violation.",
+        "statement": "state_passing(new_states, dA_cs) returns a final state that deviates from the contract recurrence state <- exp(dA_cs[c])*state + new_states[c] (float64 reference) by more than fp32 rounding, for representative fp32 inputs (various nchunks, dim, decays)."
+      },
+      "created_at": "2026-09-08T14:40:21Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-08T14:40:21Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel appears to implement the recurrence literally, but indexing/off-by-one of dA_cs, initial-state handling, masking for non-power-of-2 dim, or the final-store branch could be wrong. A float64 reference comparison is the direct test of the contract formula.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0, returning the final state.'"
+          }
+        ],
+        "scope_rationale": "problem.txt states the exact recurrence and that the final state is returned; any deviation from that formula on admitted inputs is a contract violation.",
+        "statement": "state_passing(new_states, dA_cs) returns a final state that deviates from the contract recurrence state <- exp(dA_cs[c])*state + new_states[c] (float64 reference) by more than fp32 rounding, for representative fp32 inputs (various nchunks, dim, decays).",
+        "status": "open",
+        "updated_at": "2026-09-08T14:40:21Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The contract explicitly declares subdivision equivalence as part of the operation's definition, so a kernel that loses this invariance (e.g. via a low-accuracy exp approximation compounding over many sub-chunks, or scale mis-application) violates a stated property.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'subdividing one chunk into several sub-chunks whose log-decays sum to the original, with the local-state contribution placed on the last sub-chunk, describes the same recurrence.'"
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly asserts subdivision describes the same recurrence, making this a contract-stated invariant.",
+        "statement": "The kernel's result is not invariant (beyond fp32 tolerance) under the chunk subdivision described in the contract: splitting chunk c into sub-chunks whose log-decays sum to dA_cs[c] with the local state on the last sub-chunk."
+      },
+      "created_at": "2026-09-08T14:40:21Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-08T14:40:21Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "The contract explicitly declares subdivision equivalence as part of the operation's definition, so a kernel that loses this invariance (e.g. via a low-accuracy exp approximation compounding over many sub-chunks, or scale mis-application) violates a stated property.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'subdividing one chunk into several sub-chunks whose log-decays sum to the original, with the local-state contribution placed on the last sub-chunk, describes the same recurrence.'"
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly asserts subdivision describes the same recurrence, making this a contract-stated invariant.",
+        "statement": "The kernel's result is not invariant (beyond fp32 tolerance) under the chunk subdivision described in the contract: splitting chunk c into sub-chunks whose log-decays sum to dA_cs[c] with the local state on the last sub-chunk.",
+        "status": "open",
+        "updated_at": "2026-09-08T14:40:21Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util, math\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_02/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(ns, da):\n    ns = ns.double().cpu(); da = da.double().cpu()\n    st = torch.zeros(ns.shape[1], dtype=torch.float64)\n    for c in range(ns.shape[0]):\n        st = torch.exp(da[c]) * st + ns[c]\n    return st\n\nres = []\ntorch.manual_seed(0)\ncases = [\n    (\"small_neg\", 4, 8, lambda n: -torch.rand(n)),\n    (\"dim1\", 16, 1, lambda n: -torch.rand(n)),\n    (\"dim_nonpow2\", 8, 100, lambda n: -torch.rand(n)*2),\n    (\"dim3\", 5, 3, lambda n: -torch.rand(n)),\n    (\"many_chunks\", 1024, 64, lambda n: -torch.rand(n)*0.01),\n    (\"mixed_sign\", 32, 64, lambda n: (torch.rand(n)-0.5)*0.5),\n    (\"strong_decay\", 64, 128, lambda n: -torch.rand(n)*5),\n    (\"zero_decay\", 64, 64, lambda n: torch.zeros(n)),\n    (\"big_dim\", 8, 1024, lambda n: -torch.rand(n)),\n]\nfor name, nch, dim, daf in cases:\n    ns = torch.randn(nch, dim)\n    da = daf(nch)\n    out = k.state_passing(ns.cuda(), da.cuda()).cpu().double()\n    r = ref(ns, da)\n    err = (out - r).abs()\n    denom = r.abs().clamp_min(1e-30)\n    res.append(dict(case=name, nchunks=nch, dim=dim,\n                    max_abs=float(err.max()), max_rel=float((err/denom).max()),\n                    ref_absmax=float(r.abs().max()), out_dtype=str(out.dtype),\n                    out_shape=list(out.shape)))\nprint(json.dumps({\"metric\":\"max abs/rel err vs float64 recurrence\",\"cases\":res}, indent=1))\n",
+        "expected_signal": "rel errors ~1e-6 or below if kernel matches contract recurrence; systematic large error indicates indexing/formula bug"
+      },
+      "created_at": "2026-09-08T14:41:11Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "fa37f8f3b1bdc2c1e86f6eabcec4287bfea103489a032c03cc8de9b98bffa165"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "26e3dd82d144f101bdad9b4ab6963270e6ac1226493c96a3b63dac3ce570bd7b"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "state_passing(new_states, dA_cs) returns a final state that deviates from the contract recurrence state <- exp(dA_cs[c])*state + new_states[c] (float64 reference) by more than fp32 rounding, for representative fp32 inputs (various nchunks, dim, decays).",
+        "cwd": "/root/cases/case_02",
+        "duration_s": 7.680516,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "fa37f8f3b1bdc2c1e86f6eabcec4287bfea103489a032c03cc8de9b98bffa165"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "26e3dd82d144f101bdad9b4ab6963270e6ac1226493c96a3b63dac3ce570bd7b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 7.680516,
+            "exit_code": 0,
+            "expected_signal": "rel errors ~1e-6 or below if kernel matches contract recurrence; systematic large error indicates indexing/formula bug",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n \"metric\": \"max abs/rel err vs float64 recurrence\",\n \"cases\": [\n  {\n   \"case\": \"small_neg\",\n   \"nchunks\": 4,\n   \"dim\": 8,\n   \"max_abs\": 1.913588624224971e-07,\n   \"max_rel\": 3.187778611902012e-07,\n   \"ref_absmax\": 4.014314507795332,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    8\n   ]\n  },\n  {\n   \"case\": \"dim1\",\n   \"nchunks\": 16,\n   \"dim\": 1,\n   \"max_abs\": 7.285658631950298e-09,\n   \"max_rel\": 1.4786923328764055e-08,\n   \"ref_absmax\": 0.492709569797929,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    1\n   ]\n  },\n  {\n   \"case\": \"dim_nonpow2\",\n   \"nchunks\": 8,\n   \"dim\": 100,\n   \"max_abs\": 1.2299546137128914e-07,\n   \"max_rel\": 6.181416869267275e-06,\n   \"ref_absmax\": 3.4553158674527658,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    100\n   ]\n  },\n  {\n   \"case\": \"dim3\",\n   \"nchunks\": 5,\n   \"dim\": 3,\n   \"max_abs\": 7.968378068490267e-09,\n   \"max_rel\": 8.5493611974411e-09,\n   \"ref_absmax\": 1.2221800062313957,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    3\n   ]\n  },\n  {\n   \"case\": \"many_chunks\",\n   \"nchunks\": 1024,\n   \"dim\": 64,\n   \"max_abs\": 0.00010373538158603424,\n   \"max_rel\": 0.0001105485693853533,\n   \"ref_absmax\": 28.58056523745678,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"mixed_sign\",\n   \"nchunks\": 32,\n   \"dim\": 64,\n   \"max_abs\": 8.919585098965399e-06,\n   \"max_rel\": 5.066388061321824e-06,\n   \"ref_absmax\": 29.610213616240372,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"strong_decay\",\n   \"nchunks\": 64,\n   \"dim\": 128,\n   \"max_abs\": 2.240935921271614e-07,\n   \"max_rel\": 4.64932765664126e-06,\n   \"ref_absmax\": 3.1729633491824165,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    128\n   ]\n  },\n  {\n   \"case\": \"zero_decay\",\n   \"nchunks\": 64,\n   \"dim\": 64,\n   \"max_abs\": 4.380941390991211e-06,\n   \"max_rel\": 4.36253045448723e-05,\n   \"ref_absmax\": 23.552671634592116,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"big_dim\",\n   \"nchunks\": 8,\n   \"dim\": 1024,\n   \"max_abs\": 2.0666417732684295e-07,\n   \"max_rel\": 3.198402722336888e-05,\n   \"ref_absmax\": 4.585249838965914,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    1024\n   ]\n  }\n ]\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "rel errors ~1e-6 or below if kernel matches contract recurrence; systematic large error indicates indexing/formula bug",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n \"metric\": \"max abs/rel err vs float64 recurrence\",\n \"cases\": [\n  {\n   \"case\": \"small_neg\",\n   \"nchunks\": 4,\n   \"dim\": 8,\n   \"max_abs\": 1.913588624224971e-07,\n   \"max_rel\": 3.187778611902012e-07,\n   \"ref_absmax\": 4.014314507795332,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    8\n   ]\n  },\n  {\n   \"case\": \"dim1\",\n   \"nchunks\": 16,\n   \"dim\": 1,\n   \"max_abs\": 7.285658631950298e-09,\n   \"max_rel\": 1.4786923328764055e-08,\n   \"ref_absmax\": 0.492709569797929,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    1\n   ]\n  },\n  {\n   \"case\": \"dim_nonpow2\",\n   \"nchunks\": 8,\n   \"dim\": 100,\n   \"max_abs\": 1.2299546137128914e-07,\n   \"max_rel\": 6.181416869267275e-06,\n   \"ref_absmax\": 3.4553158674527658,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    100\n   ]\n  },\n  {\n   \"case\": \"dim3\",\n   \"nchunks\": 5,\n   \"dim\": 3,\n   \"max_abs\": 7.968378068490267e-09,\n   \"max_rel\": 8.5493611974411e-09,\n   \"ref_absmax\": 1.2221800062313957,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    3\n   ]\n  },\n  {\n   \"case\": \"many_chunks\",\n   \"nchunks\": 1024,\n   \"dim\": 64,\n   \"max_abs\": 0.00010373538158603424,\n   \"max_rel\": 0.0001105485693853533,\n   \"ref_absmax\": 28.58056523745678,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"mixed_sign\",\n   \"nchunks\": 32,\n   \"dim\": 64,\n   \"max_abs\": 8.919585098965399e-06,\n   \"max_rel\": 5.066388061321824e-06,\n   \"ref_absmax\": 29.610213616240372,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"strong_decay\",\n   \"nchunks\": 64,\n   \"dim\": 128,\n   \"max_abs\": 2.240935921271614e-07,\n   \"max_rel\": 4.64932765664126e-06,\n   \"ref_absmax\": 3.1729633491824165,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    128\n   ]\n  },\n  {\n   \"case\": \"zero_decay\",\n   \"nchunks\": 64,\n   \"dim\": 64,\n   \"max_abs\": 4.380941390991211e-06,\n   \"max_rel\": 4.36253045448723e-05,\n   \"ref_absmax\": 23.552671634592116,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"big_dim\",\n   \"nchunks\": 8,\n   \"dim\": 1024,\n   \"max_abs\": 2.0666417732684295e-07,\n   \"max_rel\": 3.198402722336888e-05,\n   \"ref_absmax\": 4.585249838965914,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    1024\n   ]\n  }\n ]\n}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport torch, json, importlib.util, math\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_02/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref64(ns, da):\n    ns = ns.double().cpu(); da = da.double().cpu()\n    st = torch.zeros(ns.shape[1], dtype=torch.float64)\n    for c in range(ns.shape[0]):\n        st = torch.exp(da[c]) * st + ns[c]\n    return st\n\ndef subdivide(ns, da, K):\n    nch, dim = ns.shape\n    ns2 = torch.zeros(nch*K, dim)\n    da2 = torch.zeros(nch*K)\n    for c in range(nch):\n        # split log-decay evenly; local state on LAST sub-chunk\n        da2[c*K:(c+1)*K] = da[c] / K\n        ns2[(c+1)*K - 1] = ns[c]\n    return ns2, da2\n\ntorch.manual_seed(1)\nout = {}\n\n# A) pure exp-compounding test: state=1 then K multiplications of exp(d/K)\nexpcases = []\nfor d in [-0.5, -5.0, -20.0, 1.0]:\n    for K in [1, 10, 100, 1000]:\n        nch = K+1\n        ns = torch.zeros(nch, 4); ns[0] = 1.0\n        da = torch.full((nch,), d/K); da[0] = 0.0\n        got = k.state_passing(ns.cuda(), da.cuda()).cpu().double()\n        exact = math.exp(d)\n        expcases.append(dict(d=d, K=K, got=float(got[0]), exact=exact,\n                             rel=abs(float(got[0])-exact)/abs(exact),\n                             rel_per_step=abs(float(got[0])-exact)/abs(exact)/K))\nout[\"exp_compounding\"] = expcases\n\n# B) full subdivision invariance on random problems\nsubcases = []\nfor nch, dim, K, scale in [(8,64,1,1.0),(8,64,4,1.0),(8,64,16,1.0),(8,64,64,1.0),\n                           (16,32,8,3.0),(4,128,256,1.0)]:\n    ns = torch.randn(nch, dim)\n    da = -torch.rand(nch)*scale\n    base = k.state_passing(ns.cuda(), da.cuda()).cpu().double()\n    ns2, da2 = subdivide(ns, da, K)\n    sub = k.state_passing(ns2.cuda(), da2.cuda()).cpu().double()\n    r = ref64(ns, da)\n    r2 = ref64(ns2, da2)\n    subcases.append(dict(nchunks=nch, dim=dim, K=K, decay_scale=scale,\n        ref_consistency_max_abs=float((r-r2).abs().max()),\n        ref_absmax=float(r.abs().max()),\n        base_vs_ref_maxabs=float((base-r).abs().max()),\n        sub_vs_ref_maxabs=float((sub-r).abs().max()),\n        base_vs_sub_maxabs=float((base-sub).abs().max()),\n        sub_vs_ref_rel_to_scale=float((sub-r).abs().max()/max(1e-30,float(r.abs().max()))),\n    ))\nout[\"subdivision\"] = subcases\nout[\"metric\"] = \"compounded exp relative error; subdivided-vs-original kernel outputs both vs shared float64 reference\"\nprint(json.dumps(out, indent=1))\n",
+        "expected_signal": "If exp is accurate, rel error grows ~K*1e-7; a systematic per-step rel error >>1e-6 or subdivided output far from float64 reference relative to output scale indicates a real invariance violation.",
+        "timeout_s": 180
+      },
+      "created_at": "2026-09-08T14:42:04Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "3abf1311cf55bb221517427fc11b7d01c4c811f4050b2486f2019263879a7133"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "51d4afe064c35de1cafe51e94051c6954cbdeded93c7930ddb0c66a13820c583"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "The kernel's result is not invariant (beyond fp32 tolerance) under the chunk subdivision described in the contract: splitting chunk c into sub-chunks whose log-decays sum to dA_cs[c] with the local state on the last sub-chunk.",
+        "cwd": "/root/cases/case_02",
+        "duration_s": 7.010962,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "3abf1311cf55bb221517427fc11b7d01c4c811f4050b2486f2019263879a7133"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "51d4afe064c35de1cafe51e94051c6954cbdeded93c7930ddb0c66a13820c583"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 7.010962,
+            "exit_code": 0,
+            "expected_signal": "If exp is accurate, rel error grows ~K*1e-7; a systematic per-step rel error >>1e-6 or subdivided output far from float64 reference relative to output scale indicates a real invariance violation.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n \"exp_compounding\": [\n  {\n   \"d\": -0.5,\n   \"K\": 1,\n   \"got\": 0.6065306663513184,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 1.094534106199546e-08,\n   \"rel_per_step\": 1.094534106199546e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 10,\n   \"got\": 0.606530487537384,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 2.838689959591399e-07,\n   \"rel_per_step\": 2.8386899595913988e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 100,\n   \"got\": 0.606525719165802,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 8.145584649856083e-06,\n   \"rel_per_step\": 8.145584649856082e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 1000,\n   \"got\": 0.6065130829811096,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 2.897913113268298e-05,\n   \"rel_per_step\": 2.8979131132682983e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 1,\n   \"got\": 0.006737946532666683,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 6.922268516910716e-08,\n   \"rel_per_step\": 6.922268516910716e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 10,\n   \"got\": 0.006737947929650545,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 1.3810810299423526e-07,\n   \"rel_per_step\": 1.3810810299423526e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 100,\n   \"got\": 0.006737925112247467,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 3.248294770340358e-06,\n   \"rel_per_step\": 3.248294770340358e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 1000,\n   \"got\": 0.0067374212667346,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 7.802559903458586e-05,\n   \"rel_per_step\": 7.802559903458587e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 1,\n   \"got\": 2.061153470123145e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 7.389813711168034e-08,\n   \"rel_per_step\": 7.389813711168034e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 10,\n   \"got\": 2.061153470123145e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 7.389813711168034e-08,\n   \"rel_per_step\": 7.389813711168034e-09\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 100,\n   \"got\": 2.0611581330598483e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 2.188396459789312e-06,\n   \"rel_per_step\": 2.188396459789312e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 1000,\n   \"got\": 2.0610444462221267e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 5.296850037893964e-05,\n   \"rel_per_step\": 5.2968500378939646e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 1,\n   \"got\": 2.7182817459106445,\n   \"exact\": 2.718281828459045,\n   \"rel\": 3.036785946744201e-08,\n   \"rel_per_step\": 3.036785946744201e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 10,\n   \"got\": 2.718283176422119,\n   \"exact\": 2.718281828459045,\n   \"rel\": 4.958879024011908e-07,\n   \"rel_per_step\": 4.9588790240119084e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 100,\n   \"got\": 2.718285083770752,\n   \"exact\": 2.718281828459045,\n   \"rel\": 1.1975622515593678e-06,\n   \"rel_per_step\": 1.1975622515593678e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 1000,\n   \"got\": 2.718343734741211,\n   \"exact\": 2.718281828459045,\n   \"rel\": 2.2774048488173314e-05,\n   \"rel_per_step\": 2.2774048488173316e-08\n  }\n ],\n \"subdivision\": [\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 1,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 0.0,\n   \"ref_absmax\": 4.002182897938265,\n   \"base_vs_ref_maxabs\": 2.41510155429836e-07,\n   \"sub_vs_ref_maxabs\": 2.41510155429836e-07,\n   \"base_vs_sub_maxabs\": 0.0,\n   \"sub_vs_ref_rel_to_scale\": 6.034460732772871e-08\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 4,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 8.881784197001252e-16,\n   \"ref_absmax\": 4.109850699706133,\n   \"base_vs_ref_maxabs\": 3.846615590497038e-07,\n   \"sub_vs_ref_maxabs\": 3.846615590497038e-07,\n   \"base_vs_sub_maxabs\": 2.2351741790771484e-07,\n   \"sub_vs_ref_rel_to_scale\": 9.359502014932277e-08\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 16,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 8.881784197001252e-16,\n   \"ref_absmax\": 3.2840157070059846,\n   \"base_vs_ref_maxabs\": 2.6209032011337285e-07,\n   \"sub_vs_ref_maxabs\": 5.251134090888954e-07,\n   \"base_vs_sub_maxabs\": 7.152557373046875e-07,\n   \"sub_vs_ref_rel_to_scale\": 1.5989978609683258e-07\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 64,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 9.325873406851315e-15,\n   \"ref_absmax\": 2.7460458197147055,\n   \"base_vs_ref_maxabs\": 1.6850761541675752e-07,\n   \"sub_vs_ref_maxabs\": 3.697491085086213e-06,\n   \"base_vs_sub_maxabs\": 3.6954879760742188e-06,\n   \"sub_vs_ref_rel_to_scale\": 1.3464782920010986e-06\n  },\n  {\n   \"nchunks\": 16,\n   \"dim\": 32,\n   \"K\": 8,\n   \"decay_scale\": 3.0,\n   \"ref_consistency_max_abs\": 2.220446049250313e-16,\n   \"ref_absmax\": 2.278354557715631,\n   \"base_vs_ref_maxabs\": 8.705975984568681e-08,\n   \"sub_vs_ref_maxabs\": 8.705975984568681e-08,\n   \"base_vs_sub_maxabs\": 5.960464477539063e-08,\n   \"sub_vs_ref_rel_to_scale\": 3.821168200131959e-08\n  },\n  {\n   \"nchunks\": 4,\n   \"dim\": 128,\n   \"K\": 256,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 2.842170943040401e-14,\n   \"ref_absmax\": 3.4874992904639797,\n   \"base_vs_ref_maxabs\": 1.6013286741056731e-07,\n   \"sub_vs_ref_maxabs\": 2.6096333304970187e-05,\n   \"base_vs_sub_maxabs\": 2.6106834411621094e-05,\n   \"sub_vs_ref_rel_to_scale\": 7.482821108043383e-06\n  }\n ],\n \"metric\": \"compounded exp relative error; subdivided-vs-original kernel outputs both vs shared float64 reference\"\n}\n",
+            "timed_out": false,
+            "timeout_s": 180
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "If exp is accurate, rel error grows ~K*1e-7; a systematic per-step rel error >>1e-6 or subdivided output far from float64 reference relative to output scale indicates a real invariance violation.",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 210,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n \"exp_compounding\": [\n  {\n   \"d\": -0.5,\n   \"K\": 1,\n   \"got\": 0.6065306663513184,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 1.094534106199546e-08,\n   \"rel_per_step\": 1.094534106199546e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 10,\n   \"got\": 0.606530487537384,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 2.838689959591399e-07,\n   \"rel_per_step\": 2.8386899595913988e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 100,\n   \"got\": 0.606525719165802,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 8.145584649856083e-06,\n   \"rel_per_step\": 8.145584649856082e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 1000,\n   \"got\": 0.6065130829811096,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 2.897913113268298e-05,\n   \"rel_per_step\": 2.8979131132682983e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 1,\n   \"got\": 0.006737946532666683,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 6.922268516910716e-08,\n   \"rel_per_step\": 6.922268516910716e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 10,\n   \"got\": 0.006737947929650545,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 1.3810810299423526e-07,\n   \"rel_per_step\": 1.3810810299423526e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 100,\n   \"got\": 0.006737925112247467,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 3.248294770340358e-06,\n   \"rel_per_step\": 3.248294770340358e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 1000,\n   \"got\": 0.0067374212667346,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 7.802559903458586e-05,\n   \"rel_per_step\": 7.802559903458587e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 1,\n   \"got\": 2.061153470123145e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 7.389813711168034e-08,\n   \"rel_per_step\": 7.389813711168034e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 10,\n   \"got\": 2.061153470123145e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 7.389813711168034e-08,\n   \"rel_per_step\": 7.389813711168034e-09\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 100,\n   \"got\": 2.0611581330598483e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 2.188396459789312e-06,\n   \"rel_per_step\": 2.188396459789312e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 1000,\n   \"got\": 2.0610444462221267e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 5.296850037893964e-05,\n   \"rel_per_step\": 5.2968500378939646e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 1,\n   \"got\": 2.7182817459106445,\n   \"exact\": 2.718281828459045,\n   \"rel\": 3.036785946744201e-08,\n   \"rel_per_step\": 3.036785946744201e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 10,\n   \"got\": 2.718283176422119,\n   \"exact\": 2.718281828459045,\n   \"rel\": 4.958879024011908e-07,\n   \"rel_per_step\": 4.9588790240119084e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 100,\n   \"got\": 2.718285083770752,\n   \"exact\": 2.718281828459045,\n   \"rel\": 1.1975622515593678e-06,\n   \"rel_per_step\": 1.1975622515593678e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 1000,\n   \"got\": 2.718343734741211,\n   \"exact\": 2.718281828459045,\n   \"rel\": 2.2774048488173314e-05,\n   \"rel_per_step\": 2.2774048488173316e-08\n  }\n ],\n \"subdivision\": [\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 1,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 0.0,\n   \"ref_absmax\": 4.002182897938265,\n   \"base_vs_ref_maxabs\": 2.41510155429836e-07,\n   \"sub_vs_ref_maxabs\": 2.41510155429836e-07,\n   \"base_vs_sub_maxabs\": 0.0,\n   \"sub_vs_ref_rel_to_scale\": 6.034460732772871e-08\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 4,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 8.881784197001252e-16,\n   \"ref_absmax\": 4.109850699706133,\n   \"base_vs_ref_maxabs\": 3.846615590497038e-07,\n   \"sub_vs_ref_maxabs\": 3.846615590497038e-07,\n   \"base_vs_sub_maxabs\": 2.2351741790771484e-07,\n   \"sub_vs_ref_rel_to_scale\": 9.359502014932277e-08\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 16,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 8.881784197001252e-16,\n   \"ref_absmax\": 3.2840157070059846,\n   \"base_vs_ref_maxabs\": 2.6209032011337285e-07,\n   \"sub_vs_ref_maxabs\": 5.251134090888954e-07,\n   \"base_vs_sub_maxabs\": 7.152557373046875e-07,\n   \"sub_vs_ref_rel_to_scale\": 1.5989978609683258e-07\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 64,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 9.325873406851315e-15,\n   \"ref_absmax\": 2.7460458197147055,\n   \"base_vs_ref_maxabs\": 1.6850761541675752e-07,\n   \"sub_vs_ref_maxabs\": 3.697491085086213e-06,\n   \"base_vs_sub_maxabs\": 3.6954879760742188e-06,\n   \"sub_vs_ref_rel_to_scale\": 1.3464782920010986e-06\n  },\n  {\n   \"nchunks\": 16,\n   \"dim\": 32,\n   \"K\": 8,\n   \"decay_scale\": 3.0,\n   \"ref_consistency_max_abs\": 2.220446049250313e-16,\n   \"ref_absmax\": 2.278354557715631,\n   \"base_vs_ref_maxabs\": 8.705975984568681e-08,\n   \"sub_vs_ref_maxabs\": 8.705975984568681e-08,\n   \"base_vs_sub_maxabs\": 5.960464477539063e-08,\n   \"sub_vs_ref_rel_to_scale\": 3.821168200131959e-08\n  },\n  {\n   \"nchunks\": 4,\n   \"dim\": 128,\n   \"K\": 256,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 2.842170943040401e-14,\n   \"ref_absmax\": 3.4874992904639797,\n   \"base_vs_ref_maxabs\": 1.6013286741056731e-07,\n   \"sub_vs_ref_maxabs\": 2.6096333304970187e-05,\n   \"base_vs_sub_maxabs\": 2.6106834411621094e-05,\n   \"sub_vs_ref_rel_to_scale\": 7.482821108043383e-06\n  }\n ],\n \"metric\": \"compounded exp relative error; subdivided-vs-original kernel outputs both vs shared float64 reference\"\n}\n",
+        "timed_out": false,
+        "timeout_s": 180,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "conclusion": "consistent with fp32 rounding, not a formula error",
+          "metric": "max abs/rel error vs float64 recurrence",
+          "nonpow2_dims_ok": [
+            3,
+            100
+          ],
+          "typical_rel_to_scale": "<=2e-7",
+          "worst_case": {
+            "case": "many_chunks",
+            "dim": 64,
+            "max_abs": 0.00010373,
+            "nchunks": 1024,
+            "ref_absmax": 28.58,
+            "rel_to_scale": 3.6e-06
+          }
+        },
+        "event_id": "t7",
+        "status": "rebutted",
+        "summary": "Kernel output matches a float64 sequential reference of the contract recurrence across 9 configurations (nchunks 4..1024, dim 1/3/8/64/100/128/1024, decays negative/zero/mixed-sign). Max abs errors scale with fp32 accumulation: e.g. nchunks=1024,dim=64 gives max_abs 1.04e-4 on values of magnitude 28.6 (rel-to-scale 3.6e-6, consistent with sqrt(N)*eps sequential accumulation); all other cases have error <=9e-6 abs with rel-to-scale <=2e-7. Non-power-of-2 dims (3, 100) are correct, so masking is right; the returned tensor is shape (dim,) fp32 as the contract's \"final state\" requires. No indexing/off-by-one signature (which would give O(1) relative error).",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T14:43:07Z",
+      "id": "t9",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:40:21Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:43:07Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "fa37f8f3b1bdc2c1e86f6eabcec4287bfea103489a032c03cc8de9b98bffa165"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "26e3dd82d144f101bdad9b4ab6963270e6ac1226493c96a3b63dac3ce570bd7b"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "conclusion": "consistent with fp32 rounding, not a formula error",
+                "duration_s": 7.680516,
+                "exit_code": 0,
+                "expected_signal": "rel errors ~1e-6 or below if kernel matches contract recurrence; systematic large error indicates indexing/formula bug",
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "metric": "max abs/rel error vs float64 recurrence",
+                "nonpow2_dims_ok": [
+                  3,
+                  100
+                ],
+                "stderr": "",
+                "stdout": "{\n \"metric\": \"max abs/rel err vs float64 recurrence\",\n \"cases\": [\n  {\n   \"case\": \"small_neg\",\n   \"nchunks\": 4,\n   \"dim\": 8,\n   \"max_abs\": 1.913588624224971e-07,\n   \"max_rel\": 3.187778611902012e-07,\n   \"ref_absmax\": 4.014314507795332,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    8\n   ]\n  },\n  {\n   \"case\": \"dim1\",\n   \"nchunks\": 16,\n   \"dim\": 1,\n   \"max_abs\": 7.285658631950298e-09,\n   \"max_rel\": 1.4786923328764055e-08,\n   \"ref_absmax\": 0.492709569797929,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    1\n   ]\n  },\n  {\n   \"case\": \"dim_nonpow2\",\n   \"nchunks\": 8,\n   \"dim\": 100,\n   \"max_abs\": 1.2299546137128914e-07,\n   \"max_rel\": 6.181416869267275e-06,\n   \"ref_absmax\": 3.4553158674527658,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    100\n   ]\n  },\n  {\n   \"case\": \"dim3\",\n   \"nchunks\": 5,\n   \"dim\": 3,\n   \"max_abs\": 7.968378068490267e-09,\n   \"max_rel\": 8.5493611974411e-09,\n   \"ref_absmax\": 1.2221800062313957,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    3\n   ]\n  },\n  {\n   \"case\": \"many_chunks\",\n   \"nchunks\": 1024,\n   \"dim\": 64,\n   \"max_abs\": 0.00010373538158603424,\n   \"max_rel\": 0.0001105485693853533,\n   \"ref_absmax\": 28.58056523745678,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"mixed_sign\",\n   \"nchunks\": 32,\n   \"dim\": 64,\n   \"max_abs\": 8.919585098965399e-06,\n   \"max_rel\": 5.066388061321824e-06,\n   \"ref_absmax\": 29.610213616240372,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"strong_decay\",\n   \"nchunks\": 64,\n   \"dim\": 128,\n   \"max_abs\": 2.240935921271614e-07,\n   \"max_rel\": 4.64932765664126e-06,\n   \"ref_absmax\": 3.1729633491824165,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    128\n   ]\n  },\n  {\n   \"case\": \"zero_decay\",\n   \"nchunks\": 64,\n   \"dim\": 64,\n   \"max_abs\": 4.380941390991211e-06,\n   \"max_rel\": 4.36253045448723e-05,\n   \"ref_absmax\": 23.552671634592116,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"big_dim\",\n   \"nchunks\": 8,\n   \"dim\": 1024,\n   \"max_abs\": 2.0666417732684295e-07,\n   \"max_rel\": 3.198402722336888e-05,\n   \"ref_absmax\": 4.585249838965914,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    1024\n   ]\n  }\n ]\n}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "typical_rel_to_scale": "<=2e-7",
+                "worst_case": {
+                  "case": "many_chunks",
+                  "dim": 64,
+                  "max_abs": 0.00010373,
+                  "nchunks": 1024,
+                  "ref_absmax": 28.58,
+                  "rel_to_scale": 3.6e-06
+                }
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Kernel output matches a float64 sequential reference of the contract recurrence across 9 configurations (nchunks 4..1024, dim 1/3/8/64/100/128/1024, decays negative/zero/mixed-sign). Max abs errors scale with fp32 accumulation: e.g. nchunks=1024,dim=64 gives max_abs 1.04e-4 on values of magnitude 28.6 (rel-to-scale 3.6e-6, consistent with sqrt(N)*eps sequential accumulation); all other cases have error <=9e-6 abs with rel-to-scale <=2e-7. Non-power-of-2 dims (3, 100) are correct, so masking is right; the returned tensor is shape (dim,) fp32 as the contract's \"final state\" requires. No indexing/off-by-one signature (which would give O(1) relative error).",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel appears to implement the recurrence literally, but indexing/off-by-one of dA_cs, initial-state handling, masking for non-power-of-2 dim, or the final-store branch could be wrong. A float64 reference comparison is the direct test of the contract formula.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "'state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0, returning the final state.'"
+            }
+          ],
+          "scope_rationale": "problem.txt states the exact recurrence and that the final state is returned; any deviation from that formula on admitted inputs is a contract violation.",
+          "statement": "state_passing(new_states, dA_cs) returns a final state that deviates from the contract recurrence state <- exp(dA_cs[c])*state + new_states[c] (float64 reference) by more than fp32 rounding, for representative fp32 inputs (various nchunks, dim, decays).",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:43:07Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:43:07Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "fa37f8f3b1bdc2c1e86f6eabcec4287bfea103489a032c03cc8de9b98bffa165"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "26e3dd82d144f101bdad9b4ab6963270e6ac1226493c96a3b63dac3ce570bd7b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "conclusion": "consistent with fp32 rounding, not a formula error",
+            "duration_s": 7.680516,
+            "exit_code": 0,
+            "expected_signal": "rel errors ~1e-6 or below if kernel matches contract recurrence; systematic large error indicates indexing/formula bug",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "metric": "max abs/rel error vs float64 recurrence",
+            "nonpow2_dims_ok": [
+              3,
+              100
+            ],
+            "stderr": "",
+            "stdout": "{\n \"metric\": \"max abs/rel err vs float64 recurrence\",\n \"cases\": [\n  {\n   \"case\": \"small_neg\",\n   \"nchunks\": 4,\n   \"dim\": 8,\n   \"max_abs\": 1.913588624224971e-07,\n   \"max_rel\": 3.187778611902012e-07,\n   \"ref_absmax\": 4.014314507795332,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    8\n   ]\n  },\n  {\n   \"case\": \"dim1\",\n   \"nchunks\": 16,\n   \"dim\": 1,\n   \"max_abs\": 7.285658631950298e-09,\n   \"max_rel\": 1.4786923328764055e-08,\n   \"ref_absmax\": 0.492709569797929,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    1\n   ]\n  },\n  {\n   \"case\": \"dim_nonpow2\",\n   \"nchunks\": 8,\n   \"dim\": 100,\n   \"max_abs\": 1.2299546137128914e-07,\n   \"max_rel\": 6.181416869267275e-06,\n   \"ref_absmax\": 3.4553158674527658,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    100\n   ]\n  },\n  {\n   \"case\": \"dim3\",\n   \"nchunks\": 5,\n   \"dim\": 3,\n   \"max_abs\": 7.968378068490267e-09,\n   \"max_rel\": 8.5493611974411e-09,\n   \"ref_absmax\": 1.2221800062313957,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    3\n   ]\n  },\n  {\n   \"case\": \"many_chunks\",\n   \"nchunks\": 1024,\n   \"dim\": 64,\n   \"max_abs\": 0.00010373538158603424,\n   \"max_rel\": 0.0001105485693853533,\n   \"ref_absmax\": 28.58056523745678,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"mixed_sign\",\n   \"nchunks\": 32,\n   \"dim\": 64,\n   \"max_abs\": 8.919585098965399e-06,\n   \"max_rel\": 5.066388061321824e-06,\n   \"ref_absmax\": 29.610213616240372,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"strong_decay\",\n   \"nchunks\": 64,\n   \"dim\": 128,\n   \"max_abs\": 2.240935921271614e-07,\n   \"max_rel\": 4.64932765664126e-06,\n   \"ref_absmax\": 3.1729633491824165,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    128\n   ]\n  },\n  {\n   \"case\": \"zero_decay\",\n   \"nchunks\": 64,\n   \"dim\": 64,\n   \"max_abs\": 4.380941390991211e-06,\n   \"max_rel\": 4.36253045448723e-05,\n   \"ref_absmax\": 23.552671634592116,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    64\n   ]\n  },\n  {\n   \"case\": \"big_dim\",\n   \"nchunks\": 8,\n   \"dim\": 1024,\n   \"max_abs\": 2.0666417732684295e-07,\n   \"max_rel\": 3.198402722336888e-05,\n   \"ref_absmax\": 4.585249838965914,\n   \"out_dtype\": \"torch.float64\",\n   \"out_shape\": [\n    1024\n   ]\n  }\n ]\n}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "typical_rel_to_scale": "<=2e-7",
+            "worst_case": {
+              "case": "many_chunks",
+              "dim": 64,
+              "max_abs": 0.00010373,
+              "nchunks": 1024,
+              "ref_absmax": 28.58,
+              "rel_to_scale": 3.6e-06
+            }
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel output matches a float64 sequential reference of the contract recurrence across 9 configurations (nchunks 4..1024, dim 1/3/8/64/100/128/1024, decays negative/zero/mixed-sign). Max abs errors scale with fp32 accumulation: e.g. nchunks=1024,dim=64 gives max_abs 1.04e-4 on values of magnitude 28.6 (rel-to-scale 3.6e-6, consistent with sqrt(N)*eps sequential accumulation); all other cases have error <=9e-6 abs with rel-to-scale <=2e-7. Non-power-of-2 dims (3, 100) are correct, so masking is right; the returned tensor is shape (dim,) fp32 as the contract's \"final state\" requires. No indexing/off-by-one signature (which would give O(1) relative error).",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "conclusion": "invariance preserved to fp32 rounding",
+          "exp_rel_per_step_range": [
+            1.09e-08,
+            7.4e-08
+          ],
+          "kernel_base_vs_sub_maxabs": {
+            "K1": 0.0,
+            "K16": 7.15e-07,
+            "K256": 2.61e-05,
+            "K4": 2.24e-07,
+            "K64": 3.7e-06
+          },
+          "ref64_subdivision_consistency_max_abs": 2.84e-14,
+          "sub_vs_ref_rel_to_scale_max": 7.48e-06
+        },
+        "event_id": "t8",
+        "status": "rebutted",
+        "summary": "Subdivision invariance holds to fp32 accuracy. (A) Pure exp-compounding: replacing one decay d by K decays d/K gives relative error 1.1e-8 (K=1) up to 7.8e-5 (K=1000, d=-5), i.e. per-step relative error 1e-8..8e-8 ~ 1 ulp of fp32, so tl.exp is accurate and the error is unavoidable rounding of K successive fp32 multiplies, not a low-accuracy exp. (B) Full subdivision on random problems: float64 references for the original and subdivided partitions agree to <=2.8e-14 (confirming the invariance is real), and the kernel's subdivided output tracks the same reference: K=1 identical (0.0 diff), K=4 2.2e-7, K=16 7.2e-7, K=64 3.7e-6, K=256 2.6e-5 on values of magnitude ~2.7-3.5 (rel-to-scale 6e-8 .. 7.5e-6), growing ~linearly with the number of extra fp32 multiply steps as expected. No structural loss of invariance.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T14:43:07Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:40:21Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:43:07Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "3abf1311cf55bb221517427fc11b7d01c4c811f4050b2486f2019263879a7133"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "51d4afe064c35de1cafe51e94051c6954cbdeded93c7930ddb0c66a13820c583"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "conclusion": "invariance preserved to fp32 rounding",
+                "duration_s": 7.010962,
+                "exit_code": 0,
+                "exp_rel_per_step_range": [
+                  1.09e-08,
+                  7.4e-08
+                ],
+                "expected_signal": "If exp is accurate, rel error grows ~K*1e-7; a systematic per-step rel error >>1e-6 or subdivided output far from float64 reference relative to output scale indicates a real invariance violation.",
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "kernel_base_vs_sub_maxabs": {
+                  "K1": 0.0,
+                  "K16": 7.15e-07,
+                  "K256": 2.61e-05,
+                  "K4": 2.24e-07,
+                  "K64": 3.7e-06
+                },
+                "ref64_subdivision_consistency_max_abs": 2.84e-14,
+                "stderr": "",
+                "stdout": "{\n \"exp_compounding\": [\n  {\n   \"d\": -0.5,\n   \"K\": 1,\n   \"got\": 0.6065306663513184,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 1.094534106199546e-08,\n   \"rel_per_step\": 1.094534106199546e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 10,\n   \"got\": 0.606530487537384,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 2.838689959591399e-07,\n   \"rel_per_step\": 2.8386899595913988e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 100,\n   \"got\": 0.606525719165802,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 8.145584649856083e-06,\n   \"rel_per_step\": 8.145584649856082e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 1000,\n   \"got\": 0.6065130829811096,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 2.897913113268298e-05,\n   \"rel_per_step\": 2.8979131132682983e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 1,\n   \"got\": 0.006737946532666683,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 6.922268516910716e-08,\n   \"rel_per_step\": 6.922268516910716e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 10,\n   \"got\": 0.006737947929650545,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 1.3810810299423526e-07,\n   \"rel_per_step\": 1.3810810299423526e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 100,\n   \"got\": 0.006737925112247467,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 3.248294770340358e-06,\n   \"rel_per_step\": 3.248294770340358e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 1000,\n   \"got\": 0.0067374212667346,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 7.802559903458586e-05,\n   \"rel_per_step\": 7.802559903458587e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 1,\n   \"got\": 2.061153470123145e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 7.389813711168034e-08,\n   \"rel_per_step\": 7.389813711168034e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 10,\n   \"got\": 2.061153470123145e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 7.389813711168034e-08,\n   \"rel_per_step\": 7.389813711168034e-09\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 100,\n   \"got\": 2.0611581330598483e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 2.188396459789312e-06,\n   \"rel_per_step\": 2.188396459789312e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 1000,\n   \"got\": 2.0610444462221267e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 5.296850037893964e-05,\n   \"rel_per_step\": 5.2968500378939646e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 1,\n   \"got\": 2.7182817459106445,\n   \"exact\": 2.718281828459045,\n   \"rel\": 3.036785946744201e-08,\n   \"rel_per_step\": 3.036785946744201e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 10,\n   \"got\": 2.718283176422119,\n   \"exact\": 2.718281828459045,\n   \"rel\": 4.958879024011908e-07,\n   \"rel_per_step\": 4.9588790240119084e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 100,\n   \"got\": 2.718285083770752,\n   \"exact\": 2.718281828459045,\n   \"rel\": 1.1975622515593678e-06,\n   \"rel_per_step\": 1.1975622515593678e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 1000,\n   \"got\": 2.718343734741211,\n   \"exact\": 2.718281828459045,\n   \"rel\": 2.2774048488173314e-05,\n   \"rel_per_step\": 2.2774048488173316e-08\n  }\n ],\n \"subdivision\": [\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 1,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 0.0,\n   \"ref_absmax\": 4.002182897938265,\n   \"base_vs_ref_maxabs\": 2.41510155429836e-07,\n   \"sub_vs_ref_maxabs\": 2.41510155429836e-07,\n   \"base_vs_sub_maxabs\": 0.0,\n   \"sub_vs_ref_rel_to_scale\": 6.034460732772871e-08\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 4,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 8.881784197001252e-16,\n   \"ref_absmax\": 4.109850699706133,\n   \"base_vs_ref_maxabs\": 3.846615590497038e-07,\n   \"sub_vs_ref_maxabs\": 3.846615590497038e-07,\n   \"base_vs_sub_maxabs\": 2.2351741790771484e-07,\n   \"sub_vs_ref_rel_to_scale\": 9.359502014932277e-08\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 16,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 8.881784197001252e-16,\n   \"ref_absmax\": 3.2840157070059846,\n   \"base_vs_ref_maxabs\": 2.6209032011337285e-07,\n   \"sub_vs_ref_maxabs\": 5.251134090888954e-07,\n   \"base_vs_sub_maxabs\": 7.152557373046875e-07,\n   \"sub_vs_ref_rel_to_scale\": 1.5989978609683258e-07\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 64,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 9.325873406851315e-15,\n   \"ref_absmax\": 2.7460458197147055,\n   \"base_vs_ref_maxabs\": 1.6850761541675752e-07,\n   \"sub_vs_ref_maxabs\": 3.697491085086213e-06,\n   \"base_vs_sub_maxabs\": 3.6954879760742188e-06,\n   \"sub_vs_ref_rel_to_scale\": 1.3464782920010986e-06\n  },\n  {\n   \"nchunks\": 16,\n   \"dim\": 32,\n   \"K\": 8,\n   \"decay_scale\": 3.0,\n   \"ref_consistency_max_abs\": 2.220446049250313e-16,\n   \"ref_absmax\": 2.278354557715631,\n   \"base_vs_ref_maxabs\": 8.705975984568681e-08,\n   \"sub_vs_ref_maxabs\": 8.705975984568681e-08,\n   \"base_vs_sub_maxabs\": 5.960464477539063e-08,\n   \"sub_vs_ref_rel_to_scale\": 3.821168200131959e-08\n  },\n  {\n   \"nchunks\": 4,\n   \"dim\": 128,\n   \"K\": 256,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 2.842170943040401e-14,\n   \"ref_absmax\": 3.4874992904639797,\n   \"base_vs_ref_maxabs\": 1.6013286741056731e-07,\n   \"sub_vs_ref_maxabs\": 2.6096333304970187e-05,\n   \"base_vs_sub_maxabs\": 2.6106834411621094e-05,\n   \"sub_vs_ref_rel_to_scale\": 7.482821108043383e-06\n  }\n ],\n \"metric\": \"compounded exp relative error; subdivided-vs-original kernel outputs both vs shared float64 reference\"\n}\n",
+                "sub_vs_ref_rel_to_scale_max": 7.48e-06,
+                "timed_out": false,
+                "timeout_s": 180
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Subdivision invariance holds to fp32 accuracy. (A) Pure exp-compounding: replacing one decay d by K decays d/K gives relative error 1.1e-8 (K=1) up to 7.8e-5 (K=1000, d=-5), i.e. per-step relative error 1e-8..8e-8 ~ 1 ulp of fp32, so tl.exp is accurate and the error is unavoidable rounding of K successive fp32 multiplies, not a low-accuracy exp. (B) Full subdivision on random problems: float64 references for the original and subdivided partitions agree to <=2.8e-14 (confirming the invariance is real), and the kernel's subdivided output tracks the same reference: K=1 identical (0.0 diff), K=4 2.2e-7, K=16 7.2e-7, K=64 3.7e-6, K=256 2.6e-5 on values of magnitude ~2.7-3.5 (rel-to-scale 6e-8 .. 7.5e-6), growing ~linearly with the number of extra fp32 multiply steps as expected. No structural loss of invariance.",
+              "supports": "rebutted",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "solo",
+          "rationale": "The contract explicitly declares subdivision equivalence as part of the operation's definition, so a kernel that loses this invariance (e.g. via a low-accuracy exp approximation compounding over many sub-chunks, or scale mis-application) violates a stated property.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "'subdividing one chunk into several sub-chunks whose log-decays sum to the original, with the local-state contribution placed on the last sub-chunk, describes the same recurrence.'"
+            }
+          ],
+          "scope_rationale": "problem.txt explicitly asserts subdivision describes the same recurrence, making this a contract-stated invariant.",
+          "statement": "The kernel's result is not invariant (beyond fp32 tolerance) under the chunk subdivision described in the contract: splitting chunk c into sub-chunks whose log-decays sum to dA_cs[c] with the local state on the last sub-chunk.",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:43:07Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:43:07Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "3abf1311cf55bb221517427fc11b7d01c4c811f4050b2486f2019263879a7133"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "51d4afe064c35de1cafe51e94051c6954cbdeded93c7930ddb0c66a13820c583"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "conclusion": "invariance preserved to fp32 rounding",
+            "duration_s": 7.010962,
+            "exit_code": 0,
+            "exp_rel_per_step_range": [
+              1.09e-08,
+              7.4e-08
+            ],
+            "expected_signal": "If exp is accurate, rel error grows ~K*1e-7; a systematic per-step rel error >>1e-6 or subdivided output far from float64 reference relative to output scale indicates a real invariance violation.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "kernel_base_vs_sub_maxabs": {
+              "K1": 0.0,
+              "K16": 7.15e-07,
+              "K256": 2.61e-05,
+              "K4": 2.24e-07,
+              "K64": 3.7e-06
+            },
+            "ref64_subdivision_consistency_max_abs": 2.84e-14,
+            "stderr": "",
+            "stdout": "{\n \"exp_compounding\": [\n  {\n   \"d\": -0.5,\n   \"K\": 1,\n   \"got\": 0.6065306663513184,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 1.094534106199546e-08,\n   \"rel_per_step\": 1.094534106199546e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 10,\n   \"got\": 0.606530487537384,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 2.838689959591399e-07,\n   \"rel_per_step\": 2.8386899595913988e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 100,\n   \"got\": 0.606525719165802,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 8.145584649856083e-06,\n   \"rel_per_step\": 8.145584649856082e-08\n  },\n  {\n   \"d\": -0.5,\n   \"K\": 1000,\n   \"got\": 0.6065130829811096,\n   \"exact\": 0.6065306597126334,\n   \"rel\": 2.897913113268298e-05,\n   \"rel_per_step\": 2.8979131132682983e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 1,\n   \"got\": 0.006737946532666683,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 6.922268516910716e-08,\n   \"rel_per_step\": 6.922268516910716e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 10,\n   \"got\": 0.006737947929650545,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 1.3810810299423526e-07,\n   \"rel_per_step\": 1.3810810299423526e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 100,\n   \"got\": 0.006737925112247467,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 3.248294770340358e-06,\n   \"rel_per_step\": 3.248294770340358e-08\n  },\n  {\n   \"d\": -5.0,\n   \"K\": 1000,\n   \"got\": 0.0067374212667346,\n   \"exact\": 0.006737946999085467,\n   \"rel\": 7.802559903458586e-05,\n   \"rel_per_step\": 7.802559903458587e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 1,\n   \"got\": 2.061153470123145e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 7.389813711168034e-08,\n   \"rel_per_step\": 7.389813711168034e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 10,\n   \"got\": 2.061153470123145e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 7.389813711168034e-08,\n   \"rel_per_step\": 7.389813711168034e-09\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 100,\n   \"got\": 2.0611581330598483e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 2.188396459789312e-06,\n   \"rel_per_step\": 2.188396459789312e-08\n  },\n  {\n   \"d\": -20.0,\n   \"K\": 1000,\n   \"got\": 2.0610444462221267e-09,\n   \"exact\": 2.061153622438558e-09,\n   \"rel\": 5.296850037893964e-05,\n   \"rel_per_step\": 5.2968500378939646e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 1,\n   \"got\": 2.7182817459106445,\n   \"exact\": 2.718281828459045,\n   \"rel\": 3.036785946744201e-08,\n   \"rel_per_step\": 3.036785946744201e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 10,\n   \"got\": 2.718283176422119,\n   \"exact\": 2.718281828459045,\n   \"rel\": 4.958879024011908e-07,\n   \"rel_per_step\": 4.9588790240119084e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 100,\n   \"got\": 2.718285083770752,\n   \"exact\": 2.718281828459045,\n   \"rel\": 1.1975622515593678e-06,\n   \"rel_per_step\": 1.1975622515593678e-08\n  },\n  {\n   \"d\": 1.0,\n   \"K\": 1000,\n   \"got\": 2.718343734741211,\n   \"exact\": 2.718281828459045,\n   \"rel\": 2.2774048488173314e-05,\n   \"rel_per_step\": 2.2774048488173316e-08\n  }\n ],\n \"subdivision\": [\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 1,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 0.0,\n   \"ref_absmax\": 4.002182897938265,\n   \"base_vs_ref_maxabs\": 2.41510155429836e-07,\n   \"sub_vs_ref_maxabs\": 2.41510155429836e-07,\n   \"base_vs_sub_maxabs\": 0.0,\n   \"sub_vs_ref_rel_to_scale\": 6.034460732772871e-08\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 4,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 8.881784197001252e-16,\n   \"ref_absmax\": 4.109850699706133,\n   \"base_vs_ref_maxabs\": 3.846615590497038e-07,\n   \"sub_vs_ref_maxabs\": 3.846615590497038e-07,\n   \"base_vs_sub_maxabs\": 2.2351741790771484e-07,\n   \"sub_vs_ref_rel_to_scale\": 9.359502014932277e-08\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 16,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 8.881784197001252e-16,\n   \"ref_absmax\": 3.2840157070059846,\n   \"base_vs_ref_maxabs\": 2.6209032011337285e-07,\n   \"sub_vs_ref_maxabs\": 5.251134090888954e-07,\n   \"base_vs_sub_maxabs\": 7.152557373046875e-07,\n   \"sub_vs_ref_rel_to_scale\": 1.5989978609683258e-07\n  },\n  {\n   \"nchunks\": 8,\n   \"dim\": 64,\n   \"K\": 64,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 9.325873406851315e-15,\n   \"ref_absmax\": 2.7460458197147055,\n   \"base_vs_ref_maxabs\": 1.6850761541675752e-07,\n   \"sub_vs_ref_maxabs\": 3.697491085086213e-06,\n   \"base_vs_sub_maxabs\": 3.6954879760742188e-06,\n   \"sub_vs_ref_rel_to_scale\": 1.3464782920010986e-06\n  },\n  {\n   \"nchunks\": 16,\n   \"dim\": 32,\n   \"K\": 8,\n   \"decay_scale\": 3.0,\n   \"ref_consistency_max_abs\": 2.220446049250313e-16,\n   \"ref_absmax\": 2.278354557715631,\n   \"base_vs_ref_maxabs\": 8.705975984568681e-08,\n   \"sub_vs_ref_maxabs\": 8.705975984568681e-08,\n   \"base_vs_sub_maxabs\": 5.960464477539063e-08,\n   \"sub_vs_ref_rel_to_scale\": 3.821168200131959e-08\n  },\n  {\n   \"nchunks\": 4,\n   \"dim\": 128,\n   \"K\": 256,\n   \"decay_scale\": 1.0,\n   \"ref_consistency_max_abs\": 2.842170943040401e-14,\n   \"ref_absmax\": 3.4874992904639797,\n   \"base_vs_ref_maxabs\": 1.6013286741056731e-07,\n   \"sub_vs_ref_maxabs\": 2.6096333304970187e-05,\n   \"base_vs_sub_maxabs\": 2.6106834411621094e-05,\n   \"sub_vs_ref_rel_to_scale\": 7.482821108043383e-06\n  }\n ],\n \"metric\": \"compounded exp relative error; subdivided-vs-original kernel outputs both vs shared float64 reference\"\n}\n",
+            "sub_vs_ref_rel_to_scale_max": 7.48e-06,
+            "timed_out": false,
+            "timeout_s": 180
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Subdivision invariance holds to fp32 accuracy. (A) Pure exp-compounding: replacing one decay d by K decays d/K gives relative error 1.1e-8 (K=1) up to 7.8e-5 (K=1000, d=-5), i.e. per-step relative error 1e-8..8e-8 ~ 1 ulp of fp32, so tl.exp is accurate and the error is unavoidable rounding of K successive fp32 multiplies, not a low-accuracy exp. (B) Full subdivision on random problems: float64 references for the original and subdivided partitions agree to <=2.8e-14 (confirming the invariance is real), and the kernel's subdivided output tracks the same reference: K=1 identical (0.0 diff), K=4 2.2e-7, K=16 7.2e-7, K=64 3.7e-6, K=256 2.6e-5 on values of magnitude ~2.7-3.5 (rel-to-scale 6e-8 .. 7.5e-6), growing ~linearly with the number of extra fp32 multiply steps as expected. No structural loss of invariance.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.87,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract requires state <- exp(dA_cs[c])*state + new_states[c] for c=0..nchunks-1 from state=0, returning the final state, and additionally asserts invariance under chunk subdivision (log-decays summing to the original, local state on the last sub-chunk).\\n\\nc1 (event t7): I compared state_passing against a float64 sequential implementation of the contract recurrence over 9 configurations (nchunks 4..1024; dim 1, 3, 8, 64, 100, 128, 1024; decays all-negative, zero, mixed-sign, strong decay). Errors were at fp32-accumulation level: most cases max_abs <= 9e-6 with error/output-scale <= 2e-7; the worst case (nchunks=1024, dim=64) was max_abs 1.04e-4 on values of magnitude 28.6, i.e. 3.6e-6 relative to scale, consistent with sequential fp32 accumulation over 1024 steps. An indexing/off-by-one of dA_cs, a wrong initial state, or a wrong final-store branch would give O(1) relative error, which was not observed. Non-power-of-2 dims (3, 100) were correct, so the offs_m < dim masking with BLOCK_SIZE = next_power_of_2(dim) is sound, and the returned tensor is shape (dim,) fp32. Claim rebutted.\\n\\nc2 (event t8): I tested the contract's stated subdivision invariance two ways. (A) Pure exp compounding: replacing one decay d by K decays d/K gave per-step relative error 1.1e-8..7.8e-8 (~1 fp32 ulp), so tl.exp is accurate and residual error is unavoidable rounding of K successive fp32 multiplies, not an approximate exp. (B) Full subdivision on random problems: float64 references for the original and subdivided partitions agreed to <= 2.8e-14 (the invariance is real), and the kernel's subdivided output tracked that same reference \u2014 K=1 bitwise identical (0.0), K=4 2.2e-7, K=16 7.2e-7, K=64 3.7e-6, K=256 2.6e-5 on values of magnitude ~2.7-3.5 (6e-8 .. 7.5e-6 relative to scale), growing roughly linearly with the extra fp32 multiply steps as expected. No structural loss of invariance. Claim rebutted.\\n\\nSource inspection agrees: the kernel loads dA_cs at chunk c, scales the running fp32 state, adds new_states[c], stores the last iteration's state to final_states, and the Python wrapper returns final_states. The only deviations found are float32 rounding inherent to the declared computation, which the contract accounts for. No contract-required behaviour was shown to be violated.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-08T14:43:36Z",
+      "id": "t11",
+      "output": {
+        "confidence": 0.87,
+        "created_at": "2026-09-08T14:43:36Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract requires state <- exp(dA_cs[c])*state + new_states[c] for c=0..nchunks-1 from state=0, returning the final state, and additionally asserts invariance under chunk subdivision (log-decays summing to the original, local state on the last sub-chunk).\\n\\nc1 (event t7): I compared state_passing against a float64 sequential implementation of the contract recurrence over 9 configurations (nchunks 4..1024; dim 1, 3, 8, 64, 100, 128, 1024; decays all-negative, zero, mixed-sign, strong decay). Errors were at fp32-accumulation level: most cases max_abs <= 9e-6 with error/output-scale <= 2e-7; the worst case (nchunks=1024, dim=64) was max_abs 1.04e-4 on values of magnitude 28.6, i.e. 3.6e-6 relative to scale, consistent with sequential fp32 accumulation over 1024 steps. An indexing/off-by-one of dA_cs, a wrong initial state, or a wrong final-store branch would give O(1) relative error, which was not observed. Non-power-of-2 dims (3, 100) were correct, so the offs_m < dim masking with BLOCK_SIZE = next_power_of_2(dim) is sound, and the returned tensor is shape (dim,) fp32. Claim rebutted.\\n\\nc2 (event t8): I tested the contract's stated subdivision invariance two ways. (A) Pure exp compounding: replacing one decay d by K decays d/K gave per-step relative error 1.1e-8..7.8e-8 (~1 fp32 ulp), so tl.exp is accurate and residual error is unavoidable rounding of K successive fp32 multiplies, not an approximate exp. (B) Full subdivision on random problems: float64 references for the original and subdivided partitions agreed to <= 2.8e-14 (the invariance is real), and the kernel's subdivided output tracked that same reference \u2014 K=1 bitwise identical (0.0), K=4 2.2e-7, K=16 7.2e-7, K=64 3.7e-6, K=256 2.6e-5 on values of magnitude ~2.7-3.5 (6e-8 .. 7.5e-6 relative to scale), growing roughly linearly with the extra fp32 multiply steps as expected. No structural loss of invariance. Claim rebutted.\\n\\nSource inspection agrees: the kernel loads dA_cs at chunk c, scales the running fp32 state, adds new_states[c], stores the last iteration's state to final_states, and the Python wrapper returns final_states. The only deviations found are float32 rounding inherent to the declared computation, which the contract accounts for. No contract-required behaviour was shown to be violated.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.87,
+    "created_at": "2026-09-08T14:43:36Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The contract requires state <- exp(dA_cs[c])*state + new_states[c] for c=0..nchunks-1 from state=0, returning the final state, and additionally asserts invariance under chunk subdivision (log-decays summing to the original, local state on the last sub-chunk).\\n\\nc1 (event t7): I compared state_passing against a float64 sequential implementation of the contract recurrence over 9 configurations (nchunks 4..1024; dim 1, 3, 8, 64, 100, 128, 1024; decays all-negative, zero, mixed-sign, strong decay). Errors were at fp32-accumulation level: most cases max_abs <= 9e-6 with error/output-scale <= 2e-7; the worst case (nchunks=1024, dim=64) was max_abs 1.04e-4 on values of magnitude 28.6, i.e. 3.6e-6 relative to scale, consistent with sequential fp32 accumulation over 1024 steps. An indexing/off-by-one of dA_cs, a wrong initial state, or a wrong final-store branch would give O(1) relative error, which was not observed. Non-power-of-2 dims (3, 100) were correct, so the offs_m < dim masking with BLOCK_SIZE = next_power_of_2(dim) is sound, and the returned tensor is shape (dim,) fp32. Claim rebutted.\\n\\nc2 (event t8): I tested the contract's stated subdivision invariance two ways. (A) Pure exp compounding: replacing one decay d by K decays d/K gave per-step relative error 1.1e-8..7.8e-8 (~1 fp32 ulp), so tl.exp is accurate and residual error is unavoidable rounding of K successive fp32 multiplies, not an approximate exp. (B) Full subdivision on random problems: float64 references for the original and subdivided partitions agreed to <= 2.8e-14 (the invariance is real), and the kernel's subdivided output tracked that same reference \u2014 K=1 bitwise identical (0.0), K=4 2.2e-7, K=16 7.2e-7, K=64 3.7e-6, K=256 2.6e-5 on values of magnitude ~2.7-3.5 (6e-8 .. 7.5e-6 relative to scale), growing roughly linearly with the extra fp32 multiply steps as expected. No structural loss of invariance. Claim rebutted.\\n\\nSource inspection agrees: the kernel loads dA_cs at chunk c, scales the running fp32 state, adds new_states[c], stores the last iteration's state to final_states, and the Python wrapper returns final_states. The only deviations found are float32 rounding inherent to the declared computation, which the contract accounts for. No contract-required behaviour was shown to be violated.",
+    "verdict": "trust"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "confidence": 0.96,
+  "created_at": "2026-09-08T15:03:17Z",
+  "decisive_claims": [
+    "c1",
+    "c2"
+  ],
+  "reason": "The artifact ships only kernel.py, meta.json and problem.txt \u2014 no test.py or get_inputs \u2014 so problem.txt is the operative contract. It explicitly states \"M, N and K may each be any positive integer\" and that \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel loops `range(0, K // BLOCK_K)` (kernel.py:19) with BLOCK_K hardcoded to 32 (kernel.py:40) and carries no K-dimension load mask (kernel.py:20-21), so the partial tile is never visited.\n\nConfirmed runtime evidence (t9/c1.e1) at M=N=64 fp32 CUDA: for K=33/40/47/100 the output disagrees with an fp64-accumulated torch reference by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.29-0.58), while matching the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose 1e-3 True). That truncated-reference control localizes the defect precisely to the dropped K tail rather than to reduction order or precision \u2014 for K=32/64/128 the same kernel matches torch to <=1.5e-5 (rel <=3.7e-7), 5-6 orders smaller. So this is not a declared-precision, TF32, accumulation-order, or near-zero artifact; it is a failure to implement the contraction the contract explicitly requires. Evidence t10/c2.e1 confirms the degenerate extreme: for K=1/8/31 the output is exactly all zeros (nonzero_frac=0.0) against nonzero references, i.e. 100% relative error.\n\nc3 (M/N ragged-edge leakage) was cleanly rebutted, including a poisoned-allocation control showing masked lanes suppress out-of-range reads; that narrows but does not excuse the K-dimension defect. No unresolved claim remains. Verdict: reject.",
+  "verdict": "reject"
+}

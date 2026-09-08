@@ -1,0 +1,89 @@
+[
+  {
+    "created_at": "2026-09-08T14:49:48Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:50:29Z",
+        "data": {
+          "BLOCK_SIZE": 32768,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "866629fb79992bfa6af808ee0e17eb373a5cd9a8f3d869c494c5bda0f235a8f7"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "d7ad1e46f1fd32dfbbd96f57d5837c8d9a0e3ace348d6cc00a0b9faeb45e47dd"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 8.001807,
+          "exit_code": 0,
+          "expected_signal": "If claim true: pred_multiblock == 35000 while ref is 100; single-block control should give 10.",
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "loss_ratio_kernel_over_ref": [
+            0.25,
+            0.25,
+            0.25,
+            0.25
+          ],
+          "n_cols": 40000,
+          "pred_kernel": [
+            35000,
+            35000,
+            35000,
+            35000
+          ],
+          "pred_required_lowest": [
+            100,
+            100,
+            100,
+            100
+          ],
+          "pred_single_block_control": [
+            10,
+            10
+          ],
+          "stderr": "",
+          "stdout": "{\n \"block_size_multi\": 32768,\n \"pred_multiblock\": [\n  35000,\n  35000,\n  35000,\n  35000\n ],\n \"ref_pred_lowest\": [\n  100,\n  100,\n  100,\n  100\n ],\n \"low_idx\": 100,\n \"high_idx\": 35000,\n \"loss_kernel\": [\n  2.675312042236328,\n  2.6506166458129883,\n  2.67434024810791,\n  2.681089162826538\n ],\n \"loss_ref_per_row\": [\n  10.701248168945312,\n  10.602466583251953,\n  10.697361946105957,\n  10.724355697631836\n ],\n \"loss_ratio\": [\n  0.25,\n  0.25,\n  0.2499999850988388,\n  0.2500000298023224\n ],\n \"pred_singleblock\": [\n  10,\n  10\n ]\n}\n",
+          "tie_indices": [
+            100,
+            35000
+          ],
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Cross-block tie test (n_cols=40000, BLOCK_SIZE=32768, exact ties at col 100 in block 0 and col 35000 in block 1): kernel returned predicted=[35000,35000,35000,35000] while the contract-required lowest tied index is 100 for all rows. Single-block control (n_cols=1024, ties at 10 and 900) returned 10, i.e. intra-block tie handling via tl.min is correct and only the cross-block `>=` update is wrong. Incidentally loss/ref_loss = 0.25 for all rows, since the wrapper uses reduction=\"mean\" with n_non_ignore=4 instead of the contract's per-row -log softmax.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Ties across blocks: `>=` updates on equality, choosing the later block's index instead of the earliest.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size so a tie may fall in different blocks."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly states the tie rule (\"predicted must be the LOWEST such index\") and explicitly declares the input domain includes n_cols exceeding block size so a tie may fall in different blocks.",
+    "statement": "In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later block ties the running maximum, argmax_idx is overwritten with the later (higher) index, violating the contract's \"lowest index wins\" tie rule for rows spanning multiple blocks.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:50:29Z"
+  }
+]

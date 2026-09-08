@@ -1,0 +1,2804 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_16",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _matmul_kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn,\n                   stride_cm, stride_cn,\n                   BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):\n    pid_m = tl.program_id(0)\n    pid_n = tl.program_id(1)\n    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)\n    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)\n    offs_k = tl.arange(0, BLOCK_K)\n\n    a_ptrs = A + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak\n    b_ptrs = B + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn\n    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)\n    for _ in range(0, K // BLOCK_K):\n        a = tl.load(a_ptrs, mask=offs_m[:, None] < M, other=0.0)\n        b = tl.load(b_ptrs, mask=offs_n[None, :] < N, other=0.0)\n        acc += tl.dot(a, b)\n        a_ptrs += BLOCK_K * stride_ak\n        b_ptrs += BLOCK_K * stride_bk\n\n    c_ptrs = C + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn\n    tl.store(c_ptrs, acc, mask=(offs_m[:, None] < M) & (offs_n[None, :] < N))\n\n\ndef matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:\n    \"\"\"C = A @ B for float32 operands.\"\"\"\n    M, K = a.shape\n    K2, N = b.shape\n    assert K == K2\n    c = torch.empty((M, N), device=a.device, dtype=torch.float32)\n    grid = (triton.cdiv(M, 64), triton.cdiv(N, 64))\n    _matmul_kernel[grid](a, b, c, M, N, K,\n                         a.stride(0), a.stride(1), b.stride(0), b.stride(1),\n                         c.stride(0), c.stride(1),\n                         BLOCK_M=64, BLOCK_N=64, BLOCK_K=32)\n    return c\n",
+    "passed": null,
+    "problem_text": "Operation: dense matrix multiplication C = A @ B for float32 operands, blocked\nover M, N and K (the standard tiled-GEMM structure used by Triton matmul\nkernels).\n\n    C[m, n] = sum over k of A[m, k] * B[k, n]\n\nInput domain: M, N and K may each be any positive integer. In particular K is\nNOT required to be a multiple of the kernel's K block size; when it is not, the\nfinal K tile is partial and only the first (K mod BLOCK_K) of its entries take\npart in the sum.\n\nDoes matmul() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_16",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T15:01:36Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:02:54Z",
+          "data": {
+            "K_divisible_max_abs_err": {
+              "128": 1.52587890625e-05,
+              "32": 4.76837158203125e-06,
+              "64": 8.58306884765625e-06
+            },
+            "K_nondivisible_max_abs_err_vs_torch": {
+              "100": 11.031343460083008,
+              "33": 9.890376091003418,
+              "40": 12.810418128967285,
+              "47": 17.772851943969727
+            },
+            "K_nondivisible_max_rel_err_vs_torch": {
+              "100": 0.2857711996676445,
+              "33": 0.3782863197049291,
+              "40": 0.4572077519513882,
+              "47": 0.5820121805351536
+            },
+            "allclose_torch_rtol_atol_1e-3": {
+              "100": false,
+              "128": true,
+              "32": true,
+              "33": false,
+              "40": false,
+              "47": false,
+              "64": true
+            },
+            "allclose_truncated_ref_1e-3": {
+              "100": true,
+              "33": true,
+              "40": true,
+              "47": true
+            },
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "92e2e2398da88e409f5afd013a441e31f9d2c92008ba428fcc75dafc05bb2f72"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "705b2903691072724f3ba512055a611eaea5f3b770857db89b6dcb5b1088eace"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "cddf39eafc65d478b63d5b5f1b178f9ff5bd100e37e60f4cff1f231936a974cc"
+              }
+            ],
+            "duration_s": 8.718147,
+            "exit_code": 0,
+            "expected_signal": "For K in {33,40,47,100}: large error vs torch.matmul, but near-zero error vs truncated reference A[:,:32*(K//32)]@B[:32*(K//32)]; K in {32,64,128} matches torch.matmul within fp32/TF32 tolerance.",
+            "json_parse_error": null,
+            "json_result": {
+              "100": {
+                "K": 100,
+                "Ktail": 4,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 11.031343460083008,
+                "max_abs_err_vs_truncated_ref": 1.1444091796875e-05,
+                "max_rel_err_vs_torch": 0.2857711996676445
+              },
+              "128": {
+                "K": 128,
+                "Ktail": 0,
+                "allclose_torch_1e3": true,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 1.52587890625e-05,
+                "max_abs_err_vs_truncated_ref": 1.52587890625e-05,
+                "max_rel_err_vs_torch": 3.707984709383454e-07
+              },
+              "32": {
+                "K": 32,
+                "Ktail": 0,
+                "allclose_torch_1e3": true,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 4.76837158203125e-06,
+                "max_abs_err_vs_truncated_ref": 4.76837158203125e-06,
+                "max_rel_err_vs_torch": 2.3727665622902475e-07
+              },
+              "33": {
+                "K": 33,
+                "Ktail": 1,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 9.890376091003418,
+                "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                "max_rel_err_vs_torch": 0.3782863197049291
+              },
+              "40": {
+                "K": 40,
+                "Ktail": 8,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 12.810418128967285,
+                "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                "max_rel_err_vs_torch": 0.4572077519513882
+              },
+              "47": {
+                "K": 47,
+                "Ktail": 15,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 17.772851943969727,
+                "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                "max_rel_err_vs_torch": 0.5820121805351536
+              },
+              "64": {
+                "K": 64,
+                "Ktail": 0,
+                "allclose_torch_1e3": true,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 8.58306884765625e-06,
+                "max_abs_err_vs_truncated_ref": 8.58306884765625e-06,
+                "max_rel_err_vs_torch": 2.6775020215140263e-07
+              }
+            },
+            "max_abs_err_vs_truncated_ref": {
+              "100": 1.1444091796875e-05,
+              "33": 3.814697265625e-06,
+              "40": 3.814697265625e-06,
+              "47": 3.814697265625e-06
+            },
+            "metric_reason": "continuous matmul output: max abs/rel elementwise error vs fp64-accumulated torch reference, plus a truncated-K reference to localize the defect",
+            "shape": "M=N=64, fp32 cuda",
+            "stderr": "",
+            "stdout": "{\"32\": {\"K\": 32, \"Ktail\": 0, \"max_abs_err_vs_torch\": 4.76837158203125e-06, \"max_rel_err_vs_torch\": 2.3727665622902475e-07, \"max_abs_err_vs_truncated_ref\": 4.76837158203125e-06, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"64\": {\"K\": 64, \"Ktail\": 0, \"max_abs_err_vs_torch\": 8.58306884765625e-06, \"max_rel_err_vs_torch\": 2.6775020215140263e-07, \"max_abs_err_vs_truncated_ref\": 8.58306884765625e-06, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"128\": {\"K\": 128, \"Ktail\": 0, \"max_abs_err_vs_torch\": 1.52587890625e-05, \"max_rel_err_vs_torch\": 3.707984709383454e-07, \"max_abs_err_vs_truncated_ref\": 1.52587890625e-05, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"33\": {\"K\": 33, \"Ktail\": 1, \"max_abs_err_vs_torch\": 9.890376091003418, \"max_rel_err_vs_torch\": 0.3782863197049291, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"40\": {\"K\": 40, \"Ktail\": 8, \"max_abs_err_vs_torch\": 12.810418128967285, \"max_rel_err_vs_torch\": 0.4572077519513882, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"47\": {\"K\": 47, \"Ktail\": 15, \"max_abs_err_vs_torch\": 17.772851943969727, \"max_rel_err_vs_torch\": 0.5820121805351536, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"100\": {\"K\": 100, \"Ktail\": 4, \"max_abs_err_vs_torch\": 11.031343460083008, \"max_rel_err_vs_torch\": 0.2857711996676445, \"max_abs_err_vs_truncated_ref\": 1.1444091796875e-05, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "K-tail is dropped exactly as claimed. For K=33/40/47/100 (M=N=64, fp32 CUDA) the kernel's output disagrees with torch.matmul by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.38/0.46/0.58/0.29) yet matches the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose rtol=atol=1e-3 True). For K=32/64/128 the kernel matches torch.matmul to <=1.5e-5 (rel <=3.7e-7), so the failure is specifically the missing partial K tile, not a general GEMM or precision error; error magnitude is 5-6 orders above the fp32/TF32 floor observed on divisible K.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "kernel.py:19 loops `range(0, K // BLOCK_K)` with BLOCK_K=32, so only floor(K/32) whole tiles are visited; loads at kernel.py:20-21 carry no offs_k+k*BLOCK_K < K mask, so there is no partial-tile path at all. The store mask (line 27) only bounds M/N.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Input domain: M, N and K may each be any positive integer; K explicitly NOT required to be a multiple of the kernel's K block size, and the partial final K tile must contribute its first (K mod BLOCK_K) entries to the sum."
+        },
+        {
+          "source": "kernel.py:40",
+          "summary": "Wrapper hardcodes BLOCK_K=32, making K%32!=0 (e.g. K=40) the concrete contract-named case."
+        }
+      ],
+      "scope_rationale": "problem.txt is the operative contract (no test.py exists) and it explicitly states \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel fixes BLOCK_K=32 at kernel.py:40, so K=40 is a representative in-domain input the contract admits and specifically calls out.",
+      "statement": "For K not a multiple of 32 (e.g. M=64,N=64,K=40 or K=33,47,100 float32 CUDA tensors), matmul() omits the trailing (K mod 32) k-slices from the contraction, so C differs from torch.matmul(a,b) by the sum over those tail indices \u2014 a large relative error (order sqrt(K_tail/K), far above any fp32/TF32 tolerance), not a rounding artifact.",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T15:02:54Z"
+    },
+    {
+      "created_at": "2026-09-08T15:01:36Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:02:54Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "8ac973bbf8017cb020aa5c13029a163c2a33f3be52591584fb46f7009446e218"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "dae98c8efff5ceda6ad48c17ccff7a6825bcec86de1fe644ba1314df1887dfe1"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "b3d7cde1009d148669ba6cddc0296dcf84f9db68063b731d61ec6fb5fb6fd1c9"
+              }
+            ],
+            "duration_s": 8.031097,
+            "exit_code": 0,
+            "expected_signal": "For K in {1,8,31}: kernel output is exactly all zeros while torch.matmul is nonzero (100% relative error).",
+            "json_parse_error": null,
+            "json_result": {
+              "1": {
+                "K": 1,
+                "kernel_abs_max": 0.0,
+                "kernel_all_zero": true,
+                "max_abs_err": 6.549962997436523,
+                "nonzero_frac": 0.0,
+                "ref_abs_max": 6.549962997436523
+              },
+              "31": {
+                "K": 31,
+                "kernel_abs_max": 0.0,
+                "kernel_all_zero": true,
+                "max_abs_err": 21.460908889770508,
+                "nonzero_frac": 0.0,
+                "ref_abs_max": 21.460908889770508
+              },
+              "8": {
+                "K": 8,
+                "kernel_abs_max": 0.0,
+                "kernel_all_zero": true,
+                "max_abs_err": 10.059889793395996,
+                "nonzero_frac": 0.0,
+                "ref_abs_max": 10.059889793395996
+              }
+            },
+            "kernel_abs_max": {
+              "1": 0.0,
+              "31": 0.0,
+              "8": 0.0
+            },
+            "kernel_all_zero": {
+              "1": true,
+              "31": true,
+              "8": true
+            },
+            "max_abs_err": {
+              "1": 6.549962997436523,
+              "31": 21.460908889770508,
+              "8": 10.059889793395996
+            },
+            "nonzero_frac": {
+              "1": 0.0,
+              "31": 0.0,
+              "8": 0.0
+            },
+            "ref_abs_max": {
+              "1": 6.549962997436523,
+              "31": 21.460908889770508,
+              "8": 10.059889793395996
+            },
+            "relative_error": 1.0,
+            "shape": "M=N=64, fp32 cuda",
+            "stderr": "",
+            "stdout": "{\"1\": {\"K\": 1, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 6.549962997436523, \"max_abs_err\": 6.549962997436523, \"nonzero_frac\": 0.0}, \"8\": {\"K\": 8, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 10.059889793395996, \"max_abs_err\": 10.059889793395996, \"nonzero_frac\": 0.0}, \"31\": {\"K\": 31, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 21.460908889770508, \"max_abs_err\": 21.460908889770508, \"nonzero_frac\": 0.0}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Degenerate K<32 case confirmed: for K=1, 8, 31 (M=N=64, fp32 CUDA) the kernel output is exactly all zeros (kernel_abs_max=0.0, nonzero_frac=0.0) while torch.matmul is nonzero (ref abs max 6.55/10.06/21.46), giving max abs err equal to the full reference magnitude, i.e. 100% relative error. Matches the source reading that K//32==0 skips the reduction loop and stores the zero-initialized accumulator (kernel.py:18-19, 27).",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "Degenerate instance of the floor-division loop bound at kernel.py:19; acc from kernel.py:18 is stored unmodified at kernel.py:27. Worth separating from claim 1 because the failure mode (all-zero output, 100% relative error) is qualitatively different and unmistakable.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"M, N and K may each be any positive integer\" \u2014 no lower bound excluding K<BLOCK_K; the partial-tile rule is stated as required behavior."
+        }
+      ],
+      "scope_rationale": "problem.txt states M, N and K may each be any positive integer, so K=8 is inside the stated input domain; with BLOCK_K=32 this is the extreme of the contract's named \"partial final K tile\" case (the whole of K is the partial tile).",
+      "statement": "For any positive K < 32 (e.g. M=64,N=64,K=8 or K=1,31), K//32 == 0 so the reduction loop body never executes and matmul() returns the zero-initialized accumulator: C is identically zero regardless of A and B, instead of A@B.",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T15:02:54Z"
+    },
+    {
+      "created_at": "2026-09-08T15:01:36Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:02:54Z",
+          "data": {
+            "allclose_1e-3": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "8ded936cc60e09a1d2cafc4e772533919319f29b9af892d8f06588fee68983ef"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "5aba89aba302e554df272e1f74a62aed56fdce2032fd5dc666b260115ce482c0"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "ae9382c38b7c4b1d9f197be3224a503a5d8d2ab8328a21fe761fa716c5bb9755"
+              }
+            ],
+            "cases": [
+              "70x100x64",
+              "65x65x32",
+              "100x70x128"
+            ],
+            "duration_s": 8.539535,
+            "exit_code": 0,
+            "expected_signal": "With K divisible by 32 and ragged M/N (70x100, 65x65, 100x70), in-bounds outputs match torch.matmul within fp32/TF32 tolerance and no CUDA fault occurs; a padded-allocation variant with poisoned out-of-range memory gives identical results.",
+            "fault": false,
+            "json_parse_error": null,
+            "json_result": {
+              "100x70x128": {
+                "K": 128,
+                "M": 100,
+                "N": 70,
+                "allclose_1e3": true,
+                "fault": false,
+                "max_abs_err": 1.52587890625e-05,
+                "max_abs_err_poisoned_alloc": 1.52587890625e-05,
+                "max_rel_err": 3.302807683783908e-07,
+                "poison_allclose_1e3": true
+              },
+              "65x65x32": {
+                "K": 32,
+                "M": 65,
+                "N": 65,
+                "allclose_1e3": true,
+                "fault": false,
+                "max_abs_err": 4.76837158203125e-06,
+                "max_abs_err_poisoned_alloc": 4.76837158203125e-06,
+                "max_rel_err": 1.9317652602308026e-07,
+                "poison_allclose_1e3": true
+              },
+              "70x100x64": {
+                "K": 64,
+                "M": 70,
+                "N": 100,
+                "allclose_1e3": true,
+                "fault": false,
+                "max_abs_err": 9.5367431640625e-06,
+                "max_abs_err_poisoned_alloc": 9.5367431640625e-06,
+                "max_rel_err": 2.84870742749185e-07,
+                "poison_allclose_1e3": true
+              }
+            },
+            "max_abs_err": {
+              "100x70x128": 1.52587890625e-05,
+              "65x65x32": 4.76837158203125e-06,
+              "70x100x64": 9.5367431640625e-06
+            },
+            "max_abs_err_poisoned_alloc": {
+              "100x70x128": 1.52587890625e-05,
+              "65x65x32": 4.76837158203125e-06,
+              "70x100x64": 9.5367431640625e-06
+            },
+            "max_rel_err": {
+              "100x70x128": 3.302807683783908e-07,
+              "65x65x32": 1.9317652602308026e-07,
+              "70x100x64": 2.84870742749185e-07
+            },
+            "poison_allclose_1e-3": true,
+            "poison_value": 1000000.0,
+            "stderr": "",
+            "stdout": "{\"70x100x64\": {\"M\": 70, \"N\": 100, \"K\": 64, \"max_abs_err\": 9.5367431640625e-06, \"max_rel_err\": 2.84870742749185e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 9.5367431640625e-06, \"poison_allclose_1e3\": true, \"fault\": false}, \"65x65x32\": {\"M\": 65, \"N\": 65, \"K\": 32, \"max_abs_err\": 4.76837158203125e-06, \"max_rel_err\": 1.9317652602308026e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 4.76837158203125e-06, \"poison_allclose_1e3\": true, \"fault\": false}, \"100x70x128\": {\"M\": 100, \"N\": 70, \"K\": 128, \"max_abs_err\": 1.52587890625e-05, \"max_rel_err\": 3.302807683783908e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 1.52587890625e-05, \"poison_allclose_1e3\": true, \"fault\": false}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "No M/N-edge leakage or fault. With K divisible by 32 and ragged M/N (70x100x64, 65x65x32, 100x70x128) in-bounds outputs match an fp64-accumulated torch reference to max abs err <=1.53e-5 (max rel <=3.3e-7), allclose(rtol=atol=1e-3) True, and no CUDA fault occurred. A poisoned-allocation variant (logical A/B viewed inside larger buffers filled with 1e6 so any out-of-range read would pull in 1e6) produced byte-identical error magnitudes, showing the masked lanes' other=0.0 fully suppress out-of-range contributions and out-of-range memory does not leak into in-bounds C. The M/N masking path is correct; the defect is confined to the K dimension (c1/c2).",
+          "supports": "rebutted",
+          "tool_event_id": "t11"
+        }
+      ],
+      "id": "c3",
+      "raised_by": "skeptic",
+      "rationale": "Asymmetric masking: A is masked on rows only and B on columns only. For divisible K this should be harmless (the unmasked dimension stays in range), but the last M/N tile reads beyond the logical matrix, and the masked-lane `other=0.0` values feed tl.dot; needs a runtime check to confirm ragged M/N does not corrupt in-bounds results.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "M, N and K may each be any positive integer, and C[m,n] = sum_k A[m,k]*B[k,n] is required for all in-range m,n."
+        }
+      ],
+      "scope_rationale": "problem.txt admits any positive M and N, so M=70/N=100 with K=64 is inside the stated domain; the claim is about the required C[m,n] formula holding on those shapes.",
+      "statement": "With K a multiple of 32 but M and/or N not a multiple of 64 (e.g. M=70, N=100, K=64), the loads at kernel.py:20-21 mask only A's M dimension and only B's N dimension, so B's k-rows and A's k-columns are read unmasked; if the values fetched for out-of-range positions in the masked dimension are not fully suppressed, in-bounds outputs C[m,n] (m<M, n<N) could still deviate from torch.matmul, or the launch could fault on out-of-bounds reads past the end of the A/B allocations.",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T15:02:54Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Compute dense C = A @ B for float32 operands, C[m,n] = sum_k A[m,k]*B[k,n] (problem.txt).",
+      "M, N, K may each be ANY positive integer; the contract calls out explicitly that K is NOT required to be a multiple of the kernel's K block size.",
+      "When K % BLOCK_K != 0 the final partial K tile must still contribute its first (K mod BLOCK_K) elements to the sum \u2014 i.e. the K tail is part of the required answer, not an optional optimization.",
+      "Implied: output shape (M, N), dtype float32, on the same device as inputs; accuracy comparable to a torch.matmul reference within a float32 tolerance.",
+      "No test_code is provided in the artifact, so the operative contract is the prose in problem.txt only."
+    ],
+    "kernel_model": [
+      "kernel.py:30-41 host wrapper: reads M,K from a.shape and K2,N from b.shape, asserts K==K2, allocates c as torch.empty((M,N), float32), launches a 2-D grid (cdiv(M,64), cdiv(N,64)) with BLOCK_M=BLOCK_N=64, BLOCK_K=32, passing all six strides.",
+      "kernel.py:12-14 computes offs_m/offs_n from program ids and a fixed offs_k = arange(0, BLOCK_K); pointer arithmetic at 16-17 is fully stride-based, so non-contiguous / transposed operands are handled in principle.",
+      "kernel.py:19 the K reduction loop bound is `K // BLOCK_K` (floor division), so it iterates only over whole 32-wide K tiles and never visits the remainder tile.",
+      "kernel.py:20-21 loads mask only on the M dimension for A (offs_m < M) and only on the N dimension for B (offs_n < N); there is no `offs_k + k*BLOCK_K < K` mask component on either load, meaning the code has no mechanism to load a partial K tile safely even if the loop were extended.",
+      "kernel.py:22 accumulates with tl.dot into an fp32 accumulator; no explicit allow_tf32/input_precision argument is given, so it inherits the Triton default precision for fp32 dot.",
+      "kernel.py:26-27 stores acc with a correct 2-D M/N bounds mask, so M/N ragged edges are handled; the store never re-masks or scales for K.",
+      "Implicit assumptions: a and b are 2-D, already float32 (no dtype check or cast), on a CUDA device, and K is a multiple of 32."
+    ],
+    "open_questions": [
+      "What tolerance and reference does the grader use? Without test_code, whether TF32 precision loss alone would be judged a failure on large K is unknown; the K-tail error should be shown to be far larger than any TF32 effect to keep the two separated.",
+      "Is the Triton/GPU environment one where fp32 tl.dot defaults to TF32 (Ampere+ with allow_tf32 default true)? Determines the magnitude of the benign precision floor.",
+      "Does the harness ever exercise K < 32, where the output is identically zero, or only moderate non-multiple K? Affects how dramatic the observed failure will look but not the in-scope conclusion."
+    ],
+    "risk_map": [
+      "Primary: dropped K tail. With K % 32 != 0 the loop at kernel.py:19 skips the last (K mod 32) K-slices entirely, so C is systematically short by that partial contraction \u2014 a large relative error, not a tolerance issue. Probe K = 33, 40, 47, 65, 100 against torch.matmul.",
+      "Degenerate case: any K < 32 gives K//32 == 0, so the loop body never executes and the kernel stores the zero-initialized accumulator \u2014 output is all zeros. Probe K = 1, 8, 31.",
+      "Confirming that the K-divisible path is otherwise correct matters for scoping: probe K = 32, 64, 128 to show the failure is specifically the tail, not a general GEMM error (guards against a passing-random-probe false negative and against blaming the wrong line).",
+      "Even if someone added the missing K iteration, the unmasked loads at kernel.py:20-21 would read out of bounds past the end of A/B rows/columns \u2014 worth noting that the bug is not a one-character loop-bound fix.",
+      "Secondary precision surface: tl.dot on fp32 inputs may use TF32 on Ampere+ by default, giving ~1e-2-relative error vs a full-fp32 torch reference on large K. Any allclose probe should choose tolerance deliberately and distinguish this bounded precision loss from the unbounded tail-dropping error (do not let a loose tolerance mask the tail bug, or a tight tolerance misattribute TF32 loss to the tail).",
+      "M/N ragged edges: offs_m/offs_n masking looks correct on both loads and the store, but worth a spot check at M=70, N=100 that garbage from the unmasked-dimension loads (A masked only on M, B only on N) does not leak into in-bounds outputs.",
+      "Non-contiguous inputs (e.g. b = x.t()) exercise the stride path; low suspicion but cheap to include.",
+      "No dtype guard: passing float16/bfloat16 or int tensors would silently produce a wrong-dtype dot or an fp32 output written from mismatched loads. Likely out of the stated contract (fp32 operands) \u2014 note, do not weight heavily."
+    ],
+    "scope_notes": [
+      "The problem statement itself defines the input domain as all positive M, N, K and calls out non-multiple-of-BLOCK_K K as explicitly in scope. So a K-tail failure cannot be dismissed as an out-of-domain edge case; it is the named test axis.",
+      "BLOCK_K = 32 is fixed inside the wrapper (kernel.py:40), so 'multiple of the kernel's K block size' concretely means K % 32 == 0. The failing region is K % 32 != 0, which is 31/32 of all integer K.",
+      "The wrapper hardcodes grid divisor 64 matching BLOCK_M/BLOCK_N=64, so grid/block mismatch is not a live concern in this artifact.",
+      "No test harness is shipped (test_code is empty, artifact has only kernel.py, meta.json, problem.txt), so correctness must be judged against the prose contract plus a torch.matmul reference rather than a supplied test's tolerance.",
+      "meta.json reports status under_test / passed null \u2014 no prior pass/fail signal to anchor on."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Compute dense C = A @ B for float32 operands, C[m,n] = sum_k A[m,k]*B[k,n] (problem.txt).",
+        "M, N, K may each be ANY positive integer; the contract calls out explicitly that K is NOT required to be a multiple of the kernel's K block size.",
+        "When K % BLOCK_K != 0 the final partial K tile must still contribute its first (K mod BLOCK_K) elements to the sum \u2014 i.e. the K tail is part of the required answer, not an optional optimization.",
+        "Implied: output shape (M, N), dtype float32, on the same device as inputs; accuracy comparable to a torch.matmul reference within a float32 tolerance.",
+        "No test_code is provided in the artifact, so the operative contract is the prose in problem.txt only."
+      ],
+      "created_at": "2026-09-08T15:01:10Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "kernel.py:30-41 host wrapper: reads M,K from a.shape and K2,N from b.shape, asserts K==K2, allocates c as torch.empty((M,N), float32), launches a 2-D grid (cdiv(M,64), cdiv(N,64)) with BLOCK_M=BLOCK_N=64, BLOCK_K=32, passing all six strides.",
+        "kernel.py:12-14 computes offs_m/offs_n from program ids and a fixed offs_k = arange(0, BLOCK_K); pointer arithmetic at 16-17 is fully stride-based, so non-contiguous / transposed operands are handled in principle.",
+        "kernel.py:19 the K reduction loop bound is `K // BLOCK_K` (floor division), so it iterates only over whole 32-wide K tiles and never visits the remainder tile.",
+        "kernel.py:20-21 loads mask only on the M dimension for A (offs_m < M) and only on the N dimension for B (offs_n < N); there is no `offs_k + k*BLOCK_K < K` mask component on either load, meaning the code has no mechanism to load a partial K tile safely even if the loop were extended.",
+        "kernel.py:22 accumulates with tl.dot into an fp32 accumulator; no explicit allow_tf32/input_precision argument is given, so it inherits the Triton default precision for fp32 dot.",
+        "kernel.py:26-27 stores acc with a correct 2-D M/N bounds mask, so M/N ragged edges are handled; the store never re-masks or scales for K.",
+        "Implicit assumptions: a and b are 2-D, already float32 (no dtype check or cast), on a CUDA device, and K is a multiple of 32."
+      ],
+      "open_questions": [
+        "What tolerance and reference does the grader use? Without test_code, whether TF32 precision loss alone would be judged a failure on large K is unknown; the K-tail error should be shown to be far larger than any TF32 effect to keep the two separated.",
+        "Is the Triton/GPU environment one where fp32 tl.dot defaults to TF32 (Ampere+ with allow_tf32 default true)? Determines the magnitude of the benign precision floor.",
+        "Does the harness ever exercise K < 32, where the output is identically zero, or only moderate non-multiple K? Affects how dramatic the observed failure will look but not the in-scope conclusion."
+      ],
+      "risk_map": [
+        "Primary: dropped K tail. With K % 32 != 0 the loop at kernel.py:19 skips the last (K mod 32) K-slices entirely, so C is systematically short by that partial contraction \u2014 a large relative error, not a tolerance issue. Probe K = 33, 40, 47, 65, 100 against torch.matmul.",
+        "Degenerate case: any K < 32 gives K//32 == 0, so the loop body never executes and the kernel stores the zero-initialized accumulator \u2014 output is all zeros. Probe K = 1, 8, 31.",
+        "Confirming that the K-divisible path is otherwise correct matters for scoping: probe K = 32, 64, 128 to show the failure is specifically the tail, not a general GEMM error (guards against a passing-random-probe false negative and against blaming the wrong line).",
+        "Even if someone added the missing K iteration, the unmasked loads at kernel.py:20-21 would read out of bounds past the end of A/B rows/columns \u2014 worth noting that the bug is not a one-character loop-bound fix.",
+        "Secondary precision surface: tl.dot on fp32 inputs may use TF32 on Ampere+ by default, giving ~1e-2-relative error vs a full-fp32 torch reference on large K. Any allclose probe should choose tolerance deliberately and distinguish this bounded precision loss from the unbounded tail-dropping error (do not let a loose tolerance mask the tail bug, or a tight tolerance misattribute TF32 loss to the tail).",
+        "M/N ragged edges: offs_m/offs_n masking looks correct on both loads and the store, but worth a spot check at M=70, N=100 that garbage from the unmasked-dimension loads (A masked only on M, B only on N) does not leak into in-bounds outputs.",
+        "Non-contiguous inputs (e.g. b = x.t()) exercise the stride path; low suspicion but cheap to include.",
+        "No dtype guard: passing float16/bfloat16 or int tensors would silently produce a wrong-dtype dot or an fp32 output written from mismatched loads. Likely out of the stated contract (fp32 operands) \u2014 note, do not weight heavily."
+      ],
+      "scope_notes": [
+        "The problem statement itself defines the input domain as all positive M, N, K and calls out non-multiple-of-BLOCK_K K as explicitly in scope. So a K-tail failure cannot be dismissed as an out-of-domain edge case; it is the named test axis.",
+        "BLOCK_K = 32 is fixed inside the wrapper (kernel.py:40), so 'multiple of the kernel's K block size' concretely means K % 32 == 0. The failing region is K % 32 != 0, which is 31/32 of all integer K.",
+        "The wrapper hardcodes grid divisor 64 matching BLOCK_M/BLOCK_N=64, so grid/block mismatch is not a live concern in this artifact.",
+        "No test harness is shipped (test_code is empty, artifact has only kernel.py, meta.json, problem.txt), so correctness must be judged against the prose contract plus a torch.matmul reference rather than a supplied test's tolerance.",
+        "meta.json reports status under_test / passed null \u2014 no prior pass/fail signal to anchor on."
+      ],
+      "summary": "case_16 is a tiled fp32 Triton GEMM. The contract explicitly demands support for K not divisible by BLOCK_K, but the kernel's K loop runs exactly `K // BLOCK_K` iterations with no K masking, so any partial trailing K tile is silently dropped (and K<32 yields an all-zero result). Secondary surfaces: tl.dot TF32 precision, and no dtype/shape validation.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_16",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_16"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_16"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_16"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_16",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 40.26214716200002,
+      "role": "describer",
+      "round": 2,
+      "text": "",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Compute dense C = A @ B for float32 operands, C[m,n] = sum_k A[m,k]*B[k,n] (problem.txt).",
+              "M, N, K may each be ANY positive integer; the contract calls out explicitly that K is NOT required to be a multiple of the kernel's K block size.",
+              "When K % BLOCK_K != 0 the final partial K tile must still contribute its first (K mod BLOCK_K) elements to the sum \u2014 i.e. the K tail is part of the required answer, not an optional optimization.",
+              "Implied: output shape (M, N), dtype float32, on the same device as inputs; accuracy comparable to a torch.matmul reference within a float32 tolerance.",
+              "No test_code is provided in the artifact, so the operative contract is the prose in problem.txt only."
+            ],
+            "kernel_model": [
+              "kernel.py:30-41 host wrapper: reads M,K from a.shape and K2,N from b.shape, asserts K==K2, allocates c as torch.empty((M,N), float32), launches a 2-D grid (cdiv(M,64), cdiv(N,64)) with BLOCK_M=BLOCK_N=64, BLOCK_K=32, passing all six strides.",
+              "kernel.py:12-14 computes offs_m/offs_n from program ids and a fixed offs_k = arange(0, BLOCK_K); pointer arithmetic at 16-17 is fully stride-based, so non-contiguous / transposed operands are handled in principle.",
+              "kernel.py:19 the K reduction loop bound is `K // BLOCK_K` (floor division), so it iterates only over whole 32-wide K tiles and never visits the remainder tile.",
+              "kernel.py:20-21 loads mask only on the M dimension for A (offs_m < M) and only on the N dimension for B (offs_n < N); there is no `offs_k + k*BLOCK_K < K` mask component on either load, meaning the code has no mechanism to load a partial K tile safely even if the loop were extended.",
+              "kernel.py:22 accumulates with tl.dot into an fp32 accumulator; no explicit allow_tf32/input_precision argument is given, so it inherits the Triton default precision for fp32 dot.",
+              "kernel.py:26-27 stores acc with a correct 2-D M/N bounds mask, so M/N ragged edges are handled; the store never re-masks or scales for K.",
+              "Implicit assumptions: a and b are 2-D, already float32 (no dtype check or cast), on a CUDA device, and K is a multiple of 32."
+            ],
+            "open_questions": [
+              "What tolerance and reference does the grader use? Without test_code, whether TF32 precision loss alone would be judged a failure on large K is unknown; the K-tail error should be shown to be far larger than any TF32 effect to keep the two separated.",
+              "Is the Triton/GPU environment one where fp32 tl.dot defaults to TF32 (Ampere+ with allow_tf32 default true)? Determines the magnitude of the benign precision floor.",
+              "Does the harness ever exercise K < 32, where the output is identically zero, or only moderate non-multiple K? Affects how dramatic the observed failure will look but not the in-scope conclusion."
+            ],
+            "risk_map": [
+              "Primary: dropped K tail. With K % 32 != 0 the loop at kernel.py:19 skips the last (K mod 32) K-slices entirely, so C is systematically short by that partial contraction \u2014 a large relative error, not a tolerance issue. Probe K = 33, 40, 47, 65, 100 against torch.matmul.",
+              "Degenerate case: any K < 32 gives K//32 == 0, so the loop body never executes and the kernel stores the zero-initialized accumulator \u2014 output is all zeros. Probe K = 1, 8, 31.",
+              "Confirming that the K-divisible path is otherwise correct matters for scoping: probe K = 32, 64, 128 to show the failure is specifically the tail, not a general GEMM error (guards against a passing-random-probe false negative and against blaming the wrong line).",
+              "Even if someone added the missing K iteration, the unmasked loads at kernel.py:20-21 would read out of bounds past the end of A/B rows/columns \u2014 worth noting that the bug is not a one-character loop-bound fix.",
+              "Secondary precision surface: tl.dot on fp32 inputs may use TF32 on Ampere+ by default, giving ~1e-2-relative error vs a full-fp32 torch reference on large K. Any allclose probe should choose tolerance deliberately and distinguish this bounded precision loss from the unbounded tail-dropping error (do not let a loose tolerance mask the tail bug, or a tight tolerance misattribute TF32 loss to the tail).",
+              "M/N ragged edges: offs_m/offs_n masking looks correct on both loads and the store, but worth a spot check at M=70, N=100 that garbage from the unmasked-dimension loads (A masked only on M, B only on N) does not leak into in-bounds outputs.",
+              "Non-contiguous inputs (e.g. b = x.t()) exercise the stride path; low suspicion but cheap to include.",
+              "No dtype guard: passing float16/bfloat16 or int tensors would silently produce a wrong-dtype dot or an fp32 output written from mismatched loads. Likely out of the stated contract (fp32 operands) \u2014 note, do not weight heavily."
+            ],
+            "scope_notes": [
+              "The problem statement itself defines the input domain as all positive M, N, K and calls out non-multiple-of-BLOCK_K K as explicitly in scope. So a K-tail failure cannot be dismissed as an out-of-domain edge case; it is the named test axis.",
+              "BLOCK_K = 32 is fixed inside the wrapper (kernel.py:40), so 'multiple of the kernel's K block size' concretely means K % 32 == 0. The failing region is K % 32 != 0, which is 31/32 of all integer K.",
+              "The wrapper hardcodes grid divisor 64 matching BLOCK_M/BLOCK_N=64, so grid/block mismatch is not a live concern in this artifact.",
+              "No test harness is shipped (test_code is empty, artifact has only kernel.py, meta.json, problem.txt), so correctness must be judged against the prose contract plus a torch.matmul reference rather than a supplied test's tolerance.",
+              "meta.json reports status under_test / passed null \u2014 no prior pass/fail signal to anchor on."
+            ],
+            "summary": "case_16 is a tiled fp32 Triton GEMM. The contract explicitly demands support for K not divisible by BLOCK_K, but the kernel's K loop runs exactly `K // BLOCK_K` iterations with no K masking, so any partial trailing K tile is silently dropped (and K<32 yields an all-zero result). Secondary surfaces: tl.dot TF32 precision, and no dtype/shape validation."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 3192,
+        "duration_s": 40.262,
+        "input_tokens": 4165,
+        "output_tokens": 2775
+      }
+    },
+    {
+      "duration_s": 25.409407057999942,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The contract explicitly names non-multiple-of-BLOCK_K K as in-domain, and the loop bound `K // BLOCK_K` with no K-dimension load mask is a direct violation candidate. Recording the two sharpest testable claims plus one about garbage leakage from the K-unmasked loads at ragged M/N.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "kernel.py:19 loops `range(0, K // BLOCK_K)` with BLOCK_K=32, so only floor(K/32) whole tiles are visited; loads at kernel.py:20-21 carry no offs_k+k*BLOCK_K < K mask, so there is no partial-tile path at all. The store mask (line 27) only bounds M/N.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Input domain: M, N and K may each be any positive integer; K explicitly NOT required to be a multiple of the kernel's K block size, and the partial final K tile must contribute its first (K mod BLOCK_K) entries to the sum."
+              },
+              {
+                "source": "kernel.py:40",
+                "summary": "Wrapper hardcodes BLOCK_K=32, making K%32!=0 (e.g. K=40) the concrete contract-named case."
+              }
+            ],
+            "scope_rationale": "problem.txt is the operative contract (no test.py exists) and it explicitly states \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel fixes BLOCK_K=32 at kernel.py:40, so K=40 is a representative in-domain input the contract admits and specifically calls out.",
+            "statement": "For K not a multiple of 32 (e.g. M=64,N=64,K=40 or K=33,47,100 float32 CUDA tensors), matmul() omits the trailing (K mod 32) k-slices from the contraction, so C differs from torch.matmul(a,b) by the sum over those tail indices \u2014 a large relative error (order sqrt(K_tail/K), far above any fp32/TF32 tolerance), not a rounding artifact."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Degenerate instance of the floor-division loop bound at kernel.py:19; acc from kernel.py:18 is stored unmodified at kernel.py:27. Worth separating from claim 1 because the failure mode (all-zero output, 100% relative error) is qualitatively different and unmistakable.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"M, N and K may each be any positive integer\" \u2014 no lower bound excluding K<BLOCK_K; the partial-tile rule is stated as required behavior."
+              }
+            ],
+            "scope_rationale": "problem.txt states M, N and K may each be any positive integer, so K=8 is inside the stated input domain; with BLOCK_K=32 this is the extreme of the contract's named \"partial final K tile\" case (the whole of K is the partial tile).",
+            "statement": "For any positive K < 32 (e.g. M=64,N=64,K=8 or K=1,31), K//32 == 0 so the reduction loop body never executes and matmul() returns the zero-initialized accumulator: C is identically zero regardless of A and B, instead of A@B."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Asymmetric masking: A is masked on rows only and B on columns only. For divisible K this should be harmless (the unmasked dimension stays in range), but the last M/N tile reads beyond the logical matrix, and the masked-lane `other=0.0` values feed tl.dot; needs a runtime check to confirm ragged M/N does not corrupt in-bounds results.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "M, N and K may each be any positive integer, and C[m,n] = sum_k A[m,k]*B[k,n] is required for all in-range m,n."
+              }
+            ],
+            "scope_rationale": "problem.txt admits any positive M and N, so M=70/N=100 with K=64 is inside the stated domain; the claim is about the required C[m,n] formula holding on those shapes.",
+            "statement": "With K a multiple of 32 but M and/or N not a multiple of 64 (e.g. M=70, N=100, K=64), the loads at kernel.py:20-21 mask only A's M dimension and only B's N dimension, so B's k-rows and A's k-columns are read unmasked; if the values fetched for out-of-range positions in the masked dimension are not fully suppressed, in-bounds outputs C[m,n] (m<M, n<N) could still deviate from torch.matmul, or the launch could fault on out-of-bounds reads past the end of the A/B allocations."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5644,
+        "duration_s": 25.409,
+        "input_tokens": 18712,
+        "output_tokens": 1991
+      }
+    },
+    {
+      "duration_s": 25.401565952000055,
+      "role": "experimenter",
+      "round": 4,
+      "text": "Launching all three probes together \u2014 they are independent: c1 (K not multiple of 32), c2 (K<32 degenerate), c3 (ragged M/N with K divisible by 32, so the K-tail defect cannot confound it).",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport json, sys, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_16/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(0)\nres = {}\nfor K in [32, 64, 128, 33, 40, 47, 100]:\n    M = N = 64\n    a = torch.randn(M, K, device='cuda', dtype=torch.float32)\n    b = torch.randn(K, N, device='cuda', dtype=torch.float32)\n    c = m.matmul(a, b)\n    ref = (a.double() @ b.double()).float()\n    Kt = (K // 32) * 32\n    trunc = (a[:, :Kt].double() @ b[:Kt].double()).float()\n    err_full = (c - ref).abs().max().item()\n    err_trunc = (c - trunc).abs().max().item()\n    rel_full = err_full / ref.abs().max().item()\n    res[str(K)] = dict(K=K, Ktail=K - Kt, max_abs_err_vs_torch=err_full,\n                       max_rel_err_vs_torch=rel_full,\n                       max_abs_err_vs_truncated_ref=err_trunc,\n                       allclose_torch_1e3=bool(torch.allclose(c, ref, rtol=1e-3, atol=1e-3)),\n                       allclose_trunc_1e3=bool(torch.allclose(c, trunc, rtol=1e-3, atol=1e-3)))\nprint(json.dumps(res))\n",
+            "expected_signal": "For K in {33,40,47,100}: large error vs torch.matmul, but near-zero error vs truncated reference A[:,:32*(K//32)]@B[:32*(K//32)]; K in {32,64,128} matches torch.matmul within fp32/TF32 tolerance."
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_16/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(1)\nres = {}\nfor K in [1, 8, 31]:\n    M = N = 64\n    a = torch.randn(M, K, device='cuda', dtype=torch.float32)\n    b = torch.randn(K, N, device='cuda', dtype=torch.float32)\n    c = m.matmul(a, b)\n    ref = a @ b\n    res[str(K)] = dict(K=K, kernel_all_zero=bool((c == 0).all().item()),\n                       kernel_abs_max=c.abs().max().item(),\n                       ref_abs_max=ref.abs().max().item(),\n                       max_abs_err=(c - ref).abs().max().item(),\n                       nonzero_frac=float((c != 0).float().mean().item()))\nprint(json.dumps(res))\n",
+            "expected_signal": "For K in {1,8,31}: kernel output is exactly all zeros while torch.matmul is nonzero (100% relative error)."
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c3",
+            "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_16/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(2)\nres = {}\nfor (M, N, K) in [(70, 100, 64), (65, 65, 32), (100, 70, 128)]:\n    a = torch.randn(M, K, device='cuda', dtype=torch.float32)\n    b = torch.randn(K, N, device='cuda', dtype=torch.float32)\n    try:\n        c = m.matmul(a, b)\n        torch.cuda.synchronize()\n        ref = (a.double() @ b.double()).float()\n        err = (c - ref).abs().max().item()\n        rel = err / ref.abs().max().item()\n        # poison test: same logical matrices inside a larger buffer with garbage past the end\n        bigA = torch.full((M + 8, K), 1e6, device='cuda', dtype=torch.float32); bigA[:M] = a\n        bigB = torch.full((K, N + 8), 1e6, device='cuda', dtype=torch.float32); bigB[:, :N] = b\n        c2 = m.matmul(bigA[:M].contiguous() if False else a, b)\n        # true poison: view into larger allocation so OOB reads hit 1e6\n        vA = bigA.as_strided((M, K), (K, 1))\n        vB = bigB.as_strided((K, N), (N + 8, 1))\n        c3 = m.matmul(vA, vB)\n        torch.cuda.synchronize()\n        err_poison = (c3 - ref).abs().max().item()\n        res[f\"{M}x{N}x{K}\"] = dict(M=M, N=N, K=K, max_abs_err=err, max_rel_err=rel,\n                                   allclose_1e3=bool(torch.allclose(c, ref, rtol=1e-3, atol=1e-3)),\n                                   max_abs_err_poisoned_alloc=err_poison,\n                                   poison_allclose_1e3=bool(torch.allclose(c3, ref, rtol=1e-3, atol=1e-3)),\n                                   fault=False)\n    except Exception as e:\n        res[f\"{M}x{N}x{K}\"] = dict(M=M, N=N, K=K, fault=True, error=repr(e)[:300])\nprint(json.dumps(res))\n",
+            "expected_signal": "With K divisible by 32 and ragged M/N (70x100, 65x65, 100x70), in-bounds outputs match torch.matmul within fp32/TF32 tolerance and no CUDA fault occurs; a padded-allocation variant with poisoned out-of-range memory gives identical results."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6263,
+        "duration_s": 25.402,
+        "input_tokens": 25977,
+        "output_tokens": 2484
+      }
+    },
+    {
+      "duration_s": 27.45818612900007,
+      "role": "experimenter",
+      "round": 5,
+      "text": "All three probe results are in and decisive; finalizing them together. c1 and c2 are confirmed (K-tail dropped, K<32 gives all zeros), and c3 is rebutted (ragged M/N with divisible K is exact, even with poisoned out-of-range memory). No further probes are needed.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "K_divisible_max_abs_err": {
+                "128": 1.52587890625e-05,
+                "32": 4.76837158203125e-06,
+                "64": 8.58306884765625e-06
+              },
+              "K_nondivisible_max_abs_err_vs_torch": {
+                "100": 11.031343460083008,
+                "33": 9.890376091003418,
+                "40": 12.810418128967285,
+                "47": 17.772851943969727
+              },
+              "K_nondivisible_max_rel_err_vs_torch": {
+                "100": 0.2857711996676445,
+                "33": 0.3782863197049291,
+                "40": 0.4572077519513882,
+                "47": 0.5820121805351536
+              },
+              "allclose_torch_rtol_atol_1e-3": {
+                "100": false,
+                "128": true,
+                "32": true,
+                "33": false,
+                "40": false,
+                "47": false,
+                "64": true
+              },
+              "allclose_truncated_ref_1e-3": {
+                "100": true,
+                "33": true,
+                "40": true,
+                "47": true
+              },
+              "max_abs_err_vs_truncated_ref": {
+                "100": 1.1444091796875e-05,
+                "33": 3.814697265625e-06,
+                "40": 3.814697265625e-06,
+                "47": 3.814697265625e-06
+              },
+              "metric_reason": "continuous matmul output: max abs/rel elementwise error vs fp64-accumulated torch reference, plus a truncated-K reference to localize the defect",
+              "shape": "M=N=64, fp32 cuda"
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "K-tail is dropped exactly as claimed. For K=33/40/47/100 (M=N=64, fp32 CUDA) the kernel's output disagrees with torch.matmul by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.38/0.46/0.58/0.29) yet matches the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose rtol=atol=1e-3 True). For K=32/64/128 the kernel matches torch.matmul to <=1.5e-5 (rel <=3.7e-7), so the failure is specifically the missing partial K tile, not a general GEMM or precision error; error magnitude is 5-6 orders above the fp32/TF32 floor observed on divisible K.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "kernel_abs_max": {
+                "1": 0.0,
+                "31": 0.0,
+                "8": 0.0
+              },
+              "kernel_all_zero": {
+                "1": true,
+                "31": true,
+                "8": true
+              },
+              "max_abs_err": {
+                "1": 6.549962997436523,
+                "31": 21.460908889770508,
+                "8": 10.059889793395996
+              },
+              "nonzero_frac": {
+                "1": 0.0,
+                "31": 0.0,
+                "8": 0.0
+              },
+              "ref_abs_max": {
+                "1": 6.549962997436523,
+                "31": 21.460908889770508,
+                "8": 10.059889793395996
+              },
+              "relative_error": 1.0,
+              "shape": "M=N=64, fp32 cuda"
+            },
+            "event_id": "t10",
+            "status": "confirmed",
+            "summary": "Degenerate K<32 case confirmed: for K=1, 8, 31 (M=N=64, fp32 CUDA) the kernel output is exactly all zeros (kernel_abs_max=0.0, nonzero_frac=0.0) while torch.matmul is nonzero (ref abs max 6.55/10.06/21.46), giving max abs err equal to the full reference magnitude, i.e. 100% relative error. Matches the source reading that K//32==0 skips the reduction loop and stores the zero-initialized accumulator (kernel.py:18-19, 27).",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "allclose_1e-3": true,
+              "cases": [
+                "70x100x64",
+                "65x65x32",
+                "100x70x128"
+              ],
+              "fault": false,
+              "max_abs_err": {
+                "100x70x128": 1.52587890625e-05,
+                "65x65x32": 4.76837158203125e-06,
+                "70x100x64": 9.5367431640625e-06
+              },
+              "max_abs_err_poisoned_alloc": {
+                "100x70x128": 1.52587890625e-05,
+                "65x65x32": 4.76837158203125e-06,
+                "70x100x64": 9.5367431640625e-06
+              },
+              "max_rel_err": {
+                "100x70x128": 3.302807683783908e-07,
+                "65x65x32": 1.9317652602308026e-07,
+                "70x100x64": 2.84870742749185e-07
+              },
+              "poison_allclose_1e-3": true,
+              "poison_value": 1000000.0
+            },
+            "event_id": "t11",
+            "status": "rebutted",
+            "summary": "No M/N-edge leakage or fault. With K divisible by 32 and ragged M/N (70x100x64, 65x65x32, 100x70x128) in-bounds outputs match an fp64-accumulated torch reference to max abs err <=1.53e-5 (max rel <=3.3e-7), allclose(rtol=atol=1e-3) True, and no CUDA fault occurred. A poisoned-allocation variant (logical A/B viewed inside larger buffers filled with 1e6 so any out-of-range read would pull in 1e6) produced byte-identical error magnitudes, showing the masked lanes' other=0.0 fully suppress out-of-range contributions and out-of-range memory does not leak into in-bounds C. The M/N masking path is correct; the defect is confined to the K dimension (c1/c2).",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6263,
+        "duration_s": 27.458,
+        "input_tokens": 42647,
+        "output_tokens": 2304
+      }
+    },
+    {
+      "duration_s": 9.381978481000033,
+      "role": "skeptic",
+      "round": 6,
+      "text": "This is my final review turn. The two K-dimension claims (c1, c2) are confirmed with decisive runtime evidence, and c3 (M/N edge leakage) is cleanly rebutted including a poisoned-allocation control. The contract-named failure is fully localized to the dropped partial K tile; nothing in the new evidence points at an uncovered in-scope defect, so I have no reason to hold up the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "All three claims have direct runtime evidence and the defect is fully localized. c1 (K%32!=0 drops the trailing K tile) and c2 (K<32 returns all zeros) are confirmed against the contract's explicitly named input domain, with the truncated-K reference matching to <=1.1e-5 proving the error is the missing partial tile rather than precision. c3 is rebutted, including a poisoned-allocation control showing the M/N masking path leaks nothing. Any remaining surfaces (dtype guards, non-contiguous stride path, TF32 precision) are either out of the stated fp32 contract or already shown benign, and none would change the verdict beyond what c1/c2 establish. No new high-quality in-scope claim to add.",
+            "reviewed_claims": [
+              "c1",
+              "c2",
+              "c3"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5644,
+        "duration_s": 9.382,
+        "input_tokens": 69843,
+        "output_tokens": 471
+      }
+    },
+    {
+      "duration_s": 14.018583272000114,
+      "role": "judge",
+      "round": 7,
+      "text": "All claims have evidence, the Skeptic reviewed the latest results and recorded no new claims, so I can finalize. The contract in problem.txt explicitly requires the partial final K tile to contribute, and confirmed runtime evidence shows it does not.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.96,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The artifact ships only kernel.py, meta.json and problem.txt \u2014 no test.py or get_inputs \u2014 so problem.txt is the operative contract. It explicitly states \"M, N and K may each be any positive integer\" and that \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel loops `range(0, K // BLOCK_K)` (kernel.py:19) with BLOCK_K hardcoded to 32 (kernel.py:40) and carries no K-dimension load mask (kernel.py:20-21), so the partial tile is never visited.\n\nConfirmed runtime evidence (t9/c1.e1) at M=N=64 fp32 CUDA: for K=33/40/47/100 the output disagrees with an fp64-accumulated torch reference by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.29-0.58), while matching the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose 1e-3 True). That truncated-reference control localizes the defect precisely to the dropped K tail rather than to reduction order or precision \u2014 for K=32/64/128 the same kernel matches torch to <=1.5e-5 (rel <=3.7e-7), 5-6 orders smaller. So this is not a declared-precision, TF32, accumulation-order, or near-zero artifact; it is a failure to implement the contraction the contract explicitly requires. Evidence t10/c2.e1 confirms the degenerate extreme: for K=1/8/31 the output is exactly all zeros (nonzero_frac=0.0) against nonzero references, i.e. 100% relative error.\n\nc3 (M/N ragged-edge leakage) was cleanly rebutted, including a poisoned-allocation control showing masked lanes suppress out-of-range reads; that narrows but does not excuse the K-dimension defect. No unresolved claim remains. Verdict: reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5846,
+        "duration_s": 14.019,
+        "input_tokens": 71636,
+        "output_tokens": 965
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-08T15:03:03Z",
+    "decision": "no_new_claims",
+    "reason": "All three claims have direct runtime evidence and the defect is fully localized. c1 (K%32!=0 drops the trailing K tile) and c2 (K<32 returns all zeros) are confirmed against the contract's explicitly named input domain, with the truncated-K reference matching to <=1.1e-5 proving the error is the missing partial tile rather than precision. c3 is rebutted, including a poisoned-allocation control showing the M/N masking path leaks nothing. Any remaining surfaces (dtype guards, non-contiguous stride path, TF32 precision) are either out of the stated fp32 contract or already shown benign, and none would change the verdict beyond what c1/c2 establish. No new high-quality in-scope claim to add.",
+    "reviewed_claims": [
+      "c1",
+      "c2",
+      "c3"
+    ],
+    "reviewed_tool_event_count": 14,
+    "tool_event_id": "t15",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_16"
+      },
+      "created_at": "2026-09-08T15:00:30Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_16",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _matmul_kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn,\n                   stride_cm, stride_cn,\n                   BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):\n    pid_m = tl.program_id(0)\n    pid_n = tl.program_id(1)\n    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)\n    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)\n    offs_k = tl.arange(0, BLOCK_K)\n\n    a_ptrs = A + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak\n    b_ptrs = B + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn\n    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)\n    for _ in range(0, K // BLOCK_K):\n        a = tl.load(a_ptrs, mask=offs_m[:, None] < M, other=0.0)\n        b = tl.load(b_ptrs, mask=offs_n[None, :] < N, other=0.0)\n        acc += tl.dot(a, b)\n        a_ptrs += BLOCK_K * stride_ak\n        b_ptrs += BLOCK_K * stride_bk\n\n    c_ptrs = C + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn\n    tl.store(c_ptrs, acc, mask=(offs_m[:, None] < M) & (offs_n[None, :] < N))\n\n\ndef matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:\n    \"\"\"C = A @ B for float32 operands.\"\"\"\n    M, K = a.shape\n    K2, N = b.shape\n    assert K == K2\n    c = torch.empty((M, N), device=a.device, dtype=torch.float32)\n    grid = (triton.cdiv(M, 64), triton.cdiv(N, 64))\n    _matmul_kernel[grid](a, b, c, M, N, K,\n                         a.stride(0), a.stride(1), b.stride(0), b.stride(1),\n                         c.stride(0), c.stride(1),\n                         BLOCK_M=64, BLOCK_N=64, BLOCK_K=32)\n    return c\n",
+        "passed": null,
+        "problem_text": "Operation: dense matrix multiplication C = A @ B for float32 operands, blocked\nover M, N and K (the standard tiled-GEMM structure used by Triton matmul\nkernels).\n\n    C[m, n] = sum over k of A[m, k] * B[k, n]\n\nInput domain: M, N and K may each be any positive integer. In particular K is\nNOT required to be a multiple of the kernel's K block size; when it is not, the\nfinal K tile is partial and only the first (K mod BLOCK_K) of its entries take\npart in the sum.\n\nDoes matmul() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_16",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_16"
+      },
+      "created_at": "2026-09-08T15:00:30Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: dense matrix multiplication C = A @ B for float32 operands, blocked\nover M, N and K (the standard tiled-GEMM structure used by Triton matmul\nkernels).\n\n    C[m, n] = sum over k of A[m, k] * B[k, n]\n\nInput domain: M, N and K may each be any positive integer. In particular K is\nNOT required to be a multiple of the kernel's K block size; when it is not, the\nfinal K tile is partial and only the first (K mod BLOCK_K) of its entries take\npart in the sum.\n\nDoes matmul() satisfy this contract?\n",
+        "entry": "case_16",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_16"
+      },
+      "created_at": "2026-09-08T15:00:30Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_16",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1640
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 502
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_16",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T15:00:30Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_16\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_16",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Compute dense C = A @ B for float32 operands, C[m,n] = sum_k A[m,k]*B[k,n] (problem.txt).",
+          "M, N, K may each be ANY positive integer; the contract calls out explicitly that K is NOT required to be a multiple of the kernel's K block size.",
+          "When K % BLOCK_K != 0 the final partial K tile must still contribute its first (K mod BLOCK_K) elements to the sum \u2014 i.e. the K tail is part of the required answer, not an optional optimization.",
+          "Implied: output shape (M, N), dtype float32, on the same device as inputs; accuracy comparable to a torch.matmul reference within a float32 tolerance.",
+          "No test_code is provided in the artifact, so the operative contract is the prose in problem.txt only."
+        ],
+        "kernel_model": [
+          "kernel.py:30-41 host wrapper: reads M,K from a.shape and K2,N from b.shape, asserts K==K2, allocates c as torch.empty((M,N), float32), launches a 2-D grid (cdiv(M,64), cdiv(N,64)) with BLOCK_M=BLOCK_N=64, BLOCK_K=32, passing all six strides.",
+          "kernel.py:12-14 computes offs_m/offs_n from program ids and a fixed offs_k = arange(0, BLOCK_K); pointer arithmetic at 16-17 is fully stride-based, so non-contiguous / transposed operands are handled in principle.",
+          "kernel.py:19 the K reduction loop bound is `K // BLOCK_K` (floor division), so it iterates only over whole 32-wide K tiles and never visits the remainder tile.",
+          "kernel.py:20-21 loads mask only on the M dimension for A (offs_m < M) and only on the N dimension for B (offs_n < N); there is no `offs_k + k*BLOCK_K < K` mask component on either load, meaning the code has no mechanism to load a partial K tile safely even if the loop were extended.",
+          "kernel.py:22 accumulates with tl.dot into an fp32 accumulator; no explicit allow_tf32/input_precision argument is given, so it inherits the Triton default precision for fp32 dot.",
+          "kernel.py:26-27 stores acc with a correct 2-D M/N bounds mask, so M/N ragged edges are handled; the store never re-masks or scales for K.",
+          "Implicit assumptions: a and b are 2-D, already float32 (no dtype check or cast), on a CUDA device, and K is a multiple of 32."
+        ],
+        "open_questions": [
+          "What tolerance and reference does the grader use? Without test_code, whether TF32 precision loss alone would be judged a failure on large K is unknown; the K-tail error should be shown to be far larger than any TF32 effect to keep the two separated.",
+          "Is the Triton/GPU environment one where fp32 tl.dot defaults to TF32 (Ampere+ with allow_tf32 default true)? Determines the magnitude of the benign precision floor.",
+          "Does the harness ever exercise K < 32, where the output is identically zero, or only moderate non-multiple K? Affects how dramatic the observed failure will look but not the in-scope conclusion."
+        ],
+        "risk_map": [
+          "Primary: dropped K tail. With K % 32 != 0 the loop at kernel.py:19 skips the last (K mod 32) K-slices entirely, so C is systematically short by that partial contraction \u2014 a large relative error, not a tolerance issue. Probe K = 33, 40, 47, 65, 100 against torch.matmul.",
+          "Degenerate case: any K < 32 gives K//32 == 0, so the loop body never executes and the kernel stores the zero-initialized accumulator \u2014 output is all zeros. Probe K = 1, 8, 31.",
+          "Confirming that the K-divisible path is otherwise correct matters for scoping: probe K = 32, 64, 128 to show the failure is specifically the tail, not a general GEMM error (guards against a passing-random-probe false negative and against blaming the wrong line).",
+          "Even if someone added the missing K iteration, the unmasked loads at kernel.py:20-21 would read out of bounds past the end of A/B rows/columns \u2014 worth noting that the bug is not a one-character loop-bound fix.",
+          "Secondary precision surface: tl.dot on fp32 inputs may use TF32 on Ampere+ by default, giving ~1e-2-relative error vs a full-fp32 torch reference on large K. Any allclose probe should choose tolerance deliberately and distinguish this bounded precision loss from the unbounded tail-dropping error (do not let a loose tolerance mask the tail bug, or a tight tolerance misattribute TF32 loss to the tail).",
+          "M/N ragged edges: offs_m/offs_n masking looks correct on both loads and the store, but worth a spot check at M=70, N=100 that garbage from the unmasked-dimension loads (A masked only on M, B only on N) does not leak into in-bounds outputs.",
+          "Non-contiguous inputs (e.g. b = x.t()) exercise the stride path; low suspicion but cheap to include.",
+          "No dtype guard: passing float16/bfloat16 or int tensors would silently produce a wrong-dtype dot or an fp32 output written from mismatched loads. Likely out of the stated contract (fp32 operands) \u2014 note, do not weight heavily."
+        ],
+        "scope_notes": [
+          "The problem statement itself defines the input domain as all positive M, N, K and calls out non-multiple-of-BLOCK_K K as explicitly in scope. So a K-tail failure cannot be dismissed as an out-of-domain edge case; it is the named test axis.",
+          "BLOCK_K = 32 is fixed inside the wrapper (kernel.py:40), so 'multiple of the kernel's K block size' concretely means K % 32 == 0. The failing region is K % 32 != 0, which is 31/32 of all integer K.",
+          "The wrapper hardcodes grid divisor 64 matching BLOCK_M/BLOCK_N=64, so grid/block mismatch is not a live concern in this artifact.",
+          "No test harness is shipped (test_code is empty, artifact has only kernel.py, meta.json, problem.txt), so correctness must be judged against the prose contract plus a torch.matmul reference rather than a supplied test's tolerance.",
+          "meta.json reports status under_test / passed null \u2014 no prior pass/fail signal to anchor on."
+        ],
+        "summary": "case_16 is a tiled fp32 Triton GEMM. The contract explicitly demands support for K not divisible by BLOCK_K, but the kernel's K loop runs exactly `K // BLOCK_K` iterations with no K masking, so any partial trailing K tile is silently dropped (and K<32 yields an all-zero result). Secondary surfaces: tl.dot TF32 precision, and no dtype/shape validation."
+      },
+      "created_at": "2026-09-08T15:01:10Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Compute dense C = A @ B for float32 operands, C[m,n] = sum_k A[m,k]*B[k,n] (problem.txt).",
+            "M, N, K may each be ANY positive integer; the contract calls out explicitly that K is NOT required to be a multiple of the kernel's K block size.",
+            "When K % BLOCK_K != 0 the final partial K tile must still contribute its first (K mod BLOCK_K) elements to the sum \u2014 i.e. the K tail is part of the required answer, not an optional optimization.",
+            "Implied: output shape (M, N), dtype float32, on the same device as inputs; accuracy comparable to a torch.matmul reference within a float32 tolerance.",
+            "No test_code is provided in the artifact, so the operative contract is the prose in problem.txt only."
+          ],
+          "kernel_model": [
+            "kernel.py:30-41 host wrapper: reads M,K from a.shape and K2,N from b.shape, asserts K==K2, allocates c as torch.empty((M,N), float32), launches a 2-D grid (cdiv(M,64), cdiv(N,64)) with BLOCK_M=BLOCK_N=64, BLOCK_K=32, passing all six strides.",
+            "kernel.py:12-14 computes offs_m/offs_n from program ids and a fixed offs_k = arange(0, BLOCK_K); pointer arithmetic at 16-17 is fully stride-based, so non-contiguous / transposed operands are handled in principle.",
+            "kernel.py:19 the K reduction loop bound is `K // BLOCK_K` (floor division), so it iterates only over whole 32-wide K tiles and never visits the remainder tile.",
+            "kernel.py:20-21 loads mask only on the M dimension for A (offs_m < M) and only on the N dimension for B (offs_n < N); there is no `offs_k + k*BLOCK_K < K` mask component on either load, meaning the code has no mechanism to load a partial K tile safely even if the loop were extended.",
+            "kernel.py:22 accumulates with tl.dot into an fp32 accumulator; no explicit allow_tf32/input_precision argument is given, so it inherits the Triton default precision for fp32 dot.",
+            "kernel.py:26-27 stores acc with a correct 2-D M/N bounds mask, so M/N ragged edges are handled; the store never re-masks or scales for K.",
+            "Implicit assumptions: a and b are 2-D, already float32 (no dtype check or cast), on a CUDA device, and K is a multiple of 32."
+          ],
+          "open_questions": [
+            "What tolerance and reference does the grader use? Without test_code, whether TF32 precision loss alone would be judged a failure on large K is unknown; the K-tail error should be shown to be far larger than any TF32 effect to keep the two separated.",
+            "Is the Triton/GPU environment one where fp32 tl.dot defaults to TF32 (Ampere+ with allow_tf32 default true)? Determines the magnitude of the benign precision floor.",
+            "Does the harness ever exercise K < 32, where the output is identically zero, or only moderate non-multiple K? Affects how dramatic the observed failure will look but not the in-scope conclusion."
+          ],
+          "risk_map": [
+            "Primary: dropped K tail. With K % 32 != 0 the loop at kernel.py:19 skips the last (K mod 32) K-slices entirely, so C is systematically short by that partial contraction \u2014 a large relative error, not a tolerance issue. Probe K = 33, 40, 47, 65, 100 against torch.matmul.",
+            "Degenerate case: any K < 32 gives K//32 == 0, so the loop body never executes and the kernel stores the zero-initialized accumulator \u2014 output is all zeros. Probe K = 1, 8, 31.",
+            "Confirming that the K-divisible path is otherwise correct matters for scoping: probe K = 32, 64, 128 to show the failure is specifically the tail, not a general GEMM error (guards against a passing-random-probe false negative and against blaming the wrong line).",
+            "Even if someone added the missing K iteration, the unmasked loads at kernel.py:20-21 would read out of bounds past the end of A/B rows/columns \u2014 worth noting that the bug is not a one-character loop-bound fix.",
+            "Secondary precision surface: tl.dot on fp32 inputs may use TF32 on Ampere+ by default, giving ~1e-2-relative error vs a full-fp32 torch reference on large K. Any allclose probe should choose tolerance deliberately and distinguish this bounded precision loss from the unbounded tail-dropping error (do not let a loose tolerance mask the tail bug, or a tight tolerance misattribute TF32 loss to the tail).",
+            "M/N ragged edges: offs_m/offs_n masking looks correct on both loads and the store, but worth a spot check at M=70, N=100 that garbage from the unmasked-dimension loads (A masked only on M, B only on N) does not leak into in-bounds outputs.",
+            "Non-contiguous inputs (e.g. b = x.t()) exercise the stride path; low suspicion but cheap to include.",
+            "No dtype guard: passing float16/bfloat16 or int tensors would silently produce a wrong-dtype dot or an fp32 output written from mismatched loads. Likely out of the stated contract (fp32 operands) \u2014 note, do not weight heavily."
+          ],
+          "scope_notes": [
+            "The problem statement itself defines the input domain as all positive M, N, K and calls out non-multiple-of-BLOCK_K K as explicitly in scope. So a K-tail failure cannot be dismissed as an out-of-domain edge case; it is the named test axis.",
+            "BLOCK_K = 32 is fixed inside the wrapper (kernel.py:40), so 'multiple of the kernel's K block size' concretely means K % 32 == 0. The failing region is K % 32 != 0, which is 31/32 of all integer K.",
+            "The wrapper hardcodes grid divisor 64 matching BLOCK_M/BLOCK_N=64, so grid/block mismatch is not a live concern in this artifact.",
+            "No test harness is shipped (test_code is empty, artifact has only kernel.py, meta.json, problem.txt), so correctness must be judged against the prose contract plus a torch.matmul reference rather than a supplied test's tolerance.",
+            "meta.json reports status under_test / passed null \u2014 no prior pass/fail signal to anchor on."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Compute dense C = A @ B for float32 operands, C[m,n] = sum_k A[m,k]*B[k,n] (problem.txt).",
+            "M, N, K may each be ANY positive integer; the contract calls out explicitly that K is NOT required to be a multiple of the kernel's K block size.",
+            "When K % BLOCK_K != 0 the final partial K tile must still contribute its first (K mod BLOCK_K) elements to the sum \u2014 i.e. the K tail is part of the required answer, not an optional optimization.",
+            "Implied: output shape (M, N), dtype float32, on the same device as inputs; accuracy comparable to a torch.matmul reference within a float32 tolerance.",
+            "No test_code is provided in the artifact, so the operative contract is the prose in problem.txt only."
+          ],
+          "created_at": "2026-09-08T15:01:10Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "kernel.py:30-41 host wrapper: reads M,K from a.shape and K2,N from b.shape, asserts K==K2, allocates c as torch.empty((M,N), float32), launches a 2-D grid (cdiv(M,64), cdiv(N,64)) with BLOCK_M=BLOCK_N=64, BLOCK_K=32, passing all six strides.",
+            "kernel.py:12-14 computes offs_m/offs_n from program ids and a fixed offs_k = arange(0, BLOCK_K); pointer arithmetic at 16-17 is fully stride-based, so non-contiguous / transposed operands are handled in principle.",
+            "kernel.py:19 the K reduction loop bound is `K // BLOCK_K` (floor division), so it iterates only over whole 32-wide K tiles and never visits the remainder tile.",
+            "kernel.py:20-21 loads mask only on the M dimension for A (offs_m < M) and only on the N dimension for B (offs_n < N); there is no `offs_k + k*BLOCK_K < K` mask component on either load, meaning the code has no mechanism to load a partial K tile safely even if the loop were extended.",
+            "kernel.py:22 accumulates with tl.dot into an fp32 accumulator; no explicit allow_tf32/input_precision argument is given, so it inherits the Triton default precision for fp32 dot.",
+            "kernel.py:26-27 stores acc with a correct 2-D M/N bounds mask, so M/N ragged edges are handled; the store never re-masks or scales for K.",
+            "Implicit assumptions: a and b are 2-D, already float32 (no dtype check or cast), on a CUDA device, and K is a multiple of 32."
+          ],
+          "open_questions": [
+            "What tolerance and reference does the grader use? Without test_code, whether TF32 precision loss alone would be judged a failure on large K is unknown; the K-tail error should be shown to be far larger than any TF32 effect to keep the two separated.",
+            "Is the Triton/GPU environment one where fp32 tl.dot defaults to TF32 (Ampere+ with allow_tf32 default true)? Determines the magnitude of the benign precision floor.",
+            "Does the harness ever exercise K < 32, where the output is identically zero, or only moderate non-multiple K? Affects how dramatic the observed failure will look but not the in-scope conclusion."
+          ],
+          "risk_map": [
+            "Primary: dropped K tail. With K % 32 != 0 the loop at kernel.py:19 skips the last (K mod 32) K-slices entirely, so C is systematically short by that partial contraction \u2014 a large relative error, not a tolerance issue. Probe K = 33, 40, 47, 65, 100 against torch.matmul.",
+            "Degenerate case: any K < 32 gives K//32 == 0, so the loop body never executes and the kernel stores the zero-initialized accumulator \u2014 output is all zeros. Probe K = 1, 8, 31.",
+            "Confirming that the K-divisible path is otherwise correct matters for scoping: probe K = 32, 64, 128 to show the failure is specifically the tail, not a general GEMM error (guards against a passing-random-probe false negative and against blaming the wrong line).",
+            "Even if someone added the missing K iteration, the unmasked loads at kernel.py:20-21 would read out of bounds past the end of A/B rows/columns \u2014 worth noting that the bug is not a one-character loop-bound fix.",
+            "Secondary precision surface: tl.dot on fp32 inputs may use TF32 on Ampere+ by default, giving ~1e-2-relative error vs a full-fp32 torch reference on large K. Any allclose probe should choose tolerance deliberately and distinguish this bounded precision loss from the unbounded tail-dropping error (do not let a loose tolerance mask the tail bug, or a tight tolerance misattribute TF32 loss to the tail).",
+            "M/N ragged edges: offs_m/offs_n masking looks correct on both loads and the store, but worth a spot check at M=70, N=100 that garbage from the unmasked-dimension loads (A masked only on M, B only on N) does not leak into in-bounds outputs.",
+            "Non-contiguous inputs (e.g. b = x.t()) exercise the stride path; low suspicion but cheap to include.",
+            "No dtype guard: passing float16/bfloat16 or int tensors would silently produce a wrong-dtype dot or an fp32 output written from mismatched loads. Likely out of the stated contract (fp32 operands) \u2014 note, do not weight heavily."
+          ],
+          "scope_notes": [
+            "The problem statement itself defines the input domain as all positive M, N, K and calls out non-multiple-of-BLOCK_K K as explicitly in scope. So a K-tail failure cannot be dismissed as an out-of-domain edge case; it is the named test axis.",
+            "BLOCK_K = 32 is fixed inside the wrapper (kernel.py:40), so 'multiple of the kernel's K block size' concretely means K % 32 == 0. The failing region is K % 32 != 0, which is 31/32 of all integer K.",
+            "The wrapper hardcodes grid divisor 64 matching BLOCK_M/BLOCK_N=64, so grid/block mismatch is not a live concern in this artifact.",
+            "No test harness is shipped (test_code is empty, artifact has only kernel.py, meta.json, problem.txt), so correctness must be judged against the prose contract plus a torch.matmul reference rather than a supplied test's tolerance.",
+            "meta.json reports status under_test / passed null \u2014 no prior pass/fail signal to anchor on."
+          ],
+          "summary": "case_16 is a tiled fp32 Triton GEMM. The contract explicitly demands support for K not divisible by BLOCK_K, but the kernel's K loop runs exactly `K // BLOCK_K` iterations with no K masking, so any partial trailing K tile is silently dropped (and K<32 yields an all-zero result). Secondary surfaces: tl.dot TF32 precision, and no dtype/shape validation.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "kernel.py:19 loops `range(0, K // BLOCK_K)` with BLOCK_K=32, so only floor(K/32) whole tiles are visited; loads at kernel.py:20-21 carry no offs_k+k*BLOCK_K < K mask, so there is no partial-tile path at all. The store mask (line 27) only bounds M/N.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Input domain: M, N and K may each be any positive integer; K explicitly NOT required to be a multiple of the kernel's K block size, and the partial final K tile must contribute its first (K mod BLOCK_K) entries to the sum."
+          },
+          {
+            "source": "kernel.py:40",
+            "summary": "Wrapper hardcodes BLOCK_K=32, making K%32!=0 (e.g. K=40) the concrete contract-named case."
+          }
+        ],
+        "scope_rationale": "problem.txt is the operative contract (no test.py exists) and it explicitly states \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel fixes BLOCK_K=32 at kernel.py:40, so K=40 is a representative in-domain input the contract admits and specifically calls out.",
+        "statement": "For K not a multiple of 32 (e.g. M=64,N=64,K=40 or K=33,47,100 float32 CUDA tensors), matmul() omits the trailing (K mod 32) k-slices from the contraction, so C differs from torch.matmul(a,b) by the sum over those tail indices \u2014 a large relative error (order sqrt(K_tail/K), far above any fp32/TF32 tolerance), not a rounding artifact."
+      },
+      "created_at": "2026-09-08T15:01:36Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-08T15:01:36Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "kernel.py:19 loops `range(0, K // BLOCK_K)` with BLOCK_K=32, so only floor(K/32) whole tiles are visited; loads at kernel.py:20-21 carry no offs_k+k*BLOCK_K < K mask, so there is no partial-tile path at all. The store mask (line 27) only bounds M/N.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Input domain: M, N and K may each be any positive integer; K explicitly NOT required to be a multiple of the kernel's K block size, and the partial final K tile must contribute its first (K mod BLOCK_K) entries to the sum."
+          },
+          {
+            "source": "kernel.py:40",
+            "summary": "Wrapper hardcodes BLOCK_K=32, making K%32!=0 (e.g. K=40) the concrete contract-named case."
+          }
+        ],
+        "scope_rationale": "problem.txt is the operative contract (no test.py exists) and it explicitly states \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel fixes BLOCK_K=32 at kernel.py:40, so K=40 is a representative in-domain input the contract admits and specifically calls out.",
+        "statement": "For K not a multiple of 32 (e.g. M=64,N=64,K=40 or K=33,47,100 float32 CUDA tensors), matmul() omits the trailing (K mod 32) k-slices from the contraction, so C differs from torch.matmul(a,b) by the sum over those tail indices \u2014 a large relative error (order sqrt(K_tail/K), far above any fp32/TF32 tolerance), not a rounding artifact.",
+        "status": "open",
+        "updated_at": "2026-09-08T15:01:36Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Degenerate instance of the floor-division loop bound at kernel.py:19; acc from kernel.py:18 is stored unmodified at kernel.py:27. Worth separating from claim 1 because the failure mode (all-zero output, 100% relative error) is qualitatively different and unmistakable.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"M, N and K may each be any positive integer\" \u2014 no lower bound excluding K<BLOCK_K; the partial-tile rule is stated as required behavior."
+          }
+        ],
+        "scope_rationale": "problem.txt states M, N and K may each be any positive integer, so K=8 is inside the stated input domain; with BLOCK_K=32 this is the extreme of the contract's named \"partial final K tile\" case (the whole of K is the partial tile).",
+        "statement": "For any positive K < 32 (e.g. M=64,N=64,K=8 or K=1,31), K//32 == 0 so the reduction loop body never executes and matmul() returns the zero-initialized accumulator: C is identically zero regardless of A and B, instead of A@B."
+      },
+      "created_at": "2026-09-08T15:01:36Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-08T15:01:36Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "Degenerate instance of the floor-division loop bound at kernel.py:19; acc from kernel.py:18 is stored unmodified at kernel.py:27. Worth separating from claim 1 because the failure mode (all-zero output, 100% relative error) is qualitatively different and unmistakable.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"M, N and K may each be any positive integer\" \u2014 no lower bound excluding K<BLOCK_K; the partial-tile rule is stated as required behavior."
+          }
+        ],
+        "scope_rationale": "problem.txt states M, N and K may each be any positive integer, so K=8 is inside the stated input domain; with BLOCK_K=32 this is the extreme of the contract's named \"partial final K tile\" case (the whole of K is the partial tile).",
+        "statement": "For any positive K < 32 (e.g. M=64,N=64,K=8 or K=1,31), K//32 == 0 so the reduction loop body never executes and matmul() returns the zero-initialized accumulator: C is identically zero regardless of A and B, instead of A@B.",
+        "status": "open",
+        "updated_at": "2026-09-08T15:01:36Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Asymmetric masking: A is masked on rows only and B on columns only. For divisible K this should be harmless (the unmasked dimension stays in range), but the last M/N tile reads beyond the logical matrix, and the masked-lane `other=0.0` values feed tl.dot; needs a runtime check to confirm ragged M/N does not corrupt in-bounds results.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "M, N and K may each be any positive integer, and C[m,n] = sum_k A[m,k]*B[k,n] is required for all in-range m,n."
+          }
+        ],
+        "scope_rationale": "problem.txt admits any positive M and N, so M=70/N=100 with K=64 is inside the stated domain; the claim is about the required C[m,n] formula holding on those shapes.",
+        "statement": "With K a multiple of 32 but M and/or N not a multiple of 64 (e.g. M=70, N=100, K=64), the loads at kernel.py:20-21 mask only A's M dimension and only B's N dimension, so B's k-rows and A's k-columns are read unmasked; if the values fetched for out-of-range positions in the masked dimension are not fully suppressed, in-bounds outputs C[m,n] (m<M, n<N) could still deviate from torch.matmul, or the launch could fault on out-of-bounds reads past the end of the A/B allocations."
+      },
+      "created_at": "2026-09-08T15:01:36Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-08T15:01:36Z",
+        "evidence": [],
+        "id": "c3",
+        "raised_by": "skeptic",
+        "rationale": "Asymmetric masking: A is masked on rows only and B on columns only. For divisible K this should be harmless (the unmasked dimension stays in range), but the last M/N tile reads beyond the logical matrix, and the masked-lane `other=0.0` values feed tl.dot; needs a runtime check to confirm ragged M/N does not corrupt in-bounds results.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "M, N and K may each be any positive integer, and C[m,n] = sum_k A[m,k]*B[k,n] is required for all in-range m,n."
+          }
+        ],
+        "scope_rationale": "problem.txt admits any positive M and N, so M=70/N=100 with K=64 is inside the stated domain; the claim is about the required C[m,n] formula holding on those shapes.",
+        "statement": "With K a multiple of 32 but M and/or N not a multiple of 64 (e.g. M=70, N=100, K=64), the loads at kernel.py:20-21 mask only A's M dimension and only B's N dimension, so B's k-rows and A's k-columns are read unmasked; if the values fetched for out-of-range positions in the masked dimension are not fully suppressed, in-bounds outputs C[m,n] (m<M, n<N) could still deviate from torch.matmul, or the launch could fault on out-of-bounds reads past the end of the A/B allocations.",
+        "status": "open",
+        "updated_at": "2026-09-08T15:01:36Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport json, sys, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_16/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(0)\nres = {}\nfor K in [32, 64, 128, 33, 40, 47, 100]:\n    M = N = 64\n    a = torch.randn(M, K, device='cuda', dtype=torch.float32)\n    b = torch.randn(K, N, device='cuda', dtype=torch.float32)\n    c = m.matmul(a, b)\n    ref = (a.double() @ b.double()).float()\n    Kt = (K // 32) * 32\n    trunc = (a[:, :Kt].double() @ b[:Kt].double()).float()\n    err_full = (c - ref).abs().max().item()\n    err_trunc = (c - trunc).abs().max().item()\n    rel_full = err_full / ref.abs().max().item()\n    res[str(K)] = dict(K=K, Ktail=K - Kt, max_abs_err_vs_torch=err_full,\n                       max_rel_err_vs_torch=rel_full,\n                       max_abs_err_vs_truncated_ref=err_trunc,\n                       allclose_torch_1e3=bool(torch.allclose(c, ref, rtol=1e-3, atol=1e-3)),\n                       allclose_trunc_1e3=bool(torch.allclose(c, trunc, rtol=1e-3, atol=1e-3)))\nprint(json.dumps(res))\n",
+        "expected_signal": "For K in {33,40,47,100}: large error vs torch.matmul, but near-zero error vs truncated reference A[:,:32*(K//32)]@B[:32*(K//32)]; K in {32,64,128} matches torch.matmul within fp32/TF32 tolerance."
+      },
+      "created_at": "2026-09-08T15:02:10Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "92e2e2398da88e409f5afd013a441e31f9d2c92008ba428fcc75dafc05bb2f72"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "705b2903691072724f3ba512055a611eaea5f3b770857db89b6dcb5b1088eace"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "cddf39eafc65d478b63d5b5f1b178f9ff5bd100e37e60f4cff1f231936a974cc"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For K not a multiple of 32 (e.g. M=64,N=64,K=40 or K=33,47,100 float32 CUDA tensors), matmul() omits the trailing (K mod 32) k-slices from the contraction, so C differs from torch.matmul(a,b) by the sum over those tail indices \u2014 a large relative error (order sqrt(K_tail/K), far above any fp32/TF32 tolerance), not a rounding artifact.",
+        "cwd": "/root/cases/case_16",
+        "duration_s": 8.718147,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "92e2e2398da88e409f5afd013a441e31f9d2c92008ba428fcc75dafc05bb2f72"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "705b2903691072724f3ba512055a611eaea5f3b770857db89b6dcb5b1088eace"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "cddf39eafc65d478b63d5b5f1b178f9ff5bd100e37e60f4cff1f231936a974cc"
+              }
+            ],
+            "duration_s": 8.718147,
+            "exit_code": 0,
+            "expected_signal": "For K in {33,40,47,100}: large error vs torch.matmul, but near-zero error vs truncated reference A[:,:32*(K//32)]@B[:32*(K//32)]; K in {32,64,128} matches torch.matmul within fp32/TF32 tolerance.",
+            "json_parse_error": null,
+            "json_result": {
+              "100": {
+                "K": 100,
+                "Ktail": 4,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 11.031343460083008,
+                "max_abs_err_vs_truncated_ref": 1.1444091796875e-05,
+                "max_rel_err_vs_torch": 0.2857711996676445
+              },
+              "128": {
+                "K": 128,
+                "Ktail": 0,
+                "allclose_torch_1e3": true,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 1.52587890625e-05,
+                "max_abs_err_vs_truncated_ref": 1.52587890625e-05,
+                "max_rel_err_vs_torch": 3.707984709383454e-07
+              },
+              "32": {
+                "K": 32,
+                "Ktail": 0,
+                "allclose_torch_1e3": true,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 4.76837158203125e-06,
+                "max_abs_err_vs_truncated_ref": 4.76837158203125e-06,
+                "max_rel_err_vs_torch": 2.3727665622902475e-07
+              },
+              "33": {
+                "K": 33,
+                "Ktail": 1,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 9.890376091003418,
+                "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                "max_rel_err_vs_torch": 0.3782863197049291
+              },
+              "40": {
+                "K": 40,
+                "Ktail": 8,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 12.810418128967285,
+                "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                "max_rel_err_vs_torch": 0.4572077519513882
+              },
+              "47": {
+                "K": 47,
+                "Ktail": 15,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 17.772851943969727,
+                "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                "max_rel_err_vs_torch": 0.5820121805351536
+              },
+              "64": {
+                "K": 64,
+                "Ktail": 0,
+                "allclose_torch_1e3": true,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 8.58306884765625e-06,
+                "max_abs_err_vs_truncated_ref": 8.58306884765625e-06,
+                "max_rel_err_vs_torch": 2.6775020215140263e-07
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"32\": {\"K\": 32, \"Ktail\": 0, \"max_abs_err_vs_torch\": 4.76837158203125e-06, \"max_rel_err_vs_torch\": 2.3727665622902475e-07, \"max_abs_err_vs_truncated_ref\": 4.76837158203125e-06, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"64\": {\"K\": 64, \"Ktail\": 0, \"max_abs_err_vs_torch\": 8.58306884765625e-06, \"max_rel_err_vs_torch\": 2.6775020215140263e-07, \"max_abs_err_vs_truncated_ref\": 8.58306884765625e-06, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"128\": {\"K\": 128, \"Ktail\": 0, \"max_abs_err_vs_torch\": 1.52587890625e-05, \"max_rel_err_vs_torch\": 3.707984709383454e-07, \"max_abs_err_vs_truncated_ref\": 1.52587890625e-05, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"33\": {\"K\": 33, \"Ktail\": 1, \"max_abs_err_vs_torch\": 9.890376091003418, \"max_rel_err_vs_torch\": 0.3782863197049291, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"40\": {\"K\": 40, \"Ktail\": 8, \"max_abs_err_vs_torch\": 12.810418128967285, \"max_rel_err_vs_torch\": 0.4572077519513882, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"47\": {\"K\": 47, \"Ktail\": 15, \"max_abs_err_vs_torch\": 17.772851943969727, \"max_rel_err_vs_torch\": 0.5820121805351536, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"100\": {\"K\": 100, \"Ktail\": 4, \"max_abs_err_vs_torch\": 11.031343460083008, \"max_rel_err_vs_torch\": 0.2857711996676445, \"max_abs_err_vs_truncated_ref\": 1.1444091796875e-05, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "For K in {33,40,47,100}: large error vs torch.matmul, but near-zero error vs truncated reference A[:,:32*(K//32)]@B[:32*(K//32)]; K in {32,64,128} matches torch.matmul within fp32/TF32 tolerance.",
+        "json_parse_error": null,
+        "json_result": {
+          "100": {
+            "K": 100,
+            "Ktail": 4,
+            "allclose_torch_1e3": false,
+            "allclose_trunc_1e3": true,
+            "max_abs_err_vs_torch": 11.031343460083008,
+            "max_abs_err_vs_truncated_ref": 1.1444091796875e-05,
+            "max_rel_err_vs_torch": 0.2857711996676445
+          },
+          "128": {
+            "K": 128,
+            "Ktail": 0,
+            "allclose_torch_1e3": true,
+            "allclose_trunc_1e3": true,
+            "max_abs_err_vs_torch": 1.52587890625e-05,
+            "max_abs_err_vs_truncated_ref": 1.52587890625e-05,
+            "max_rel_err_vs_torch": 3.707984709383454e-07
+          },
+          "32": {
+            "K": 32,
+            "Ktail": 0,
+            "allclose_torch_1e3": true,
+            "allclose_trunc_1e3": true,
+            "max_abs_err_vs_torch": 4.76837158203125e-06,
+            "max_abs_err_vs_truncated_ref": 4.76837158203125e-06,
+            "max_rel_err_vs_torch": 2.3727665622902475e-07
+          },
+          "33": {
+            "K": 33,
+            "Ktail": 1,
+            "allclose_torch_1e3": false,
+            "allclose_trunc_1e3": true,
+            "max_abs_err_vs_torch": 9.890376091003418,
+            "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+            "max_rel_err_vs_torch": 0.3782863197049291
+          },
+          "40": {
+            "K": 40,
+            "Ktail": 8,
+            "allclose_torch_1e3": false,
+            "allclose_trunc_1e3": true,
+            "max_abs_err_vs_torch": 12.810418128967285,
+            "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+            "max_rel_err_vs_torch": 0.4572077519513882
+          },
+          "47": {
+            "K": 47,
+            "Ktail": 15,
+            "allclose_torch_1e3": false,
+            "allclose_trunc_1e3": true,
+            "max_abs_err_vs_torch": 17.772851943969727,
+            "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+            "max_rel_err_vs_torch": 0.5820121805351536
+          },
+          "64": {
+            "K": 64,
+            "Ktail": 0,
+            "allclose_torch_1e3": true,
+            "allclose_trunc_1e3": true,
+            "max_abs_err_vs_torch": 8.58306884765625e-06,
+            "max_abs_err_vs_truncated_ref": 8.58306884765625e-06,
+            "max_rel_err_vs_torch": 2.6775020215140263e-07
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"32\": {\"K\": 32, \"Ktail\": 0, \"max_abs_err_vs_torch\": 4.76837158203125e-06, \"max_rel_err_vs_torch\": 2.3727665622902475e-07, \"max_abs_err_vs_truncated_ref\": 4.76837158203125e-06, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"64\": {\"K\": 64, \"Ktail\": 0, \"max_abs_err_vs_torch\": 8.58306884765625e-06, \"max_rel_err_vs_torch\": 2.6775020215140263e-07, \"max_abs_err_vs_truncated_ref\": 8.58306884765625e-06, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"128\": {\"K\": 128, \"Ktail\": 0, \"max_abs_err_vs_torch\": 1.52587890625e-05, \"max_rel_err_vs_torch\": 3.707984709383454e-07, \"max_abs_err_vs_truncated_ref\": 1.52587890625e-05, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"33\": {\"K\": 33, \"Ktail\": 1, \"max_abs_err_vs_torch\": 9.890376091003418, \"max_rel_err_vs_torch\": 0.3782863197049291, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"40\": {\"K\": 40, \"Ktail\": 8, \"max_abs_err_vs_torch\": 12.810418128967285, \"max_rel_err_vs_torch\": 0.4572077519513882, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"47\": {\"K\": 47, \"Ktail\": 15, \"max_abs_err_vs_torch\": 17.772851943969727, \"max_rel_err_vs_torch\": 0.5820121805351536, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"100\": {\"K\": 100, \"Ktail\": 4, \"max_abs_err_vs_torch\": 11.031343460083008, \"max_rel_err_vs_torch\": 0.2857711996676445, \"max_abs_err_vs_truncated_ref\": 1.1444091796875e-05, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_16/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(1)\nres = {}\nfor K in [1, 8, 31]:\n    M = N = 64\n    a = torch.randn(M, K, device='cuda', dtype=torch.float32)\n    b = torch.randn(K, N, device='cuda', dtype=torch.float32)\n    c = m.matmul(a, b)\n    ref = a @ b\n    res[str(K)] = dict(K=K, kernel_all_zero=bool((c == 0).all().item()),\n                       kernel_abs_max=c.abs().max().item(),\n                       ref_abs_max=ref.abs().max().item(),\n                       max_abs_err=(c - ref).abs().max().item(),\n                       nonzero_frac=float((c != 0).float().mean().item()))\nprint(json.dumps(res))\n",
+        "expected_signal": "For K in {1,8,31}: kernel output is exactly all zeros while torch.matmul is nonzero (100% relative error)."
+      },
+      "created_at": "2026-09-08T15:02:18Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "8ac973bbf8017cb020aa5c13029a163c2a33f3be52591584fb46f7009446e218"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "dae98c8efff5ceda6ad48c17ccff7a6825bcec86de1fe644ba1314df1887dfe1"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t10_json_result.json",
+            "sha256": "b3d7cde1009d148669ba6cddc0296dcf84f9db68063b731d61ec6fb5fb6fd1c9"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "For any positive K < 32 (e.g. M=64,N=64,K=8 or K=1,31), K//32 == 0 so the reduction loop body never executes and matmul() returns the zero-initialized accumulator: C is identically zero regardless of A and B, instead of A@B.",
+        "cwd": "/root/cases/case_16",
+        "duration_s": 8.031097,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "8ac973bbf8017cb020aa5c13029a163c2a33f3be52591584fb46f7009446e218"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "dae98c8efff5ceda6ad48c17ccff7a6825bcec86de1fe644ba1314df1887dfe1"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "b3d7cde1009d148669ba6cddc0296dcf84f9db68063b731d61ec6fb5fb6fd1c9"
+              }
+            ],
+            "duration_s": 8.031097,
+            "exit_code": 0,
+            "expected_signal": "For K in {1,8,31}: kernel output is exactly all zeros while torch.matmul is nonzero (100% relative error).",
+            "json_parse_error": null,
+            "json_result": {
+              "1": {
+                "K": 1,
+                "kernel_abs_max": 0.0,
+                "kernel_all_zero": true,
+                "max_abs_err": 6.549962997436523,
+                "nonzero_frac": 0.0,
+                "ref_abs_max": 6.549962997436523
+              },
+              "31": {
+                "K": 31,
+                "kernel_abs_max": 0.0,
+                "kernel_all_zero": true,
+                "max_abs_err": 21.460908889770508,
+                "nonzero_frac": 0.0,
+                "ref_abs_max": 21.460908889770508
+              },
+              "8": {
+                "K": 8,
+                "kernel_abs_max": 0.0,
+                "kernel_all_zero": true,
+                "max_abs_err": 10.059889793395996,
+                "nonzero_frac": 0.0,
+                "ref_abs_max": 10.059889793395996
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"1\": {\"K\": 1, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 6.549962997436523, \"max_abs_err\": 6.549962997436523, \"nonzero_frac\": 0.0}, \"8\": {\"K\": 8, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 10.059889793395996, \"max_abs_err\": 10.059889793395996, \"nonzero_frac\": 0.0}, \"31\": {\"K\": 31, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 21.460908889770508, \"max_abs_err\": 21.460908889770508, \"nonzero_frac\": 0.0}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": "For K in {1,8,31}: kernel output is exactly all zeros while torch.matmul is nonzero (100% relative error).",
+        "json_parse_error": null,
+        "json_result": {
+          "1": {
+            "K": 1,
+            "kernel_abs_max": 0.0,
+            "kernel_all_zero": true,
+            "max_abs_err": 6.549962997436523,
+            "nonzero_frac": 0.0,
+            "ref_abs_max": 6.549962997436523
+          },
+          "31": {
+            "K": 31,
+            "kernel_abs_max": 0.0,
+            "kernel_all_zero": true,
+            "max_abs_err": 21.460908889770508,
+            "nonzero_frac": 0.0,
+            "ref_abs_max": 21.460908889770508
+          },
+          "8": {
+            "K": 8,
+            "kernel_abs_max": 0.0,
+            "kernel_all_zero": true,
+            "max_abs_err": 10.059889793395996,
+            "nonzero_frac": 0.0,
+            "ref_abs_max": 10.059889793395996
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"1\": {\"K\": 1, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 6.549962997436523, \"max_abs_err\": 6.549962997436523, \"nonzero_frac\": 0.0}, \"8\": {\"K\": 8, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 10.059889793395996, \"max_abs_err\": 10.059889793395996, \"nonzero_frac\": 0.0}, \"31\": {\"K\": 31, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 21.460908889770508, \"max_abs_err\": 21.460908889770508, \"nonzero_frac\": 0.0}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c3",
+        "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_16/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(2)\nres = {}\nfor (M, N, K) in [(70, 100, 64), (65, 65, 32), (100, 70, 128)]:\n    a = torch.randn(M, K, device='cuda', dtype=torch.float32)\n    b = torch.randn(K, N, device='cuda', dtype=torch.float32)\n    try:\n        c = m.matmul(a, b)\n        torch.cuda.synchronize()\n        ref = (a.double() @ b.double()).float()\n        err = (c - ref).abs().max().item()\n        rel = err / ref.abs().max().item()\n        # poison test: same logical matrices inside a larger buffer with garbage past the end\n        bigA = torch.full((M + 8, K), 1e6, device='cuda', dtype=torch.float32); bigA[:M] = a\n        bigB = torch.full((K, N + 8), 1e6, device='cuda', dtype=torch.float32); bigB[:, :N] = b\n        c2 = m.matmul(bigA[:M].contiguous() if False else a, b)\n        # true poison: view into larger allocation so OOB reads hit 1e6\n        vA = bigA.as_strided((M, K), (K, 1))\n        vB = bigB.as_strided((K, N), (N + 8, 1))\n        c3 = m.matmul(vA, vB)\n        torch.cuda.synchronize()\n        err_poison = (c3 - ref).abs().max().item()\n        res[f\"{M}x{N}x{K}\"] = dict(M=M, N=N, K=K, max_abs_err=err, max_rel_err=rel,\n                                   allclose_1e3=bool(torch.allclose(c, ref, rtol=1e-3, atol=1e-3)),\n                                   max_abs_err_poisoned_alloc=err_poison,\n                                   poison_allclose_1e3=bool(torch.allclose(c3, ref, rtol=1e-3, atol=1e-3)),\n                                   fault=False)\n    except Exception as e:\n        res[f\"{M}x{N}x{K}\"] = dict(M=M, N=N, K=K, fault=True, error=repr(e)[:300])\nprint(json.dumps(res))\n",
+        "expected_signal": "With K divisible by 32 and ragged M/N (70x100, 65x65, 100x70), in-bounds outputs match torch.matmul within fp32/TF32 tolerance and no CUDA fault occurs; a padded-allocation variant with poisoned out-of-range memory gives identical results."
+      },
+      "created_at": "2026-09-08T15:02:26Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t11_probe.py",
+            "sha256": "8ded936cc60e09a1d2cafc4e772533919319f29b9af892d8f06588fee68983ef"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t11_stdout.txt",
+            "sha256": "5aba89aba302e554df272e1f74a62aed56fdce2032fd5dc666b260115ce482c0"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t11_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t11_json_result.json",
+            "sha256": "ae9382c38b7c4b1d9f197be3224a503a5d8d2ab8328a21fe761fa716c5bb9755"
+          }
+        ],
+        "claim_id": "c3",
+        "claim_statement": "With K a multiple of 32 but M and/or N not a multiple of 64 (e.g. M=70, N=100, K=64), the loads at kernel.py:20-21 mask only A's M dimension and only B's N dimension, so B's k-rows and A's k-columns are read unmasked; if the values fetched for out-of-range positions in the masked dimension are not fully suppressed, in-bounds outputs C[m,n] (m<M, n<N) could still deviate from torch.matmul, or the launch could fault on out-of-bounds reads past the end of the A/B allocations.",
+        "cwd": "/root/cases/case_16",
+        "duration_s": 8.539535,
+        "event_id": "t11",
+        "evidence_draft": {
+          "claim_id": "c3",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "8ded936cc60e09a1d2cafc4e772533919319f29b9af892d8f06588fee68983ef"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "5aba89aba302e554df272e1f74a62aed56fdce2032fd5dc666b260115ce482c0"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "ae9382c38b7c4b1d9f197be3224a503a5d8d2ab8328a21fe761fa716c5bb9755"
+              }
+            ],
+            "duration_s": 8.539535,
+            "exit_code": 0,
+            "expected_signal": "With K divisible by 32 and ragged M/N (70x100, 65x65, 100x70), in-bounds outputs match torch.matmul within fp32/TF32 tolerance and no CUDA fault occurs; a padded-allocation variant with poisoned out-of-range memory gives identical results.",
+            "json_parse_error": null,
+            "json_result": {
+              "100x70x128": {
+                "K": 128,
+                "M": 100,
+                "N": 70,
+                "allclose_1e3": true,
+                "fault": false,
+                "max_abs_err": 1.52587890625e-05,
+                "max_abs_err_poisoned_alloc": 1.52587890625e-05,
+                "max_rel_err": 3.302807683783908e-07,
+                "poison_allclose_1e3": true
+              },
+              "65x65x32": {
+                "K": 32,
+                "M": 65,
+                "N": 65,
+                "allclose_1e3": true,
+                "fault": false,
+                "max_abs_err": 4.76837158203125e-06,
+                "max_abs_err_poisoned_alloc": 4.76837158203125e-06,
+                "max_rel_err": 1.9317652602308026e-07,
+                "poison_allclose_1e3": true
+              },
+              "70x100x64": {
+                "K": 64,
+                "M": 70,
+                "N": 100,
+                "allclose_1e3": true,
+                "fault": false,
+                "max_abs_err": 9.5367431640625e-06,
+                "max_abs_err_poisoned_alloc": 9.5367431640625e-06,
+                "max_rel_err": 2.84870742749185e-07,
+                "poison_allclose_1e3": true
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"70x100x64\": {\"M\": 70, \"N\": 100, \"K\": 64, \"max_abs_err\": 9.5367431640625e-06, \"max_rel_err\": 2.84870742749185e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 9.5367431640625e-06, \"poison_allclose_1e3\": true, \"fault\": false}, \"65x65x32\": {\"M\": 65, \"N\": 65, \"K\": 32, \"max_abs_err\": 4.76837158203125e-06, \"max_rel_err\": 1.9317652602308026e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 4.76837158203125e-06, \"poison_allclose_1e3\": true, \"fault\": false}, \"100x70x128\": {\"M\": 100, \"N\": 70, \"K\": 128, \"max_abs_err\": 1.52587890625e-05, \"max_rel_err\": 3.302807683783908e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 1.52587890625e-05, \"poison_allclose_1e3\": true, \"fault\": false}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t11"
+        },
+        "exit_code": 0,
+        "expected_signal": "With K divisible by 32 and ragged M/N (70x100, 65x65, 100x70), in-bounds outputs match torch.matmul within fp32/TF32 tolerance and no CUDA fault occurs; a padded-allocation variant with poisoned out-of-range memory gives identical results.",
+        "json_parse_error": null,
+        "json_result": {
+          "100x70x128": {
+            "K": 128,
+            "M": 100,
+            "N": 70,
+            "allclose_1e3": true,
+            "fault": false,
+            "max_abs_err": 1.52587890625e-05,
+            "max_abs_err_poisoned_alloc": 1.52587890625e-05,
+            "max_rel_err": 3.302807683783908e-07,
+            "poison_allclose_1e3": true
+          },
+          "65x65x32": {
+            "K": 32,
+            "M": 65,
+            "N": 65,
+            "allclose_1e3": true,
+            "fault": false,
+            "max_abs_err": 4.76837158203125e-06,
+            "max_abs_err_poisoned_alloc": 4.76837158203125e-06,
+            "max_rel_err": 1.9317652602308026e-07,
+            "poison_allclose_1e3": true
+          },
+          "70x100x64": {
+            "K": 64,
+            "M": 70,
+            "N": 100,
+            "allclose_1e3": true,
+            "fault": false,
+            "max_abs_err": 9.5367431640625e-06,
+            "max_abs_err_poisoned_alloc": 9.5367431640625e-06,
+            "max_rel_err": 2.84870742749185e-07,
+            "poison_allclose_1e3": true
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"70x100x64\": {\"M\": 70, \"N\": 100, \"K\": 64, \"max_abs_err\": 9.5367431640625e-06, \"max_rel_err\": 2.84870742749185e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 9.5367431640625e-06, \"poison_allclose_1e3\": true, \"fault\": false}, \"65x65x32\": {\"M\": 65, \"N\": 65, \"K\": 32, \"max_abs_err\": 4.76837158203125e-06, \"max_rel_err\": 1.9317652602308026e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 4.76837158203125e-06, \"poison_allclose_1e3\": true, \"fault\": false}, \"100x70x128\": {\"M\": 100, \"N\": 70, \"K\": 128, \"max_abs_err\": 1.52587890625e-05, \"max_rel_err\": 3.302807683783908e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 1.52587890625e-05, \"poison_allclose_1e3\": true, \"fault\": false}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "K_divisible_max_abs_err": {
+            "128": 1.52587890625e-05,
+            "32": 4.76837158203125e-06,
+            "64": 8.58306884765625e-06
+          },
+          "K_nondivisible_max_abs_err_vs_torch": {
+            "100": 11.031343460083008,
+            "33": 9.890376091003418,
+            "40": 12.810418128967285,
+            "47": 17.772851943969727
+          },
+          "K_nondivisible_max_rel_err_vs_torch": {
+            "100": 0.2857711996676445,
+            "33": 0.3782863197049291,
+            "40": 0.4572077519513882,
+            "47": 0.5820121805351536
+          },
+          "allclose_torch_rtol_atol_1e-3": {
+            "100": false,
+            "128": true,
+            "32": true,
+            "33": false,
+            "40": false,
+            "47": false,
+            "64": true
+          },
+          "allclose_truncated_ref_1e-3": {
+            "100": true,
+            "33": true,
+            "40": true,
+            "47": true
+          },
+          "max_abs_err_vs_truncated_ref": {
+            "100": 1.1444091796875e-05,
+            "33": 3.814697265625e-06,
+            "40": 3.814697265625e-06,
+            "47": 3.814697265625e-06
+          },
+          "metric_reason": "continuous matmul output: max abs/rel elementwise error vs fp64-accumulated torch reference, plus a truncated-K reference to localize the defect",
+          "shape": "M=N=64, fp32 cuda"
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "K-tail is dropped exactly as claimed. For K=33/40/47/100 (M=N=64, fp32 CUDA) the kernel's output disagrees with torch.matmul by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.38/0.46/0.58/0.29) yet matches the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose rtol=atol=1e-3 True). For K=32/64/128 the kernel matches torch.matmul to <=1.5e-5 (rel <=3.7e-7), so the failure is specifically the missing partial K tile, not a general GEMM or precision error; error magnitude is 5-6 orders above the fp32/TF32 floor observed on divisible K.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T15:02:54Z",
+      "id": "t12",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T15:01:36Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T15:02:54Z",
+              "data": {
+                "K_divisible_max_abs_err": {
+                  "128": 1.52587890625e-05,
+                  "32": 4.76837158203125e-06,
+                  "64": 8.58306884765625e-06
+                },
+                "K_nondivisible_max_abs_err_vs_torch": {
+                  "100": 11.031343460083008,
+                  "33": 9.890376091003418,
+                  "40": 12.810418128967285,
+                  "47": 17.772851943969727
+                },
+                "K_nondivisible_max_rel_err_vs_torch": {
+                  "100": 0.2857711996676445,
+                  "33": 0.3782863197049291,
+                  "40": 0.4572077519513882,
+                  "47": 0.5820121805351536
+                },
+                "allclose_torch_rtol_atol_1e-3": {
+                  "100": false,
+                  "128": true,
+                  "32": true,
+                  "33": false,
+                  "40": false,
+                  "47": false,
+                  "64": true
+                },
+                "allclose_truncated_ref_1e-3": {
+                  "100": true,
+                  "33": true,
+                  "40": true,
+                  "47": true
+                },
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "92e2e2398da88e409f5afd013a441e31f9d2c92008ba428fcc75dafc05bb2f72"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "705b2903691072724f3ba512055a611eaea5f3b770857db89b6dcb5b1088eace"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "cddf39eafc65d478b63d5b5f1b178f9ff5bd100e37e60f4cff1f231936a974cc"
+                  }
+                ],
+                "duration_s": 8.718147,
+                "exit_code": 0,
+                "expected_signal": "For K in {33,40,47,100}: large error vs torch.matmul, but near-zero error vs truncated reference A[:,:32*(K//32)]@B[:32*(K//32)]; K in {32,64,128} matches torch.matmul within fp32/TF32 tolerance.",
+                "json_parse_error": null,
+                "json_result": {
+                  "100": {
+                    "K": 100,
+                    "Ktail": 4,
+                    "allclose_torch_1e3": false,
+                    "allclose_trunc_1e3": true,
+                    "max_abs_err_vs_torch": 11.031343460083008,
+                    "max_abs_err_vs_truncated_ref": 1.1444091796875e-05,
+                    "max_rel_err_vs_torch": 0.2857711996676445
+                  },
+                  "128": {
+                    "K": 128,
+                    "Ktail": 0,
+                    "allclose_torch_1e3": true,
+                    "allclose_trunc_1e3": true,
+                    "max_abs_err_vs_torch": 1.52587890625e-05,
+                    "max_abs_err_vs_truncated_ref": 1.52587890625e-05,
+                    "max_rel_err_vs_torch": 3.707984709383454e-07
+                  },
+                  "32": {
+                    "K": 32,
+                    "Ktail": 0,
+                    "allclose_torch_1e3": true,
+                    "allclose_trunc_1e3": true,
+                    "max_abs_err_vs_torch": 4.76837158203125e-06,
+                    "max_abs_err_vs_truncated_ref": 4.76837158203125e-06,
+                    "max_rel_err_vs_torch": 2.3727665622902475e-07
+                  },
+                  "33": {
+                    "K": 33,
+                    "Ktail": 1,
+                    "allclose_torch_1e3": false,
+                    "allclose_trunc_1e3": true,
+                    "max_abs_err_vs_torch": 9.890376091003418,
+                    "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                    "max_rel_err_vs_torch": 0.3782863197049291
+                  },
+                  "40": {
+                    "K": 40,
+                    "Ktail": 8,
+                    "allclose_torch_1e3": false,
+                    "allclose_trunc_1e3": true,
+                    "max_abs_err_vs_torch": 12.810418128967285,
+                    "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                    "max_rel_err_vs_torch": 0.4572077519513882
+                  },
+                  "47": {
+                    "K": 47,
+                    "Ktail": 15,
+                    "allclose_torch_1e3": false,
+                    "allclose_trunc_1e3": true,
+                    "max_abs_err_vs_torch": 17.772851943969727,
+                    "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                    "max_rel_err_vs_torch": 0.5820121805351536
+                  },
+                  "64": {
+                    "K": 64,
+                    "Ktail": 0,
+                    "allclose_torch_1e3": true,
+                    "allclose_trunc_1e3": true,
+                    "max_abs_err_vs_torch": 8.58306884765625e-06,
+                    "max_abs_err_vs_truncated_ref": 8.58306884765625e-06,
+                    "max_rel_err_vs_torch": 2.6775020215140263e-07
+                  }
+                },
+                "max_abs_err_vs_truncated_ref": {
+                  "100": 1.1444091796875e-05,
+                  "33": 3.814697265625e-06,
+                  "40": 3.814697265625e-06,
+                  "47": 3.814697265625e-06
+                },
+                "metric_reason": "continuous matmul output: max abs/rel elementwise error vs fp64-accumulated torch reference, plus a truncated-K reference to localize the defect",
+                "shape": "M=N=64, fp32 cuda",
+                "stderr": "",
+                "stdout": "{\"32\": {\"K\": 32, \"Ktail\": 0, \"max_abs_err_vs_torch\": 4.76837158203125e-06, \"max_rel_err_vs_torch\": 2.3727665622902475e-07, \"max_abs_err_vs_truncated_ref\": 4.76837158203125e-06, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"64\": {\"K\": 64, \"Ktail\": 0, \"max_abs_err_vs_torch\": 8.58306884765625e-06, \"max_rel_err_vs_torch\": 2.6775020215140263e-07, \"max_abs_err_vs_truncated_ref\": 8.58306884765625e-06, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"128\": {\"K\": 128, \"Ktail\": 0, \"max_abs_err_vs_torch\": 1.52587890625e-05, \"max_rel_err_vs_torch\": 3.707984709383454e-07, \"max_abs_err_vs_truncated_ref\": 1.52587890625e-05, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"33\": {\"K\": 33, \"Ktail\": 1, \"max_abs_err_vs_torch\": 9.890376091003418, \"max_rel_err_vs_torch\": 0.3782863197049291, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"40\": {\"K\": 40, \"Ktail\": 8, \"max_abs_err_vs_torch\": 12.810418128967285, \"max_rel_err_vs_torch\": 0.4572077519513882, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"47\": {\"K\": 47, \"Ktail\": 15, \"max_abs_err_vs_torch\": 17.772851943969727, \"max_rel_err_vs_torch\": 0.5820121805351536, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"100\": {\"K\": 100, \"Ktail\": 4, \"max_abs_err_vs_torch\": 11.031343460083008, \"max_rel_err_vs_torch\": 0.2857711996676445, \"max_abs_err_vs_truncated_ref\": 1.1444091796875e-05, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "K-tail is dropped exactly as claimed. For K=33/40/47/100 (M=N=64, fp32 CUDA) the kernel's output disagrees with torch.matmul by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.38/0.46/0.58/0.29) yet matches the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose rtol=atol=1e-3 True). For K=32/64/128 the kernel matches torch.matmul to <=1.5e-5 (rel <=3.7e-7), so the failure is specifically the missing partial K tile, not a general GEMM or precision error; error magnitude is 5-6 orders above the fp32/TF32 floor observed on divisible K.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "kernel.py:19 loops `range(0, K // BLOCK_K)` with BLOCK_K=32, so only floor(K/32) whole tiles are visited; loads at kernel.py:20-21 carry no offs_k+k*BLOCK_K < K mask, so there is no partial-tile path at all. The store mask (line 27) only bounds M/N.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Input domain: M, N and K may each be any positive integer; K explicitly NOT required to be a multiple of the kernel's K block size, and the partial final K tile must contribute its first (K mod BLOCK_K) entries to the sum."
+            },
+            {
+              "source": "kernel.py:40",
+              "summary": "Wrapper hardcodes BLOCK_K=32, making K%32!=0 (e.g. K=40) the concrete contract-named case."
+            }
+          ],
+          "scope_rationale": "problem.txt is the operative contract (no test.py exists) and it explicitly states \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel fixes BLOCK_K=32 at kernel.py:40, so K=40 is a representative in-domain input the contract admits and specifically calls out.",
+          "statement": "For K not a multiple of 32 (e.g. M=64,N=64,K=40 or K=33,47,100 float32 CUDA tensors), matmul() omits the trailing (K mod 32) k-slices from the contraction, so C differs from torch.matmul(a,b) by the sum over those tail indices \u2014 a large relative error (order sqrt(K_tail/K), far above any fp32/TF32 tolerance), not a rounding artifact.",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T15:02:54Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:02:54Z",
+          "data": {
+            "K_divisible_max_abs_err": {
+              "128": 1.52587890625e-05,
+              "32": 4.76837158203125e-06,
+              "64": 8.58306884765625e-06
+            },
+            "K_nondivisible_max_abs_err_vs_torch": {
+              "100": 11.031343460083008,
+              "33": 9.890376091003418,
+              "40": 12.810418128967285,
+              "47": 17.772851943969727
+            },
+            "K_nondivisible_max_rel_err_vs_torch": {
+              "100": 0.2857711996676445,
+              "33": 0.3782863197049291,
+              "40": 0.4572077519513882,
+              "47": 0.5820121805351536
+            },
+            "allclose_torch_rtol_atol_1e-3": {
+              "100": false,
+              "128": true,
+              "32": true,
+              "33": false,
+              "40": false,
+              "47": false,
+              "64": true
+            },
+            "allclose_truncated_ref_1e-3": {
+              "100": true,
+              "33": true,
+              "40": true,
+              "47": true
+            },
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "92e2e2398da88e409f5afd013a441e31f9d2c92008ba428fcc75dafc05bb2f72"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "705b2903691072724f3ba512055a611eaea5f3b770857db89b6dcb5b1088eace"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "cddf39eafc65d478b63d5b5f1b178f9ff5bd100e37e60f4cff1f231936a974cc"
+              }
+            ],
+            "duration_s": 8.718147,
+            "exit_code": 0,
+            "expected_signal": "For K in {33,40,47,100}: large error vs torch.matmul, but near-zero error vs truncated reference A[:,:32*(K//32)]@B[:32*(K//32)]; K in {32,64,128} matches torch.matmul within fp32/TF32 tolerance.",
+            "json_parse_error": null,
+            "json_result": {
+              "100": {
+                "K": 100,
+                "Ktail": 4,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 11.031343460083008,
+                "max_abs_err_vs_truncated_ref": 1.1444091796875e-05,
+                "max_rel_err_vs_torch": 0.2857711996676445
+              },
+              "128": {
+                "K": 128,
+                "Ktail": 0,
+                "allclose_torch_1e3": true,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 1.52587890625e-05,
+                "max_abs_err_vs_truncated_ref": 1.52587890625e-05,
+                "max_rel_err_vs_torch": 3.707984709383454e-07
+              },
+              "32": {
+                "K": 32,
+                "Ktail": 0,
+                "allclose_torch_1e3": true,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 4.76837158203125e-06,
+                "max_abs_err_vs_truncated_ref": 4.76837158203125e-06,
+                "max_rel_err_vs_torch": 2.3727665622902475e-07
+              },
+              "33": {
+                "K": 33,
+                "Ktail": 1,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 9.890376091003418,
+                "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                "max_rel_err_vs_torch": 0.3782863197049291
+              },
+              "40": {
+                "K": 40,
+                "Ktail": 8,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 12.810418128967285,
+                "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                "max_rel_err_vs_torch": 0.4572077519513882
+              },
+              "47": {
+                "K": 47,
+                "Ktail": 15,
+                "allclose_torch_1e3": false,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 17.772851943969727,
+                "max_abs_err_vs_truncated_ref": 3.814697265625e-06,
+                "max_rel_err_vs_torch": 0.5820121805351536
+              },
+              "64": {
+                "K": 64,
+                "Ktail": 0,
+                "allclose_torch_1e3": true,
+                "allclose_trunc_1e3": true,
+                "max_abs_err_vs_torch": 8.58306884765625e-06,
+                "max_abs_err_vs_truncated_ref": 8.58306884765625e-06,
+                "max_rel_err_vs_torch": 2.6775020215140263e-07
+              }
+            },
+            "max_abs_err_vs_truncated_ref": {
+              "100": 1.1444091796875e-05,
+              "33": 3.814697265625e-06,
+              "40": 3.814697265625e-06,
+              "47": 3.814697265625e-06
+            },
+            "metric_reason": "continuous matmul output: max abs/rel elementwise error vs fp64-accumulated torch reference, plus a truncated-K reference to localize the defect",
+            "shape": "M=N=64, fp32 cuda",
+            "stderr": "",
+            "stdout": "{\"32\": {\"K\": 32, \"Ktail\": 0, \"max_abs_err_vs_torch\": 4.76837158203125e-06, \"max_rel_err_vs_torch\": 2.3727665622902475e-07, \"max_abs_err_vs_truncated_ref\": 4.76837158203125e-06, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"64\": {\"K\": 64, \"Ktail\": 0, \"max_abs_err_vs_torch\": 8.58306884765625e-06, \"max_rel_err_vs_torch\": 2.6775020215140263e-07, \"max_abs_err_vs_truncated_ref\": 8.58306884765625e-06, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"128\": {\"K\": 128, \"Ktail\": 0, \"max_abs_err_vs_torch\": 1.52587890625e-05, \"max_rel_err_vs_torch\": 3.707984709383454e-07, \"max_abs_err_vs_truncated_ref\": 1.52587890625e-05, \"allclose_torch_1e3\": true, \"allclose_trunc_1e3\": true}, \"33\": {\"K\": 33, \"Ktail\": 1, \"max_abs_err_vs_torch\": 9.890376091003418, \"max_rel_err_vs_torch\": 0.3782863197049291, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"40\": {\"K\": 40, \"Ktail\": 8, \"max_abs_err_vs_torch\": 12.810418128967285, \"max_rel_err_vs_torch\": 0.4572077519513882, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"47\": {\"K\": 47, \"Ktail\": 15, \"max_abs_err_vs_torch\": 17.772851943969727, \"max_rel_err_vs_torch\": 0.5820121805351536, \"max_abs_err_vs_truncated_ref\": 3.814697265625e-06, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}, \"100\": {\"K\": 100, \"Ktail\": 4, \"max_abs_err_vs_torch\": 11.031343460083008, \"max_rel_err_vs_torch\": 0.2857711996676445, \"max_abs_err_vs_truncated_ref\": 1.1444091796875e-05, \"allclose_torch_1e3\": false, \"allclose_trunc_1e3\": true}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "K-tail is dropped exactly as claimed. For K=33/40/47/100 (M=N=64, fp32 CUDA) the kernel's output disagrees with torch.matmul by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.38/0.46/0.58/0.29) yet matches the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose rtol=atol=1e-3 True). For K=32/64/128 the kernel matches torch.matmul to <=1.5e-5 (rel <=3.7e-7), so the failure is specifically the missing partial K tile, not a general GEMM or precision error; error magnitude is 5-6 orders above the fp32/TF32 floor observed on divisible K.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "kernel_abs_max": {
+            "1": 0.0,
+            "31": 0.0,
+            "8": 0.0
+          },
+          "kernel_all_zero": {
+            "1": true,
+            "31": true,
+            "8": true
+          },
+          "max_abs_err": {
+            "1": 6.549962997436523,
+            "31": 21.460908889770508,
+            "8": 10.059889793395996
+          },
+          "nonzero_frac": {
+            "1": 0.0,
+            "31": 0.0,
+            "8": 0.0
+          },
+          "ref_abs_max": {
+            "1": 6.549962997436523,
+            "31": 21.460908889770508,
+            "8": 10.059889793395996
+          },
+          "relative_error": 1.0,
+          "shape": "M=N=64, fp32 cuda"
+        },
+        "event_id": "t10",
+        "status": "confirmed",
+        "summary": "Degenerate K<32 case confirmed: for K=1, 8, 31 (M=N=64, fp32 CUDA) the kernel output is exactly all zeros (kernel_abs_max=0.0, nonzero_frac=0.0) while torch.matmul is nonzero (ref abs max 6.55/10.06/21.46), giving max abs err equal to the full reference magnitude, i.e. 100% relative error. Matches the source reading that K//32==0 skips the reduction loop and stores the zero-initialized accumulator (kernel.py:18-19, 27).",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T15:02:54Z",
+      "id": "t13",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T15:01:36Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T15:02:54Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "8ac973bbf8017cb020aa5c13029a163c2a33f3be52591584fb46f7009446e218"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "dae98c8efff5ceda6ad48c17ccff7a6825bcec86de1fe644ba1314df1887dfe1"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t10_json_result.json",
+                    "sha256": "b3d7cde1009d148669ba6cddc0296dcf84f9db68063b731d61ec6fb5fb6fd1c9"
+                  }
+                ],
+                "duration_s": 8.031097,
+                "exit_code": 0,
+                "expected_signal": "For K in {1,8,31}: kernel output is exactly all zeros while torch.matmul is nonzero (100% relative error).",
+                "json_parse_error": null,
+                "json_result": {
+                  "1": {
+                    "K": 1,
+                    "kernel_abs_max": 0.0,
+                    "kernel_all_zero": true,
+                    "max_abs_err": 6.549962997436523,
+                    "nonzero_frac": 0.0,
+                    "ref_abs_max": 6.549962997436523
+                  },
+                  "31": {
+                    "K": 31,
+                    "kernel_abs_max": 0.0,
+                    "kernel_all_zero": true,
+                    "max_abs_err": 21.460908889770508,
+                    "nonzero_frac": 0.0,
+                    "ref_abs_max": 21.460908889770508
+                  },
+                  "8": {
+                    "K": 8,
+                    "kernel_abs_max": 0.0,
+                    "kernel_all_zero": true,
+                    "max_abs_err": 10.059889793395996,
+                    "nonzero_frac": 0.0,
+                    "ref_abs_max": 10.059889793395996
+                  }
+                },
+                "kernel_abs_max": {
+                  "1": 0.0,
+                  "31": 0.0,
+                  "8": 0.0
+                },
+                "kernel_all_zero": {
+                  "1": true,
+                  "31": true,
+                  "8": true
+                },
+                "max_abs_err": {
+                  "1": 6.549962997436523,
+                  "31": 21.460908889770508,
+                  "8": 10.059889793395996
+                },
+                "nonzero_frac": {
+                  "1": 0.0,
+                  "31": 0.0,
+                  "8": 0.0
+                },
+                "ref_abs_max": {
+                  "1": 6.549962997436523,
+                  "31": 21.460908889770508,
+                  "8": 10.059889793395996
+                },
+                "relative_error": 1.0,
+                "shape": "M=N=64, fp32 cuda",
+                "stderr": "",
+                "stdout": "{\"1\": {\"K\": 1, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 6.549962997436523, \"max_abs_err\": 6.549962997436523, \"nonzero_frac\": 0.0}, \"8\": {\"K\": 8, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 10.059889793395996, \"max_abs_err\": 10.059889793395996, \"nonzero_frac\": 0.0}, \"31\": {\"K\": 31, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 21.460908889770508, \"max_abs_err\": 21.460908889770508, \"nonzero_frac\": 0.0}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Degenerate K<32 case confirmed: for K=1, 8, 31 (M=N=64, fp32 CUDA) the kernel output is exactly all zeros (kernel_abs_max=0.0, nonzero_frac=0.0) while torch.matmul is nonzero (ref abs max 6.55/10.06/21.46), giving max abs err equal to the full reference magnitude, i.e. 100% relative error. Matches the source reading that K//32==0 skips the reduction loop and stores the zero-initialized accumulator (kernel.py:18-19, 27).",
+              "supports": "confirmed",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "Degenerate instance of the floor-division loop bound at kernel.py:19; acc from kernel.py:18 is stored unmodified at kernel.py:27. Worth separating from claim 1 because the failure mode (all-zero output, 100% relative error) is qualitatively different and unmistakable.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"M, N and K may each be any positive integer\" \u2014 no lower bound excluding K<BLOCK_K; the partial-tile rule is stated as required behavior."
+            }
+          ],
+          "scope_rationale": "problem.txt states M, N and K may each be any positive integer, so K=8 is inside the stated input domain; with BLOCK_K=32 this is the extreme of the contract's named \"partial final K tile\" case (the whole of K is the partial tile).",
+          "statement": "For any positive K < 32 (e.g. M=64,N=64,K=8 or K=1,31), K//32 == 0 so the reduction loop body never executes and matmul() returns the zero-initialized accumulator: C is identically zero regardless of A and B, instead of A@B.",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T15:02:54Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:02:54Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "8ac973bbf8017cb020aa5c13029a163c2a33f3be52591584fb46f7009446e218"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "dae98c8efff5ceda6ad48c17ccff7a6825bcec86de1fe644ba1314df1887dfe1"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "b3d7cde1009d148669ba6cddc0296dcf84f9db68063b731d61ec6fb5fb6fd1c9"
+              }
+            ],
+            "duration_s": 8.031097,
+            "exit_code": 0,
+            "expected_signal": "For K in {1,8,31}: kernel output is exactly all zeros while torch.matmul is nonzero (100% relative error).",
+            "json_parse_error": null,
+            "json_result": {
+              "1": {
+                "K": 1,
+                "kernel_abs_max": 0.0,
+                "kernel_all_zero": true,
+                "max_abs_err": 6.549962997436523,
+                "nonzero_frac": 0.0,
+                "ref_abs_max": 6.549962997436523
+              },
+              "31": {
+                "K": 31,
+                "kernel_abs_max": 0.0,
+                "kernel_all_zero": true,
+                "max_abs_err": 21.460908889770508,
+                "nonzero_frac": 0.0,
+                "ref_abs_max": 21.460908889770508
+              },
+              "8": {
+                "K": 8,
+                "kernel_abs_max": 0.0,
+                "kernel_all_zero": true,
+                "max_abs_err": 10.059889793395996,
+                "nonzero_frac": 0.0,
+                "ref_abs_max": 10.059889793395996
+              }
+            },
+            "kernel_abs_max": {
+              "1": 0.0,
+              "31": 0.0,
+              "8": 0.0
+            },
+            "kernel_all_zero": {
+              "1": true,
+              "31": true,
+              "8": true
+            },
+            "max_abs_err": {
+              "1": 6.549962997436523,
+              "31": 21.460908889770508,
+              "8": 10.059889793395996
+            },
+            "nonzero_frac": {
+              "1": 0.0,
+              "31": 0.0,
+              "8": 0.0
+            },
+            "ref_abs_max": {
+              "1": 6.549962997436523,
+              "31": 21.460908889770508,
+              "8": 10.059889793395996
+            },
+            "relative_error": 1.0,
+            "shape": "M=N=64, fp32 cuda",
+            "stderr": "",
+            "stdout": "{\"1\": {\"K\": 1, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 6.549962997436523, \"max_abs_err\": 6.549962997436523, \"nonzero_frac\": 0.0}, \"8\": {\"K\": 8, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 10.059889793395996, \"max_abs_err\": 10.059889793395996, \"nonzero_frac\": 0.0}, \"31\": {\"K\": 31, \"kernel_all_zero\": true, \"kernel_abs_max\": 0.0, \"ref_abs_max\": 21.460908889770508, \"max_abs_err\": 21.460908889770508, \"nonzero_frac\": 0.0}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Degenerate K<32 case confirmed: for K=1, 8, 31 (M=N=64, fp32 CUDA) the kernel output is exactly all zeros (kernel_abs_max=0.0, nonzero_frac=0.0) while torch.matmul is nonzero (ref abs max 6.55/10.06/21.46), giving max abs err equal to the full reference magnitude, i.e. 100% relative error. Matches the source reading that K//32==0 skips the reduction loop and stores the zero-initialized accumulator (kernel.py:18-19, 27).",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "allclose_1e-3": true,
+          "cases": [
+            "70x100x64",
+            "65x65x32",
+            "100x70x128"
+          ],
+          "fault": false,
+          "max_abs_err": {
+            "100x70x128": 1.52587890625e-05,
+            "65x65x32": 4.76837158203125e-06,
+            "70x100x64": 9.5367431640625e-06
+          },
+          "max_abs_err_poisoned_alloc": {
+            "100x70x128": 1.52587890625e-05,
+            "65x65x32": 4.76837158203125e-06,
+            "70x100x64": 9.5367431640625e-06
+          },
+          "max_rel_err": {
+            "100x70x128": 3.302807683783908e-07,
+            "65x65x32": 1.9317652602308026e-07,
+            "70x100x64": 2.84870742749185e-07
+          },
+          "poison_allclose_1e-3": true,
+          "poison_value": 1000000.0
+        },
+        "event_id": "t11",
+        "status": "rebutted",
+        "summary": "No M/N-edge leakage or fault. With K divisible by 32 and ragged M/N (70x100x64, 65x65x32, 100x70x128) in-bounds outputs match an fp64-accumulated torch reference to max abs err <=1.53e-5 (max rel <=3.3e-7), allclose(rtol=atol=1e-3) True, and no CUDA fault occurred. A poisoned-allocation variant (logical A/B viewed inside larger buffers filled with 1e6 so any out-of-range read would pull in 1e6) produced byte-identical error magnitudes, showing the masked lanes' other=0.0 fully suppress out-of-range contributions and out-of-range memory does not leak into in-bounds C. The M/N masking path is correct; the defect is confined to the K dimension (c1/c2).",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T15:02:54Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T15:01:36Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T15:02:54Z",
+              "data": {
+                "allclose_1e-3": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t11_probe.py",
+                    "sha256": "8ded936cc60e09a1d2cafc4e772533919319f29b9af892d8f06588fee68983ef"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t11_stdout.txt",
+                    "sha256": "5aba89aba302e554df272e1f74a62aed56fdce2032fd5dc666b260115ce482c0"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t11_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t11_json_result.json",
+                    "sha256": "ae9382c38b7c4b1d9f197be3224a503a5d8d2ab8328a21fe761fa716c5bb9755"
+                  }
+                ],
+                "cases": [
+                  "70x100x64",
+                  "65x65x32",
+                  "100x70x128"
+                ],
+                "duration_s": 8.539535,
+                "exit_code": 0,
+                "expected_signal": "With K divisible by 32 and ragged M/N (70x100, 65x65, 100x70), in-bounds outputs match torch.matmul within fp32/TF32 tolerance and no CUDA fault occurs; a padded-allocation variant with poisoned out-of-range memory gives identical results.",
+                "fault": false,
+                "json_parse_error": null,
+                "json_result": {
+                  "100x70x128": {
+                    "K": 128,
+                    "M": 100,
+                    "N": 70,
+                    "allclose_1e3": true,
+                    "fault": false,
+                    "max_abs_err": 1.52587890625e-05,
+                    "max_abs_err_poisoned_alloc": 1.52587890625e-05,
+                    "max_rel_err": 3.302807683783908e-07,
+                    "poison_allclose_1e3": true
+                  },
+                  "65x65x32": {
+                    "K": 32,
+                    "M": 65,
+                    "N": 65,
+                    "allclose_1e3": true,
+                    "fault": false,
+                    "max_abs_err": 4.76837158203125e-06,
+                    "max_abs_err_poisoned_alloc": 4.76837158203125e-06,
+                    "max_rel_err": 1.9317652602308026e-07,
+                    "poison_allclose_1e3": true
+                  },
+                  "70x100x64": {
+                    "K": 64,
+                    "M": 70,
+                    "N": 100,
+                    "allclose_1e3": true,
+                    "fault": false,
+                    "max_abs_err": 9.5367431640625e-06,
+                    "max_abs_err_poisoned_alloc": 9.5367431640625e-06,
+                    "max_rel_err": 2.84870742749185e-07,
+                    "poison_allclose_1e3": true
+                  }
+                },
+                "max_abs_err": {
+                  "100x70x128": 1.52587890625e-05,
+                  "65x65x32": 4.76837158203125e-06,
+                  "70x100x64": 9.5367431640625e-06
+                },
+                "max_abs_err_poisoned_alloc": {
+                  "100x70x128": 1.52587890625e-05,
+                  "65x65x32": 4.76837158203125e-06,
+                  "70x100x64": 9.5367431640625e-06
+                },
+                "max_rel_err": {
+                  "100x70x128": 3.302807683783908e-07,
+                  "65x65x32": 1.9317652602308026e-07,
+                  "70x100x64": 2.84870742749185e-07
+                },
+                "poison_allclose_1e-3": true,
+                "poison_value": 1000000.0,
+                "stderr": "",
+                "stdout": "{\"70x100x64\": {\"M\": 70, \"N\": 100, \"K\": 64, \"max_abs_err\": 9.5367431640625e-06, \"max_rel_err\": 2.84870742749185e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 9.5367431640625e-06, \"poison_allclose_1e3\": true, \"fault\": false}, \"65x65x32\": {\"M\": 65, \"N\": 65, \"K\": 32, \"max_abs_err\": 4.76837158203125e-06, \"max_rel_err\": 1.9317652602308026e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 4.76837158203125e-06, \"poison_allclose_1e3\": true, \"fault\": false}, \"100x70x128\": {\"M\": 100, \"N\": 70, \"K\": 128, \"max_abs_err\": 1.52587890625e-05, \"max_rel_err\": 3.302807683783908e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 1.52587890625e-05, \"poison_allclose_1e3\": true, \"fault\": false}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c3.e1",
+              "kind": "runtime_probe",
+              "summary": "No M/N-edge leakage or fault. With K divisible by 32 and ragged M/N (70x100x64, 65x65x32, 100x70x128) in-bounds outputs match an fp64-accumulated torch reference to max abs err <=1.53e-5 (max rel <=3.3e-7), allclose(rtol=atol=1e-3) True, and no CUDA fault occurred. A poisoned-allocation variant (logical A/B viewed inside larger buffers filled with 1e6 so any out-of-range read would pull in 1e6) produced byte-identical error magnitudes, showing the masked lanes' other=0.0 fully suppress out-of-range contributions and out-of-range memory does not leak into in-bounds C. The M/N masking path is correct; the defect is confined to the K dimension (c1/c2).",
+              "supports": "rebutted",
+              "tool_event_id": "t11"
+            }
+          ],
+          "id": "c3",
+          "raised_by": "skeptic",
+          "rationale": "Asymmetric masking: A is masked on rows only and B on columns only. For divisible K this should be harmless (the unmasked dimension stays in range), but the last M/N tile reads beyond the logical matrix, and the masked-lane `other=0.0` values feed tl.dot; needs a runtime check to confirm ragged M/N does not corrupt in-bounds results.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "M, N and K may each be any positive integer, and C[m,n] = sum_k A[m,k]*B[k,n] is required for all in-range m,n."
+            }
+          ],
+          "scope_rationale": "problem.txt admits any positive M and N, so M=70/N=100 with K=64 is inside the stated domain; the claim is about the required C[m,n] formula holding on those shapes.",
+          "statement": "With K a multiple of 32 but M and/or N not a multiple of 64 (e.g. M=70, N=100, K=64), the loads at kernel.py:20-21 mask only A's M dimension and only B's N dimension, so B's k-rows and A's k-columns are read unmasked; if the values fetched for out-of-range positions in the masked dimension are not fully suppressed, in-bounds outputs C[m,n] (m<M, n<N) could still deviate from torch.matmul, or the launch could fault on out-of-bounds reads past the end of the A/B allocations.",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T15:02:54Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:02:54Z",
+          "data": {
+            "allclose_1e-3": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "8ded936cc60e09a1d2cafc4e772533919319f29b9af892d8f06588fee68983ef"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "5aba89aba302e554df272e1f74a62aed56fdce2032fd5dc666b260115ce482c0"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "ae9382c38b7c4b1d9f197be3224a503a5d8d2ab8328a21fe761fa716c5bb9755"
+              }
+            ],
+            "cases": [
+              "70x100x64",
+              "65x65x32",
+              "100x70x128"
+            ],
+            "duration_s": 8.539535,
+            "exit_code": 0,
+            "expected_signal": "With K divisible by 32 and ragged M/N (70x100, 65x65, 100x70), in-bounds outputs match torch.matmul within fp32/TF32 tolerance and no CUDA fault occurs; a padded-allocation variant with poisoned out-of-range memory gives identical results.",
+            "fault": false,
+            "json_parse_error": null,
+            "json_result": {
+              "100x70x128": {
+                "K": 128,
+                "M": 100,
+                "N": 70,
+                "allclose_1e3": true,
+                "fault": false,
+                "max_abs_err": 1.52587890625e-05,
+                "max_abs_err_poisoned_alloc": 1.52587890625e-05,
+                "max_rel_err": 3.302807683783908e-07,
+                "poison_allclose_1e3": true
+              },
+              "65x65x32": {
+                "K": 32,
+                "M": 65,
+                "N": 65,
+                "allclose_1e3": true,
+                "fault": false,
+                "max_abs_err": 4.76837158203125e-06,
+                "max_abs_err_poisoned_alloc": 4.76837158203125e-06,
+                "max_rel_err": 1.9317652602308026e-07,
+                "poison_allclose_1e3": true
+              },
+              "70x100x64": {
+                "K": 64,
+                "M": 70,
+                "N": 100,
+                "allclose_1e3": true,
+                "fault": false,
+                "max_abs_err": 9.5367431640625e-06,
+                "max_abs_err_poisoned_alloc": 9.5367431640625e-06,
+                "max_rel_err": 2.84870742749185e-07,
+                "poison_allclose_1e3": true
+              }
+            },
+            "max_abs_err": {
+              "100x70x128": 1.52587890625e-05,
+              "65x65x32": 4.76837158203125e-06,
+              "70x100x64": 9.5367431640625e-06
+            },
+            "max_abs_err_poisoned_alloc": {
+              "100x70x128": 1.52587890625e-05,
+              "65x65x32": 4.76837158203125e-06,
+              "70x100x64": 9.5367431640625e-06
+            },
+            "max_rel_err": {
+              "100x70x128": 3.302807683783908e-07,
+              "65x65x32": 1.9317652602308026e-07,
+              "70x100x64": 2.84870742749185e-07
+            },
+            "poison_allclose_1e-3": true,
+            "poison_value": 1000000.0,
+            "stderr": "",
+            "stdout": "{\"70x100x64\": {\"M\": 70, \"N\": 100, \"K\": 64, \"max_abs_err\": 9.5367431640625e-06, \"max_rel_err\": 2.84870742749185e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 9.5367431640625e-06, \"poison_allclose_1e3\": true, \"fault\": false}, \"65x65x32\": {\"M\": 65, \"N\": 65, \"K\": 32, \"max_abs_err\": 4.76837158203125e-06, \"max_rel_err\": 1.9317652602308026e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 4.76837158203125e-06, \"poison_allclose_1e3\": true, \"fault\": false}, \"100x70x128\": {\"M\": 100, \"N\": 70, \"K\": 128, \"max_abs_err\": 1.52587890625e-05, \"max_rel_err\": 3.302807683783908e-07, \"allclose_1e3\": true, \"max_abs_err_poisoned_alloc\": 1.52587890625e-05, \"poison_allclose_1e3\": true, \"fault\": false}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "No M/N-edge leakage or fault. With K divisible by 32 and ragged M/N (70x100x64, 65x65x32, 100x70x128) in-bounds outputs match an fp64-accumulated torch reference to max abs err <=1.53e-5 (max rel <=3.3e-7), allclose(rtol=atol=1e-3) True, and no CUDA fault occurred. A poisoned-allocation variant (logical A/B viewed inside larger buffers filled with 1e6 so any out-of-range read would pull in 1e6) produced byte-identical error magnitudes, showing the masked lanes' other=0.0 fully suppress out-of-range contributions and out-of-range memory does not leak into in-bounds C. The M/N masking path is correct; the defect is confined to the K dimension (c1/c2).",
+          "supports": "rebutted",
+          "tool_event_id": "t11"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "All three claims have direct runtime evidence and the defect is fully localized. c1 (K%32!=0 drops the trailing K tile) and c2 (K<32 returns all zeros) are confirmed against the contract's explicitly named input domain, with the truncated-K reference matching to <=1.1e-5 proving the error is the missing partial tile rather than precision. c3 is rebutted, including a poisoned-allocation control showing the M/N masking path leaks nothing. Any remaining surfaces (dtype guards, non-contiguous stride path, TF32 precision) are either out of the stated fp32 contract or already shown benign, and none would change the verdict beyond what c1/c2 establish. No new high-quality in-scope claim to add.",
+        "reviewed_claims": [
+          "c1",
+          "c2",
+          "c3"
+        ]
+      },
+      "created_at": "2026-09-08T15:03:03Z",
+      "id": "t15",
+      "output": {
+        "created_at": "2026-09-08T15:03:03Z",
+        "decision": "no_new_claims",
+        "reason": "All three claims have direct runtime evidence and the defect is fully localized. c1 (K%32!=0 drops the trailing K tile) and c2 (K<32 returns all zeros) are confirmed against the contract's explicitly named input domain, with the truncated-K reference matching to <=1.1e-5 proving the error is the missing partial tile rather than precision. c3 is rebutted, including a poisoned-allocation control showing the M/N masking path leaks nothing. Any remaining surfaces (dtype guards, non-contiguous stride path, TF32 precision) are either out of the stated fp32 contract or already shown benign, and none would change the verdict beyond what c1/c2 establish. No new high-quality in-scope claim to add.",
+        "reviewed_claims": [
+          "c1",
+          "c2",
+          "c3"
+        ],
+        "reviewed_tool_event_count": 14,
+        "tool_event_id": "t15",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.96,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The artifact ships only kernel.py, meta.json and problem.txt \u2014 no test.py or get_inputs \u2014 so problem.txt is the operative contract. It explicitly states \"M, N and K may each be any positive integer\" and that \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel loops `range(0, K // BLOCK_K)` (kernel.py:19) with BLOCK_K hardcoded to 32 (kernel.py:40) and carries no K-dimension load mask (kernel.py:20-21), so the partial tile is never visited.\n\nConfirmed runtime evidence (t9/c1.e1) at M=N=64 fp32 CUDA: for K=33/40/47/100 the output disagrees with an fp64-accumulated torch reference by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.29-0.58), while matching the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose 1e-3 True). That truncated-reference control localizes the defect precisely to the dropped K tail rather than to reduction order or precision \u2014 for K=32/64/128 the same kernel matches torch to <=1.5e-5 (rel <=3.7e-7), 5-6 orders smaller. So this is not a declared-precision, TF32, accumulation-order, or near-zero artifact; it is a failure to implement the contraction the contract explicitly requires. Evidence t10/c2.e1 confirms the degenerate extreme: for K=1/8/31 the output is exactly all zeros (nonzero_frac=0.0) against nonzero references, i.e. 100% relative error.\n\nc3 (M/N ragged-edge leakage) was cleanly rebutted, including a poisoned-allocation control showing masked lanes suppress out-of-range reads; that narrows but does not excuse the K-dimension defect. No unresolved claim remains. Verdict: reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-08T15:03:17Z",
+      "id": "t16",
+      "output": {
+        "confidence": 0.96,
+        "created_at": "2026-09-08T15:03:17Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The artifact ships only kernel.py, meta.json and problem.txt \u2014 no test.py or get_inputs \u2014 so problem.txt is the operative contract. It explicitly states \"M, N and K may each be any positive integer\" and that \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel loops `range(0, K // BLOCK_K)` (kernel.py:19) with BLOCK_K hardcoded to 32 (kernel.py:40) and carries no K-dimension load mask (kernel.py:20-21), so the partial tile is never visited.\n\nConfirmed runtime evidence (t9/c1.e1) at M=N=64 fp32 CUDA: for K=33/40/47/100 the output disagrees with an fp64-accumulated torch reference by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.29-0.58), while matching the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose 1e-3 True). That truncated-reference control localizes the defect precisely to the dropped K tail rather than to reduction order or precision \u2014 for K=32/64/128 the same kernel matches torch to <=1.5e-5 (rel <=3.7e-7), 5-6 orders smaller. So this is not a declared-precision, TF32, accumulation-order, or near-zero artifact; it is a failure to implement the contraction the contract explicitly requires. Evidence t10/c2.e1 confirms the degenerate extreme: for K=1/8/31 the output is exactly all zeros (nonzero_frac=0.0) against nonzero references, i.e. 100% relative error.\n\nc3 (M/N ragged-edge leakage) was cleanly rebutted, including a poisoned-allocation control showing masked lanes suppress out-of-range reads; that narrows but does not excuse the K-dimension defect. No unresolved claim remains. Verdict: reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.96,
+    "created_at": "2026-09-08T15:03:17Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The artifact ships only kernel.py, meta.json and problem.txt \u2014 no test.py or get_inputs \u2014 so problem.txt is the operative contract. It explicitly states \"M, N and K may each be any positive integer\" and that \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel loops `range(0, K // BLOCK_K)` (kernel.py:19) with BLOCK_K hardcoded to 32 (kernel.py:40) and carries no K-dimension load mask (kernel.py:20-21), so the partial tile is never visited.\n\nConfirmed runtime evidence (t9/c1.e1) at M=N=64 fp32 CUDA: for K=33/40/47/100 the output disagrees with an fp64-accumulated torch reference by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.29-0.58), while matching the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose 1e-3 True). That truncated-reference control localizes the defect precisely to the dropped K tail rather than to reduction order or precision \u2014 for K=32/64/128 the same kernel matches torch to <=1.5e-5 (rel <=3.7e-7), 5-6 orders smaller. So this is not a declared-precision, TF32, accumulation-order, or near-zero artifact; it is a failure to implement the contraction the contract explicitly requires. Evidence t10/c2.e1 confirms the degenerate extreme: for K=1/8/31 the output is exactly all zeros (nonzero_frac=0.0) against nonzero references, i.e. 100% relative error.\n\nc3 (M/N ragged-edge leakage) was cleanly rebutted, including a poisoned-allocation control showing masked lanes suppress out-of-range reads; that narrows but does not excuse the K-dimension defect. No unresolved claim remains. Verdict: reject.",
+    "verdict": "reject"
+  }
+}

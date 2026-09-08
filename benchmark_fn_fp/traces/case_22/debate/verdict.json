@@ -1,0 +1,11 @@
+{
+  "confidence": 0.88,
+  "created_at": "2026-09-08T16:34:47Z",
+  "decisive_claims": [
+    "c1",
+    "c2",
+    "c3"
+  ],
+  "reason": "The operative contract is problem.txt (no test.py in the artifact): out = sum_k a[k]*b[k] for two float32 vectors, with the text explicitly waiving summation-order/last-bit differences (\"partitioning and combining in a different order changes the last bits... the contract requires the mathematical inner product, not bitwise agreement\"). All three in-scope claims are rebutted by runtime evidence. c3 (t9): splitk_dot compiles and runs on Triton 3.8.0, returns a shape-(1,) fp32 cuda tensor, and at K=2^20 matches an fp64 dot at rel_err 9.0e-8 \u2014 the runtime-bounded loop, Python-0.0-seeded accumulator, and bare scalar atomic_add all behave as fp32. c1 (t10): the ones-vector term-count metric gives count_minus_K == 0 for 13 lengths spanning K%512 = 0/1/47/67/163/511 and chunk from 1 to 2049, proving exact, non-duplicating coverage of the tail; worst rel_err_vs_sum|a*b| 2.4e-8. c2 (t11): the K<split regime (K=1..513, hundreds of fully-masked programs) also gives exact counts and fp32-noise accuracy, so masked loads with other=0.0 and the all-false-mask atomic_add of 0.0 contribute exactly nothing. The hardening probe t15 shows only effects the contract already accounts for: the ~4e-6 relative deviation of the ones-count at K=1e8/1.6e8 is fp32 representability (counts far above 2^24 are not exactly representable and each partial is itself a rounded fp32 sum \u2014 at K=2^24 the count is exact, rel_deficit 0.0), and the mixed-magnitude 3.6e-6 and cancellation 9.1e-11 (relative to sum|a*b|) deviations are ordinary fp32 reduction/accumulation-order error, explicitly permitted. Run-to-run spread of 1.7e-3 absolute is atomic-ordering nondeterminism, also explicitly permitted. Unexercised surfaces noted but set aside as generalization limits outside the stated domain of \"two float32 vectors\": non-contiguous/strided inputs, mismatched b length (only a.numel() is consulted), non-float32 dtypes, K=0, and split<=0 (empty grid would silently return 0.0). These are notes about robustness beyond the declared input domain, not confirmed in-scope defects.",
+  "verdict": "trust"
+}

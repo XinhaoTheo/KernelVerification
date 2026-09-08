@@ -1,0 +1,10 @@
+{
+  "confidence": 0.86,
+  "created_at": "2026-09-08T14:52:49Z",
+  "decisive_claims": [
+    "c1",
+    "c2"
+  ],
+  "reason": "The contract (problem.txt) requires row-wise cos(a,b)=dot/(||a||*||b||) on 2-D float32 tensors, with the denominator floored at eps, judged by absolute agreement of the score.\\n\\nEvent t7 (claim c1) compared the kernel against a float64 eps-floored reference across shapes 4x16, 8x256, 8x257 (N not a multiple of BLOCK=256, exercising the mask), 16x1000, 32x4096, 4x100000 (391 loop iterations), and 3x1: max absolute errors were 3.9e-8, 1.3e-8, 9.4e-9, 1.2e-8, 4.6e-9, 1.8e-9 and 0.0 respectively. Uniformly scaled inputs (1e-4, 1e4, 1e-20) matched to <=7e-9 abs, and near-identical rows returned 1.0 within 1.2e-7, i.e. the output stays in [-1,1] to fp32 rounding. This is far inside any sensible absolute tolerance, so the formula, masking, stride indexing and fp32 accumulation are all correct.\\n\\nEvent t8 (claim c2) exercised the eps floor directly: rows with ||a||=0, ||b||=0, both zero, and 1e-25-magnitude entries all returned finite 0.0 with no NaN/Inf, matching the eps-floored float64 reference to 3.0e-9 abs, while non-degenerate rows in the same batch matched to 3e-9. The tl.maximum(denom, eps) floor works as the contract states.\\n\\nThe single deviation observed was inputs scaled by 1e20, where the fp32 sum of squares overflows and the output is NaN (t7, scale1e+20). That is an extreme-magnitude input the contract does not require support for -- the contract declares float32 tensors and the plain formula, and any direct fp32 implementation of ||a||^2 overflows there -- so it is a generalization note, not a contract violation, and cannot support a reject under the scope policy. Both in-scope claims are confirmed in the kernel's favour.",
+  "verdict": "trust"
+}

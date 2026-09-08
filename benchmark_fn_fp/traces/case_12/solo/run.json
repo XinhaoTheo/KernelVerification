@@ -1,0 +1,701 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_12",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\ntry:\n    from triton.language.extra.libdevice import sqrt as _sqrt\nexcept ModuleNotFoundError:\n    from triton.language.extra.cuda.libdevice import sqrt as _sqrt\n\n\n@triton.jit\ndef _rms_norm_forward_kernel(\n    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,\n    n_cols, eps,\n    BLOCK_SIZE: tl.constexpr,\n):\n    row_idx = tl.program_id(0).to(tl.int64)\n    col_offsets = tl.arange(0, BLOCK_SIZE)\n    mask = col_offsets < n_cols\n\n    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0)\n    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols\n    rstd = 1.0 / (_sqrt(mean_square) + eps)\n\n    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)\n    Y_row = X_row * rstd\n    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)\n\n\ndef rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:\n    num_rows, n_cols = X.shape\n    BLOCK_SIZE = triton.next_power_of_2(n_cols)\n    Y = torch.empty_like(X)\n    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)\n    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X, X.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)\n    return Y\n",
+    "passed": null,
+    "problem_text": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\nThe epsilon is the standard RMSNorm stabilizer: it must keep the normalizer\nfinite as the row norm approaches zero, so that a row of (near-)zero input\ndoes not blow the output up.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_12",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T14:47:26Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:47:57Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "b748b6115f703ae1fef46b3b119e6a84c6e31803148eed570588ad299ad23afe"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "06f40ef1e3144c10555864fe9c89e339c268b6dc0f60eac8e63e306fc3754f4b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "contract_out_row_1e-4": 0.09950371831655502,
+            "contract_out_row_1e-8": 9.999999747378752e-06,
+            "contract_rstd_bound_1_over_sqrt_eps": 1000.0,
+            "dtype": "float32",
+            "duration_s": 7.658623,
+            "eps": 1e-06,
+            "exit_code": 0,
+            "expected_signal": "If eps is misplaced, kernel matches 1/(sqrt(ms)+eps) closely and diverges from 1/sqrt(ms+eps); near-zero rows blow up (rstd ~ 1/eps = 1e6 instead of ~1e3).",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "kernel_effective_rstd_row_1e-4": 9900.990234375,
+            "kernel_out_row_1e-4": 0.9900990724563599,
+            "kernel_out_row_1e-8": 0.009900989942252636,
+            "nearzero_max_abs_err": 0.8905953764915466,
+            "normal_max_abs_err_vs_contract": 1.6689300537109375e-06,
+            "normal_max_abs_err_vs_eps_outside": 4.76837158203125e-07,
+            "shape": [
+              8,
+              512
+            ],
+            "stderr": "",
+            "stdout": "{\n \"normal_max_abs_err\": 1.6689300537109375e-06,\n \"normal_max_rel_err\": 6.747113729943521e-07,\n \"nearzero_kernel\": [\n  0.0,\n  0.009900989942252636,\n  0.9900990724563599\n ],\n \"nearzero_ref\": [\n  0.0,\n  9.999999747378752e-06,\n  0.09950371831655502\n ],\n \"nearzero_max_abs_err\": 0.8905953764915466,\n \"nearzero_rstd_kernel\": [\n  Infinity,\n  100000000.0,\n  10000.0\n ],\n \"expected_ref_rstd\": [\n  999.9999389648438,\n  999.9999389648438,\n  995.0372314453125\n ],\n \"kernel_impl_rstd_formula_pred\": [\n  1000000.0,\n  990099.0,\n  9900.990234375\n ],\n \"matches_eps_outside_max_abs_err\": 4.76837158203125e-07\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel output matches the 'eps outside sqrt' formula 1/(sqrt(ms)+eps) to 4.77e-7 max abs err on randn(8,512), while deviating from the contract's 1/sqrt(ms+eps) by 1.67e-6 there. On small-magnitude rows the deviation is catastrophic: for a row of constant 1e-4 the kernel yields 0.9901 per element vs contract 0.09950 (max abs err 0.891, ~10x), and for a row of 1e-8 it yields 0.00990 vs contract 1.0e-5 (~990x). The kernel's effective rstd is ~9900 / ~990099 instead of the contract-bounded ~995 / ~1000, i.e. eps fails to bound the normalizer at 1/sqrt(eps)=1000 as required.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Line 23 of kernel.py adds eps after the sqrt rather than inside it; problem.txt explicitly specifies the formula 1/sqrt(mean_square+eps) and the epsilon's role as an in-sqrt stabilizer.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd, with eps described as the in-sqrt stabilizer keeping the normalizer finite for near-zero rows."
+        },
+        {
+          "source": "kernel.py line 23",
+          "summary": "rstd = 1.0 / (_sqrt(mean_square) + eps) -- eps applied outside the sqrt."
+        }
+      ],
+      "scope_rationale": "problem.txt states the required formula verbatim and additionally requires eps to keep the normalizer finite as row norm approaches zero; representative float32 rows with standard eps=1e-6 are admitted inputs.",
+      "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's rstd = 1/sqrt(mean_square + eps), producing wrong outputs both on ordinary rows and catastrophically on near-zero rows.",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T14:47:57Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_12",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_12"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_12"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_12"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_12",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 10.23519078999999,
+      "role": "solo",
+      "round": 2,
+      "text": "Clear formula deviation on line 23: `1/(sqrt(ms) + eps)` instead of `1/sqrt(ms + eps)`. Recording and testing.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Line 23 of kernel.py adds eps after the sqrt rather than inside it; problem.txt explicitly specifies the formula 1/sqrt(mean_square+eps) and the epsilon's role as an in-sqrt stabilizer.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd, with eps described as the in-sqrt stabilizer keeping the normalizer finite for near-zero rows."
+              },
+              {
+                "source": "kernel.py line 23",
+                "summary": "rstd = 1.0 / (_sqrt(mean_square) + eps) -- eps applied outside the sqrt."
+              }
+            ],
+            "scope_rationale": "problem.txt states the required formula verbatim and additionally requires eps to keep the normalizer finite as row norm approaches zero; representative float32 rows with standard eps=1e-6 are admitted inputs.",
+            "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's rstd = 1/sqrt(mean_square + eps), producing wrong outputs both on ordinary rows and catastrophically on near-zero rows."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 10.235,
+        "input_tokens": 3723,
+        "output_tokens": 775
+      }
+    },
+    {
+      "duration_s": 11.56864899300001,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run a probe against the real kernel comparing to the contract formula, including a near-zero row case where the eps placement matters most.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_12/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\neps = 1e-6\nres = {}\n\n# ordinary row\nX = torch.randn(8, 512, device=\"cuda\", dtype=torch.float32)\nY = m.rms_norm_forward(X, eps)\nms = (X*X).sum(-1, keepdim=True)/X.shape[1]\nref = X * (1.0/torch.sqrt(ms+eps))\nres[\"normal_max_abs_err\"] = (Y-ref).abs().max().item()\nres[\"normal_max_rel_err\"] = ((Y-ref).abs()/(ref.abs()+1e-12)).max().item()\n\n# near-zero row\nZ = torch.zeros(3, 512, device=\"cuda\", dtype=torch.float32)\nZ[1] = 1e-8\nZ[2] = 1e-4\nYz = m.rms_norm_forward(Z, eps)\nmsz = (Z*Z).sum(-1, keepdim=True)/Z.shape[1]\nrefz = Z * (1.0/torch.sqrt(msz+eps))\nres[\"nearzero_kernel\"] = Yz[:,0].tolist()\nres[\"nearzero_ref\"] = refz[:,0].tolist()\nres[\"nearzero_max_abs_err\"] = (Yz-refz).abs().max().item()\nres[\"nearzero_rstd_kernel\"] = (1.0/torch.sqrt(msz)+0).squeeze().tolist()\nres[\"expected_ref_rstd\"] = (1.0/torch.sqrt(msz+eps)).squeeze().tolist()\nres[\"kernel_impl_rstd_formula_pred\"] = (1.0/(torch.sqrt(msz)+eps)).squeeze().tolist()\n\n# check kernel matches the \"eps outside\" formula exactly on normal rows\nalt = X * (1.0/(torch.sqrt(ms)+eps))\nres[\"matches_eps_outside_max_abs_err\"] = (Y-alt).abs().max().item()\nprint(json.dumps(res, indent=1))\n",
+            "expected_signal": "If eps is misplaced, kernel matches 1/(sqrt(ms)+eps) closely and diverges from 1/sqrt(ms+eps); near-zero rows blow up (rstd ~ 1/eps = 1e6 instead of ~1e3)."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 11.569,
+        "input_tokens": 5986,
+        "output_tokens": 995
+      }
+    },
+    {
+      "duration_s": 12.32582026600005,
+      "role": "solo",
+      "round": 4,
+      "text": "Probe t6 confirms the eps misplacement: the kernel tracks `1/(sqrt(ms)+eps)` to 4.8e-7 and diverges from the contract formula by 0.89 absolute (10x) on a small-magnitude row. Finalizing evidence.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "contract_out_row_1e-4": 0.09950371831655502,
+              "contract_out_row_1e-8": 9.999999747378752e-06,
+              "contract_rstd_bound_1_over_sqrt_eps": 1000.0,
+              "dtype": "float32",
+              "eps": 1e-06,
+              "kernel_effective_rstd_row_1e-4": 9900.990234375,
+              "kernel_out_row_1e-4": 0.9900990724563599,
+              "kernel_out_row_1e-8": 0.009900989942252636,
+              "nearzero_max_abs_err": 0.8905953764915466,
+              "normal_max_abs_err_vs_contract": 1.6689300537109375e-06,
+              "normal_max_abs_err_vs_eps_outside": 4.76837158203125e-07,
+              "shape": [
+                8,
+                512
+              ]
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "Kernel output matches the 'eps outside sqrt' formula 1/(sqrt(ms)+eps) to 4.77e-7 max abs err on randn(8,512), while deviating from the contract's 1/sqrt(ms+eps) by 1.67e-6 there. On small-magnitude rows the deviation is catastrophic: for a row of constant 1e-4 the kernel yields 0.9901 per element vs contract 0.09950 (max abs err 0.891, ~10x), and for a row of 1e-8 it yields 0.00990 vs contract 1.0e-5 (~990x). The kernel's effective rstd is ~9900 / ~990099 instead of the contract-bounded ~995 / ~1000, i.e. eps fails to bound the normalizer at 1/sqrt(eps)=1000 as required.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 12.326,
+        "input_tokens": 10238,
+        "output_tokens": 937
+      }
+    },
+    {
+      "duration_s": 10.429229558999964,
+      "role": "solo",
+      "round": 5,
+      "text": "Claim c1 is confirmed with in-scope contract evidence and decisive runtime numbers; no other line of inquiry would change the outcome. Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.96,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "problem.txt states the required formula verbatim: rstd = 1/sqrt(mean_square + eps), and explicitly requires eps to keep the normalizer finite as the row norm approaches zero. kernel.py line 23 instead computes rstd = 1.0 / (_sqrt(mean_square) + eps), i.e. eps applied outside the sqrt. Probe t6 (finalized as evidence c1.e1 in event t7) ran the actual kernel on a GPU: on randn(8,512) float32 with eps=1e-6 the kernel matched the 'eps outside sqrt' formula to 4.77e-7 max abs err while deviating from the contract formula by 1.67e-6, identifying the implemented formula. On small-magnitude rows the deviation is catastrophic and exactly of the kind the contract forbids: a constant row of 1e-4 yields 0.9901 per element vs the contract's 0.09950 (max abs err 0.891, ~10x), and a row of 1e-8 yields 0.00990 vs the contract's 1.0e-5 (~990x). The kernel's effective normalizer reaches ~9.9e3 and ~9.9e5 instead of being bounded by 1/sqrt(eps)=1e3, so eps demonstrably fails its stated stabilizing role. This is a violation of an explicitly required formula and invariant, not a rounding/reduction-order artifact (the near-zero errors are orders of magnitude, not ulps).",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 10.429,
+        "input_tokens": 16962,
+        "output_tokens": 821
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_12"
+      },
+      "created_at": "2026-09-08T14:47:15Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_12",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\ntry:\n    from triton.language.extra.libdevice import sqrt as _sqrt\nexcept ModuleNotFoundError:\n    from triton.language.extra.cuda.libdevice import sqrt as _sqrt\n\n\n@triton.jit\ndef _rms_norm_forward_kernel(\n    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,\n    n_cols, eps,\n    BLOCK_SIZE: tl.constexpr,\n):\n    row_idx = tl.program_id(0).to(tl.int64)\n    col_offsets = tl.arange(0, BLOCK_SIZE)\n    mask = col_offsets < n_cols\n\n    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0)\n    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols\n    rstd = 1.0 / (_sqrt(mean_square) + eps)\n\n    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)\n    Y_row = X_row * rstd\n    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)\n\n\ndef rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:\n    num_rows, n_cols = X.shape\n    BLOCK_SIZE = triton.next_power_of_2(n_cols)\n    Y = torch.empty_like(X)\n    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)\n    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X, X.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)\n    return Y\n",
+        "passed": null,
+        "problem_text": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\nThe epsilon is the standard RMSNorm stabilizer: it must keep the normalizer\nfinite as the row norm approaches zero, so that a row of (near-)zero input\ndoes not blow the output up.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_12",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_12"
+      },
+      "created_at": "2026-09-08T14:47:15Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\nThe epsilon is the standard RMSNorm stabilizer: it must keep the normalizer\nfinite as the row norm approaches zero, so that a row of (near-)zero input\ndoes not blow the output up.\n",
+        "entry": "case_12",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_12"
+      },
+      "created_at": "2026-09-08T14:47:15Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_12",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1247
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 422
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_12",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T14:47:15Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_12\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_12",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Line 23 of kernel.py adds eps after the sqrt rather than inside it; problem.txt explicitly specifies the formula 1/sqrt(mean_square+eps) and the epsilon's role as an in-sqrt stabilizer.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd, with eps described as the in-sqrt stabilizer keeping the normalizer finite for near-zero rows."
+          },
+          {
+            "source": "kernel.py line 23",
+            "summary": "rstd = 1.0 / (_sqrt(mean_square) + eps) -- eps applied outside the sqrt."
+          }
+        ],
+        "scope_rationale": "problem.txt states the required formula verbatim and additionally requires eps to keep the normalizer finite as row norm approaches zero; representative float32 rows with standard eps=1e-6 are admitted inputs.",
+        "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's rstd = 1/sqrt(mean_square + eps), producing wrong outputs both on ordinary rows and catastrophically on near-zero rows."
+      },
+      "created_at": "2026-09-08T14:47:26Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-08T14:47:26Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Line 23 of kernel.py adds eps after the sqrt rather than inside it; problem.txt explicitly specifies the formula 1/sqrt(mean_square+eps) and the epsilon's role as an in-sqrt stabilizer.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd, with eps described as the in-sqrt stabilizer keeping the normalizer finite for near-zero rows."
+          },
+          {
+            "source": "kernel.py line 23",
+            "summary": "rstd = 1.0 / (_sqrt(mean_square) + eps) -- eps applied outside the sqrt."
+          }
+        ],
+        "scope_rationale": "problem.txt states the required formula verbatim and additionally requires eps to keep the normalizer finite as row norm approaches zero; representative float32 rows with standard eps=1e-6 are admitted inputs.",
+        "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's rstd = 1/sqrt(mean_square + eps), producing wrong outputs both on ordinary rows and catastrophically on near-zero rows.",
+        "status": "open",
+        "updated_at": "2026-09-08T14:47:26Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_12/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\neps = 1e-6\nres = {}\n\n# ordinary row\nX = torch.randn(8, 512, device=\"cuda\", dtype=torch.float32)\nY = m.rms_norm_forward(X, eps)\nms = (X*X).sum(-1, keepdim=True)/X.shape[1]\nref = X * (1.0/torch.sqrt(ms+eps))\nres[\"normal_max_abs_err\"] = (Y-ref).abs().max().item()\nres[\"normal_max_rel_err\"] = ((Y-ref).abs()/(ref.abs()+1e-12)).max().item()\n\n# near-zero row\nZ = torch.zeros(3, 512, device=\"cuda\", dtype=torch.float32)\nZ[1] = 1e-8\nZ[2] = 1e-4\nYz = m.rms_norm_forward(Z, eps)\nmsz = (Z*Z).sum(-1, keepdim=True)/Z.shape[1]\nrefz = Z * (1.0/torch.sqrt(msz+eps))\nres[\"nearzero_kernel\"] = Yz[:,0].tolist()\nres[\"nearzero_ref\"] = refz[:,0].tolist()\nres[\"nearzero_max_abs_err\"] = (Yz-refz).abs().max().item()\nres[\"nearzero_rstd_kernel\"] = (1.0/torch.sqrt(msz)+0).squeeze().tolist()\nres[\"expected_ref_rstd\"] = (1.0/torch.sqrt(msz+eps)).squeeze().tolist()\nres[\"kernel_impl_rstd_formula_pred\"] = (1.0/(torch.sqrt(msz)+eps)).squeeze().tolist()\n\n# check kernel matches the \"eps outside\" formula exactly on normal rows\nalt = X * (1.0/(torch.sqrt(ms)+eps))\nres[\"matches_eps_outside_max_abs_err\"] = (Y-alt).abs().max().item()\nprint(json.dumps(res, indent=1))\n",
+        "expected_signal": "If eps is misplaced, kernel matches 1/(sqrt(ms)+eps) closely and diverges from 1/sqrt(ms+eps); near-zero rows blow up (rstd ~ 1/eps = 1e6 instead of ~1e3)."
+      },
+      "created_at": "2026-09-08T14:47:45Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "b748b6115f703ae1fef46b3b119e6a84c6e31803148eed570588ad299ad23afe"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "06f40ef1e3144c10555864fe9c89e339c268b6dc0f60eac8e63e306fc3754f4b"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's rstd = 1/sqrt(mean_square + eps), producing wrong outputs both on ordinary rows and catastrophically on near-zero rows.",
+        "cwd": "/root/cases/case_12",
+        "duration_s": 7.658623,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "b748b6115f703ae1fef46b3b119e6a84c6e31803148eed570588ad299ad23afe"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "06f40ef1e3144c10555864fe9c89e339c268b6dc0f60eac8e63e306fc3754f4b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 7.658623,
+            "exit_code": 0,
+            "expected_signal": "If eps is misplaced, kernel matches 1/(sqrt(ms)+eps) closely and diverges from 1/sqrt(ms+eps); near-zero rows blow up (rstd ~ 1/eps = 1e6 instead of ~1e3).",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n \"normal_max_abs_err\": 1.6689300537109375e-06,\n \"normal_max_rel_err\": 6.747113729943521e-07,\n \"nearzero_kernel\": [\n  0.0,\n  0.009900989942252636,\n  0.9900990724563599\n ],\n \"nearzero_ref\": [\n  0.0,\n  9.999999747378752e-06,\n  0.09950371831655502\n ],\n \"nearzero_max_abs_err\": 0.8905953764915466,\n \"nearzero_rstd_kernel\": [\n  Infinity,\n  100000000.0,\n  10000.0\n ],\n \"expected_ref_rstd\": [\n  999.9999389648438,\n  999.9999389648438,\n  995.0372314453125\n ],\n \"kernel_impl_rstd_formula_pred\": [\n  1000000.0,\n  990099.0,\n  9900.990234375\n ],\n \"matches_eps_outside_max_abs_err\": 4.76837158203125e-07\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": "If eps is misplaced, kernel matches 1/(sqrt(ms)+eps) closely and diverges from 1/sqrt(ms+eps); near-zero rows blow up (rstd ~ 1/eps = 1e6 instead of ~1e3).",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n \"normal_max_abs_err\": 1.6689300537109375e-06,\n \"normal_max_rel_err\": 6.747113729943521e-07,\n \"nearzero_kernel\": [\n  0.0,\n  0.009900989942252636,\n  0.9900990724563599\n ],\n \"nearzero_ref\": [\n  0.0,\n  9.999999747378752e-06,\n  0.09950371831655502\n ],\n \"nearzero_max_abs_err\": 0.8905953764915466,\n \"nearzero_rstd_kernel\": [\n  Infinity,\n  100000000.0,\n  10000.0\n ],\n \"expected_ref_rstd\": [\n  999.9999389648438,\n  999.9999389648438,\n  995.0372314453125\n ],\n \"kernel_impl_rstd_formula_pred\": [\n  1000000.0,\n  990099.0,\n  9900.990234375\n ],\n \"matches_eps_outside_max_abs_err\": 4.76837158203125e-07\n}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "contract_out_row_1e-4": 0.09950371831655502,
+          "contract_out_row_1e-8": 9.999999747378752e-06,
+          "contract_rstd_bound_1_over_sqrt_eps": 1000.0,
+          "dtype": "float32",
+          "eps": 1e-06,
+          "kernel_effective_rstd_row_1e-4": 9900.990234375,
+          "kernel_out_row_1e-4": 0.9900990724563599,
+          "kernel_out_row_1e-8": 0.009900989942252636,
+          "nearzero_max_abs_err": 0.8905953764915466,
+          "normal_max_abs_err_vs_contract": 1.6689300537109375e-06,
+          "normal_max_abs_err_vs_eps_outside": 4.76837158203125e-07,
+          "shape": [
+            8,
+            512
+          ]
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "Kernel output matches the 'eps outside sqrt' formula 1/(sqrt(ms)+eps) to 4.77e-7 max abs err on randn(8,512), while deviating from the contract's 1/sqrt(ms+eps) by 1.67e-6 there. On small-magnitude rows the deviation is catastrophic: for a row of constant 1e-4 the kernel yields 0.9901 per element vs contract 0.09950 (max abs err 0.891, ~10x), and for a row of 1e-8 it yields 0.00990 vs contract 1.0e-5 (~990x). The kernel's effective rstd is ~9900 / ~990099 instead of the contract-bounded ~995 / ~1000, i.e. eps fails to bound the normalizer at 1/sqrt(eps)=1000 as required.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T14:47:57Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T14:47:26Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:47:57Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "b748b6115f703ae1fef46b3b119e6a84c6e31803148eed570588ad299ad23afe"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "06f40ef1e3144c10555864fe9c89e339c268b6dc0f60eac8e63e306fc3754f4b"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "contract_out_row_1e-4": 0.09950371831655502,
+                "contract_out_row_1e-8": 9.999999747378752e-06,
+                "contract_rstd_bound_1_over_sqrt_eps": 1000.0,
+                "dtype": "float32",
+                "duration_s": 7.658623,
+                "eps": 1e-06,
+                "exit_code": 0,
+                "expected_signal": "If eps is misplaced, kernel matches 1/(sqrt(ms)+eps) closely and diverges from 1/sqrt(ms+eps); near-zero rows blow up (rstd ~ 1/eps = 1e6 instead of ~1e3).",
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "kernel_effective_rstd_row_1e-4": 9900.990234375,
+                "kernel_out_row_1e-4": 0.9900990724563599,
+                "kernel_out_row_1e-8": 0.009900989942252636,
+                "nearzero_max_abs_err": 0.8905953764915466,
+                "normal_max_abs_err_vs_contract": 1.6689300537109375e-06,
+                "normal_max_abs_err_vs_eps_outside": 4.76837158203125e-07,
+                "shape": [
+                  8,
+                  512
+                ],
+                "stderr": "",
+                "stdout": "{\n \"normal_max_abs_err\": 1.6689300537109375e-06,\n \"normal_max_rel_err\": 6.747113729943521e-07,\n \"nearzero_kernel\": [\n  0.0,\n  0.009900989942252636,\n  0.9900990724563599\n ],\n \"nearzero_ref\": [\n  0.0,\n  9.999999747378752e-06,\n  0.09950371831655502\n ],\n \"nearzero_max_abs_err\": 0.8905953764915466,\n \"nearzero_rstd_kernel\": [\n  Infinity,\n  100000000.0,\n  10000.0\n ],\n \"expected_ref_rstd\": [\n  999.9999389648438,\n  999.9999389648438,\n  995.0372314453125\n ],\n \"kernel_impl_rstd_formula_pred\": [\n  1000000.0,\n  990099.0,\n  9900.990234375\n ],\n \"matches_eps_outside_max_abs_err\": 4.76837158203125e-07\n}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Kernel output matches the 'eps outside sqrt' formula 1/(sqrt(ms)+eps) to 4.77e-7 max abs err on randn(8,512), while deviating from the contract's 1/sqrt(ms+eps) by 1.67e-6 there. On small-magnitude rows the deviation is catastrophic: for a row of constant 1e-4 the kernel yields 0.9901 per element vs contract 0.09950 (max abs err 0.891, ~10x), and for a row of 1e-8 it yields 0.00990 vs contract 1.0e-5 (~990x). The kernel's effective rstd is ~9900 / ~990099 instead of the contract-bounded ~995 / ~1000, i.e. eps fails to bound the normalizer at 1/sqrt(eps)=1000 as required.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Line 23 of kernel.py adds eps after the sqrt rather than inside it; problem.txt explicitly specifies the formula 1/sqrt(mean_square+eps) and the epsilon's role as an in-sqrt stabilizer.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd, with eps described as the in-sqrt stabilizer keeping the normalizer finite for near-zero rows."
+            },
+            {
+              "source": "kernel.py line 23",
+              "summary": "rstd = 1.0 / (_sqrt(mean_square) + eps) -- eps applied outside the sqrt."
+            }
+          ],
+          "scope_rationale": "problem.txt states the required formula verbatim and additionally requires eps to keep the normalizer finite as row norm approaches zero; representative float32 rows with standard eps=1e-6 are admitted inputs.",
+          "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's rstd = 1/sqrt(mean_square + eps), producing wrong outputs both on ordinary rows and catastrophically on near-zero rows.",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T14:47:57Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:47:57Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "b748b6115f703ae1fef46b3b119e6a84c6e31803148eed570588ad299ad23afe"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "06f40ef1e3144c10555864fe9c89e339c268b6dc0f60eac8e63e306fc3754f4b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "contract_out_row_1e-4": 0.09950371831655502,
+            "contract_out_row_1e-8": 9.999999747378752e-06,
+            "contract_rstd_bound_1_over_sqrt_eps": 1000.0,
+            "dtype": "float32",
+            "duration_s": 7.658623,
+            "eps": 1e-06,
+            "exit_code": 0,
+            "expected_signal": "If eps is misplaced, kernel matches 1/(sqrt(ms)+eps) closely and diverges from 1/sqrt(ms+eps); near-zero rows blow up (rstd ~ 1/eps = 1e6 instead of ~1e3).",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "kernel_effective_rstd_row_1e-4": 9900.990234375,
+            "kernel_out_row_1e-4": 0.9900990724563599,
+            "kernel_out_row_1e-8": 0.009900989942252636,
+            "nearzero_max_abs_err": 0.8905953764915466,
+            "normal_max_abs_err_vs_contract": 1.6689300537109375e-06,
+            "normal_max_abs_err_vs_eps_outside": 4.76837158203125e-07,
+            "shape": [
+              8,
+              512
+            ],
+            "stderr": "",
+            "stdout": "{\n \"normal_max_abs_err\": 1.6689300537109375e-06,\n \"normal_max_rel_err\": 6.747113729943521e-07,\n \"nearzero_kernel\": [\n  0.0,\n  0.009900989942252636,\n  0.9900990724563599\n ],\n \"nearzero_ref\": [\n  0.0,\n  9.999999747378752e-06,\n  0.09950371831655502\n ],\n \"nearzero_max_abs_err\": 0.8905953764915466,\n \"nearzero_rstd_kernel\": [\n  Infinity,\n  100000000.0,\n  10000.0\n ],\n \"expected_ref_rstd\": [\n  999.9999389648438,\n  999.9999389648438,\n  995.0372314453125\n ],\n \"kernel_impl_rstd_formula_pred\": [\n  1000000.0,\n  990099.0,\n  9900.990234375\n ],\n \"matches_eps_outside_max_abs_err\": 4.76837158203125e-07\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel output matches the 'eps outside sqrt' formula 1/(sqrt(ms)+eps) to 4.77e-7 max abs err on randn(8,512), while deviating from the contract's 1/sqrt(ms+eps) by 1.67e-6 there. On small-magnitude rows the deviation is catastrophic: for a row of constant 1e-4 the kernel yields 0.9901 per element vs contract 0.09950 (max abs err 0.891, ~10x), and for a row of 1e-8 it yields 0.00990 vs contract 1.0e-5 (~990x). The kernel's effective rstd is ~9900 / ~990099 instead of the contract-bounded ~995 / ~1000, i.e. eps fails to bound the normalizer at 1/sqrt(eps)=1000 as required.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.96,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "problem.txt states the required formula verbatim: rstd = 1/sqrt(mean_square + eps), and explicitly requires eps to keep the normalizer finite as the row norm approaches zero. kernel.py line 23 instead computes rstd = 1.0 / (_sqrt(mean_square) + eps), i.e. eps applied outside the sqrt. Probe t6 (finalized as evidence c1.e1 in event t7) ran the actual kernel on a GPU: on randn(8,512) float32 with eps=1e-6 the kernel matched the 'eps outside sqrt' formula to 4.77e-7 max abs err while deviating from the contract formula by 1.67e-6, identifying the implemented formula. On small-magnitude rows the deviation is catastrophic and exactly of the kind the contract forbids: a constant row of 1e-4 yields 0.9901 per element vs the contract's 0.09950 (max abs err 0.891, ~10x), and a row of 1e-8 yields 0.00990 vs the contract's 1.0e-5 (~990x). The kernel's effective normalizer reaches ~9.9e3 and ~9.9e5 instead of being bounded by 1/sqrt(eps)=1e3, so eps demonstrably fails its stated stabilizing role. This is a violation of an explicitly required formula and invariant, not a rounding/reduction-order artifact (the near-zero errors are orders of magnitude, not ulps).",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-08T14:48:08Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.96,
+        "created_at": "2026-09-08T14:48:08Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "problem.txt states the required formula verbatim: rstd = 1/sqrt(mean_square + eps), and explicitly requires eps to keep the normalizer finite as the row norm approaches zero. kernel.py line 23 instead computes rstd = 1.0 / (_sqrt(mean_square) + eps), i.e. eps applied outside the sqrt. Probe t6 (finalized as evidence c1.e1 in event t7) ran the actual kernel on a GPU: on randn(8,512) float32 with eps=1e-6 the kernel matched the 'eps outside sqrt' formula to 4.77e-7 max abs err while deviating from the contract formula by 1.67e-6, identifying the implemented formula. On small-magnitude rows the deviation is catastrophic and exactly of the kind the contract forbids: a constant row of 1e-4 yields 0.9901 per element vs the contract's 0.09950 (max abs err 0.891, ~10x), and a row of 1e-8 yields 0.00990 vs the contract's 1.0e-5 (~990x). The kernel's effective normalizer reaches ~9.9e3 and ~9.9e5 instead of being bounded by 1/sqrt(eps)=1e3, so eps demonstrably fails its stated stabilizing role. This is a violation of an explicitly required formula and invariant, not a rounding/reduction-order artifact (the near-zero errors are orders of magnitude, not ulps).",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.96,
+    "created_at": "2026-09-08T14:48:08Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "problem.txt states the required formula verbatim: rstd = 1/sqrt(mean_square + eps), and explicitly requires eps to keep the normalizer finite as the row norm approaches zero. kernel.py line 23 instead computes rstd = 1.0 / (_sqrt(mean_square) + eps), i.e. eps applied outside the sqrt. Probe t6 (finalized as evidence c1.e1 in event t7) ran the actual kernel on a GPU: on randn(8,512) float32 with eps=1e-6 the kernel matched the 'eps outside sqrt' formula to 4.77e-7 max abs err while deviating from the contract formula by 1.67e-6, identifying the implemented formula. On small-magnitude rows the deviation is catastrophic and exactly of the kind the contract forbids: a constant row of 1e-4 yields 0.9901 per element vs the contract's 0.09950 (max abs err 0.891, ~10x), and a row of 1e-8 yields 0.00990 vs the contract's 1.0e-5 (~990x). The kernel's effective normalizer reaches ~9.9e3 and ~9.9e5 instead of being bounded by 1/sqrt(eps)=1e3, so eps demonstrably fails its stated stabilizing role. This is a violation of an explicitly required formula and invariant, not a rounding/reduction-order artifact (the near-zero errors are orders of magnitude, not ulps).",
+    "verdict": "reject"
+  }
+}

@@ -1,0 +1,86 @@
+[
+  {
+    "created_at": "2026-09-08T14:43:21Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T14:43:49Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "9d4496d198e38c81fc38614d0e4fca67a409494dccf00bb9cde0375b0538b1f9"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "c519d4a00d6a935f102b825935e7effdf80d53dcca98702a9c9424354c74d005"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 7.962161,
+          "exit_code": 0,
+          "expected_signal": "If quantization is active, max_abs_err ~2.5e-3 per element and kernel outputs lie exactly on the 5e-3 grid (offgrid frac ~0).",
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "max_abs_err": {
+            "128x64": 0.003306,
+            "32x128": 0.004552,
+            "8x64": 0.003238
+          },
+          "max_offgrid_frac_of_5e-3": {
+            "128x64": 3.81e-06,
+            "32x128": 2.86e-06,
+            "8x64": 2.38e-06
+          },
+          "max_rel_err": {
+            "128x64": 1.2016,
+            "32x128": 1.0,
+            "8x64": 1.0
+          },
+          "n_mismatch_gt_1e-5": {
+            "128x64": "64/64",
+            "32x128": "126/128",
+            "8x64": "64/64"
+          },
+          "quant_step": 0.005,
+          "stderr": "",
+          "stdout": "{\n  \"8x64\": {\n    \"max_abs_err\": 0.003238071841050627,\n    \"max_rel_err\": 1.0,\n    \"ref_absmax\": 0.23449500306162346,\n    \"kernel_output_max_offgrid_frac\": 2.384185791015625e-06,\n    \"n_mismatch_1e5\": 64,\n    \"total\": 64\n  },\n  \"32x128\": {\n    \"max_abs_err\": 0.004552342606875176,\n    \"max_rel_err\": 1.0,\n    \"ref_absmax\": 0.4090102127440114,\n    \"kernel_output_max_offgrid_frac\": 2.86102294921875e-06,\n    \"n_mismatch_1e5\": 126,\n    \"total\": 128\n  },\n  \"128x64\": {\n    \"max_abs_err\": 0.0033061759267483115,\n    \"max_rel_err\": 1.2016435929848928,\n    \"ref_absmax\": 0.35027296145618403,\n    \"kernel_output_max_offgrid_frac\": 3.814697265625e-06,\n    \"n_mismatch_1e5\": 64,\n    \"total\": 64\n  }\n}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Kernel final state vs exact float64 recurrence: max_abs_err 3.24e-3 (8x64), 4.55e-3 (32x128), 3.31e-3 (128x64) -- i.e. up to ~half of QUANT_STEP=5e-3, ~1e5x larger than fp32 rounding. All/nearly all elements exceed 1e-5 error (64/64, 126/128, 64/64), max_rel_err up to 1.20. Kernel outputs lie on the 5e-3 grid (max off-grid fraction 2.4e-6..3.8e-6, pure fp32 representation error), proving the floor(x/step+0.5)*step quantization at line 32 is active on the returned state.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Line 32 does states = floor(states/QUANT_STEP + 0.5)*QUANT_STEP with QUANT_STEP=5e-3, an explicit approximation applied to the state carried across chunks; the contract requires the recurrence be exact aside from ordinary FP arithmetic.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Requires state <- exp(dA_cs[c])*state + new_states[c] carried exactly and states the recurrence introduces no approximation of its own beyond ordinary floating point."
+      },
+      {
+        "source": "kernel.py line 5, 32",
+        "summary": "_QUANT_STEP = 5e-3 'coarse quantization grid for the compressed recurrent state' applied to states each iteration."
+      }
+    ],
+    "scope_rationale": "problem.txt states the exact recurrence formula and explicitly says \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" Any deliberate quantization of the state violates this stated requirement, for any admitted input (per-chunk states and log-decays, dA_cs <= 0 typical of Mamba decays).",
+    "statement": "The kernel quantizes the recurrent state to a 5e-3 grid each chunk (kernel.py line 32), so the returned final state deviates from the exact recurrence state <- exp(dA_cs[c])*state + new_states[c] by far more than floating-point error.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T14:43:49Z"
+  }
+]
