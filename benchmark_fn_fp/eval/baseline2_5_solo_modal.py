@@ -50,7 +50,7 @@ AGENTS = "solo"
     timeout=3600,
     # Each debate run holds a T4 for minutes and burns real API tokens; cap the
     # fan-out so an --all run cannot saturate the workspace GPU quota.
-    max_containers=2,
+    max_containers=4,
     secrets=[modal.Secret.from_dotenv(REPO_ROOT)],
 )
 def run_solo(entry: str, max_debate_rounds: int, model: str) -> dict:
@@ -137,7 +137,12 @@ def main(cases: str = "", all: bool = False, max_debate_rounds: int = 3,
 
     print(f"running solo agent on {len(names)} case(s), model={model}, rounds={max_debate_rounds}")
     jobs = [(n, max_debate_rounds, model) for n in names]
-    outputs = list(run_solo.starmap(jobs))
+    # NOT list(): starmap yields each result as its container finishes, and
+    # materialising the whole iterator first means nothing reaches disk until
+    # all 32 cases are done. A failure at case 30 would then throw away the 29
+    # runs already paid for. Iterated directly, each trace is written the
+    # moment it arrives.
+    outputs = run_solo.starmap(jobs)
 
     # Imported here, not at module scope: Modal imports this module inside
     # the container as well, and only /root/verifier and /root/cases are
@@ -149,6 +154,7 @@ def main(cases: str = "", all: bool = False, max_debate_rounds: int = 3,
 
     results: dict[str, str] = {}
     details: dict[str, dict] = {}
+    done = 0
     for r in outputs:
         entry = r["entry"]
         # Written before anything else in the loop: a crash while scoring must
@@ -159,7 +165,8 @@ def main(cases: str = "", all: bool = False, max_debate_rounds: int = 3,
             files={"runner_stdout.txt": r.get("stdout") or "",
                    "runner_error.txt": r.get("error") or ""},
         )
-        print(f"  trace: {trace_dir}")
+        done += 1
+        print(f"  [{done}/{len(names)}] trace: {trace_dir}", flush=True)
         details[entry] = r
         # "the system judged this inconclusive" and "the system never produced a
         # verdict" are different outcomes and must not be scored as the same
