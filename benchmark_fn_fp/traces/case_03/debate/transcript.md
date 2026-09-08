@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
 - Entry: `case_03`
-- Turns: 11
-- Tool events: 17
+- Turns: 7
+- Tool events: 16
 - Claims: 3
 - Description updates: 0
-- LLM time: 395.575s across 10 calls | tokens: in=371962 out=27910 total=399872
-- Cache tokens: created=0 read=56182
+- LLM time: 315.518s across 6 calls | tokens: in=176129 out=23514 total=199643
+- Cache tokens: created=6263 read=26489
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.9
+- Confidence: 0.93
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -62,12 +62,12 @@ Tool calls:
     "entry": "case_03"
   }
 
-### Turn 2 - `describer` (84.492352968s, in=5967 out=6775)
+### Turn 2 - `describer` (82.330048312s, in=5967 out=6169)
 
 Message:
 
 ```text
-I have the full kernel, problem statement, and metadata already in context. Rather than re-reading, I'll compare this kernel against the upstream AutoGPTQ `quant_matmul_248_kernel` it claims to reproduce and record the structured description model.
+I have full source, the problem contract, and metadata already in context, so I'll go straight to building the description model: mapping the AutoGPTQ 248-kernel structure against the stated contract (per-column `g_idx` dequant, arbitrary K including a trailing partial group) and flagging the concrete divergence surfaces for the Skeptic.
 ```
 
 Tool calls:
@@ -75,24 +75,23 @@ Tool calls:
 - `record_description_update -> t5 error`
   Args:
   {
-    "contract_model": "Host signature (kernel.py:61-63): a (M,K) fp32; b_packed (K//(32//bits), N) int32; scales/zeros (num_groups, N); g_idx (K,) int32; returns fp32 (M,N).",
-    "kernel_model": "`a_ptrs += BLOCK_SIZE_K` (line 52) omits stride_ak, so A is assumed row-contiguous; `scales_ptrs = scales_ptr + offs_bn` (line 34) assumes scales.stride(1)==1.",
-    "open_questions": "What comparison tolerance is intended, given tl.dot on fp32 operands defaults to TF32?",
-    "risk_map": "bits != 4: bits and maxq are runtime (non-constexpr) args; 2/8-bit paths change infearure_per_bits and the BLOCK_K//infearure_per_bits pointer step (BLOCK_K=16 with 8-bit gives step 4, with 2-bit gives step 1). Only relevant if the harness exercises bits other than 4.",
-    "scope_notes": "Only public entry point is gp
-  ...[truncated 794 chars]
+    "contract_model": "Wrapper docstring (kernel.py:62-63) states a:(M,K) fp32, scales/zeros:(num_groups, N), g_idx:(K,) int32 \u2014 i.e. zeros declared as one entry per (group, column), not bit-packed.",
+    "kernel_model": "Accumulator is fp32; b becomes int32*scales, so the dot operand dtype is whatever scales' dtype promotes to (fp16 scales would give an fp16 B against fp32 A in tl.dot). Store is masked on both M and N (lines 56-58), so out-of-range columns are not written even though they were read.",
+    "open_questions": "Are M and N always multiples of 32 in the tests, which would keep the unmasked B/scales/zeros loads from faulting?",
+    "risk_map": "Dtype coupling in tl.dot: if scales is fp16/bf16, b = (b - zeros) * scales is low precision while a is fp32; this either fails to compil
+  ...[truncated 865 chars]
   Output summary:
   {
     "error_type": "ValueError",
     "message": "contract_model must be a list of strings"
   }
 
-### Turn 3 - `skeptic` (96.27138923199999s, in=7683 out=7762)
+### Turn 3 - `skeptic` (52.435553915s, in=7687 out=4026)
 
 Message:
 
 ```text
-I have the kernel, problem, and metadata in context. This is a near-verbatim AutoGPTQ port; the interesting deviations from the stated contract are the total absence of K-dimension masking and N-dimension masking on the packed-weight/scale/zero loads, plus the unwrapped `zeros + 1`. Recording the three highest-risk, directly testable hypotheses.
+Kernel body is a near-verbatim AutoGPTQ copy, but the *stated* contract here (problem.txt formula + wrapper docstring layout) differs from what upstream assumes. I'm recording the three concrete divergences that are directly testable.
 ```
 
 Tool calls:
@@ -100,77 +99,127 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "Every load inside the k-loop is unmasked in the K dimension; only offs_am < M is masked. num_pid_k = cdiv(K, BLOCK_SIZE_K) rounds up, so a K that is a multiple of the packing factor 8 but not of 16 forces a full extra tile of out-of-range reads whose products are added to the accumulator. An out-of-range g_idx value also indexes scales/zeros arbitrarily.",
+    "rationale": "problem.txt gives the dequant formula with no +1 term; upstream AutoGPTQ adds 1 because its qzeros are stored biased, but this artifact's contract declares plain zeros. A probe that builds the reference straight from the stated formula should show a constant offset proportional to scale.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract explicitly requires correct per-column group dequantization 'for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.'"
+        "summary": "States 'The kernel computes C = A @ dequant(B), with dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 bias on the zero-point."
       },
       {
-        "source": "kernel.py:62-63 (docstring) and :68-69",
-        "summary": "Host contract accepts a (M,K
-  ...[truncated 1293 chars]
+        "source": "kernel.py:44-50",
+        "summary": "Kernel loads zeros, unpacks, then does `zeros = zeros + 1` before `b = (b - zeros) * scales`."
+      }
+    ],
+    "scope_rationale": "The contract states a required
+  ...[truncated 693 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Every load inside the k-loop is unmasked in the K dimension; only offs_am < M is masked. num_pid_k = cdiv(K, BLOCK_SIZE_K) rounds up, so a K that is a multiple of the packing factor 8 but not of 16 forces a full extra tile of out-of-range reads whose products are added to the accumulator. An out-of-range g_idx value also indexes scales/zeros arbitrarily.",
+    "rationale": "problem.txt gives the dequant formula with no +1 term; upstream AutoGPTQ adds 1 because its qzeros are stored biased, but this artifact's contract declares plain zeros. A probe that builds the reference straight from the stated formula should show a constant offset proportional to scale.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract explicitly requires correct per-column group dequantization 'for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.'"
+        "summary": "States 'The kernel computes C = A @ dequant(B), with dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 bias on the zero-point."
       },
       {
-        "source": "kernel.py:62-63 (docstring) and :68-69",
-        "summary": "Host contract accepts a (M,K) with b_packed (K//(32//bits), N); BLOCK_SIZE_K is hardcoded to 16 and num_pid_k = cdiv(K,16), so any K in the admitted domain that is not a multiple of 16 triggers an unmasked tail iteration."
+        "source": "kernel.py:44-50",
+        "summary": "Kernel loads zeros, unpacks, then does `zeros = zeros + 1` before `b = (b - zeros) * scales`."
       }
     ],
-    "scope_rationale": "problem.txt states the contract must hold \"for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still 
-  ...[truncated 927 chars]
+    "scope_rationale": "The contract states a required numeric formula for dequant(B); a claim that the kernel violates that formula is in-scope even without test.py. Representative inputs (M,K,N multiples of 32/16, bits=4) are exactly what the wrapper docstring admits.",
+    "statement": "Zero-point off-by-one: line 46 computes `zeros = zeros + 1`, so the kernel evaluates (q - (zero+1))*scale instead of the contractually stated (unpacked
+  ...[truncated 327 chars]
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Lines 32-35 build b/scales/zeros pointers from offs_bn with no offs_bn < N guard, and line 48/43/44 load them without a mask; only line 57 masks the store. Reading beyond the final row of a contiguous tensor has no guaranteed valid backing memory.",
-    "scope": "unknown",
-    "scope_rationale": "problem.txt constrains the operator and explicitly generalizes over K, but says nothing about N divisibility, and there is no test.py/get_inputs pinning N. The host wrapper accepts arbitrary N, so the case is admitted by the signature, but I cannot show the benchmark domain requires a non-multiple-of-32 N; marking unknown rather than in_scope.",
-    "statement": "When N is not a multiple of BLOCK_SIZE_N=32 (e.g. N=48), the loads of b (line 48), scales (line 43) and zeros (line 44) are 
-  ...[truncated 316 chars]
+    "rationale": "The wrapper docstring declares scales/zeros both as (num_groups, N) and scales are indexed unpacked (line 34), so the asymmetric packed indexing of zeros contradicts the declared and problem-stated per-column zero table.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Dequant uses zero[g_idx[k],n], one zero-point per (group, column)."
+      },
+      {
+        "source": "kernel.py:62-63 docstring",
+        "summary": "'scales/zeros: (num_groups, N)' \u2014 zeros declared same unpacked layout as scales."
+      },
+      {
+        "source": "kernel.py:35,38,45",
+        "summary": "zeros pointer divided by 8 along N and value shifted by (n%8)*4 then masked \u2014 packed-layout access."
+      }
+    ],
+    "scope_rationale": "problem.txt defines 
+  ...[truncated 752 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Lines 32-35 build b/scales/zeros pointers from offs_bn with no offs_bn < N guard, and line 48/43/44 load them without a mask; only line 57 masks the store. Reading beyond the final row of a contiguous tensor has no guaranteed valid backing memory.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "problem.txt constrains the operator and explicitly generalizes over K, but says nothing about N divisibility, and there is no test.py/get_inputs pinning N. The host wrapper accepts arbitrary N, so the case is admitted by the signature, but I cannot show the benchmark domain requires a non-multiple-of-32 N; marking unknown rather than in_scope.",
-    "statement": "When N is not a multiple of BLOCK_SIZE_N=32 (e.g. N=48), the loads of b (line 48), scales (line 43) and zeros (line 44) are unmasked in the N dimension while only the C store is masked, so the last column tile dereferences addresses past the end of b_packed/scales/zeros; this can raise a CUDA illegal memory access (or, for the qzeros word index offs_bn//8, read out-of-range packed data) rather than returning the correct (M,N) result.",
-    "status": "open"
-  }
+    "rationale": "The wrapper docstring declares scales/zeros both as (num_groups, N) and scales are indexed unpacked (line 34), so the asymmetric packed indexing of zeros contradicts the declared and problem-stated per-column zero table.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Dequant uses zero[g_idx[k],n], one zero-point per (group, column)."
+      },
+      {
+        "source": "kernel.py:62-63 docstring",
+        "summary": "'scales/zeros: (num_groups, N)' \u2014 zeros declared same unpacked layout as scales."
+      },
+      {
+        "source": "kernel.py:35,38,45",
+        "summary": "zeros pointer divided by 8 along N and value shifted by (n%8)*4 then masked \u2014 packed-layout access."
+      }
+    ],
+    "scope_rationale": "problem.txt defines zero as zero[g_idx[k],n] \u2014 a per-column value \u2014 and the host wrapper (the artifact's own API surface) declares zeros as (num_groups, N). Any admissible call with N>1 exercises this.",
+    "statement": "Zeros indexing treats zeros as bit-packed along N although the declared layout is one int32 zero per (group, column): line 35 uses `zeros_ptr + (offs_bn // infearure_per_bits)`
+  ...[truncated 386 chars]
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "Current AutoGPTQ applies `zeros = (zeros + 1) & maxq`; this port drops the mask. Randomly generated qzeros will contain the code 15 with probability ~1/16 per (group, column), so a benign random probe will hit the case, but only if the reference used for comparison implements the wrapping semantics.",
-    "scope": "unknown",
-    "scope_rationale": "problem.txt's stated formula is (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no stated +1 or wrap convention, so which of {zero, zero+1, (zero+1)&maxq} is contractually required is ambiguous without the reference implementation; scope is unknown until the intended zero-point convention is clarified.",
-    "statement": "Line 46 computes `zeros = zeros + 1` without the `& maxq` wrap, so when a packed zero-point nibble 
-  ...[truncated 208 chars]
+    "rationale": "problem.txt explicitly stresses correctness 'for any K -- including a K that is not an exact multiple of group_size'; the kernel only masks M (a_mask) and M/N at the store, never K.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'every column must be dequantized ... for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.'"
+      },
+      {
+        "source": "kernel.py:29-33,41-54",
+        "summary": "offs_k has no `< K` mask; loads of a (mask only on M), b, and g_idx are unmasked across cdiv(K,16) iterations."
+      }
+    ],
+    "scope_rationale": "The contract explicitly names arbitrary K (including trailing partial groups) as a required behavior, so K=
+  ...[truncated 574 chars]
   Output summary:
   {
     "id": "c3",
-    "rationale": "Current AutoGPTQ applies `zeros = (zeros + 1) & maxq`; this port drops the mask. Randomly generated qzeros will contain the code 15 with probability ~1/16 per (group, column), so a benign random probe will hit the case, but only if the reference used for comparison implements the wrapping semantics.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "problem.txt's stated formula is (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no stated +1 or wrap convention, so which of {zero, zero+1, (zero+1)&maxq} is contractually required is ambiguous without the reference implementation; scope is unknown until the intended zero-point convention is clarified.",
-    "statement": "Line 46 computes `zeros = zeros + 1` without the `& maxq` wrap, so when a packed zero-point nibble equals maxq (15 for 4-bit) the kernel dequantizes with zero=16 instead of the wrapped value 0, giving dequant values that differ from the reference by exactly 16*scale for every k in that group and column.",
-    "status": "open"
-  }
+    "rationale": "problem.txt explicitly stresses correctness 'for any K -- including a K that is not an exact multiple of group_size'; the kernel only masks M (a_mask) and M/N at the store, never K.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'every column must be dequantized ... for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.'"
+      },
+      {
+        "source": "kernel.py:29-33,41-54",
+        "summary": "offs_k has no `< K` mask; loads of a (mask only on M), b, and g_idx are unmasked across cdiv(K,16) iterations."
+      }
+    ],
+    "scope_rationale": "The contract explicitly names arbitrary K (including trailing partial groups) as a required behavior, so K=24 or K=40 with bits=4 are contract-admitted representative inputs.",
+    "statement": "No K-dimension masking: offs_k = arange(0, BLOCK_SIZE_K=16) is never compared against K, and the loop runs cdiv(K,16) iterations. When K is not a multiple of 16 (e.g. K=24 with group_size 8, or K=40), the final iteration loads A, packed B, and g_idx past the valid K range without a mask, adding out-
+  ...[truncated 208 chars]
 
-### Turn 4 - `experimenter` (45.534028041s, in=15362 out=3610)
+### Turn 4 - `experimenter` (106.83565310700001s, in=15907 out=8928)
 
 Message:
 
 ```text
-Starting with c1 (missing K-dimension masking). I'll run the kernel in a child process so a possible CUDA illegal-access crash is captured rather than killing the probe, with a K=128 control (multiple of 16) and the K=72 tail case, using zero-codes ≤14 so the c3 wrap issue cannot confound the result.
+Starting with three independent probes, each designed to isolate one defect so they cannot confound each other:
+
+- **c1** (`zeros+1`): all-zero `zeros` tensor, so the packed-zeros indexing of c2 is a no-op (every unpack yields 0) and only the `+1` can show up.
+- **c2** (packed zeros along N): random zeros, compared against *two* references — one with the `+1` already folded in per-column (isolates the indexing bug) and one emulating the kernel's packed-unpack semantics (confirms the mechanism).
+- **c3** (no K mask): zeros all-zero and reference built with the `+1` convention, so c1/c2 are neutralized; K=32 control vs K=24/K=40, each in a separate subprocess since an OOB `g_idx` load can fault the CUDA context.
 ```
 
 Tool calls:
@@ -179,8 +228,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport subprocess, sys, json\n\nscript = r'''\nimport torch, json, math, importlib.util, traceback\nspec = importlib.util.spec_from_file_location(\"kmod\", \"/root/cases/case_03/kernel.py\")\nkmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(kmod)\n\ndef build(M, K, N, group_size, seed):\n    g = torch.Generator().manual_seed(seed)\n    a = torch.randn(M, K, generator=g)\n    q = torch.randint(0, 16, (K, N), generator=g, dtype=torch.int32)\n    packed = torch.zeros(K // 8, N, dtype=torch.int32)\n    for j in range(8):\n        packed |= (q[j::8] << (4 * j))\n    ng = (K + group_size - 1) // group_size\n    g_idx = (torch.arange(K) // group_size).to(torch.int32)\n    # zero codes restricted to 0..14 so the (zeros+1)&maxq wrap question c
-  ...[truncated 2135 chars]
+    "code": "\nimport sys, json, numpy as np, torch\nsys.path.insert(0,'/root/cases/case_03')\nfrom kernel import gptq_matmul\n\nM,K,N,gs,bits = 32,32,32,8,4\nng = K//gs\nrng = np.random.default_rng(0)\nq = rng.integers(0,16,size=(K,N)).astype(np.uint32)\npacked = np.zeros((K//8,N),dtype=np.uint32)\nfor k in range(K):\n    packed[k//8] |= (q[k] << ((k%8)*4))\npacked_t = torch.from_numpy(packed.view(np.int32).copy()).cuda()\nscales = torch.from_numpy((rng.random((ng,N))*0.1+0.05).astype(np.float32)).cuda()\nzeros = torch.zeros((ng,N),dtype=torch.int32,device='cuda')   # all zero -> packed-unpack also yields 0\ng_idx = (torch.arange(K,device='cuda')//gs).to(torch.int32)\na = torch.from_numpy(rng.standard_normal((M,K)).astype(np.float32)).cuda()\n\nc = gptq_matmul(a, packe
+  ...[truncated 1346 chars]
   Output summary:
   {
     "artifacts": [
@@ -188,13 +237,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "354b05ea61d407405f12179706f7d81c6bb9a2dbd33d48dab82c62919b0e5f6b"
+        "sha256": "6fbc637b5a1c40b96c324b7a058b89dd1ad22af5d995317e88d212b1cbb11a44"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "13e5717930d809447ba303fcda358af77655d4b2d7fe65428c7959670de701c4"
+        "sha256": "9b8ec7719eba582f03f3802fa5d2cf1b5efc8da2ca10aea74e9047dcf2394a2e"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -206,72 +255,55 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t9_json_result.json",
-        "sha256": "7db9478ca0871bec4189b12b3efbf5af49bb7e3785942d0af312056f5c96c137"
+        "sha256": "0a3ce3d6e786e954afed95bbe34aaaec8941e86a4dbcefffeca96548e952ab57"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "When K is not a multiple of BLOCK_SIZE_K=16 (e.g. K=72 with 4-bit packing, group_size=64, so b_packed has 9 int32 rows and the trailing group is partial), the loop runs num_pid_k=cdiv(72,16)=5 iterations and the f
-  ...[truncated 6471 chars]
-
-### Turn 5 - `experimenter` (15.332934191000021s, in=22367 out=728)
-
-Message:
-
-```text
-The K=72 probe crashed with CUDA illegal memory access while the K=128 control matched exactly; finalizing c1 now.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t10 ok`
-  Args:
-  {
-    "data": {
-      "M": 32,
-      "N": 64,
-      "bits": 4,
-      "control_K": 128,
-      "control_max_abs_err": 0.0,
-      "control_num_pid_k": 8,
-      "control_ref_absmax": 51.00389862060547,
-      "control_rel_err": 0.0,
-      "probe_exit_code": 0,
-      "tail_K": 72,
-      "tail_group_size": 64,
-      "tail_num_pid_k": 5,
-      "tail_outcome": "CUDA illegal memory access (cudaErrorIllegalAddress)",
-      "zero_codes_restricted_to": "0..14 (avoids c3 confound)"
-    },
-    "event_id": "t9",
-    "status": "confirmed",
-    "summary": "K-dimension masking failure confirmed at runtime. Control K=128 (multiple of BLOCK_SIZE_K=16, num_pid_k=8) reproduced the reference C = A @ dequant(B) exactly (max_abs_err=0.0 against ref_absmax=51.0). The tail case K=72 (legal 4-bit packing, 9 int32 rows, group_size=64 with a trailing partia
-  ...[truncated 415 chars]
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "confirmed",
-    "evidence_id": "c1.e1",
-    "summary": "K-dimension masking failure confirmed at runtime. Control K=128 (multiple of BLOCK_SIZE_K=16, num_pid_k=8) reproduced the reference C = A @ dequant(B) exactly (max_abs_err=0.0 against ref_absmax=51.0). The tail case K=72 (legal 4-bit packing, 9 int32 rows, group_size=64 with a trailing partial group, num_pid_k=cdiv(72,16)=5) raised CUDA error: an illegal memory access was encountered. The 5th loop iteration loads g_idx/b/a for k in [72,80) with no K bounds mask (kernel.py:42-48), and the out-of-range g_idx then indexes scales/zeros at an arbitrary row, producing the fault. Zero codes were restricted to 0..14 so the c3 (zeros+1 wrap) question cannot confound this result.",
-    "supports": "confirmed",
-    "tool_event_id": "t9"
-  }
-
-### Turn 6 - `experimenter` (20.23410622299997s, in=31501 out=1521)
-
-Message:
-
-```text
-I'll now probe c2 (N=48, not a multiple of BLOCK_SIZE_N=32) with a K that is a multiple of 16 so the confirmed c1 defect cannot confound the result.
-```
-
-Tool calls:
-
-- `run_claim_probe -> t11 ok`
+    "claim_statement": "Zero-point off-by-one: line 46 computes `zeros = zeros + 1`, so the kernel evaluates (q - (zero+1))*scale instead of the contractually stated (unpacked_q[k,n] - zero[g_idx[k],n])*scale[g_idx[k],n]. For any input w
+  ...[truncated 4143 chars]
+- `run_claim_probe -> t10 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "\nimport subprocess, sys, json\n\nscript = r'''\nimport torch, json, math, importlib.util\nspec = importlib.util.spec_from_file_location(\"kmod\", \"/root/cases/case_03/kernel.py\")\nkmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(kmod)\n\ndef build(M, K, N, group_size, seed):\n    g = torch.Generator().manual_seed(seed)\n    a = torch.randn(M, K, generator=g)\n    q = torch.randint(0, 16, (K, N), generator=g, dtype=torch.int32)\n    packed = torch.zeros(K // 8, N, dtype=torch.int32)\n    for j in range(8):\n        packed |= (q[j::8] << (4 * j))\n    ng = (K + group_size - 1) // group_size\n    g_idx = (torch.arange(K) // group_size).to(torch.int32)\n    zcode = torch.randint(0, 15, (ng, N), generator=g, dtype=torch.int32)\n    qzeros
-  ...[truncated 2305 chars]
+    "code": "\nimport sys, json, numpy as np, torch\nsys.path.insert(0,'/root/cases/case_03')\nfrom kernel import gptq_matmul\n\nM,K,N,gs,bits = 32,32,32,8,4\nng = K//gs\nrng = np.random.default_rng(1)\nq = rng.integers(0,16,size=(K,N)).astype(np.uint32)\npacked = np.zeros((K//8,N),dtype=np.uint32)\nfor k in range(K):\n    packed[k//8] |= (q[k] << ((k%8)*4))\npacked_t = torch.from_numpy(packed.view(np.int32).copy()).cuda()\nscales = torch.from_numpy((rng.random((ng,N))*0.1+0.05).astype(np.float32)).cuda()\nzeros_np = rng.integers(1,16,size=(ng,N)).astype(np.int32)   # per-(group,column) zero point, declared layout\nzeros = torch.from_numpy(zeros_np).cuda()\ng_idx = (torch.arange(K,device='cuda')//gs).to(torch.int32)\na = torch.from_numpy(rng.standard_normal((M,K)).astyp
+  ...[truncated 2068 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t10_probe.py",
+        "sha256": "f655fe41cf3de6f37e2949b21b68d040deaa534b4982d47b1b4350d9fd57f2b8"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t10_stdout.txt",
+        "sha256": "5efb03de003ec3e04de4fbb490b9dccae9b2099118307abf553bd0262e03636f"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t10_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t10_json_result.json",
+        "sha256": "529db348976fa63f0b9ae3e5b6be050a287c66030bc61da79d4370d6b5a7d62d"
+      }
+    ],
+    "claim_id": "c2",
+    "claim_statement": "Zeros indexing treats zeros as bit-packed along N although the declared layout is one int32 zero per (group, column): line 35 uses `zeros_ptr + (offs_bn // infearure_per_bits)` and line 45 shifts by `(offs_bn 
+  ...[truncated 4882 chars]
+- `run_claim_probe -> t11 ok`
+  Args:
+  {
+    "claim_id": "c3",
+    "code": "\nimport json, os, subprocess, sys, textwrap\n\nSCRIPT = r'''\nimport sys, json, numpy as np, torch\nsys.path.insert(0,'/root/cases/case_03')\nfrom kernel import gptq_matmul\nK = int(sys.argv[1]); M, N, gs, bits = 32, 32, 8, 4\nng = (K + gs - 1)//gs\nrows = (K + 7)//8\nrng = np.random.default_rng(2)\nq = rng.integers(0,16,size=(K,N)).astype(np.uint32)\npacked = np.zeros((rows,N),dtype=np.uint32)\nfor k in range(K):\n    packed[k//8] |= (q[k] << ((k%8)*4))\npacked_t = torch.from_numpy(packed.view(np.int32).copy()).cuda()\nscales = torch.from_numpy((rng.random((ng,N))*0.1+0.05).astype(np.float32)).cuda()\nzeros = torch.zeros((ng,N),dtype=torch.int32,device='cuda')  # neutralize c1/c2: kernel zero == 1 everywhere\ng_idx = (torch.arange(K,device='cuda')//gs).to
+  ...[truncated 1809 chars]
   Output summary:
   {
     "artifacts": [
@@ -279,13 +311,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t11_probe.py",
-        "sha256": "6eded9fa70b0d919d384bf14aad2fda1de464809dc80a9405b85497ed926d074"
+        "sha256": "366a223bf7a23f28013647c924e157878bc341801ead350c1cfdfae508a49b49"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t11_stdout.txt",
-        "sha256": "4e011e596a80066804e496e263d9a29c552af85322cbd8b5410173f6f9eacd72"
+        "sha256": "689764c49a4cec3b8731ef2857b1ccfe85d9c32c690653d310ee14f2ec78dd44"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -297,19 +329,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t11_json_result.json",
-        "sha256": "f86b0329a86b774272a853cc57480293393f11d191715dbc3bff3c9331ff1ed6"
+        "sha256": "bd14773e749af4c37f4d14499a5e42944b7de441f866350104303d72d67a6c3c"
       }
     ],
-    "claim_id": "c2",
-    "claim_statement": "When N is not a multiple of BLOCK_SIZE_N=32 (e.g. N=48), the loads of b (line 48), scales (line 43) and zeros (line 44) are unmasked in the N dimension while only the C store is masked, so the last column tile
-  ...[truncated 5518 chars]
+    "claim_id": "c3",
+    "claim_statement": "No K-dimension masking: offs_k = arange(0, BLOCK_SIZE_K=16) is never compared against K, and the loop runs cdiv(K,16) iterations. When K is not a multiple of 16 (e.g. K=24 with group_size 8, or K=40), the fina
+  ...[truncated 6556 chars]
 
-### Turn 7 - `experimenter` (50.437302746s, in=37765 out=3777)
+### Turn 5 - `experimenter` (29.053328210000018s, in=33576 out=2430)
 
 Message:
 
 ```text
-The N=48 probe returned exact results with no fault, so I'll finalize c2 as rebutted-for-the-tested-case, and simultaneously launch the c3 probe (zero code = maxq = 15) comparing the kernel against both the unwrapped `zero+1` and the AutoGPTQ `(zero+1)&maxq` conventions, with K=128/N=64 so c1 and c2 cannot confound.
+All three probes returned clean, decisive results, and each was designed so the other two defects were neutralized (c1: zeros=0; c2: compared against a "+1 only" reference and a packed-unpack emulation; c3: zeros=0 plus the kernel's own +1 convention baked into the reference). Finalizing all three; no further probes are needed since each claim is now directly decided.
 ```
 
 Tool calls:
@@ -318,122 +350,112 @@ Tool calls:
   Args:
   {
     "data": {
-      "K": 128,
-      "M": 32,
       "bits": 4,
-      "control_N": 64,
-      "control_max_abs_err": 0.0,
-      "control_ref_absmax": 30.87841033935547,
-      "exception": null,
-      "group_size": 64,
-      "interpretation": "unmasked N loads over-read into allocator slack; no fault, no numeric error",
-      "tail_N": 48,
-      "tail_max_abs_err": 0.0,
-      "tail_max_abs_err_cols_0_31": 0.0,
-      "tail_max_abs_err_cols_32_end": 0.0,
-      "tail_num_pid_n": 2,
-      "tail_ref_absmax": 42.29752731323242,
-      "zero_codes_restricted_to": "0..14 (avoids c3 confound)"
+      "group_size": 8,
+      "matches_contract_within_1e-3": false,
+      "matches_plus1_within_1e-3": true,
+      "max_abs_err_vs_contract_plus_predicted_offset": 4.76837158203125e-06,
+      "max_abs_err_vs_contract_ref": 1.8228340148925781,
+      "max_abs_err_vs_plus1_ref": 0.0,
+      "ref_contract_absmax": 20.603981018066406,
+      "rel_err_vs_contract_ref": 0.08846999098350185,
+      "shape": [
+        32,
+        32,
+        32
+      ],
+      "zeros_all_zero": true
     },
-    "event_id": "t11",
-    "status": "rebutted",
-    "summary": "N-dimension masking did not produce an observable failure at runtime. With K=128 (multiple of BLOCK_SIZE_K=16, so the confirmed c1 tail defect cannot confound) and zero codes restri
-  ...[truncated 857 chars]
+    "event_id": "t9",
+    "status": "confirmed",
+    "summary": "M=K=N=32, gs=8, bits=4, zeros tensor all-zero (so the packed-zeros indexing of c2 unpacks to 0 for every column and cannot confound). Kernel output does NOT match the problem.txt formula (q - zero)*scale: max_abs_err 1.8228 against ref_absmax 20.60 (8.8% relat
+  ...[truncated 283 chars]
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "confirmed",
+    "evidence_id": "c1.e1",
+    "summary": "M=K=N=32, gs=8, bits=4, zeros tensor all-zero (so the packed-zeros indexing of c2 unpacks to 0 for every column and cannot confound). Kernel output does NOT match the problem.txt formula (q - zero)*scale: max_abs_err 1.8228 against ref_absmax 20.60 (8.8% relative). It matches the +1-biased formula (q - (zero+1))*scale bit-exactly (max_abs_err 0.0), and equals contract_ref + predicted_offset (-(a@scale)) to 4.77e-06. This is exactly the systematic offset predicted by line 46 `zeros = zeros + 1`, not rounding.",
+    "supports": "confirmed",
+    "tool_event_id": "t9"
+  }
+- `finalize_probe_evidence -> t13 ok`
+  Args:
+  {
+    "data": {
+      "N": 32,
+      "bits": 4,
+      "group_size": 8,
+      "matches_kernel_packed_semantics_within_1e-3": true,
+      "max_abs_err_vs_contract_ref": 21.081695556640625,
+      "max_abs_err_vs_packed_zeros_kernel_semantics": 0.0,
+      "max_abs_err_vs_plus1_only_ref": 19.86272430419922,
+      "n_cols_with_err_gt_1e-3_vs_plus1_ref": 31,
+      "percol_err_vs_plus1_ref_n_mod8_eq0_max": 19.86272430419922,
+      "percol_err_vs_plus1_ref_n_mod8_ne0_min": 6.988404750823975,
+      "ref_contract_absmax": 13.41748046875,
+      "rel_err_vs_plus1_only_ref": 1.4803617080315878,
+      "shape": [
+        32,
+        32,
+        32
+      ],
+      "zeros_layout": "declared (num_groups, N) per-column, values 1..15"
+    },
+    "event_id": "t10",
+    "status": "confirmed",
+    "summary": "M=K=N=32, gs=8, bits=4, zeros random in [1,15] in 
+  ...[truncated 675 chars]
   Output summary:
   {
     "claim_id": "c2",
-    "claim_status": "rebutted",
+    "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "N-dimension masking did not produce an observable failure at runtime. With K=128 (multiple of BLOCK_SIZE_K=16, so the confirmed c1 tail defect cannot confound) and zero codes restricted to 0..14 (c3 cannot confound), the N=64 control matched the reference exactly (max_abs_err=0.0, ref_absmax=30.88) and the N=48 tail case ALSO matched exactly (max_abs_err=0.0, ref_absmax=42.30; per-tile split: cols 0..31 err=0.0, cols 32..47 err=0.0). num_pid_n=cdiv(48,32)=2, so the second column tile did issue unmasked b/scales/zeros loads for offs_bn in [32,64) while only 48 columns exist, yet no CUDA illegal memory access occurred and the masked store (line 57) discarded the garbage columns. The over-read stays inside CUDA allocator slack for these sizes, so the unmasked N loads are a latent UB/portability concern rather than a demonstrated wrong-output or fault in this configuration. Claim as stated (fault or wrong (M,N) result) is rebutted for N=48; note it was never established as in_scope (scope=unknown).",
-    "supports": "rebutted",
-    "tool_event_id": "t11"
+    "summary": "M=K=N=32, gs=8, bits=4, zeros random in [1,15] in the declared (num_groups, N) per-column layout. Kernel output matches an emulation of packed-along-N zeros access ((zeros[g, n//8] >> ((n%8)*4)) & 15) + 1 bit-exactly (max_abs_err 0.0), confirming the mechanism at lines 35/38/45. Against the contract reference it is off by 21.08 vs ref_absmax 13.42; against a reference with only the c1 +1 bug applied per-column it is off by 19.86 (rel 1.48), with 31 of 32 columns exceeding 1e-3 error. Per-column error is large for both n%8==0 and n%8!=0 columns because the kernel reads zeros[g, n//8] (a different element) for essentially every column beyond n=0, so this is not merely a boundary artifact.",
+    "supports": "confirmed",
+    "tool_event_id": "t10"
   }
-- `run_claim_probe -> t13 ok`
-  Args:
-  {
-    "claim_id": "c3",
-    "code": "\nimport subprocess, sys, json\n\nscript = r'''\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kmod\", \"/root/cases/case_03/kernel.py\")\nkmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(kmod)\n\ndef build(M, K, N, group_size, zcode_mode, seed):\n    g = torch.Generator().manual_seed(seed)\n    a = torch.randn(M, K, generator=g)\n    q = torch.randint(0, 16, (K, N), generator=g, dtype=torch.int32)\n    packed = torch.zeros(K // 8, N, dtype=torch.int32)\n    for j in range(8):\n        packed |= (q[j::8] << (4 * j))\n    ng = (K + group_size - 1) // group_size\n    g_idx = (torch.arange(K) // group_size).to(torch.int32)\n    if zcode_mode == \"all15\":\n        zcode = torch.full((ng, N), 15, dtype=
-  ...[truncated 3338 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t13_probe.py",
-        "sha256": "1ef36b673807090fc0ce14048e1a33f5ac448bdb33a2761425647a2e3231edd3"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t13_stdout.txt",
-        "sha256": "3ea80bc59f54cc5c9acc23e79ccba984599bab5125dc282ab9fd668523e7eaeb"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t13_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t13_json_result.json",
-        "sha256": "bb6d8758f8b2a2bc0683a608615c58ba35cf8747e05ed4c25e9c638179f1b7fd"
-      }
-    ],
-    "claim_id": "c3",
-    "claim_statement": "Line 46 computes `zeros = zeros + 1` without the `& maxq` wrap, so when a packed zero-point nibble equals maxq (15 for 4-bit) the kernel dequantizes with zero=16 instead of the wrapped value 0, giving dequant 
-  ...[truncated 8584 chars]
-
-### Turn 8 - `experimenter` (29.719597168000007s, in=52901 out=1587)
-
-Message:
-
-```text
-Consuming the c3 probe result: the kernel matches the unwrapped `zeros+1` semantics exactly and diverges sharply from the wrapped AutoGPTQ semantics whenever a zero code equals 15, so the behavioral deviation described in c3 is confirmed (its contractual scope remains unknown).
-```
-
-Tool calls:
-
 - `finalize_probe_evidence -> t14 ok`
   Args:
   {
     "data": {
-      "K": 128,
-      "M": 32,
-      "N": 64,
-      "all15_err_vs_unwrapped_zero_plus_1": 0.0,
-      "all15_err_vs_wrapped_zero_plus_1_and_maxq": 45.42070388793945,
-      "all15_num_codes_eq15": 128,
-      "all15_ref_unwrapped_absmax": 39.209590911865234,
-      "all15_ref_wrapped_absmax": 33.653717041015625,
-      "bits": 4,
-      "control_err_vs_raw_zero_no_plus1": 3.8623428344726562,
-      "control_err_vs_unwrapped_zero_plus_1": 0.0,
-      "control_err_vs_wrapped_zero_plus_1_and_maxq": 0.0,
-      "control_num_codes_eq15": 0,
-      "control_ref_absmax": 35.47075653076172,
-      "group_size": 64,
-      "kernel_semantics_identified": "zeros + 1 with no & maxq wrap (pre-wrap AutoGPTQ variant)",
-      "matches_problem_txt_literal_formula": false,
-      "mixed15_err_vs_unwrapped_zero_plus_1": 0.0,
-      "mixed15_err_
-  ...[truncated 1819 chars]
+      "K24_match_1e-3": false,
+      "K24_max_abs_err": 527.3579711914062,
+      "K24_ref_absmax": 13.854650497436523,
+      "K24_rel_err": 38.063606966410404,
+      "K32_match_1e-3": true,
+      "K32_max_abs_err": 0.0,
+      "K32_ref_absmax": 19.38603401184082,
+      "K40_match_1e-3": false,
+      "K40_max_abs_err": 382.7547912597656,
+      "K40_ref_absmax": 16.030807495117188,
+      "K40_rel_err": 23.876201581008857,
+      "all_returncodes": 0,
+      "block_size_k": 16,
+      "group_size": 8,
+      "nonfinite_out_any": false,
+      "reference_convention": "kernel's own (q-1)*scale with zeros=0, isolating K-masking from c1/c2"
+    },
+    "event_id": "t11",
+    "status": "confirmed",
+    "summary": "M=N=32, gs=8, bits=4, zeros all-zero and reference built with the kernel's own (q-1)*scale convention, so c1/c2 are n
+  ...[truncated 713 chars]
   Output summary:
   {
     "claim_id": "c3",
     "claim_status": "confirmed",
     "evidence_id": "c3.e1",
-    "summary": "Behavioral divergence in c3 confirmed at runtime with K=128/N=64 (so the confirmed c1 K-tail defect and the c2 N-tail case cannot confound). Control with no zero code == 15: kernel matched BOTH the unwrapped (zeros+1) and wrapped ((zeros+1)&15) references exactly (err 0.0 for both, since the two agree when no code is 15), and differed from the literal problem.txt 'zero, no +1' reference by 3.86 (ref_absmax 35.47) \u2014 i.e. the kernel definitively implements a +1 zero-point offset, not the literal problem.txt formula. With all zero codes == 15 (128/128 codes): kernel matched the unwrapped zeros+1 (=16) reference exactly (err 0.0) and differed from the upstream AutoGPTQ wrapped (zeros+1)&maxq (=0) reference by max_abs 45.42 against ref_wrapped_absmax 33.65 (>100% relative). Mixed case (44/128 codes == 15): err_vs_unwrapped 0.0, err_vs_wrapped 78.81 vs ref_wrapped_absmax 44.21. So line 46's missing `& maxq` is a real, large behavioral difference from upstream AutoGPTQ whenever a packed zero nibble is maxq, exactly as claimed. Which convention is contractually required is still not decided by
-  ...[truncated 414 chars]
+    "summary": "M=N=32, gs=8, bits=4, zeros all-zero and reference built with the kernel's own (q-1)*scale convention, so c1/c2 are neutralized and only K-masking can differ. Each K ran in its own subprocess. K=32 (multiple of BLOCK_SIZE_K=16): max_abs_err 0.0, exact match. K=24 (2 k-iters, 3 packed rows): max_abs_err 527.36 vs ref_absmax 13.85, rel_err 38.06. K=40 (3 k-iters, 5 packed rows): max_abs_err 382.75 vs ref_absmax 16.03, rel_err 23.88. Outputs remained finite and no process crashed (returncode 0 for all three), so the failure mode is garbage accumulation from unmasked out-of-range A/B/g_idx loads in the tail iteration rather than a hard fault. problem.txt explicitly requires correctness \"for any K -- including a K that is not an exact multiple of group_size\", so K=24/40 are contract-admitted.",
+    "supports": "confirmed",
+    "tool_event_id": "t11"
+  }
 
-### Turn 9 - `skeptic` (14.566951727000003s, in=65814 out=529)
+### Turn 6 - `skeptic` (16.68927456399996s, in=55041 out=652)
 
 Message:
 
 ```text
-This is the final review turn. c1 is confirmed and in_scope (K=72 tail causes a CUDA illegal memory access, with a clean K=128 control), c2 is rebutted for the tested N=48 case, and c3's behavioral divergence is confirmed though its contractual convention remains unknown. The evidence is coherent and the decisive in-scope defect is already covered; nothing new here warrants holding up the verdict.
+This is the final review turn. All three claims I raised (c1 zero-point +1 bias, c2 packed-zeros indexing along N, c3 missing K-mask) are now confirmed with isolated, mutually non-confounding probes that each matched the predicted wrong-behavior model bit-exactly. That is already more than enough for a decisive verdict; any further ideas (e.g. M/N not multiples of 32, GROUP_SIZE_M pid remapping, scales dtype in tl.dot) would be generalization notes that cannot change the outcome and are not supported by additional contract evidence beyond what c1–c3 already establish.
 ```
 
 Tool calls:
@@ -441,68 +463,52 @@ Tool calls:
 - `record_no_new_claims -> t15 ok`
   Args:
   {
-    "reason": "Final review: the round's probes are consistent and already cover the material defects. c1 (missing K-dimension masking) is confirmed in_scope with a controlled probe pair (K=128 exact match vs K=72 CUDA illegal memory access), which alone is decisive. c2 (unmasked N loads) was rebutted for N=48 and was never established in_scope; it remains at most a latent UB/portability note, and re-probing other N values would not change the verdict since c1 already dominates. c3 (missing `& maxq` on zeros+1) is confirmed as a behavioral divergence from the wrapped AutoGPTQ convention, but the intended zero-point convention is not pinned by problem.txt (which states plain `zero` with no +1), so its scope stays unknown and no sharper testable claim can be formed without a reference implem
-  ...[truncated 141 chars]
+    "reason": "Review turn: the three recorded claims are all confirmed by isolated runtime probes that reproduced the predicted incorrect semantics exactly (c1: kernel matches (q-(zero+1))*scale bit-exactly and contract_ref+predicted offset to 4.8e-6; c2: kernel matches packed-along-N zeros emulation bit-exactly with 31/32 columns wrong vs the declared per-column layout; c3: exact match at K=32 but rel_err 38.1 at K=24 and 23.9 at K=40 with c1/c2 neutralized). These three independently violate the stated dequant formula, the declared zeros layout, and the explicit \"any K\" requirement in problem.txt, so the verdict is already determined. Remaining curiosities (M/N not multiples of 32 causing unmasked B/scales/zeros reads, the GROUP_SIZE_M=1 pid remap, scales dtype coupling in tl.dot) are
+  ...[truncated 192 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the round's probes are consistent and already cover the material defects. c1 (missing K-dimension masking) is confirmed in_scope with a controlled probe pair (K=128 exact match vs K=72 CUDA illegal memory access), which alone is decisive. c2 (unmasked N loads) was rebutted for N=48 and was never established in_scope; it remains at most a latent UB/portability note, and re-probing other N values would not change the verdict since c1 already dominates. c3 (missing `& maxq` on zeros+1) is confirmed as a behavioral divergence from the wrapped AutoGPTQ convention, but the intended zero-point convention is not pinned by problem.txt (which states plain `zero` with no +1), so its scope stays unknown and no sharper testable claim can be formed without a reference implementation. No new in-scope, testable hypothesis is exposed by the latest evidence.",
+    "reason": "Review turn: the three recorded claims are all confirmed by isolated runtime probes that reproduced the predicted incorrect semantics exactly (c1: kernel matches (q-(zero+1))*scale bit-exactly and contract_ref+predicted offset to 4.8e-6; c2: kernel matches packed-along-N zeros emulation bit-exactly with 31/32 columns wrong vs the declared per-column layout; c3: exact match at K=32 but rel_err 38.1 at K=24 and 23.9 at K=40 with c1/c2 neutralized). These three independently violate the stated dequant formula, the declared zeros layout, and the explicit \"any K\" requirement in problem.txt, so the verdict is already determined. Remaining curiosities (M/N not multiples of 32 causing unmasked B/scales/zeros reads, the GROUP_SIZE_M=1 pid remap, scales dtype coupling in tl.dot) are generalization notes with no additional contract evidence and would not change the outcome; I am not holding up the Judge for them.",
     "reviewed_claims": [
       "c1",
       "c2",
       "c3"
     ],
     "reviewed_tool_event_count": 14,
-    "turn": 9
+    "turn": 6
   }
 
-### Turn 10 - `judge` (15.281027074000008s, in=66785 out=369)
+### Turn 7 - `judge` (28.174582680000015s, in=57951 out=1309)
 
 Message:
 
 ```text
-Reading problem.txt once to confirm the exact contract clause that c1's in-scope classification rests on.
+All three claims are confirmed, in scope, and backed by isolated runtime probes; the Skeptic has signed off with no new claims. Recording the final verdict.
 ```
 
 Tool calls:
 
-- `inspect_problem -> t16 ok`
+- `record_verdict -> t16 ok`
   Args:
   {
-    "entry": "case_03"
-  }
+    "confidence": 0.93,
+    "decisive_claims": [
+      "c1",
+      "c2",
+      "c3"
+    ],
+    "reason": "The artifact ships no test.py (artifact.test_code is empty), so problem.txt plus the host wrapper's own declared API surface is the operative contract, and each confirmed claim is tied to a behavior that contract explicitly requires.\n\nc1 (decisive): problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], with no bias term. Line 46 adds `zeros = zeros + 1`. Probe t9 neutralized the other two defects (zeros tensor all-zero, so any zeros-indexing bug unpacks to 0) and showed the kernel misses the contract formula by max_abs_err 1.823 against ref_absmax 20.60 (8.8% relative), while matching (q - (zero+1))*scale bit-exactly (err 0.0) and matching contract_ref + 
+  ...[truncated 1796 chars]
   Output summary:
   {
-    "entry": "case_03"
-  }
-
-### Turn 11 - `judge` (23.705478212000003s, in=65817 out=1252)
-
-Message:
-
-```text
-All claims have evidence, Skeptic reviewed the latest round and recorded no new claims, so I can finalize. The artifact has no test.py (test_code is empty), so problem.txt is the operative contract, and it explicitly requires correctness "for any K — including a K that is not an exact multiple of group_size." The confirmed c1 evidence shows a hard CUDA illegal memory access at K=72 with a clean K=128 control, which is a decisive in-scope failure.
-```
-
-Tool calls:
-
-- `record_verdict -> t17 ok`
-  Args:
-  {
-    "confidence": 0.9,
+    "confidence": 0.93,
     "decisive_claims": [
-      "c1"
+      "c1",
+      "c2",
+      "c3"
     ],
-    "reason": "Decisive defect is c1 (confirmed, in_scope): the k-loop (kernel.py:41-54) applies no K-dimension bounds mask to any of the g_idx, b_packed, or A loads, and num_pid_k = cdiv(K, BLOCK_SIZE_K=16) rounds up. Runtime evidence c1.e1 (tool event t9) is a controlled probe pair: K=128 (multiple of 16) reproduced C = A @ dequant(B) exactly (max_abs_err 0.0 vs ref_absmax 51.0), while K=72 \u2014 a legal 4-bit packing (9 int32 rows) with group_size=64 and a trailing partial group \u2014 raised a CUDA illegal memory access (cudaErrorIllegalAddress). Zero codes were restricted to 0..14 in that probe so the c3 zero-point question cannot confound it. Scope: this artifact provides no test.py or get_inputs (test_code is empty), so prob
-  ...[truncated 1228 chars]
-  Output summary:
-  {
-    "confidence": 0.9,
-    "decisive_claims": [
-      "c1"
-    ],
-    "reason": "Decisive defect is c1 (confirmed, in_scope): the k-loop (kernel.py:41-54) applies no K-dimension bounds mask to any of the g_idx, b_packed, or A loads, and num_pid_k = cdiv(K, BLOCK_SIZE_K=16) rounds up. Runtime evidence c1.e1 (tool event t9) is a controlled probe pair: K=128 (multiple of 16) reproduced C = A @ dequant(B) exactly (max_abs_err 0.0 vs ref_absmax 51.0), while K=72 \u2014 a legal 4-bit packing (9 int32 rows) with group_size=64 and a trailing partial group \u2014 raised a CUDA illegal memory access (cudaErrorIllegalAddress). Zero codes were restricted to 0..14 in that probe so the c3 zero-point question cannot confound it. Scope: this artifact provides no test.py or get_inputs (test_code is empty), so problem.txt is the operative contract, and it explicitly requires correct dequantized matmul \"for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.\" K=72 is exactly such a K and is admitted by the host wrapper signature (kernel.py:61-69). The reference is well-defined and finite for this input, so this is a genuine corre
-  ...[truncated 828 chars]
+    "reason": "The artifact ships no test.py (artifact.test_code is empty), so problem.txt plus the host wrapper's own declared API surface is the operative contract, and each confirmed claim is tied to a behavior that contract explicitly requires.\n\nc1 (decisive): problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], with no bias term. Line 46 adds `zeros = zeros + 1`. Probe t9 neutralized the other two defects (zeros tensor all-zero, so any zeros-indexing bug unpacks to 0) and showed the kernel misses the contract formula by max_abs_err 1.823 against ref_absmax 20.60 (8.8% relative), while matching (q - (zero+1))*scale bit-exactly (err 0.0) and matching contract_ref + the predicted -(a@scale) offset to 4.8e-6. This is a systematic formula violation, not a reduction-order or rounding artifact, so the \"declared numeric deviation\" exemptions do not apply.\n\nc2 (decisive): the wrapper docstring declares scales/zeros both as (num_groups, N) and problem.txt indexes zero[g_idx[k],n] per column, but lines 35/38/45 read zeros as bit-packed along N. Probe t10 fed zero
+  ...[truncated 1396 chars]
 
 ## Description Model
 
@@ -512,46 +518,55 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: When K is not a multiple of BLOCK_SIZE_K=16 (e.g. K=72 with 4-bit packing, group_size=64, so b_packed has 9 int32 rows and the trailing group is partial), the loop runs num_pid_k=cdiv(72,16)=5 iterations and the final iteration loads g_idx, b, scales, zeros and a for k in [72,80) with no K mask (lines 42-48 have no K bounds check). This reads past g_idx/b_packed and past each A row, so garbage (or out-of-range g_idx feeding an arbitrary scales/zeros row) is multiplied and accumulated into C, producing wrong output (or an illegal memory access) versus the reference C = A @ dequant(B).
+Statement: Zero-point off-by-one: line 46 computes `zeros = zeros + 1`, so the kernel evaluates (q - (zero+1))*scale instead of the contractually stated (unpacked_q[k,n] - zero[g_idx[k],n])*scale[g_idx[k],n]. For any input where some scale is nonzero and A has nonzero entries (e.g. M=32,K=32,N=32, bits=4, random q/scales/zeros), the output differs from the reference by exactly -sum_k a[m,k]*scale[g_idx[k],n], i.e. a systematic non-negligible error, not rounding.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt states the contract must hold "for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own." K=72 with group_size=64 is exactly such a K, is a legal packing size for 4-bit (K/8 = 9 int32 rows per the wrapper docstring), and is admitted by the host signature. No test.py exists, so problem.txt is authoritative and I choose this representative K it explicitly admits.
+Scope rationale: The contract states a required numeric formula for dequant(B); a claim that the kernel violates that formula is in-scope even without test.py. Representative inputs (M,K,N multiples of 32/16, bits=4) are exactly what the wrapper docstring admits.
 
 Scope evidence:
-- `problem.txt`: Contract explicitly requires correct per-column group dequantization 'for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.'
-- `kernel.py:62-63 (docstring) and :68-69`: Host contract accepts a (M,K) with b_packed (K//(32//bits), N); BLOCK_SIZE_K is hardcoded to 16 and num_pid_k = cdiv(K,16), so any K in the admitted domain that is not a multiple of 16 triggers an unmasked tail iteration.
+- `problem.txt`: States 'The kernel computes C = A @ dequant(B), with dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' — no +1 bias on the zero-point.
+- `kernel.py:44-50`: Kernel loads zeros, unpacks, then does `zeros = zeros + 1` before `b = (b - zeros) * scales`.
 
-Rationale: Every load inside the k-loop is unmasked in the K dimension; only offs_am < M is masked. num_pid_k = cdiv(K, BLOCK_SIZE_K) rounds up, so a K that is a multiple of the packing factor 8 but not of 16 forces a full extra tile of out-of-range reads whose products are added to the accumulator. An out-of-range g_idx value also indexes scales/zeros arbitrarily.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: K-dimension masking failure confirmed at runtime. Control K=128 (multiple of BLOCK_SIZE_K=16, num_pid_k=8) reproduced the reference C = A @ dequant(B) exactly (max_abs_err=0.0 against ref_absmax=51.0). The tail case K=72 (legal 4-bit packing, 9 int32 rows, group_size=64 with a trailing partial group, num_pid_k=cdiv(72,16)=5) raised CUDA error: an illegal memory access was encountered. The 5th loop iteration loads g_idx/b/a for k in [72,80) with no K bounds mask (kernel.py:42-48), and the out-of-range g_idx then indexes scales/zeros at an arbitrary row, producing the fault. Zero codes were restricted to 0..14 so the c3 (zeros+1 wrap) question cannot confound this result.
-
-### c2 - `rebutted`
-
-Statement: When N is not a multiple of BLOCK_SIZE_N=32 (e.g. N=48), the loads of b (line 48), scales (line 43) and zeros (line 44) are unmasked in the N dimension while only the C store is masked, so the last column tile dereferences addresses past the end of b_packed/scales/zeros; this can raise a CUDA illegal memory access (or, for the qzeros word index offs_bn//8, read out-of-range packed data) rather than returning the correct (M,N) result.
-
-Scope: `unknown`
-
-Scope rationale: problem.txt constrains the operator and explicitly generalizes over K, but says nothing about N divisibility, and there is no test.py/get_inputs pinning N. The host wrapper accepts arbitrary N, so the case is admitted by the signature, but I cannot show the benchmark domain requires a non-multiple-of-32 N; marking unknown rather than in_scope.
-
-Rationale: Lines 32-35 build b/scales/zeros pointers from offs_bn with no offs_bn < N guard, and line 48/43/44 load them without a mask; only line 57 masks the store. Reading beyond the final row of a contiguous tensor has no guaranteed valid backing memory.
+Rationale: problem.txt gives the dequant formula with no +1 term; upstream AutoGPTQ adds 1 because its qzeros are stored biased, but this artifact's contract declares plain zeros. A probe that builds the reference straight from the stated formula should show a constant offset proportional to scale.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t11: N-dimension masking did not produce an observable failure at runtime. With K=128 (multiple of BLOCK_SIZE_K=16, so the confirmed c1 tail defect cannot confound) and zero codes restricted to 0..14 (c3 cannot confound), the N=64 control matched the reference exactly (max_abs_err=0.0, ref_absmax=30.88) and the N=48 tail case ALSO matched exactly (max_abs_err=0.0, ref_absmax=42.30; per-tile split: cols 0..31 err=0.0, cols 32..47 err=0.0). num_pid_n=cdiv(48,32)=2, so the second column tile did issue unmasked b/scales/zeros loads for offs_bn in [32,64) while only 48 columns exist, yet no CUDA illegal memory access occurred and the masked store (line 57) discarded the garbage columns. The over-read stays inside CUDA allocator slack for these sizes, so the unmasked N loads are a latent UB/portability concern rather than a demonstrated wrong-output or fault in this configuration. Claim as stated (fault or wrong (M,N) result) is rebutted for N=48; note it was never established as in_scope (scope=unknown).
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: M=K=N=32, gs=8, bits=4, zeros tensor all-zero (so the packed-zeros indexing of c2 unpacks to 0 for every column and cannot confound). Kernel output does NOT match the problem.txt formula (q - zero)*scale: max_abs_err 1.8228 against ref_absmax 20.60 (8.8% relative). It matches the +1-biased formula (q - (zero+1))*scale bit-exactly (max_abs_err 0.0), and equals contract_ref + predicted_offset (-(a@scale)) to 4.77e-06. This is exactly the systematic offset predicted by line 46 `zeros = zeros + 1`, not rounding.
+
+### c2 - `confirmed`
+
+Statement: Zeros indexing treats zeros as bit-packed along N although the declared layout is one int32 zero per (group, column): line 35 uses `zeros_ptr + (offs_bn // infearure_per_bits)` and line 45 shifts by `(offs_bn % 8)*4` and masks with maxq. Consequently for any column n with n % 8 != 0 the kernel uses a shifted/masked value of a different tensor element (zeros[g, n//8]) rather than zeros[g, n]. With N >= 2 and zeros entries in [0, maxq], columns 1..7 get a wrong (typically 0-derived) zero-point, producing large per-column output errors.
+
+Scope: `in_scope`
+
+Scope rationale: problem.txt defines zero as zero[g_idx[k],n] — a per-column value — and the host wrapper (the artifact's own API surface) declares zeros as (num_groups, N). Any admissible call with N>1 exercises this.
+
+Scope evidence:
+- `problem.txt`: Dequant uses zero[g_idx[k],n], one zero-point per (group, column).
+- `kernel.py:62-63 docstring`: 'scales/zeros: (num_groups, N)' — zeros declared same unpacked layout as scales.
+- `kernel.py:35,38,45`: zeros pointer divided by 8 along N and value shifted by (n%8)*4 then masked — packed-layout access.
+
+Rationale: The wrapper docstring declares scales/zeros both as (num_groups, N) and scales are indexed unpacked (line 34), so the asymmetric packed indexing of zeros contradicts the declared and problem-stated per-column zero table.
+
+Evidence:
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: M=K=N=32, gs=8, bits=4, zeros random in [1,15] in the declared (num_groups, N) per-column layout. Kernel output matches an emulation of packed-along-N zeros access ((zeros[g, n//8] >> ((n%8)*4)) & 15) + 1 bit-exactly (max_abs_err 0.0), confirming the mechanism at lines 35/38/45. Against the contract reference it is off by 21.08 vs ref_absmax 13.42; against a reference with only the c1 +1 bug applied per-column it is off by 19.86 (rel 1.48), with 31 of 32 columns exceeding 1e-3 error. Per-column error is large for both n%8==0 and n%8!=0 columns because the kernel reads zeros[g, n//8] (a different element) for essentially every column beyond n=0, so this is not merely a boundary artifact.
 
 ### c3 - `confirmed`
 
-Statement: Line 46 computes `zeros = zeros + 1` without the `& maxq` wrap, so when a packed zero-point nibble equals maxq (15 for 4-bit) the kernel dequantizes with zero=16 instead of the wrapped value 0, giving dequant values that differ from the reference by exactly 16*scale for every k in that group and column.
+Statement: No K-dimension masking: offs_k = arange(0, BLOCK_SIZE_K=16) is never compared against K, and the loop runs cdiv(K,16) iterations. When K is not a multiple of 16 (e.g. K=24 with group_size 8, or K=40), the final iteration loads A, packed B, and g_idx past the valid K range without a mask, adding out-of-range products into the accumulator and/or reading out of bounds (g_ptrs and b_ptrs beyond their allocations), so C is wrong for such K even though the contract requires arbitrary K.
 
-Scope: `unknown`
+Scope: `in_scope`
 
-Scope rationale: problem.txt's stated formula is (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no stated +1 or wrap convention, so which of {zero, zero+1, (zero+1)&maxq} is contractually required is ambiguous without the reference implementation; scope is unknown until the intended zero-point convention is clarified.
+Scope rationale: The contract explicitly names arbitrary K (including trailing partial groups) as a required behavior, so K=24 or K=40 with bits=4 are contract-admitted representative inputs.
 
-Rationale: Current AutoGPTQ applies `zeros = (zeros + 1) & maxq`; this port drops the mask. Randomly generated qzeros will contain the code 15 with probability ~1/16 per (group, column), so a benign random probe will hit the case, but only if the reference used for comparison implements the wrapping semantics.
+Scope evidence:
+- `problem.txt`: 'every column must be dequantized ... for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.'
+- `kernel.py:29-33,41-54`: offs_k has no `< K` mask; loads of a (mask only on M), b, and g_idx are unmasked across cdiv(K,16) iterations.
+
+Rationale: problem.txt explicitly stresses correctness 'for any K -- including a K that is not an exact multiple of group_size'; the kernel only masks M (a_mask) and M/N at the store, never K.
 
 Evidence:
-- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t13: Behavioral divergence in c3 confirmed at runtime with K=128/N=64 (so the confirmed c1 K-tail defect and the c2 N-tail case cannot confound). Control with no zero code == 15: kernel matched BOTH the unwrapped (zeros+1) and wrapped ((zeros+1)&15) references exactly (err 0.0 for both, since the two agree when no code is 15), and differed from the literal problem.txt 'zero, no +1' reference by 3.86 (ref_absmax 35.47) — i.e. the kernel definitively implements a +1 zero-point offset, not the literal problem.txt formula. With all zero codes == 15 (128/128 codes): kernel matched the unwrapped zeros+1 (=16) reference exactly (err 0.0) and differed from the upstream AutoGPTQ wrapped (zeros+1)&maxq (=0) reference by max_abs 45.42 against ref_wrapped_absmax 33.65 (>100% relative). Mixed case (44/128 codes == 15): err_vs_unwrapped 0.0, err_vs_wrapped 78.81 vs ref_wrapped_absmax 44.21. So line 46's missing `& maxq` is a real, large behavioral difference from upstream AutoGPTQ whenever a packed zero nibble is maxq, exactly as claimed. Which convention is contractually required is still not decided by this probe: problem.txt states plain `zero` with no +1 at all, so the kernel deviates from the literal spec formula in every configuration (including zero-code-free ones), while it exactly reproduces the pre-wrap AutoGPTQ variant. Scope for c3 remains 'unknown' — no test.py or reference implementation exists to fix the intended zero-point convention.
+- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t11: M=N=32, gs=8, bits=4, zeros all-zero and reference built with the kernel's own (q-1)*scale convention, so c1/c2 are neutralized and only K-masking can differ. Each K ran in its own subprocess. K=32 (multiple of BLOCK_SIZE_K=16): max_abs_err 0.0, exact match. K=24 (2 k-iters, 3 packed rows): max_abs_err 527.36 vs ref_absmax 13.85, rel_err 38.06. K=40 (3 k-iters, 5 packed rows): max_abs_err 382.75 vs ref_absmax 16.03, rel_err 23.88. Outputs remained finite and no process crashed (returncode 0 for all three), so the failure mode is garbage accumulation from unmasked out-of-range A/B/g_idx loads in the tail iteration rather than a hard fault. problem.txt explicitly requires correctness "for any K -- including a K that is not an exact multiple of group_size", so K=24/40 are contract-admitted.
 
 ## Tool Events
 
@@ -590,31 +605,45 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "Every load inside the k-loop is unmasked in the K dimension; only offs_am < M is masked. num_pid_k = cdiv(K, BLOCK_SIZE_K) rounds up, so a K that is a multiple of the packing factor 8 but not of 16 forces a full extra tile of out-of-range reads whose products are added to the accumulator. An out-of-range g_idx value also indexes scales/zeros arbitrarily.",
+  "rationale": "problem.txt gives the dequant formula with no +1 term; upstream AutoGPTQ adds 1 because its qzeros are stored biased, but this artifact's contract declares plain zeros. A probe that builds the reference straight from the stated formula should show a constant offset proportional to scale.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract explicitly requires correct per-column group dequantization 'for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.'"
+      "summary": "States 'The kernel computes C = A @ dequant(B), with dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 bias on the zero-point."
     },
     {
-      "source": "kernel.py:62-63 (docstring) and :68-69",
-      "summary": "Host contract accepts a (M,K) with b_packed (K//(32//bits), N); BLOCK_SIZE_K is hardcoded to 16 and num_pid_k = cdiv(K,16), so any K in the admitted domain that is not a multiple of 16 triggers an unmasked tail iteration."
+      "source": "kernel.py:44-50",
+      "summary": "Kernel loads zeros, unpacks, then does `zeros = zeros + 1` before `b = (b - zeros) * scales`."
     }
   ],
-  "scope_rationale": "problem.txt states the contract must hold \"for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.\" K=72 with group_size=64 is exactly such a K, is a legal packing size for 4-bit (K/8 = 9 int32 rows per the wrapper docstring), and is admitted by the host signature. No test.py exists, so problem.txt is authoritative and I choose this representative K it explicitly admits.",
-  "statement": "When K is not a multiple of BLOCK_SIZE_K=16 (e.g. K=72 with 4-bit packing, group_size=64, so b_packed has 9 int32 rows and the trailing group is partial), the loop runs num_pid_k=cdiv(72,16)=5 iterations and the final iteration loads g_idx, b, scales, zeros and a for k in [72,80) with no K mask (lines 42-48 have no K bounds check). This reads past g_idx/b_packed and past each A row, so garbage (or out-of-range g_idx feeding an arbitrary scales/zeros row) is multiplied and accumulat
-...[truncated 127 chars]
+  "scope_rationale": "The contract states a required numeric formula for dequant(B); a claim that the kernel violates that formula is in-scope even without test.py. Representative inputs (M,K,N multiples of 32/16, bits=4) are exactly what the wrapper docstring admits.",
+  "statement": "Zero-point off-by-one: line 46 computes `zeros = zeros + 1`, so the kernel evaluates (q - (zero+1))*scale instead of the contractually stated (unpacked_q[k,n] - zero[g_idx[k],n])*scale[g_idx[k],n]. For any input where some scale is nonzero and A has nonzero entries (e.g. M=32,K=32,N=32, bits=4, random q/scales/zeros), the output differs from the reference by exactly -sum_k a[m,k]*scale[g_idx[k],n], i.e. a systematic non-negligible error, not rounding.",
+  "status": "open"
+}
 
 ### t7 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "Lines 32-35 build b/scales/zeros pointers from offs_bn with no offs_bn < N guard, and line 48/43/44 load them without a mask; only line 57 masks the store. Reading beyond the final row of a contiguous tensor has no guaranteed valid backing memory.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "problem.txt constrains the operator and explicitly generalizes over K, but says nothing about N divisibility, and there is no test.py/get_inputs pinning N. The host wrapper accepts arbitrary N, so the case is admitted by the signature, but I cannot show the benchmark domain requires a non-multiple-of-32 N; marking unknown rather than in_scope.",
-  "statement": "When N is not a multiple of BLOCK_SIZE_N=32 (e.g. N=48), the loads of b (line 48), scales (line 43) and zeros (line 44) are unmasked in the N dimension while only the C store is masked, so the last column tile dereferences addresses past the end of b_packed/scales/zeros; this can raise a CUDA illegal memory access (or, for the qzeros word index offs_bn//8, read out-of-range packed data) rather than returning the correct (M,N) result.",
+  "rationale": "The wrapper docstring declares scales/zeros both as (num_groups, N) and scales are indexed unpacked (line 34), so the asymmetric packed indexing of zeros contradicts the declared and problem-stated per-column zero table.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "Dequant uses zero[g_idx[k],n], one zero-point per (group, column)."
+    },
+    {
+      "source": "kernel.py:62-63 docstring",
+      "summary": "'scales/zeros: (num_groups, N)' \u2014 zeros declared same unpacked layout as scales."
+    },
+    {
+      "source": "kernel.py:35,38,45",
+      "summary": "zeros pointer divided by 8 along N and value shifted by (n%8)*4 then masked \u2014 packed-layout access."
+    }
+  ],
+  "scope_rationale": "problem.txt defines zero as zero[g_idx[k],n] \u2014 a per-column value \u2014 and the host wrapper (the artifact's own API surface) declares zeros as (num_groups, N). Any admissible call with N>1 exercises this.",
+  "statement": "Zeros indexing treats zeros as bit-packed along N although the declared layout is one int32 zero per (group, column): line 35 uses `zeros_ptr + (offs_bn // infearure_per_bits)` and line 45 shifts by `(offs_bn % 8)*4` and masks with maxq. Consequently for any column n with n % 8 != 0 the kernel uses a shifted/masked value of a different tensor element (zeros[g, n//8]) rather than zeros[g, n]. With N >= 2 and zeros entries in [0, maxq], columns 1..7 get a wrong (typically 0-derived) zero-point, producing large per-column output errors.",
   "status": "open"
 }
 
@@ -622,11 +651,20 @@ Evidence:
 
 {
   "id": "c3",
-  "rationale": "Current AutoGPTQ applies `zeros = (zeros + 1) & maxq`; this port drops the mask. Randomly generated qzeros will contain the code 15 with probability ~1/16 per (group, column), so a benign random probe will hit the case, but only if the reference used for comparison implements the wrapping semantics.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "problem.txt's stated formula is (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no stated +1 or wrap convention, so which of {zero, zero+1, (zero+1)&maxq} is contractually required is ambiguous without the reference implementation; scope is unknown until the intended zero-point convention is clarified.",
-  "statement": "Line 46 computes `zeros = zeros + 1` without the `& maxq` wrap, so when a packed zero-point nibble equals maxq (15 for 4-bit) the kernel dequantizes with zero=16 instead of the wrapped value 0, giving dequant values that differ from the reference by exactly 16*scale for every k in that group and column.",
+  "rationale": "problem.txt explicitly stresses correctness 'for any K -- including a K that is not an exact multiple of group_size'; the kernel only masks M (a_mask) and M/N at the store, never K.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "'every column must be dequantized ... for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.'"
+    },
+    {
+      "source": "kernel.py:29-33,41-54",
+      "summary": "offs_k has no `< K` mask; loads of a (mask only on M), b, and g_idx are unmasked across cdiv(K,16) iterations."
+    }
+  ],
+  "scope_rationale": "The contract explicitly names arbitrary K (including trailing partial groups) as a required behavior, so K=24 or K=40 with bits=4 are contract-admitted representative inputs.",
+  "statement": "No K-dimension masking: offs_k = arange(0, BLOCK_SIZE_K=16) is never compared against K, and the loop runs cdiv(K,16) iterations. When K is not a multiple of 16 (e.g. K=24 with group_size 8, or K=40), the final iteration loads A, packed B, and g_idx past the valid K range without a mask, adding out-of-range products into the accumulator and/or reading out of bounds (g_ptrs and b_ptrs beyond their allocations), so C is wrong for such K even though the contract requires arbitrary K.",
   "status": "open"
 }
 
@@ -638,13 +676,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "354b05ea61d407405f12179706f7d81c6bb9a2dbd33d48dab82c62919b0e5f6b"
+      "sha256": "6fbc637b5a1c40b96c324b7a058b89dd1ad22af5d995317e88d212b1cbb11a44"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "13e5717930d809447ba303fcda358af77655d4b2d7fe65428c7959670de701c4"
+      "sha256": "9b8ec7719eba582f03f3802fa5d2cf1b5efc8da2ca10aea74e9047dcf2394a2e"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -656,12 +694,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t9_json_result.json",
-      "sha256": "7db9478ca0871bec4189b12b3efbf5af49bb7e3785942d0af312056f5c96c137"
+      "sha256": "0a3ce3d6e786e954afed95bbe34aaaec8941e86a4dbcefffeca96548e952ab57"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "When K is not a multiple of BLOCK_SIZE_K=16 (e.g. K=72 with 4-bit packing, group_size=64, so b_packed has 9 int32 rows and the trailing group is partial), the loop runs num_pid_k=cdiv(72,16)=5 iterations and the final iteration loads g_idx, b, scales, zeros and a for k in [72,80) with no K mask (lines 42-48 have no K bounds check). This reads past g_idx/b_packed and past each A row, so garbage (or out-of-range g_idx feeding an arbitrary scales/zeros row) is multiplied and accumulated into C, producing wrong output (or an illegal memory access) versus the reference C = A @ dequant(B).",
-  "duration_s": 7.259816,
+  "claim_statement": "Zero-point off-by-one: line 46 computes `zeros = zeros + 1`, so the kernel evaluates (q - (zero+1))*scale instead of the contractually stated (unpacked_q[k,n] - zero[g_idx[k],n])*scale[g_idx[k],n]. For any input where some scale is nonzero and A has nonzero entries (e.g. M=32,K=32,N=32, bits=4, random q/scales/zeros), the output differs from the reference by exactly -sum_k a[m,k]*scale[g_idx[k],n], i.e. a systematic non-negligible error, not rounding.",
+  "duration_s": 8.601306,
   "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c1",
@@ -671,22 +709,62 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t9_probe.py",
-          "sha256": "354b05ea61d407405f12179706f7d81c6bb9a2dbd33d48dab82c62919b0e5f6b"
+          "sha256": "6fbc637b5a1c40b96c324b7a058b89dd1ad22af5d995317e88d212b1cbb11a44"
         },
         {
-          "description": "Captur
-...[truncated 5671 chars]
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t9_stdout.txt",
+          "sha256": "9b8ec771
+...[truncated 3343 chars]
 
-### t10 - finalize_probe_evidence - ok
+### t10 - run_claim_probe - ok
 
 {
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "K-dimension masking failure confirmed at runtime. Control K=128 (multiple of BLOCK_SIZE_K=16, num_pid_k=8) reproduced the reference C = A @ dequant(B) exactly (max_abs_err=0.0 against ref_absmax=51.0). The tail case K=72 (legal 4-bit packing, 9 int32 rows, group_size=64 with a trailing partial group, num_pid_k=cdiv(72,16)=5) raised CUDA error: an illegal memory access was encountered. The 5th loop iteration loads g_idx/b/a for k in [72,80) with no K bounds mask (kernel.py:42-48), and the out-of-range g_idx then indexes scales/zeros at an arbitrary row, producing the fault. Zero codes were restricted to 0..14 so the c3 (zeros+1 wrap) question cannot confound this result.",
-  "supports": "confirmed",
-  "tool_event_id": "t9"
-}
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t10_probe.py",
+      "sha256": "f655fe41cf3de6f37e2949b21b68d040deaa534b4982d47b1b4350d9fd57f2b8"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t10_stdout.txt",
+      "sha256": "5efb03de003ec3e04de4fbb490b9dccae9b2099118307abf553bd0262e03636f"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t10_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t10_json_result.json",
+      "sha256": "529db348976fa63f0b9ae3e5b6be050a287c66030bc61da79d4370d6b5a7d62d"
+    }
+  ],
+  "claim_id": "c2",
+  "claim_statement": "Zeros indexing treats zeros as bit-packed along N although the declared layout is one int32 zero per (group, column): line 35 uses `zeros_ptr + (offs_bn // infearure_per_bits)` and line 45 shifts by `(offs_bn % 8)*4` and masks with maxq. Consequently for any column n with n % 8 != 0 the kernel uses a shifted/masked value of a different tensor element (zeros[g, n//8]) rather than zeros[g, n]. With N >= 2 and zeros entries in [0, maxq], columns 1..7 get a wrong (typically 0-derived) zero-point, producing large per-column output errors.",
+  "duration_s": 5.846082,
+  "event_id": "t10",
+  "evidence_draft": {
+    "claim_id": "c2",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t10_probe.py",
+          "sha256": "f655fe41cf3de6f37e2949b21b68d040deaa534b4982d47b1b4350d9fd57f2b8"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+         
+...[truncated 4082 chars]
 
 ### t11 - run_claim_probe - ok
 
@@ -696,13 +774,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t11_probe.py",
-      "sha256": "6eded9fa70b0d919d384bf14aad2fda1de464809dc80a9405b85497ed926d074"
+      "sha256": "366a223bf7a23f28013647c924e157878bc341801ead350c1cfdfae508a49b49"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t11_stdout.txt",
-      "sha256": "4e011e596a80066804e496e263d9a29c552af85322cbd8b5410173f6f9eacd72"
+      "sha256": "689764c49a4cec3b8731ef2857b1ccfe85d9c32c690653d310ee14f2ec78dd44"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -714,74 +792,13 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t11_json_result.json",
-      "sha256": "f86b0329a86b774272a853cc57480293393f11d191715dbc3bff3c9331ff1ed6"
-    }
-  ],
-  "claim_id": "c2",
-  "claim_statement": "When N is not a multiple of BLOCK_SIZE_N=32 (e.g. N=48), the loads of b (line 48), scales (line 43) and zeros (line 44) are unmasked in the N dimension while only the C store is masked, so the last column tile dereferences addresses past the end of b_packed/scales/zeros; this can raise a CUDA illegal memory access (or, for the qzeros word index offs_bn//8, read out-of-range packed data) rather than returning the correct (M,N) result.",
-  "duration_s": 4.792377,
-  "event_id": "t11",
-  "evidence_draft": {
-    "claim_id": "c2",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t11_probe.py",
-          "sha256": "6eded9fa70b0d919d384bf14aad2fda1de464809dc80a9405b85497ed926d074"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t11_stdout.txt",
-          "sha256": "4e011e596a80066804e
-...[truncated 4718 chars]
-
-### t12 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
-  "claim_status": "rebutted",
-  "evidence_id": "c2.e1",
-  "summary": "N-dimension masking did not produce an observable failure at runtime. With K=128 (multiple of BLOCK_SIZE_K=16, so the confirmed c1 tail defect cannot confound) and zero codes restricted to 0..14 (c3 cannot confound), the N=64 control matched the reference exactly (max_abs_err=0.0, ref_absmax=30.88) and the N=48 tail case ALSO matched exactly (max_abs_err=0.0, ref_absmax=42.30; per-tile split: cols 0..31 err=0.0, cols 32..47 err=0.0). num_pid_n=cdiv(48,32)=2, so the second column tile did issue unmasked b/scales/zeros loads for offs_bn in [32,64) while only 48 columns exist, yet no CUDA illegal memory access occurred and the masked store (line 57) discarded the garbage columns. The over-read stays inside CUDA allocator slack for these sizes, so the unmasked N loads are a latent UB/portability concern rather than a demonstrated wrong-output or fault in this configuration. Claim as stated (fault or wrong (M,N) result) is rebutted for N=48; note it was never established as in_scope (scope=unknown).",
-  "supports": "rebutted",
-  "tool_event_id": "t11"
-}
-
-### t13 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t13_probe.py",
-      "sha256": "1ef36b673807090fc0ce14048e1a33f5ac448bdb33a2761425647a2e3231edd3"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t13_stdout.txt",
-      "sha256": "3ea80bc59f54cc5c9acc23e79ccba984599bab5125dc282ab9fd668523e7eaeb"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t13_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t13_json_result.json",
-      "sha256": "bb6d8758f8b2a2bc0683a608615c58ba35cf8747e05ed4c25e9c638179f1b7fd"
+      "sha256": "bd14773e749af4c37f4d14499a5e42944b7de441f866350104303d72d67a6c3c"
     }
   ],
   "claim_id": "c3",
-  "claim_statement": "Line 46 computes `zeros = zeros + 1` without the `& maxq` wrap, so when a packed zero-point nibble equals maxq (15 for 4-bit) the kernel dequantizes with zero=16 instead of the wrapped value 0, giving dequant values that differ from the reference by exactly 16*scale for every k in that group and column.",
-  "duration_s": 5.234087,
-  "event_id": "t13",
+  "claim_statement": "No K-dimension masking: offs_k = arange(0, BLOCK_SIZE_K=16) is never compared against K, and the loop runs cdiv(K,16) iterations. When K is not a multiple of 16 (e.g. K=24 with group_size 8, or K=40), the final iteration loads A, packed B, and g_idx past the valid K range without a mask, adding out-of-range products into the accumulator and/or reading out of bounds (g_ptrs and b_ptrs beyond their allocations), so C is wrong for such K even though the contract requires arbitrary K.",
+  "duration_s": 17.523041,
+  "event_id": "t11",
   "evidence_draft": {
     "claim_id": "c3",
     "data": {
@@ -789,18 +806,36 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t13_probe.py",
-          "sha256": "1ef36b673807090fc0ce14048e1a33f5ac448bdb33a2761425647a2e3231edd3"
+          "path": "probes/t11_probe.py",
+          "sha256": "366a223bf7a23f28013647c924e157878bc341801ead350c1cfdfae508a49b49"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t13_stdout.txt",
-          "sha256": "3ea80bc59f54cc5c9acc23e79ccba984599bab5125dc282ab9fd668523e7eaeb"
-        },
-        {
-          "description": "Captured stderr from the probe process.
-...[truncated 7784 chars]
+          "path": "probes/t11_stdo
+...[truncated 5756 chars]
+
+### t12 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "M=K=N=32, gs=8, bits=4, zeros tensor all-zero (so the packed-zeros indexing of c2 unpacks to 0 for every column and cannot confound). Kernel output does NOT match the problem.txt formula (q - zero)*scale: max_abs_err 1.8228 against ref_absmax 20.60 (8.8% relative). It matches the +1-biased formula (q - (zero+1))*scale bit-exactly (max_abs_err 0.0), and equals contract_ref + predicted_offset (-(a@scale)) to 4.77e-06. This is exactly the systematic offset predicted by line 46 `zeros = zeros + 1`, not rounding.",
+  "supports": "confirmed",
+  "tool_event_id": "t9"
+}
+
+### t13 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c2",
+  "claim_status": "confirmed",
+  "evidence_id": "c2.e1",
+  "summary": "M=K=N=32, gs=8, bits=4, zeros random in [1,15] in the declared (num_groups, N) per-column layout. Kernel output matches an emulation of packed-along-N zeros access ((zeros[g, n//8] >> ((n%8)*4)) & 15) + 1 bit-exactly (max_abs_err 0.0), confirming the mechanism at lines 35/38/45. Against the contract reference it is off by 21.08 vs ref_absmax 13.42; against a reference with only the c1 +1 bug applied per-column it is off by 19.86 (rel 1.48), with 31 of 32 columns exceeding 1e-3 error. Per-column error is large for both n%8==0 and n%8!=0 columns because the kernel reads zeros[g, n//8] (a different element) for essentially every column beyond n=0, so this is not merely a boundary artifact.",
+  "supports": "confirmed",
+  "tool_event_id": "t10"
+}
 
 ### t14 - finalize_probe_evidence - ok
 
@@ -808,48 +843,46 @@ Evidence:
   "claim_id": "c3",
   "claim_status": "confirmed",
   "evidence_id": "c3.e1",
-  "summary": "Behavioral divergence in c3 confirmed at runtime with K=128/N=64 (so the confirmed c1 K-tail defect and the c2 N-tail case cannot confound). Control with no zero code == 15: kernel matched BOTH the unwrapped (zeros+1) and wrapped ((zeros+1)&15) references exactly (err 0.0 for both, since the two agree when no code is 15), and differed from the literal problem.txt 'zero, no +1' reference by 3.86 (ref_absmax 35.47) \u2014 i.e. the kernel definitively implements a +1 zero-point offset, not the literal problem.txt formula. With all zero codes == 15 (128/128 codes): kernel matched the unwrapped zeros+1 (=16) reference exactly (err 0.0) and differed from the upstream AutoGPTQ wrapped (zeros+1)&maxq (=0) reference by max_abs 45.42 against ref_wrapped_absmax 33.65 (>100% relative). Mixed case (44/128 codes == 15): err_vs_unwrapped 0.0, err_vs_wrapped 78.81 vs ref_wrapped_absmax 44.21. So line 46's missing `& maxq` is a real, large behavioral difference from upstream AutoGPTQ whenever a packed zero nibble is maxq, exactly as claimed. Which convention is contractually required is still not decided by this probe: problem.txt states plain `zero` with no +1 at all, so the kernel deviates from the literal spec formula in every configuration (including zero-code-free ones), while it exactly reproduces the pre-wrap AutoGPTQ variant. Scope for c3 remains 'unknown' \u2014 no test.py or reference implementation exists to fix the intended zero-point convention.",
+  "summary": "M=N=32, gs=8, bits=4, zeros all-zero and reference built with the kernel's own (q-1)*scale convention, so c1/c2 are neutralized and only K-masking can differ. Each K ran in its own subprocess. K=32 (multiple of BLOCK_SIZE_K=16): max_abs_err 0.0, exact match. K=24 (2 k-iters, 3 packed rows): max_abs_err 527.36 vs ref_absmax 13.85, rel_err 38.06. K=40 (3 k-iters, 5 packed rows): max_abs_err 382.75 vs ref_absmax 16.03, rel_err 23.88. Outputs remained finite and no process crashed (returncode 0 for all three), so the failure mode is garbage accumulation from unmasked out-of-range A/B/g_idx loads in the tail iteration rather than a hard fault. problem.txt explicitly requires correctness \"for any K -- including a K that is not an exact multiple of group_size\", so K=24/40 are contract-admitted.",
   "supports": "confirmed",
-  "tool_event_id": "t13"
+  "tool_event_id": "t11"
 }
 
 ### t15 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the round's probes are consistent and already cover the material defects. c1 (missing K-dimension masking) is confirmed in_scope with a controlled probe pair (K=128 exact match vs K=72 CUDA illegal memory access), which alone is decisive. c2 (unmasked N loads) was rebutted for N=48 and was never established in_scope; it remains at most a latent UB/portability note, and re-probing other N values would not change the verdict since c1 already dominates. c3 (missing `& maxq` on zeros+1) is confirmed as a behavioral divergence from the wrapped AutoGPTQ convention, but the intended zero-point convention is not pinned by problem.txt (which states plain `zero` with no +1), so its scope stays unknown and no sharper testable claim can be formed without a reference implementation. No new in-scope, testable hypothesis is exposed by the latest evidence.",
+  "reason": "Review turn: the three recorded claims are all confirmed by isolated runtime probes that reproduced the predicted incorrect semantics exactly (c1: kernel matches (q-(zero+1))*scale bit-exactly and contract_ref+predicted offset to 4.8e-6; c2: kernel matches packed-along-N zeros emulation bit-exactly with 31/32 columns wrong vs the declared per-column layout; c3: exact match at K=32 but rel_err 38.1 at K=24 and 23.9 at K=40 with c1/c2 neutralized). These three independently violate the stated dequant formula, the declared zeros layout, and the explicit \"any K\" requirement in problem.txt, so the verdict is already determined. Remaining curiosities (M/N not multiples of 32 causing unmasked B/scales/zeros reads, the GROUP_SIZE_M=1 pid remap, scales dtype coupling in tl.dot) are generalization notes with no additional contract evidence and would not change the outcome; I am not holding up the Judge for them.",
   "reviewed_claims": [
     "c1",
     "c2",
     "c3"
   ],
   "reviewed_tool_event_count": 14,
-  "turn": 9
+  "turn": 6
 }
 
-### t16 - inspect_problem - ok
+### t16 - record_verdict - ok
 
 {
-  "entry": "case_03"
-}
-
-### t17 - record_verdict - ok
-
-{
-  "confidence": 0.9,
+  "confidence": 0.93,
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2",
+    "c3"
   ],
-  "reason": "Decisive defect is c1 (confirmed, in_scope): the k-loop (kernel.py:41-54) applies no K-dimension bounds mask to any of the g_idx, b_packed, or A loads, and num_pid_k = cdiv(K, BLOCK_SIZE_K=16) rounds up. Runtime evidence c1.e1 (tool event t9) is a controlled probe pair: K=128 (multiple of 16) reproduced C = A @ dequant(B) exactly (max_abs_err 0.0 vs ref_absmax 51.0), while K=72 \u2014 a legal 4-bit packing (9 int32 rows) with group_size=64 and a trailing partial group \u2014 raised a CUDA illegal memory access (cudaErrorIllegalAddress). Zero codes were restricted to 0..14 in that probe so the c3 zero-point question cannot confound it. Scope: this artifact provides no test.py or get_inputs (test_code is empty), so problem.txt is the operative contract, and it explicitly requires correct dequantized matmul \"for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.\" K=72 is exactly such a K and is admitted by the host wrapper signature (kernel.py:61-69). The reference is well-defined and finite for this input, so this is a genuine correctness/robustness failure, not a reference-undefined case. Non-decisive notes: c2 (unmasked N loads) was rebutted as stated \u2014 N=48 matched the reference exactly with no fault, the over-read landing in allocator slack \u2014 so it is only a latent UB/portability observation and was never established as in_scope. c3 is confirmed as a real behavioral divergence (kernel implements zeros+1 with no `& maxq`, matching the unwrapped variant exactly and differing from the wrapped AutoGPTQ convention by >100% relative error when a zero nibble is 15) but its scope stays unknown: problem.txt states plain `zero` with no +1 or wrap convention, so no artifact pins which of {zero, zero+1, (zero+1)&maxq} is required. I set c3 aside as unresolved and do not rest the verdict on it; c1 alone is sufficien
-...[truncated 28 chars]
+  "reason": "The artifact ships no test.py (artifact.test_code is empty), so problem.txt plus the host wrapper's own declared API surface is the operative contract, and each confirmed claim is tied to a behavior that contract explicitly requires.\n\nc1 (decisive): problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], with no bias term. Line 46 adds `zeros = zeros + 1`. Probe t9 neutralized the other two defects (zeros tensor all-zero, so any zeros-indexing bug unpacks to 0) and showed the kernel misses the contract formula by max_abs_err 1.823 against ref_absmax 20.60 (8.8% relative), while matching (q - (zero+1))*scale bit-exactly (err 0.0) and matching contract_ref + the predicted -(a@scale) offset to 4.8e-6. This is a systematic formula violation, not a reduction-order or rounding artifact, so the \"declared numeric deviation\" exemptions do not apply.\n\nc2 (decisive): the wrapper docstring declares scales/zeros both as (num_groups, N) and problem.txt indexes zero[g_idx[k],n] per column, but lines 35/38/45 read zeros as bit-packed along N. Probe t10 fed zeros in the declared per-column layout and found the kernel reproduces the packed-unpack emulation ((zeros[g, n//8] >> ((n%8)*4)) & 15) + 1 bit-exactly, while 31 of 32 columns exceed 1e-3 error versus a reference with only the c1 bias applied (rel 1.48). This is not a benign alternative-but-consistent layout convention: it contradicts the layout the artifact itself declares for its input.\n\nc3 (decisive): problem.txt explicitly requires correctness \"for any K -- including a K that is not an exact multiple of group_size\". offs_k is never masked against K. Probe t11 built the reference in the kernel's own (q-1)*scale convention with zeros=0, so c1/c2 were neutralized and only K masking could differ: K=32 matched exactly (err 0.0), while K=24 gave rel_err 38.1 and K=40 gave rel_err 23.9, with
+...[truncated 596 chars]
 
 ## Verdict
 
 {
-  "confidence": 0.9,
-  "created_at": "2026-09-08T01:09:13Z",
+  "confidence": 0.93,
+  "created_at": "2026-09-08T01:51:44Z",
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2",
+    "c3"
   ],
-  "reason": "Decisive defect is c1 (confirmed, in_scope): the k-loop (kernel.py:41-54) applies no K-dimension bounds mask to any of the g_idx, b_packed, or A loads, and num_pid_k = cdiv(K, BLOCK_SIZE_K=16) rounds up. Runtime evidence c1.e1 (tool event t9) is a controlled probe pair: K=128 (multiple of 16) reproduced C = A @ dequant(B) exactly (max_abs_err 0.0 vs ref_absmax 51.0), while K=72 \u2014 a legal 4-bit packing (9 int32 rows) with group_size=64 and a trailing partial group \u2014 raised a CUDA illegal memory access (cudaErrorIllegalAddress). Zero codes were restricted to 0..14 in that probe so the c3 zero-point question cannot confound it. Scope: this artifact provides no test.py or get_inputs (test_code is empty), so problem.txt is the operative contract, and it explicitly requires correct dequantized matmul \"for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own.\" K=72 is exactly such a K and is admitted by the host wrapper signature (kernel.py:61-69). The reference is well-defined and finite for this input, so this is a genuine correctness/robustness failure, not a reference-undefined case. Non-decisive notes: c2 (unmasked N loads) was rebutted as stated \u2014 N=48 matched the reference exactly with no fault, the over-read landing in allocator slack \u2014 so it is only a latent UB/portability observation and was never established as in_scope. c3 is confirmed as a real behavioral divergence (kernel implements zeros+1 with no `& maxq`, matching the unwrapped variant exactly and differing from the wrapped AutoGPTQ convention by >100% relative error when a zero nibble is 15) but its scope stays unknown: problem.txt states plain `zero` with no +1 or wrap convention, so no artifact pins which of {zero, zero+1, (zero+1)&maxq} is required. I set c3 aside as unresolved and do not rest 
-...[truncated 68 chars]
+  "reason": "The artifact ships no test.py (artifact.test_code is empty), so problem.txt plus the host wrapper's own declared API surface is the operative contract, and each confirmed claim is tied to a behavior that contract explicitly requires.\n\nc1 (decisive): problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], with no bias term. Line 46 adds `zeros = zeros + 1`. Probe t9 neutralized the other two defects (zeros tensor all-zero, so any zeros-indexing bug unpacks to 0) and showed the kernel misses the contract formula by max_abs_err 1.823 against ref_absmax 20.60 (8.8% relative), while matching (q - (zero+1))*scale bit-exactly (err 0.0) and matching contract_ref + the predicted -(a@scale) offset to 4.8e-6. This is a systematic formula violation, not a reduction-order or rounding artifact, so the \"declared numeric deviation\" exemptions do not apply.\n\nc2 (decisive): the wrapper docstring declares scales/zeros both as (num_groups, N) and problem.txt indexes zero[g_idx[k],n] per column, but lines 35/38/45 read zeros as bit-packed along N. Probe t10 fed zeros in the declared per-column layout and found the kernel reproduces the packed-unpack emulation ((zeros[g, n//8] >> ((n%8)*4)) & 15) + 1 bit-exactly, while 31 of 32 columns exceed 1e-3 error versus a reference with only the c1 bias applied (rel 1.48). This is not a benign alternative-but-consistent layout convention: it contradicts the layout the artifact itself declares for its input.\n\nc3 (decisive): problem.txt explicitly requires correctness \"for any K -- including a K that is not an exact multiple of group_size\". offs_k is never masked against K. Probe t11 built the reference in the kernel's own (q-1)*scale convention with zeros=0, so c1/c2 were neutralized and only K masking could differ: K=32 matched exactly (err 0.0), while K=24 gave rel_e
+...[truncated 636 chars]

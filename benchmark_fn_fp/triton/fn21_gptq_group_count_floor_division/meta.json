@@ -1,0 +1,26 @@
+{
+  "name": "fn21_gptq_group_count_floor_division",
+  "benchmark_version": "fn_fp_triton_v1",
+  "group": "FN",
+  "seed_class": "FN3",
+  "kernel_family": "AutoGPTQ INT4 dequant+matmul",
+  "reference": "AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel",
+  "failure_mode": "false_negative",
+  "mechanism": "The Triton kernel body is the real AutoGPTQ one and gathers per-column scales through the g_idx table it is handed. The host wrapper in kernel.py now derives that table itself, and counts the groups with `K // group_size` instead of ceil(K / group_size). The trailing columns of a non-divisible K are then clamped into the previous group and dequantized with the wrong scale, while the final row of `scales`/`zeros` is never read. On a divisible K floor and ceil coincide and the output is bit-identical to the reference.",
+  "replaces": "fn3_gptq_dequant_group_div_coverage",
+  "replacement_reason": "In the retired case the defective g_idx construction lived in test.py, which is not shipped to the verifier: eval_cases carries only kernel.py, problem.txt and meta.json. The verifier was shown unmodified, correct AutoGPTQ code and asked whether it met a contract that a file it could not read was breaking. The question was unanswerable from the evidence provided, and any verdict of reject scored correct regardless of its reasoning -- which is what both agentic arms did, rejecting genuine upstream behaviour on three unrelated counts. The construction is inside the shipped wrapper here, so the defect is visible to anyone who reads what they are given.",
+  "default_tolerance": {
+    "rtol": 0.01,
+    "atol": 0.01
+  },
+  "expected": {
+    "ground_truth": "the host wrapper counts groups with K // group_size instead of ceil(K / group_size)",
+    "naive_allclose_verdict": "PASS on divisible K=4096, FAIL on irregular K=304",
+    "correct_verdict": "BUGGY"
+  },
+  "note": "Uses the real AutoGPTQ Triton kernel body unmodified; the defect is one line of the host wrapper shipped alongside it.",
+  "status": "seed_v1",
+  "source": "real_triton_kernel_adapted",
+  "requires_gpu": true,
+  "passed": null
+}

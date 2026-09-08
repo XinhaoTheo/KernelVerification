@@ -1,0 +1,16 @@
+Operation: grouped INT4 dequantization fused with a matrix multiply
+(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).
+
+Weights are stored as 4-bit values packed into int32 words. Columns along the
+reduction dimension K are split into consecutive groups of `group_size`, and
+each group carries its own scale and zero-point row in `scales` / `zeros`.
+
+Contract: every column must be dequantized with the scale and zero-point of the
+group it actually belongs to, for any K -- including a K that is not an exact
+multiple of group_size. In that case the trailing columns form a shorter final
+group which is still a group of its own, with its own row in `scales`/`zeros`;
+`scales` and `zeros` are supplied with ceil(K / group_size) rows accordingly.
+
+The kernel computes  C = A @ dequant(B),  with dequant(B)[k,n] =
+(unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n],
+where group_of(k) is the index of the group column k belongs to.

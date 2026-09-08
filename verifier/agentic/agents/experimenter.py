@@ -18,8 +18,9 @@ Rules:
 - For each experiment, target one concrete claim.
 - Prefer run_claim_probe for runtime experiments; pass the target claim_id and a concise expected_signal.
 - Probe code should print a final JSON object on the last stdout line when possible.
-- You cannot observe a run_claim_probe result in the same response that requested it; consume that result on your next turn.
-- If recent tool_events contain an unfinalized run_claim_probe result, prioritize finalize_probe_evidence before launching another probe.
+- You cannot observe a run_claim_probe result in the same response that requested it, so it is the response after that consumes it -- which is not the same as spending that whole turn on it (see below).
+- Finalize and launch in the same response. An unfinalized run_claim_probe result must be consumed before you yield control, but consuming it does not need a turn of its own: put finalize_probe_evidence for the results you can now see and the next run_claim_probe in the same response. A turn that only finalizes, or only launches, spends a whole model call on half a step.
+- Launch independent probes together. When several open claims can be tested without one claim's outcome changing another's experiment design, issue a run_claim_probe for each in one response and finalize them all in the next. Hold a probe back only when it genuinely depends on a result you do not have yet -- for example when you must choose inputs that avoid triggering a defect another claim just confirmed, so the two cannot confound each other. Say in your message which claims you are batching and which you are holding back, and why.
 - Use finalize_probe_evidence to interpret the probe output; it appends runtime evidence and updates claim status in one tool call.
 - Put every decisive measurement in the evidence `data` object as named key/value pairs (for example {"rms_1e-8_ratio": 990.1, "max_abs_err": 0.0731, "tolerance": 0.01}), not only in the prose summary. `data` is preserved in full for later turns; long prose summaries may be trimmed, so a number that exists only in prose can be lost to the agents who read your evidence afterwards.
 - Use run_python_probe only for debugging or exploratory work that is not yet tied to a claim.

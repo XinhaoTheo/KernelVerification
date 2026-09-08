@@ -1,63 +1,43 @@
 
-import subprocess, sys, json
+import sys, json, numpy as np, torch
+sys.path.insert(0,'/root/cases/case_03')
+from kernel import gptq_matmul
 
-script = r'''
-import torch, json, math, importlib.util, traceback
-spec = importlib.util.spec_from_file_location("kmod", "/root/cases/case_03/kernel.py")
-kmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(kmod)
+M,K,N,gs,bits = 32,32,32,8,4
+ng = K//gs
+rng = np.random.default_rng(0)
+q = rng.integers(0,16,size=(K,N)).astype(np.uint32)
+packed = np.zeros((K//8,N),dtype=np.uint32)
+for k in range(K):
+    packed[k//8] |= (q[k] << ((k%8)*4))
+packed_t = torch.from_numpy(packed.view(np.int32).copy()).cuda()
+scales = torch.from_numpy((rng.random((ng,N))*0.1+0.05).astype(np.float32)).cuda()
+zeros = torch.zeros((ng,N),dtype=torch.int32,device='cuda')   # all zero -> packed-unpack also yields 0
+g_idx = (torch.arange(K,device='cuda')//gs).to(torch.int32)
+a = torch.from_numpy(rng.standard_normal((M,K)).astype(np.float32)).cuda()
 
-def build(M, K, N, group_size, seed):
-    g = torch.Generator().manual_seed(seed)
-    a = torch.randn(M, K, generator=g)
-    q = torch.randint(0, 16, (K, N), generator=g, dtype=torch.int32)
-    packed = torch.zeros(K // 8, N, dtype=torch.int32)
-    for j in range(8):
-        packed |= (q[j::8] << (4 * j))
-    ng = (K + group_size - 1) // group_size
-    g_idx = (torch.arange(K) // group_size).to(torch.int32)
-    # zero codes restricted to 0..14 so the (zeros+1)&maxq wrap question cannot confound
-    zcode = torch.randint(0, 15, (ng, N), generator=g, dtype=torch.int32)
-    qzeros = torch.zeros(ng, N // 8, dtype=torch.int32)
-    for j in range(8):
-        qzeros |= (zcode[:, j::8] << (4 * j))
-    scales = (torch.rand(ng, N, generator=g) * 0.1 + 0.05)
-    zeros_eff = (zcode + 1).float()
-    deq = (q.float() - zeros_eff[g_idx.long()]) * scales[g_idx.long()]
-    ref = a @ deq
-    return (a.cuda(), packed.cuda(), scales.cuda(), qzeros.cuda(), g_idx.cuda(), ref.cuda())
+c = gptq_matmul(a, packed_t, scales, zeros, g_idx, bits=bits)
+torch.cuda.synchronize()
 
-def run(tag, M, K, N, group_size, seed=0):
-    a, packed, scales, qzeros, g_idx, ref = build(M, K, N, group_size, seed)
-    out = {"tag": tag, "M": M, "K": K, "N": N, "group_size": group_size,
-           "num_pid_k": math.ceil(K / 16), "K_mult_of_16": (K % 16 == 0)}
-    try:
-        c = kmod.gptq_matmul(a, packed, scales, qzeros, g_idx, bits=4)
-        torch.cuda.synchronize()
-        err = (c - ref).abs()
-        out["max_abs_err"] = float(err.max())
-        out["rel_err"] = float(err.max() / ref.abs().max())
-        out["ref_absmax"] = float(ref.abs().max())
-        out["ok"] = True
-    except Exception as e:
-        out["ok"] = False
-        out["exception"] = repr(e)[:300]
-    print(json.dumps(out), flush=True)
-    return out
+qf = torch.from_numpy(q.astype(np.float32)).cuda()
+sc_full = scales[g_idx.long()]                      # (K,N)
+ref_contract = a @ ((qf - 0.0) * sc_full)           # problem.txt formula
+ref_plus1    = a @ ((qf - 1.0) * sc_full)           # kernel's actual formula
+predicted_offset = -(a @ sc_full)                   # (q-(z+1)) - (q-z) = -1 per element
 
-run("control_K128", 32, 128, 64, 64, seed=1)
-run("tail_K72", 32, 72, 64, 64, seed=2)
-print(json.dumps({"tag": "done"}), flush=True)
-'''
+e_contract = (c - ref_contract).abs().max().item()
+e_plus1    = (c - ref_plus1).abs().max().item()
+e_pred     = (c - (ref_contract + predicted_offset)).abs().max().item()
+scale_c    = ref_contract.abs().max().item()
 
-p = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=480)
-lines = [l for l in p.stdout.splitlines() if l.strip()]
-res = []
-for l in lines:
-    try:
-        res.append(json.loads(l))
-    except Exception:
-        pass
-print("STDOUT_RAW:", p.stdout[-2000:])
-print("STDERR_TAIL:", p.stderr[-1500:])
-print(json.dumps({"returncode": p.returncode, "results": res,
-                  "reached_done": any(r.get("tag") == "done" for r in res)}))
+print(json.dumps({
+  "shape": [M,K,N], "group_size": gs, "bits": bits,
+  "zeros_all_zero": True,
+  "ref_contract_absmax": scale_c,
+  "max_abs_err_vs_contract_ref": e_contract,
+  "rel_err_vs_contract_ref": e_contract/scale_c,
+  "max_abs_err_vs_plus1_ref": e_plus1,
+  "max_abs_err_vs_contract_plus_predicted_offset": e_pred,
+  "matches_contract_within_1e-3": bool(e_contract < 1e-3),
+  "matches_plus1_within_1e-3": bool(e_plus1 < 1e-3),
+}))
