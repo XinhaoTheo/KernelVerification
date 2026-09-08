@@ -1,64 +1,51 @@
 
-import torch, json, sys, importlib.util
-spec = importlib.util.spec_from_file_location("kern", "/root/cases/case_33/kernel.py")
-kern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)
+import torch, math, json, importlib.util, sys
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_33/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
 
 torch.manual_seed(0)
-dev = "cuda"
+dev='cuda'
+bits=4; maxq=15; ipw=32//bits
 
-def make(M, N, K, gs, bits=4):
-    ipb = 32 // bits
-    ngroups_ceil = -(-K // gs)
-    a = torch.randn(M, K, device=dev, dtype=torch.float32)
-    q = torch.randint(0, 2**bits, (K, N), device=dev, dtype=torch.int32)
-    # pack along K
-    b_packed = torch.zeros(K // ipb, N, device=dev, dtype=torch.int32)
-    for k in range(K):
-        b_packed[k // ipb] |= (q[k] << (bits * (k % ipb)))
-    scales = (torch.rand(ngroups_ceil, N, device=dev, dtype=torch.float32) * 0.5 + 0.05)
-    zq = torch.randint(0, 2**bits, (ngroups_ceil, N), device=dev, dtype=torch.int32)
-    zeros_packed = torch.zeros(ngroups_ceil, N // ipb, device=dev, dtype=torch.int32)
-    for n in range(N):
-        zeros_packed[:, n // ipb] |= (zq[:, n] << (bits * (n % ipb)))
-    return a, q, b_packed, scales, zq, zeros_packed, ngroups_ceil
+def ref(a, b_packed, scales, zeros, group_size, K, N):
+    # unpack q
+    q = torch.zeros((K,N), device=dev, dtype=torch.int32)
+    for kk in range(K):
+        word = b_packed[kk//ipw]
+        q[kk] = (word >> ((kk % ipw)*bits)) & maxq
+    z = torch.zeros((K,N), device=dev, dtype=torch.int32)
+    for kk in range(K):
+        g = kk//group_size
+        zrow = zeros[g]
+        for n in range(N):
+            z[kk,n] = ((zrow[n//ipw].item() >> ((n % ipw)*bits)) & maxq) + 1
+    s = torch.zeros((K,N), device=dev, dtype=torch.float32)
+    for kk in range(K):
+        s[kk] = scales[kk//group_size]
+    w = (q.float()-z.float())*s
+    return a @ w
 
-def ref(a, q, scales, zq, gs):
-    K = a.shape[1]
-    kidx = torch.arange(K, device=dev)
-    g = kidx // gs                      # contract: group_of(k) = k // group_size
-    deq = (q.float() - (zq[g].float() + 1)) * scales[g]
-    return a @ deq, g
+def run(K, group_size, M=32, N=32):
+    ng = math.ceil(K/group_size)
+    a = torch.randn(M,K, device=dev, dtype=torch.float32)
+    b_packed = torch.randint(-2**31, 2**31-1, (K//ipw, N), device=dev, dtype=torch.int32)
+    scales = (torch.rand(ng, N, device=dev, dtype=torch.float32)*0.1+0.01).contiguous()
+    zeros = torch.randint(-2**31, 2**31-1, (ng, N//ipw), device=dev, dtype=torch.int32)
+    out = k.gptq_matmul(a, b_packed, scales, zeros, group_size, bits)
+    r = ref(a, b_packed, scales, zeros, group_size, K, N)
+    err = (out-r).abs()
+    return dict(K=K, gs=group_size, num_groups=ng, max_abs=err.max().item(),
+                ref_absmax=r.abs().max().item(),
+                rel=(err.max()/(r.abs().max()+1e-9)).item())
 
-out = {}
-for tag, (M, N, K, gs) in {
-    "control_K64_gs32": (32, 32, 64, 32),
-    "partial_K80_gs32": (32, 32, 80, 32),
-    "partial_K48_gs32": (32, 32, 48, 32),
-}.items():
-    a, q, b_packed, scales, zq, zeros_packed, ng = make(M, N, K, gs)
-    c = kern.gptq_matmul(a, b_packed, scales, zeros_packed, gs, bits=4)
-    r, g = ref(a, q, scales, zq, gs)
-    err = (c - r).abs()
-    denom = r.abs().clamp_min(1e-6)
-    # what group indices the kernel actually used
-    num_groups_floor = K // gs
-    g_kernel = torch.clamp(torch.arange(K, device=dev) // gs, max=num_groups_floor - 1)
-    out[tag] = dict(
-        K=K, gs=gs, ceil_groups=ng, kernel_num_groups=num_groups_floor,
-        max_abs_err=err.max().item(), max_rel_err=(err/denom).max().item(),
-        ref_absmax=r.abs().max().item(),
-        g_contract_tail=g[-8:].tolist(), g_kernel_tail=g_kernel[-8:].tolist(),
-        allclose=torch.allclose(c, r, atol=1e-3, rtol=1e-3),
-    )
-
-# also verify kernel matches the *floor/clamp* semantics (i.e. bug is exactly the group mapping)
-a, q, b_packed, scales, zq, zeros_packed, ng = make(32, 32, 80, 32)
-c = kern.gptq_matmul(a, b_packed, scales, zeros_packed, 32, bits=4)
-gk = torch.clamp(torch.arange(80, device=dev) // 32, max=80 // 32 - 1)
-deq_k = (q.float() - (zq[gk].float() + 1)) * scales[gk]
-r_kernelsem = a @ deq_k
-out["kernel_matches_clamped_semantics"] = dict(
-    max_abs_err=(c - r_kernelsem).abs().max().item(),
-    allclose=torch.allclose(c, r_kernelsem, atol=1e-3, rtol=1e-3),
-)
-print(json.dumps(out, indent=1))
+res = {}
+res['control_K64_gs32'] = run(64, 32)
+res['partial_K48_gs32'] = run(48, 32)
+res['partial_K96_gs64'] = run(96, 64)
+# also show g_idx computed by wrapper for K=48,gs=32
+import torch as t
+K=48; gs=32; ngf=K//gs
+gidx = t.clamp(t.arange(K)//gs, max=ngf-1)
+res['g_idx_K48_gs32_unique'] = sorted(set(gidx.tolist()))
+res['g_idx_correct_unique'] = sorted(set((t.arange(K)//gs).tolist()))
+print(json.dumps(res, indent=2))

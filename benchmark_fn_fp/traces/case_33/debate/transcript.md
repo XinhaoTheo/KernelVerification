@@ -2,14 +2,14 @@
 
 - Entry: `case_33`
 - Turns: 7
-- Tool events: 17
+- Tool events: 16
 - Claims: 3
 - Description updates: 1
-- LLM time: 262.44s across 6 calls | tokens: in=267538 out=21842 total=289380
-- Cache tokens: created=3192 read=29660
+- LLM time: 255.454s across 6 calls | tokens: in=292508 out=20260 total=312768
+- Cache tokens: created=0 read=32852
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.93
+- Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -62,12 +62,12 @@ Tool calls:
     "entry": "case_33"
   }
 
-### Turn 2 - `describer` (51.496084535s, in=6264 out=3805)
+### Turn 2 - `describer` (58.248999002000005s, in=7221 out=4208)
 
 Message:
 
 ```text
-Reviewing the loaded source against the stated contract; the decisive detail is how the host wrapper builds `g_idx` versus the problem's "ceil(K/group_size) groups" requirement.
+Reading the full artifact context already provided; recording the structured description model.
 ```
 
 Tool calls:
@@ -76,33 +76,32 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Compute C = A @ dequant(B) where A is (M,K) fp32 and B is 4-bit weights packed 8-per-int32 along K, shape (K//8, N).",
-      "dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n]; group_of(k) is the index of the consecutive K-group of width group_size that column k belongs to.",
-      "Groups partition K into consecutive blocks of group_size; the contract says K need not divide evenly, so there are ceil(K/group_size) groups and the final short group has its own scale/zero row.",
-      "scales/zeros are supplied with ceil(K/group_size) rows; every column must use its own group's parameters, including the trailing partial group.",
-      "Reference is the upstream AutoGPTQ kernel semantics (auto_gptq/nn_modules/triton_utils/kernels.py), so pa
-  ...[truncated 6634 chars]
+      "C = A @ dequant(B) with dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k),n]) * scale[group_of(k),n]; A is (M,K) fp32, B is 4-bit values packed 8-per-int32 along K, output (M,N) fp32.",
+      "group_of(k) = k // group_size for ALL k, including the trailing shorter group when K % group_size != 0.",
+      "scales/zeros are supplied with ceil(K / group_size) rows, so the final partial group has its own row and must be used for the trailing columns.",
+      "Contract is explicitly stated to hold 'for any K', so non-multiple-of-group_size K is an in-scope, load-bearing case rather than an edge case the caller must avoid.",
+      "Public entry point is gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4); the group table is derived inside the wrapper, not passed i
+  ...[truncated 6963 chars]
   Output summary:
   {
     "contract_model": [
-      "Compute C = A @ dequant(B) where A is (M,K) fp32 and B is 4-bit weights packed 8-per-int32 along K, shape (K//8, N).",
-      "dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n]; group_of(k) is the index of the consecutive K-group of width group_size that column k belongs to.",
-      "Groups partition K into consecutive blocks of group_size; the contract says K need not divide evenly, so there are ceil(K/group_size) groups and the final short group has its own scale/zero row.",
-      "scales/zeros are supplied with ceil(K/group_size) rows; every column must use its own group's parameters, including the trailing partial group.",
-      "Reference is the upstream AutoGPTQ kernel semantics (auto_gptq/nn_modules/triton_utils/kernels.py), so packing/zero-point conventions are expected to follow that implementation."
+      "C = A @ dequant(B) with dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k),n]) * scale[group_of(k),n]; A is (M,K) fp32, B is 4-bit values packed 8-per-int32 along K, output (M,N) fp32.",
+      "group_of(k) = k // group_size for ALL k, including the trailing shorter group when K % group_size != 0.",
+      "scales/zeros are supplied with ceil(K / group_size) rows, so the final partial group has its own row and must be used for the trailing columns.",
+      "Contract is explicitly stated to hold 'for any K', so non-multiple-of-group_size K is an in-scope, load-bearing case rather than an edge case the caller must avoid.",
+      "Public entry point is gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4); the group table is derived inside the wrapper, not passed in, so the wrapper's derivation is part of the tested behavior."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Standard AutoGPTQ 2/4/8-bit tiled matmul: grid over M/N tiles only, full K reduction inside a loop of num_pid_k = cdiv(K, BLOCK_SIZE_K) iterations, accumulator in fp32, tl.dot per tile.",
-      "Per-K group lookup is table-driven inside the kernel: g_idx = tl.load(g_ptrs)
-  ...[truncated 6324 chars]
+      "Wrapper (lines 69-73) computes num_groups = K // group_size (floor) and builds g_idx = clamp(arange(K) // group_size, max=num_groups-1). For K a multiple of group_size this equals the contract mapping; for K not a multiple, the trailing K % group_size columns are clamped down to 
+  ...[truncated 6653 chars]
 
-### Turn 3 - `skeptic` (33.56370229899999s, in=24642 out=2587)
+### Turn 3 - `skeptic` (32.683922784s, in=25707 out=2596)
 
 Message:
 
 ```text
-Recording the three highest-risk, directly testable hypotheses centered on the wrapper's group-table construction and the unmasked K tail.
+Recording the highest-risk hypotheses from the description model, all anchored to the problem's explicit "for any K" clause.
 ```
 
 Tool calls:
@@ -110,111 +109,112 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "num_groups uses floor division and the clamp caps g_idx at floor(K/group_size)-1, which is strictly less than the contract's ceil(K/group_size)-1 whenever K % group_size != 0. This is the exact case problem.txt calls out as required behavior.",
+    "rationale": "Lines 69-73 use floor division for the group count and clamp, which is only equivalent to k // group_size when group_size divides K. The problem explicitly defines group_of(k) = the group column k belongs to for any K and states ceil(K/group_size) rows are supplied.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires correct per-group dequant for any K including K not an exact multiple of group_size; trailing columns form a shorter final group with its own row, and scales/zeros have ceil(K/group_size) rows."
+        "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
       },
       {
         "source": "kernel.py lines 69-73",
-        "summary": "num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) \u2014 floor-based, clamps the trailing partial group onto the last
-  ...[truncated 1025 chars]
+        "summary": "num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) \u2
+  ...[truncated 1112 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "num_groups uses floor division and the clamp caps g_idx at floor(K/group_size)-1, which is strictly less than the contract's ceil(K/group_size)-1 whenever K % group_size != 0. This is the exact case problem.txt calls out as required behavior.",
+    "rationale": "Lines 69-73 use floor division for the group count and clamp, which is only equivalent to k // group_size when group_size divides K. The problem explicitly defines group_of(k) = the group column k belongs to for any K and states ceil(K/group_size) rows are supplied.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires correct per-group dequant for any K including K not an exact multiple of group_size; trailing columns form a shorter final group with its own row, and scales/zeros have ceil(K/group_size) rows."
+        "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
       },
       {
         "source": "kernel.py lines 69-73",
-        "summary": "num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) \u2014 floor-based, clamps the trailing partial group onto the last full group's row."
+        "summary": "num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) \u2014 floor count plus clamp collapses the trailing partial group into the previous group."
       }
     ],
-    "scope_rationale": "problem.txt states the contract explicitly: \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... `scales` and `zeros` are supplied with ceil(K / group_size) rows\". No test.py exists, so I choose a representati
-  ...[truncated 659 chars]
+    "scope_rationale": "problem.txt states the contract must hold \"for any K -- including a K that is not an exact multiple of group_size\", and that scales/zeros are supplied with ceil(K/group_size) rows. K=40 with group_size=16 is a representative case the contract explicitly admits;
+  ...[truncated 746 chars]
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "a_mask only restricts offs_am < M; nothing restricts offs_k < K. b_ptrs and g_ptrs are advanced each iteration with fully unmasked tl.load. Additionally the g_idx OOB read can yield an arbitrary row index for the scales/zeros gather.",
+    "rationale": "torch.clamp(..., max=-1) forces all entries to -1 when num_groups is 0; lines 43-44 add g_idx*stride to the base pointers with no bounds check, so negative indices produce below-base reads.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract: 'every column must be dequantized ... for any K -- including a K that is not an exact multiple of group_size', implying K values that also need not align to the kernel's internal BLOCK_SIZE_K."
+        "summary": "Contract holds \"for any K\"; scales/zeros supplied with ceil(K/group_size) rows, so K=8 with group_size=16 is a legal input with exactly one group row."
       },
       {
-        "source": "kernel.py lines 41-54",
-        "summary": "Loop over cdiv(K,16) tiles; tl.load of b and g_idx have no mask, and a's mask covers only the M dimension."
+        "samples": "",
+        "source": "kernel.py lines 69-73, 43-44",
+        "summary": "num_groups=0 gives g_idx=-1 everywhere; kernel adds g_idx*stride_scales / g_idx*stride_zeros to base pointers unguarded."
       }
     ],
-    "scope_rationale": "problem.txt requires correctn
-  ...[truncated 704 chars]
-  Output summary:
-  {
-    "id": "c2",
-    "rationale": "a_mask only restricts offs_am < M; nothing restricts offs_k < K. b_ptrs and g_ptrs are advanced each iteration with fully unmasked tl.load. Additionally the g_idx OOB read can yield an arbitrary row index for the scales/zeros gather.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Contract: 'every column must be dequantized ... for any K -- including a K that is not an exact multiple of group_size', implying K values that also need not align to the kernel's internal BLOCK_SIZE_K."
-      },
-      {
-        "source": "kernel.py lines 41-54",
-        "summary": "Loop over cdiv(K,16) tiles; tl.load of b and g_idx have no mask, and a's mask covers only the M dimension."
-      }
-    ],
-    "scope_rationale": "problem.txt requires correctness \"for any K\", and K=72 is an admissible 4-bit-packable K (72 % 8 == 0) with a non-multiple-of-group_size tail, which is precisely the case the contract highlights. No test.py narrows K, so a representative contract-admissible K is used.",
-    "statement": "When K is not a multiple of BLOCK_SIZE_K=16 but is a valid packed K (e.g. K=72 with group_size=32, N=32, M=32), the K loop run
-  ...[truncated 338 chars]
-- `record_claim -> t8 ok`
-  Args:
-  {
-    "rationale": "torch.clamp with max=-1 forces all entries to -1 since arange//group_size is 0; the kernel then computes scales_ptr + (-1)*stride_scales.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "'the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros; scales and zeros are supplied with ceil(K / group_size) rows' \u2014 for K<group_size this means exactly one group, row 0."
-      },
-      {
-        "source": "kernel.py lines 69-73",
-        "summary": "num_groups = K // group_size becomes 0 and clamp(max=-1) produces g_idx = -1 for all columns."
-      }
-    ],
-    "scope_rationale": "problem.txt says the trailing (possibly only) short group is still a group of its own with its own s
+    "scope_rationale": "problem.txt requires the mapping to be correct \"for any K\"; K smaller than grou
   ...[truncated 641 chars]
   Output summary:
   {
-    "id": "c3",
-    "rationale": "torch.clamp with max=-1 forces all entries to -1 since arange//group_size is 0; the kernel then computes scales_ptr + (-1)*stride_scales.",
+    "id": "c2",
+    "rationale": "torch.clamp(..., max=-1) forces all entries to -1 when num_groups is 0; lines 43-44 add g_idx*stride to the base pointers with no bounds check, so negative indices produce below-base reads.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "'the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros; scales and zeros are supplied with ceil(K / group_size) rows' \u2014 for K<group_size this means exactly one group, row 0."
+        "summary": "Contract holds \"for any K\"; scales/zeros supplied with ceil(K/group_size) rows, so K=8 with group_size=16 is a legal input with exactly one group row."
       },
       {
-        "source": "kernel.py lines 69-73",
-        "summary": "num_groups = K // group_size becomes 0 and clamp(max=-1) produces g_idx = -1 for all columns."
+        "source": "kernel.py lines 69-73, 43-44",
+        "summary": "num_groups=0 gives g_idx=-1 everywhere; kernel adds g_idx*stride_scales / g_idx*stride_zeros to base pointers unguarded."
       }
     ],
-    "scope_rationale": "problem.txt says the trailing (possibly only) short group is still a group of its own with its own scales/zeros row and that ceil(K/group_size) rows are supplied; K < group_size is the degenerate instance of that same stated requirement. Without a test.py fixing K, this is a contract-admissible representative input, though it is a more extreme case than claim 1.",
-    "statement": "When K < group_size (e.g. K=16, group_size=32, scales/zeros with ceil(16/32)=1 row), the wrapper comput
-  ...[truncated 275 chars]
+    "scope_rationale": "problem.txt requires the mapping to be correct \"for any K\"; K smaller than group_size yields ceil(K/group_size)=1 valid group row, a case the stated contract admits. No test.py narrows the domain (test_code is empty, meta.json has passed=null), so the contract text is the only scope authority.",
+    "statement": "When K < group_size (e.g. K=8, group_size=16, ceil = 1 group row supplied), num_groups = 0 so g_idx = clamp(..., max=-1) = -1 for every column; the kernel then loads scales/
+  ...[truncated 254 chars]
+- `record_claim -> t8 ok`
+  Args:
+  {
+    "rationale": "Lines 42, 47-48 have no offs_k + k*BLOCK_SIZE_K < K predicate and no other=0 on b/g loads, while the loop trip count is ceil-based.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"for any K -- including a K that is not an exact multiple of group_size\" admits K values such as 40 that are also not multiples of the kernel's internal BLOCK_SIZE_K=16."
+      },
+      {
+        "source": "kernel.py lines 41-54",
+        "summary": "Loop over cdiv(K,16) tiles; a-load masks rows only, b-load and g_idx-load are unmasked, so the tail tile reads past the end of A, b_packed and g_idx and adds the result into the accumulator."
+      }
+    ],
+    "scope_rationale": "The same \"for any K\" clause that makes non-multiple-of-group_size K legal al
+  ...[truncated 742 chars]
+  Output summary:
+  {
+    "id": "c3",
+    "rationale": "Lines 42, 47-48 have no offs_k + k*BLOCK_SIZE_K < K predicate and no other=0 on b/g loads, while the loop trip count is ceil-based.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"for any K -- including a K that is not an exact multiple of group_size\" admits K values such as 40 that are also not multiples of the kernel's internal BLOCK_SIZE_K=16."
+      },
+      {
+        "source": "kernel.py lines 41-54",
+        "summary": "Loop over cdiv(K,16) tiles; a-load masks rows only, b-load and g_idx-load are unmasked, so the tail tile reads past the end of A, b_packed and g_idx and adds the result into the accumulator."
+      }
+    ],
+    "scope_rationale": "The same \"for any K\" clause that makes non-multiple-of-group_size K legal also admits K values that are not multiples of 16 (e.g. K=40, which is a natural instantiation of the contract's trailing-partial-group case). Without a test.py the problem text is the operative input domain.",
+    "statement": "For K not a multiple of BLOCK_SIZE_K=16 (e.g. K=40), the reduction loop runs num_pid_k = cdiv(K,16) = 3 iterations with no k-dimension mask: tl.load(a_ptrs, mask
+  ...[truncated 376 chars]
 
-### Turn 4 - `experimenter` (96.790991362s, in=33077 out=9075)
+### Turn 4 - `experimenter` (97.56344623899999s, in=34371 out=9188)
 
 Message:
 
 ```text
-Batching all three probes now — c1 (non-divisible K, K%16==0), c2 (K%BLOCK_SIZE_K!=0 tail, with a group_size=24 variant that isolates the tail from the group-table bug), and c3 (K<group_size). They are independent: each builds its own inputs and runs in its own process, and c1's outcome does not change how I would construct c2/c3 inputs. All three use AutoGPTQ-faithful packing (4-bit along K, qzeros packed along N, +1 zero convention) so the only thing under test is the group mapping / masking, not the packing convention.
+Recording the three claims' probes now. All three are independent by construction — I deliberately chose shapes so each isolates one defect: c1 uses K=48/gs=32 (K is a multiple of BLOCK_SIZE_K=16, so no k-tail confound), c2 uses K=16/gs=32 (num_groups=0 path, still 16-aligned) with sentinel rows placed *below* the scales/zeros base so a negative-row read is directly identifiable, and c3 uses K=40/gs=8 (K divisible by group_size, so group mapping is correct and any error is purely the unmasked k-tail). I build inputs in the kernel's own zeros-packing/+1 convention so the reference disagreement cannot be attributed to the packing ambiguity.
 ```
 
 Tool calls:
@@ -223,8 +223,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport importlib.util, torch, numpy as np, json, math\nspec = importlib.util.spec_from_file_location(\"kmod\",\"/root/cases/case_33/kernel.py\")\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\ndev='cuda'\ntorch.manual_seed(0)\n\ndef build(M,N,K,gs):\n    A=torch.randn(M,K)\n    q=torch.randint(0,16,(K,N),dtype=torch.int32)\n    ng=math.ceil(K/gs)\n    scales=torch.rand(ng,N)*0.1+0.01\n    zv=torch.randint(0,15,(ng,N),dtype=torch.int32)\n    qn=q.numpy().astype(np.uint32); packed=np.zeros((K//8,N),dtype=np.uint32)\n    for kk in range(K): packed[kk//8] |= (qn[kk]<<((kk%8)*4))\n    zvn=zv.numpy().astype(np.uint32); zp=np.zeros((ng,N//8),dtype=np.uint32)\n    for nn in range(N): zp[:,nn//8] |= (zvn[:,nn]<<((nn%8)*4))\n    return d
-  ...[truncated 1502 chars]
+    "code": "\nimport torch, numpy as np, importlib.util, json\ntorch.backends.cuda.matmul.allow_tf32=False\nspec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_33/kernel.py\")\nm=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef pack_k(q):\n    K,N=q.shape; Kp=K//8\n    out=np.zeros((Kp,N),np.uint32); qr=q.reshape(Kp,8,N).astype(np.uint32)\n    for j in range(8): out |= (qr[:,j,:]<<(4*j))\n    return out.view(np.int32)\ndef pack_n(z):\n    G,N=z.shape; Nc=N//8\n    out=np.zeros((G,Nc),np.uint32); zr=z.reshape(G,Nc,8).astype(np.uint32)\n    for j in range(8): out |= (zr[:,:,j]<<(4*j))\n    return out.view(np.int32)\n\ndef run_case(M,N,K,gs,seed=0):\n    rng=np.random.default_rng(seed)\n    q=rng.integers(0,16,size=(K,N)).astype(np
+  ...[truncated 1883 chars]
   Output summary:
   {
     "artifacts": [
@@ -232,13 +232,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "5e8e83cd8fb2de92e2a82f34c68b07702452bdf161896de9e6a9d20f9eb5d29b"
+        "sha256": "8de544c4df400e165c187bcfbca4410cbc92d21586e6df8c96f52ecf425d1278"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "d3946f5546168390811cb11d3623f51a3814d00ca1115f0abd8efa30b6b904ab"
+        "sha256": "bbdab149d4efd3c11e7eaf7fc64bba8edb7ba2c216429b80a3ae675300010dc7"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -250,18 +250,18 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t9_json_result.json",
-        "sha256": "ca081764b21821d592678e505c6c9ba24c7ba945ea3e2cbf5099f5bf539b258e"
+        "sha256": "bc98f1cd9aef99e5c5322afbc17b2e6c62bc9b89317780cd2f3ce0abfc088999"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "When K is not a multiple of group_size (e.g. M=32, N=32, K=80, group_size=32, bits=4, with scales/zeros supplied as ceil(80/32)=3 rows), the host wrapper's g_idx = clamp(arange(K)//group_size, max=K//group_size - 
-  ...[truncated 5375 chars]
+    "claim_statement": "For K not an exact multiple of group_size (e.g. M=64, N=64, K=40, group_size=16, bits=4), gptq_matmul's wrapper computes num_groups = K // group_size = 2 and clamps g_idx to num_groups-1 = 1, so the trailing colum
+  ...[truncated 9190 chars]
 - `run_claim_probe -> t10 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "\nimport importlib.util, torch, numpy as np, json, math, traceback\nspec = importlib.util.spec_from_file_location(\"kmod\",\"/root/cases/case_33/kernel.py\")\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\ndev='cuda'\ntorch.manual_seed(0)\n\ndef build(M,N,K,gs):\n    A=torch.randn(M,K)\n    q=torch.randint(0,16,(K,N),dtype=torch.int32)\n    ng=math.ceil(K/gs)\n    scales=torch.rand(ng,N)*0.1+0.01\n    zv=torch.randint(0,15,(ng,N),dtype=torch.int32)\n    qn=q.numpy().astype(np.uint32); packed=np.zeros((K//8,N),dtype=np.uint32)\n    for kk in range(K): packed[kk//8] |= (qn[kk]<<((kk%8)*4))\n    zvn=zv.numpy().astype(np.uint32); zp=np.zeros((ng,N//8),dtype=np.uint32)\n    for nn in range(N): zp[:,nn//8] |= (zvn[:,nn]<<((nn%8)*4))\n 
-  ...[truncated 1938 chars]
+    "code": "\nimport torch, numpy as np, importlib.util, json, traceback\ntorch.backends.cuda.matmul.allow_tf32=False\nspec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_33/kernel.py\")\nm=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef pack_k(q):\n    K,N=q.shape; Kp=K//8\n    out=np.zeros((Kp,N),np.uint32); qr=q.reshape(Kp,8,N).astype(np.uint32)\n    for j in range(8): out |= (qr[:,j,:]<<(4*j))\n    return out.view(np.int32)\ndef pack_n(z):\n    G,N=z.shape; Nc=N//8\n    out=np.zeros((G,Nc),np.uint32); zr=z.reshape(G,Nc,8).astype(np.uint32)\n    for j in range(8): out |= (zr[:,:,j]<<(4*j))\n    return out.view(np.int32)\n\nout_json={}\ntry:\n    M,N,K,gs=64,64,16,32   # K multiple of BLOCK_SIZE_K=16 -> no k-tail confound\n  
+  ...[truncated 2366 chars]
   Output summary:
   {
     "artifacts": [
@@ -269,13 +269,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t10_probe.py",
-        "sha256": "62c114800b7f29cbcb8a29d5de463d010d3ea8a3c590d07c72ab203dccd29f24"
+        "sha256": "1c40caa31fb958b7f2a854e7fabba6c6800eb7d359b3eb3805a75d55f037bd5e"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t10_stdout.txt",
-        "sha256": "4204cb1f83de5b02372a8db151a654e603196dca8d93af44c0915f80cefd778d"
+        "sha256": "c2009e691d53c96f57f6a101a19025807ff61fc0e52168a1a75a7f4ee720457e"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -287,18 +287,18 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t10_json_result.json",
-        "sha256": "60f123830b4e2b20dab0c4faa15433037612421e56480f45eb646d193d59fe54"
+        "sha256": "ac8ad1eabd98d8a3b9fbdfa22351a8d0a56589a074acac5894960e2bf19fe90e"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "When K is not a multiple of BLOCK_SIZE_K=16 but is a valid packed K (e.g. K=72 with group_size=32, N=32, M=32), the K loop runs cdiv(K,16)=5 iterations while the loads of a (masked only on M), b_packed, and g_
-  ...[truncated 5298 chars]
+    "claim_statement": "When K < group_size (e.g. K=8, group_size=16, ceil = 1 group row supplied), num_groups = 0 so g_idx = clamp(..., max=-1) = -1 for every column; the kernel then loads scales/zeros at negative row offsets (scale
+  ...[truncated 4420 chars]
 - `run_claim_probe -> t11 ok`
   Args:
   {
     "claim_id": "c3",
-    "code": "\nimport importlib.util, torch, numpy as np, json, math\nspec = importlib.util.spec_from_file_location(\"kmod\",\"/root/cases/case_33/kernel.py\")\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\ndev='cuda'\ntorch.manual_seed(0)\nM,N,K,gs=32,32,16,32\nA=torch.randn(M,K)\nq=torch.randint(0,16,(K,N),dtype=torch.int32)\nng=math.ceil(K/gs)\nscales=torch.rand(ng,N)*0.1+0.01\nzv=torch.randint(0,15,(ng,N),dtype=torch.int32)\nqn=q.numpy().astype(np.uint32); packed=np.zeros((K//8,N),dtype=np.uint32)\nfor kk in range(K): packed[kk//8] |= (qn[kk]<<((kk%8)*4))\nzvn=zv.numpy().astype(np.uint32); zp=np.zeros((ng,N//8),dtype=np.uint32)\nfor nn in range(N): zp[:,nn//8] |= (zvn[:,nn]<<((nn%8)*4))\nb=torch.from_numpy(packed.astype(np.int32)); qz=to
-  ...[truncated 1244 chars]
+    "code": "\nimport torch, numpy as np, importlib.util, json, traceback\ntorch.backends.cuda.matmul.allow_tf32=False\nspec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_33/kernel.py\")\nm=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef pack_k(q):\n    K,N=q.shape; Kp=K//8\n    out=np.zeros((Kp,N),np.uint32); qr=q.reshape(Kp,8,N).astype(np.uint32)\n    for j in range(8): out |= (qr[:,j,:]<<(4*j))\n    return out.view(np.int32)\ndef pack_n(z):\n    G,N=z.shape; Nc=N//8\n    out=np.zeros((G,Nc),np.uint32); zr=z.reshape(G,Nc,8).astype(np.uint32)\n    for j in range(8): out |= (zr[:,:,j]<<(4*j))\n    return out.view(np.int32)\n\nres={}\ndef case(M,N,K,gs,seed):\n    rng=np.random.default_rng(seed)\n    q=rng.integers(0,16,size=(K,
+  ...[truncated 1940 chars]
   Output summary:
   {
     "artifacts": [
@@ -306,13 +306,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t11_probe.py",
-        "sha256": "ee1c992ef29c27d42636e8270d884a0a2407c20221aae8bdfb9239c9f3ddba8f"
+        "sha256": "43a7e2ff4009f824376bdcda4e2a3b774949b0d38acf5d747394f9533e1f981e"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t11_stdout.txt",
-        "sha256": "451f9a0156f2b45af268200a5967af4a9a2d8286f4c11ba62c1d45215c45614e"
+        "sha256": "b3253f19f18cc96b8ee6d0d3117145e47742595d362c845d70bdd75afe4bc38d"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -324,19 +324,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t11_json_result.json",
-        "sha256": "7ae0110b0be5fed27b66822960759a324d2fbe247b211d750d1082e4f41b531f"
+        "sha256": "ae5b81dfbd99a66a7af0f8ca017e9e7a485d680acbad2a393e06684d1f82dcaf"
       }
     ],
     "claim_id": "c3",
-    "claim_statement": "When K < group_size (e.g. K=16, group_size=32, scales/zeros with ceil(16/32)=1 row), the wrapper computes num_groups = 0 and clamp(..., max=-1) yields g_idx = -1 for every column, so the kernel gathers scales/
-  ...[truncated 3711 chars]
+    "claim_statement": "For K not a multiple of BLOCK_SIZE_K=16 (e.g. K=40), the reduction loop runs num_pid_k = cdiv(K,16) = 3 iterations with no k-dimension mask: tl.load(a_ptrs, mask=a_mask) masks only rows, and tl.load(b_ptrs) / 
+  ...[truncated 7398 chars]
 
-### Turn 5 - `experimenter` (50.30266761299998s, in=50078 out=4381)
+### Turn 5 - `experimenter` (28.98133760799999s, in=56362 out=2423)
 
 Message:
 
 ```text
-All three probes returned decisive results. Finalizing c1, c2, c3 now, and in the same response launching one supplementary probe for c3 to pin down the *mechanism* (that the g_idx = -1 gather actually reads the memory word before scales row 0, rather than the all-zero output being some unrelated no-op) — this only adds confirming detail and cannot flip the status.
+All three probes returned; finalizing each. The K-divisible controls (K=64/gs=32, K=32/gs=8) matched the reference exactly, which validates my packing and `zero+1` reference model, so the failures are attributable to the specific defects rather than a reference mismatch.
 ```
 
 Tool calls:
@@ -345,30 +345,33 @@ Tool calls:
   Args:
   {
     "data": {
-      "M": 32,
-      "N": 32,
-      "bits": 4,
-      "control_K64_gs32_frac_off_gt_1e3rel": 0.0,
-      "control_K64_gs32_max_abs_err_vs_contract": 2.9940375476655845e-06,
-      "control_K64_gs32_max_rel_err": 2.127670227083041e-07,
-      "rows_supplied": 3,
-      "target_K80_gs32_frac_off_gt_1e3rel": 0.98046875,
-      "target_K80_gs32_max_abs_err_vs_contract": 7.75621587967752,
-      "target_K80_gs32_max_abs_err_vs_floorclamp_model": 4.249939168587957e-06,
-      "target_K80_gs32_max_rel_err_vs_contract": 0.3650035711305034,
-      "target_K80_gs32_ref_absmax": 21.249698614330438,
-      "wrapper_num_groups": 2
+      "G_supplied": 2,
+      "allclose_clamped_model": true,
+      "allclose_contract": false,
+      "bug_case": "M=64,N=64,K=48,gs=32,bits=4",
+      "control_K32_allclose_contract": true,
+      "control_K32_gs32_max_abs_err_vs_contract": 0.0,
+      "control_K64_allclose_contract": true,
+      "control_K64_gs32_max_abs_err_vs_contract": 9.537e-06,
+      "gidx_last8_contract": 1,
+      "gidx_last8_kernel": 0,
+      "max_abs_err_vs_clamped_model": 7.629e-06,
+      "max_abs_err_vs_contract": 25.6465,
+      "num_groups_kernel": 1,
+      "ref_absmax": 26.8158,
+      "rel_err_vs_contract": 0.9564,
+      "tolerance": "rtol=1e-3, atol=1e-3"
     },
     "event_id": "t9",
     "status": "confirmed",
-    "summary": "K=80, group_size=32 (ceil=3 rows supplied, K%16==0 so no tail-mask confound): output deviates massively from the contract reference 
-  ...[truncated 642 chars]
+    "summary": "Trailing-partial-group misassignment confirmed at K=48, group_size=32 (K%16==0, so no k-tail confound). Wrapper p
+  ...[truncated 631 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "K=80, group_size=32 (ceil=3 rows supplied, K%16==0 so no tail-mask confound): output deviates massively from the contract reference (max_abs_err 7.756 vs ref_absmax 21.25, max_rel_err 0.365, 98.0% of elements off by >1e-3 relative) yet matches the floor/clamp model reference to 4.2e-6 \u2014 i.e. the kernel reproduces exactly the behavior of g_idx = clamp(arange(K)//gs, max=K//gs-1), assigning k=64..79 to group row 1 instead of row 2, and never reading the third supplied scales/zeros row. The divisible control K=64, gs=32 matches the contract reference to 2.99e-6 (rel 2.1e-7, 0% elements off), so the packing/+1-zero conventions used in the probe are the ones the kernel expects and the failure is specifically the partial-group mapping.",
+    "summary": "Trailing-partial-group misassignment confirmed at K=48, group_size=32 (K%16==0, so no k-tail confound). Wrapper produced num_groups=1 and g_idx=0 for all 48 columns while the contract mapping is 0 for k<32 and 1 for k>=32; the second of the ceil(K/gs)=2 supplied scale/zero rows is never read. Kernel output is bit-close to the \"clamped\" model (max abs err 7.6e-6) and far from the contract reference (max abs err 25.65 on |C|max 26.82, rel 0.956, allclose False). Controls with K divisible by group_size (K=64/gs=32 and K=32/gs=32) match the contract reference to 9.5e-6 and 0.0, confirming the packing/zero+1 reference model is right and isolating the defect to the floor+clamp group derivation at lines 69-73.",
     "supports": "confirmed",
     "tool_event_id": "t9"
   }
@@ -376,26 +379,33 @@ Tool calls:
   Args:
   {
     "data": {
-      "claim_K72_gs32_crashed": true,
-      "claim_K72_gs32_error": "CUDA error: an illegal memory access was encountered (cudaErrorIllegalAddress)",
-      "tail_only_K72_gs24_K_divisible_by_group_size": true,
-      "tail_only_K72_gs24_K_mod_BLOCK_K": 8,
-      "tail_only_K72_gs24_max_abs_err_vs_contract": 1.9222395418051074e+36,
-      "tail_only_K72_gs24_max_abs_err_vs_floorclamp_model": 1.9222395418051074e+36,
-      "tail_only_K72_gs24_num_k_tiles": 5,
-      "tail_only_K72_gs24_ref_absmax": 13.427723902464047,
-      "tail_only_K72_gs24_run_to_run_max_diff": 0.0
+      "G_supplied": 1,
+      "allclose_contract": false,
+      "allclose_sentinel_belowbase": true,
+      "case": "M=64,N=64,K=16,gs=32,bits=4",
+      "deterministic_across_runs": true,
+      "gidx_unique": [
+        -1
+      ],
+      "max_abs_err_vs_contract": 515.842,
+      "max_abs_err_vs_sentinel_belowbase": 0.0,
+      "num_groups_kernel": 0,
+      "out_absmax": 514.228,
+      "out_has_nan": false,
+      "ref_contract_absmax": 19.349,
+      "scales_stride0": 64,
+      "zeros_stride0": 8
     },
     "event_id": "t10",
     "status": "confirmed",
-    "summary": "Unmasked K tail confirmed by two independent signals. (a) Isolation case K=72, group_size=24 (K IS divisible by group_size, so the c1 group-table bug is inactive; K%BLOCK
-  ...[truncated 677 chars]
+    "summary": "Negative-index below-base read confirmed at K=16 < group_size=32 (K is a multiple of BLOCK_SIZE_K=16, so the k-tail defect is not active). num_groups=0 makes g_idx == -1 for every column. I allocated scales/zeros with an extra SENTINEL row physically preced
+  ...[truncated 465 chars]
   Output summary:
   {
     "claim_id": "c2",
     "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "Unmasked K tail confirmed by two independent signals. (a) Isolation case K=72, group_size=24 (K IS divisible by group_size, so the c1 group-table bug is inactive; K%BLOCK_SIZE_K==8, 5 K-tiles): output max_abs_err 1.92e36 against both the contract reference and the floor/clamp model (ref_absmax 13.4) \u2014 pure out-of-bounds garbage entering the accumulator, not a group-mapping artifact. (b) K=72, group_size=32 raised a hard CUDA \"illegal memory access\" (cudaErrorIllegalAddress), i.e. the unmasked tail loads of A / b_packed / g_idx (and the g_idx-driven scales/zeros gather with an OOB row index) run off allocated memory. run_to_run_max_diff was 0.0 for case (a), so the garbage was stable across the two calls in that process, but the magnitude (1e36) still shows it is uninitialized memory, not valid data.",
+    "summary": "Negative-index below-base read confirmed at K=16 < group_size=32 (K is a multiple of BLOCK_SIZE_K=16, so the k-tail defect is not active). num_groups=0 makes g_idx == -1 for every column. I allocated scales/zeros with an extra SENTINEL row physically preceding the supplied tensor (supplied = view starting at physical row 1, scales stride0=64, zeros stride0=8) so the below-base read is directly identifiable. Kernel output matched the sentinel-row reference EXACTLY (max abs err 0.0) and was wildly off the contract reference (max abs err 515.84 vs |C|max 19.35; out |max| 514.23). Result was deterministic across two runs, i.e. a silent wrong-answer out-of-bounds read rather than a fault.",
     "supports": "confirmed",
     "tool_event_id": "t10"
   }
@@ -403,196 +413,170 @@ Tool calls:
   Args:
   {
     "data": {
-      "K": 16,
-      "all_zero_output": true,
-      "crashed": false,
-      "group_size": 32,
-      "max_abs_err_vs_contract": 7.588730767695674,
-      "max_rel_err_vs_contract": 1.0,
-      "out_absmax": 0.0,
-      "ref_absmax": 7.588730767695674,
-      "rows_supplied": 1,
-      "run_to_run_max_diff": 0.0,
-      "wrapper_g_idx_unique": [
-        -1
-      ],
-      "wrapper_num_groups": 0
+      "K_mod_BLOCK_SIZE_K": 8,
+      "allclose_tail": false,
+      "control_K32_gs8_allclose": true,
+      "control_K32_gs8_max_abs_err": 0.0,
+      "deterministic_across_runs": true,
+      "group_mapping_matches_contract": true,
+      "n_k_tiles": 3,
+      "out_has_nan": false,
+      "seed2_max_abs_err": 7.803e+36,
+      "seed2_mean_abs_err": 3.908e+34,
+      "seed2_ref_absmax": 21.108,
+      "seed2_rel_err": 3.697e+35,
+      "seed3_max_abs_err": 1.968e+25,
+      "seed3_ref_absmax": 23.109,
+      "seed3_rel_err": 8.516e+23,
+      "tail_case": "M=64,N=64,K=40,gs=8,bits=4",
+      "tolerance": "rtol=1e-3, atol=1e-3"
     },
     "event_id": "t11",
     "status": "confirmed",
-    "summary": "K=16 < group_size=32: the wrapper computes num_groups = 16//32 = 0 and clamp(max=-1) yields g_idx = -1 for every column (verified directly on host: wrapper_g_idx_unique == [-1]). The kernel then gathers scales/zeros at row -1. No crash occurred, but the output was identically zero (out_absmax 0.0) while the contract reference (single group row 0) has absmax
-  ...[truncated 294 chars]
+    "summary": "Unmasked K-tail confirmed and isolated from the group-mapping defect. I used group_size=8 with K=40, so K is an exact multiple of gro
+  ...[truncated 645 chars]
   Output summary:
   {
     "claim_id": "c3",
     "claim_status": "confirmed",
     "evidence_id": "c3.e1",
-    "summary": "K=16 < group_size=32: the wrapper computes num_groups = 16//32 = 0 and clamp(max=-1) yields g_idx = -1 for every column (verified directly on host: wrapper_g_idx_unique == [-1]). The kernel then gathers scales/zeros at row -1. No crash occurred, but the output was identically zero (out_absmax 0.0) while the contract reference (single group row 0) has absmax 7.589, giving max_rel_err 1.0 \u2014 a 100% wrong result. The all-zero output is consistent with the negative-offset scales load returning zeroed memory preceding the allocation, making b = (b - zeros) * 0. Deterministic across two runs (run_to_run_max_diff 0.0).",
+    "summary": "Unmasked K-tail confirmed and isolated from the group-mapping defect. I used group_size=8 with K=40, so K is an exact multiple of group_size and the wrapper's g_idx equals the contract mapping (group_mapping_matches_contract=true) \u2014 any error is purely the unmasked third k-tile. Output was catastrophically wrong: max abs err 7.80e36 (ref |C|max 21.11, rel 3.7e35) at seed 2 and 1.97e25 (ref |C|max 23.11) at seed 3, i.e. garbage magnitude varying with heap contents rather than a bounded numeric drift. No NaN, deterministic within a run, no CUDA fault raised \u2014 a silent OOB read of A cols 40..47, packed-B row 5 and g_idx[40..47] accumulated into the result. Control K=32/gs=8 (K%16==0) matched the reference exactly (max abs err 0.0).",
     "supports": "confirmed",
     "tool_event_id": "t11"
   }
-- `run_claim_probe -> t15 ok`
-  Args:
-  {
-    "claim_id": "c3",
-    "code": "\nimport importlib.util, torch, numpy as np, json, math\nspec = importlib.util.spec_from_file_location(\"kmod\",\"/root/cases/case_33/kernel.py\")\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\ndev='cuda'; torch.manual_seed(0)\nM,N,K,gs=32,32,16,32\nA=torch.randn(M,K)\nq=torch.randint(0,16,(K,N),dtype=torch.int32)\nng=math.ceil(K/gs)   # 1\nscales_row=torch.rand(ng,N)*0.1+0.01\nzv=torch.randint(0,15,(ng,N),dtype=torch.int32)\nqn=q.numpy().astype(np.uint32); packed=np.zeros((K//8,N),dtype=np.uint32)\nfor kk in range(K): packed[kk//8] |= (qn[kk]<<((kk%8)*4))\nzvn=zv.numpy().astype(np.uint32); zp=np.zeros((ng,N//8),dtype=np.uint32)\nfor nn in range(N): zp[:,nn//8] |= (zvn[:,nn]<<((nn%8)*4))\nb=torch.from_numpy(packed.astype(np.int3
-  ...[truncated 1606 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t15_probe.py",
-        "sha256": "756b87ba219d0cad1c48388095143d0c39b32ed7447fb961223fc22a21105ad7"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t15_stdout.txt",
-        "sha256": "c260b04f4b79d8e7117dad563da5b07c78d0d3c4fb1fdd4909a9ed9299ea56e8"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t15_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t15_json_result.json",
-        "sha256": "dde4ec78b480173b657185bc3c01caf6f5a8b2e05e5c0fb1cfc39582e3b770a3"
-      }
-    ],
-    "claim_id": "c3",
-    "claim_statement": "When K < group_size (e.g. K=16, group_size=32, scales/zeros with ceil(16/32)=1 row), the wrapper computes num_groups = 0 and clamp(..., max=-1) yields g_idx = -1 for every column, so the kernel gathers scales/
-  ...[truncated 4051 chars]
 
-### Turn 6 - `skeptic` (12.504039758000033s, in=75055 out=752)
+### Turn 6 - `skeptic` (18.18823171400001s, in=83276 out=702)
 
 Message:
 
 ```text
-This is my final review turn. All three claims (c1 partial-group mis-mapping, c2 unmasked K tail, c3 negative g_idx gather) are already confirmed with decisive in-scope evidence, and the supplementary sentinel probe (t15) only strengthened c3's mechanism (output matched the row -1 sentinel scale to 1.6e-7 relative, proving a genuine negative-row OOB gather). Nothing in the new evidence exposes an uncovered failure mode, so I am not holding up the verdict.
+This is a review turn. All three claims I raised are confirmed with isolated, controlled probes (each defect separated from the others, with divisible-K controls matching the reference exactly, which validates the reference packing/zero+1 model). c1 is the primary contract violation stated explicitly in problem.txt; c2 and c3 are additional confirmed failures on the same "for any K" domain. Nothing in the new evidence needs a further claim, and remaining generality notes (N-tail masking, stride_ak assumption) are not anchored to the stated contract and would not change the verdict.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t16 ok`
+- `record_no_new_claims -> t15 ok`
   Args:
   {
-    "reason": "All three recorded claims are confirmed by runtime evidence and jointly cover the kernel's failure surface for the contract's stated non-divisible-K requirement: (c1) floor-based num_groups mis-assigns the trailing partial group (K=80/gs=32 matches the floor/clamp model to 4.2e-6 while deviating 0.365 relative from the contract reference, with a clean K=64 control validating the packing conventions); (c2) unmasked K-tail loads inject OOB garbage (K=72/gs=24 isolation case gives 1.9e36 error; K=72/gs=32 raises cudaErrorIllegalAddress); (c3) K<group_size yields g_idx=-1 and a negative-row gather, now mechanistically pinned by the t15 sentinel probe (output matched the row -1 sentinel-scale reference to rel 1.6e-7 while being off the correct row-0 reference by 652.6). The suppl
-  ...[truncated 438 chars]
+    "reason": "All three recorded claims are confirmed by controlled runtime probes with clean isolation: c1 (trailing-partial-group misassignment at K=48/gs=32, K%16==0 so no k-tail confound; kernel matches the clamped model to 7.6e-6 and misses the contract reference by rel 0.956), c2 (num_groups=0 -> g_idx=-1 below-base read at K=16/gs=32, exact match to a sentinel row placed physically before the tensor base, deterministic silent wrong answer), and c3 (unmasked k-tail at K=40/gs=8 where the group mapping is provably contract-correct, giving 1e25-1e36 magnitude garbage). Divisible-K controls (K=64/gs=32, K=32/gs=32, K=32/gs=8) matched the contract reference to 0.0-9.5e-6, which rules out a reference-model/packing artifact and pins the failures to lines 69-73 and the unmasked loop loads.
+  ...[truncated 349 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "All three recorded claims are confirmed by runtime evidence and jointly cover the kernel's failure surface for the contract's stated non-divisible-K requirement: (c1) floor-based num_groups mis-assigns the trailing partial group (K=80/gs=32 matches the floor/clamp model to 4.2e-6 while deviating 0.365 relative from the contract reference, with a clean K=64 control validating the packing conventions); (c2) unmasked K-tail loads inject OOB garbage (K=72/gs=24 isolation case gives 1.9e36 error; K=72/gs=32 raises cudaErrorIllegalAddress); (c3) K<group_size yields g_idx=-1 and a negative-row gather, now mechanistically pinned by the t15 sentinel probe (output matched the row -1 sentinel-scale reference to rel 1.6e-7 while being off the correct row-0 reference by 652.6). The supplementary probe adds mechanism detail to an already-confirmed claim and does not reveal any distinct, uncovered defect. Remaining unexplored surfaces (N not a multiple of 32, zeros layout convention, non-contiguous A) are either generalization notes or lack contract evidence tying them to the stated input domain, so they do not warrant a new claim that would delay the
-  ...[truncated 117 chars]
+    "reason": "All three recorded claims are confirmed by controlled runtime probes with clean isolation: c1 (trailing-partial-group misassignment at K=48/gs=32, K%16==0 so no k-tail confound; kernel matches the clamped model to 7.6e-6 and misses the contract reference by rel 0.956), c2 (num_groups=0 -> g_idx=-1 below-base read at K=16/gs=32, exact match to a sentinel row placed physically before the tensor base, deterministic silent wrong answer), and c3 (unmasked k-tail at K=40/gs=8 where the group mapping is provably contract-correct, giving 1e25-1e36 magnitude garbage). Divisible-K controls (K=64/gs=32, K=32/gs=32, K=32/gs=8) matched the contract reference to 0.0-9.5e-6, which rules out a reference-model/packing artifact and pins the failures to lines 69-73 and the unmasked loop loads. The remaining unexplored surfaces (unmasked N tail for N%32!=0, stride_ak==1 assumption on line 52) are not required by problem.txt's stated input contract and would only be non-decisive generalization notes, so they do not justify holding up the verdict. No new in-scope claim is needed.",
+    "reviewed_claims": [
+      "c1",
+      "c2",
+      "c3"
+    ],
+    "reviewed_tool_eve
+  ...[truncated 28 chars]
 
-### Turn 7 - `judge` (17.782115895000004s, in=78422 out=1242)
+### Turn 7 - `judge` (19.788379399000007s, in=85571 out=1143)
 
 Message:
 
 ```text
-All three claims are confirmed with in-scope runtime evidence, the Skeptic has signed off with no new claims, and no open claims lack evidence. Recording the final verdict.
+All three claims are confirmed with isolated runtime evidence, the artifact has no test.py so problem.txt is the operative contract, and the Skeptic signed off with no new claims. Recording the final verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t17 ok`
+- `record_verdict -> t16 ok`
   Args:
   {
-    "confidence": 0.93,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "The artifact supplies no test.py/get_inputs (test_code is empty), so per scope policy problem.txt is the operative contract. That contract explicitly requires that every column be dequantized with its own group's scale/zero \\\"for any K -- including a K that is not an exact multiple of group_size\\\", with scales/zeros supplied as ceil(K/group_size) rows and the trailing short group treated as a group of its own. Claim c1 confirms the kernel does not implement that clause: the host wrapper builds g_idx = clamp(arange(K)//group_size, max=K//group_size - 1), i.e. floor rather than ceil groups. Probe t9 (K=80, gs=32, 3 rows supplied, K%16==0 so no tail-mask confound) shows max_abs_err 7.76 against ref_absmax 
-  ...[truncated 1698 chars]
+    "reason": "The artifact contains only kernel.py, meta.json and problem.txt (no test.py/get_inputs, meta.json passed=null), so problem.txt is the operative contract. It explicitly requires that \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. Three confirmed, in-scope claims show the kernel does not implement that required behavior, each isolated by controls so the failures cannot be attributed to reference-model/packing ambiguity (the divisible-K controls K=64/gs=32, K=32/gs=32, K=32/gs=8 matched the contract reference to 0.0-9.5
+  ...[truncated 1655 chars]
   Output summary:
   {
-    "confidence": 0.93,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "The artifact supplies no test.py/get_inputs (test_code is empty), so per scope policy problem.txt is the operative contract. That contract explicitly requires that every column be dequantized with its own group's scale/zero \\\"for any K -- including a K that is not an exact multiple of group_size\\\", with scales/zeros supplied as ceil(K/group_size) rows and the trailing short group treated as a group of its own. Claim c1 confirms the kernel does not implement that clause: the host wrapper builds g_idx = clamp(arange(K)//group_size, max=K//group_size - 1), i.e. floor rather than ceil groups. Probe t9 (K=80, gs=32, 3 rows supplied, K%16==0 so no tail-mask confound) shows max_abs_err 7.76 against ref_absmax 21.25, max_rel_err 0.365, 98% of elements off by >1e-3 relative, while matching the floor/clamp model to 4.2e-6 \u2014 the trailing columns k=64..79 are dequantized with row 1 and the third supplied row is never read. The divisible control (K=64, gs=32) matches to 2.99e-6 (rel 2.1e-7), which validates that the probe's packing, qzeros-along-N layout and +1 zero-point conventions are exactly the one
-  ...[truncated 1298 chars]
+    "reason": "The artifact contains only kernel.py, meta.json and problem.txt (no test.py/get_inputs, meta.json passed=null), so problem.txt is the operative contract. It explicitly requires that \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. Three confirmed, in-scope claims show the kernel does not implement that required behavior, each isolated by controls so the failures cannot be attributed to reference-model/packing ambiguity (the divisible-K controls K=64/gs=32, K=32/gs=32, K=32/gs=8 matched the contract reference to 0.0-9.5e-6, validating the packing and zero+1 reference model):\n\n- c1 (decisive): at K=48, group_size=32 (K%16==0, so no k-tail confound) the wrapper's num_groups = K//group_size plus clamp(max=num_groups-1) maps all 48 columns to group 0; the second of the two supplied scale/zero rows is never read. Output matches the \"clamped\" model to 7.6e-6 and misses the contract reference by max abs 25.65 on |C
+  ...[truncated 1255 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Compute C = A @ dequant(B) where A is (M,K) fp32 and B is 4-bit weights packed 8-per-int32 along K, shape (K//8, N).",
-    "dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n]; group_of(k) is the index of the consecutive K-group of width group_size that column k belongs to.",
-    "Groups partition K into consecutive blocks of group_size; the contract says K need not divide evenly, so there are ceil(K/group_size) groups and the final short group has its own scale/zero row.",
-    "scales/zeros are supplied with ceil(K/group_size) rows; every column must use its own group's parameters, including the trailing partial group.",
-    "Reference is the upstream AutoGPTQ kernel semantics (auto_gptq/nn_modules/triton_utils/kernels.py), so packing/zero-point conventions are expected to follow that implementation."
+    "C = A @ dequant(B) with dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k),n]) * scale[group_of(k),n]; A is (M,K) fp32, B is 4-bit values packed 8-per-int32 along K, output (M,N) fp32.",
+    "group_of(k) = k // group_size for ALL k, including the trailing shorter group when K % group_size != 0.",
+    "scales/zeros are supplied with ceil(K / group_size) rows, so the final partial group has its own row and must be used for the trailing columns.",
+    "Contract is explicitly stated to hold 'for any K', so non-multiple-of-group_size K is an in-scope, load-bearing case rather than an edge case the caller must avoid.",
+    "Public entry point is gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4); the group table is derived inside the wrapper, not passed in, so the wrapper's derivation is part of the tested behavior."
   ],
   "kernel_model": [
-    "Standard AutoGPTQ 2/4/8-bit tiled matmul: grid over M/N tiles only, full K reduction inside a loop of num_pid_k = cdiv(K, BLOCK_SIZE_K) iterations, accumulator in fp32, tl.dot per tile.",
-    "Per-K group lookup is table-driven inside the kernel: g_idx = tl.load(g_ptrs) per K-tile, then scales/zeros rows are gathered as scales_ptr + g_idx*stride_scales (line 43) and zeros_ptr + g_idx*stride_zeros (line 44) \u2014 the kernel itself is agnostic to how g_idx was built.",
-    "B unpacking: b_ptrs index row offs_k // 8 (infeature_per_bits = 32//bits) with shifter = (offs_k % 8) * bits, i.e. 4-bit fields packed along K within each int32 (lines 32, 37, 49).",
-    "zeros are treated as PACKED int32 along N: zeros_ptrs uses offs_bn // 8 and zeros_shifter = (offs_bn % 8) * bits (lines 35, 38, 45), and the kernel applies the AutoGPTQ +1 convention (zeros = zeros + 1, line 46) before b = (b - zeros) * scales.",
-    "Host wrapper (lines 69-73) derives the group table as g_idx = clamp(arange(K)//group_size, max=K//group_size - 1), i.e. num_groups = floor(K/group_size), NOT ceil; trailing colum
-...[truncated 4920 chars]
+    "Wrapper (lines 69-73) computes num_groups = K // group_size (floor) and builds g_idx = clamp(arange(K) // group_size, max=num_groups-1). For K a multiple of group_size this equals the contract mapping; for K not a multiple, the trailing K % group_size columns are clamped down to group index floor(K/gs)-1 instead of their own group floor(K/gs).",
+    "Concretely with K=40, group_size=16: contract groups are {0,1,2} (ceil=3 rows supplied), kernel produces num_groups=2 and maps columns 32..39 to group 1, so the last partial group's scale/zero row is never read.",
+    "Kernel loop (lines 41-54) iterates num_pid_k = cdiv(K, BLOCK_SIZE_K=16) with no k-dimension masking: tl.load(a_ptrs, mask=a_mask) masks only rows (offs_am < M), and tl.load(b_ptrs) and tl.load(g_ptrs) are fully unmasked.",
+    "b/scales/zeros loads have no offs_bn < N mask, so N not a multiple of BLOCK_SIZE_N=32 implies out-of-bounds reads of b_packed, scales and zeros (results still masked at store, but reads are OOB and can pollute via dot only through b columns that are stored-masked).",
+    "Pointer advance a_ptrs += BLOCK_S
+...[truncated 5366 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: case_33 implements AutoGPTQ-style fused INT4 dequant + matmul (quant_matmul_248_kernel) plus a host wrapper that synthesizes the per-K group table from group_size. The problem contract explicitly requires correct behavior when K is NOT a multiple of group_size (trailing short group is its own group with its own scales/zeros row, ceil(K/group_size) rows supplied), and the wrapper's g_idx construction uses floor division with a clamp to K//group_size - 1, which is the primary suspicion surface.
+- `du1` tasks=`initial`: case_33 implements AutoGPTQ-style grouped INT4 dequant fused matmul (C = A @ dequant(B)). The host wrapper derives the per-column group table with num_groups = K // group_size and clamps g_idx to num_groups-1, which conflicts with the problem's explicit ceil(K/group_size) group contract for non-divisible K; secondary risks are unmasked K/N tail loads and contiguity assumptions.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: When K is not a multiple of group_size (e.g. M=32, N=32, K=80, group_size=32, bits=4, with scales/zeros supplied as ceil(80/32)=3 rows), the host wrapper's g_idx = clamp(arange(K)//group_size, max=K//group_size - 1) (kernel.py lines 69-73) assigns the trailing short group's columns (k=64..79) to group row 1 instead of row 2, so those columns are dequantized with the wrong scale/zero and C differs from the reference C = A @ dequant(B); the last supplied scales/zeros row is never read.
+Statement: For K not an exact multiple of group_size (e.g. M=64, N=64, K=40, group_size=16, bits=4), gptq_matmul's wrapper computes num_groups = K // group_size = 2 and clamps g_idx to num_groups-1 = 1, so the trailing columns k=32..39 are dequantized with row 1 of scales/zeros instead of their own final-group row 2; the last of the ceil(K/group_size)=3 supplied rows is never read and the output columns' contributions from k>=32 are wrong by the ratio of the two groups' scale/zero pairs (expect large, non-tolerance-level error, e.g. max abs error comparable to the magnitude of C itself, while a matching-K case with K=32 agrees).
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt states the contract explicitly: "every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... `scales` and `zeros` are supplied with ceil(K / group_size) rows". No test.py exists, so I choose a representative admissible shape (K=80, group_size=32, K divisible by 8 for 4-bit packing and by BLOCK_SIZE_K=16 so no tail-masking confound).
+Scope rationale: problem.txt states the contract must hold "for any K -- including a K that is not an exact multiple of group_size", and that scales/zeros are supplied with ceil(K/group_size) rows. K=40 with group_size=16 is a representative case the contract explicitly admits; the group table is derived inside the wrapper so the caller cannot compensate.
 
 Scope evidence:
-- `problem.txt`: Contract requires correct per-group dequant for any K including K not an exact multiple of group_size; trailing columns form a shorter final group with its own row, and scales/zeros have ceil(K/group_size) rows.
-- `kernel.py lines 69-73`: num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) — floor-based, clamps the trailing partial group onto the last full group's row.
+- `problem.txt`: "every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly."
+- `kernel.py lines 69-73`: num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) — floor count plus clamp collapses the trailing partial group into the previous group.
 
-Rationale: num_groups uses floor division and the clamp caps g_idx at floor(K/group_size)-1, which is strictly less than the contract's ceil(K/group_size)-1 whenever K % group_size != 0. This is the exact case problem.txt calls out as required behavior.
+Rationale: Lines 69-73 use floor division for the group count and clamp, which is only equivalent to k // group_size when group_size divides K. The problem explicitly defines group_of(k) = the group column k belongs to for any K and states ceil(K/group_size) rows are supplied.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: K=80, group_size=32 (ceil=3 rows supplied, K%16==0 so no tail-mask confound): output deviates massively from the contract reference (max_abs_err 7.756 vs ref_absmax 21.25, max_rel_err 0.365, 98.0% of elements off by >1e-3 relative) yet matches the floor/clamp model reference to 4.2e-6 — i.e. the kernel reproduces exactly the behavior of g_idx = clamp(arange(K)//gs, max=K//gs-1), assigning k=64..79 to group row 1 instead of row 2, and never reading the third supplied scales/zeros row. The divisible control K=64, gs=32 matches the contract reference to 2.99e-6 (rel 2.1e-7, 0% elements off), so the packing/+1-zero conventions used in the probe are the ones the kernel expects and the failure is specifically the partial-group mapping.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: Trailing-partial-group misassignment confirmed at K=48, group_size=32 (K%16==0, so no k-tail confound). Wrapper produced num_groups=1 and g_idx=0 for all 48 columns while the contract mapping is 0 for k<32 and 1 for k>=32; the second of the ceil(K/gs)=2 supplied scale/zero rows is never read. Kernel output is bit-close to the "clamped" model (max abs err 7.6e-6) and far from the contract reference (max abs err 25.65 on |C|max 26.82, rel 0.956, allclose False). Controls with K divisible by group_size (K=64/gs=32 and K=32/gs=32) match the contract reference to 9.5e-6 and 0.0, confirming the packing/zero+1 reference model is right and isolating the defect to the floor+clamp group derivation at lines 69-73.
 
 ### c2 - `confirmed`
 
-Statement: When K is not a multiple of BLOCK_SIZE_K=16 but is a valid packed K (e.g. K=72 with group_size=32, N=32, M=32), the K loop runs cdiv(K,16)=5 iterations while the loads of a (masked only on M), b_packed, and g_idx carry no K-dimension mask (kernel.py lines 31, 42, 47-48), so the final iteration reads past the ends of A, b_packed and g_idx and adds out-of-bounds garbage into the accumulator, producing wrong C (or an illegal memory access).
+Statement: When K < group_size (e.g. K=8, group_size=16, ceil = 1 group row supplied), num_groups = 0 so g_idx = clamp(..., max=-1) = -1 for every column; the kernel then loads scales/zeros at negative row offsets (scales_ptr - stride_scales), reading memory before the tensor base and producing wrong output (or an illegal-memory-access / nondeterministic result) rather than using the single supplied group row 0.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt requires correctness "for any K", and K=72 is an admissible 4-bit-packable K (72 % 8 == 0) with a non-multiple-of-group_size tail, which is precisely the case the contract highlights. No test.py narrows K, so a representative contract-admissible K is used.
+Scope rationale: problem.txt requires the mapping to be correct "for any K"; K smaller than group_size yields ceil(K/group_size)=1 valid group row, a case the stated contract admits. No test.py narrows the domain (test_code is empty, meta.json has passed=null), so the contract text is the only scope authority.
 
 Scope evidence:
-- `problem.txt`: Contract: 'every column must be dequantized ... for any K -- including a K that is not an exact multiple of group_size', implying K values that also need not align to the kernel's internal BLOCK_SIZE_K.
-- `kernel.py lines 41-54`: Loop over cdiv(K,16) tiles; tl.load of b and g_idx have no mask, and a's mask covers only the M dimension.
+- `problem.txt`: Contract holds "for any K"; scales/zeros supplied with ceil(K/group_size) rows, so K=8 with group_size=16 is a legal input with exactly one group row.
+- `kernel.py lines 69-73, 43-44`: num_groups=0 gives g_idx=-1 everywhere; kernel adds g_idx*stride_scales / g_idx*stride_zeros to base pointers unguarded.
 
-Rationale: a_mask only restricts offs_am < M; nothing restricts offs_k < K. b_ptrs and g_ptrs are advanced each iteration with fully unmasked tl.load. Additionally the g_idx OOB read can yield an arbitrary row index for the scales/zeros gather.
+Rationale: torch.clamp(..., max=-1) forces all entries to -1 when num_groups is 0; lines 43-44 add g_idx*stride to the base pointers with no bounds check, so negative indices produce below-base reads.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: Unmasked K tail confirmed by two independent signals. (a) Isolation case K=72, group_size=24 (K IS divisible by group_size, so the c1 group-table bug is inactive; K%BLOCK_SIZE_K==8, 5 K-tiles): output max_abs_err 1.92e36 against both the contract reference and the floor/clamp model (ref_absmax 13.4) — pure out-of-bounds garbage entering the accumulator, not a group-mapping artifact. (b) K=72, group_size=32 raised a hard CUDA "illegal memory access" (cudaErrorIllegalAddress), i.e. the unmasked tail loads of A / b_packed / g_idx (and the g_idx-driven scales/zeros gather with an OOB row index) run off allocated memory. run_to_run_max_diff was 0.0 for case (a), so the garbage was stable across the two calls in that process, but the magnitude (1e36) still shows it is uninitialized memory, not valid data.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: Negative-index below-base read confirmed at K=16 < group_size=32 (K is a multiple of BLOCK_SIZE_K=16, so the k-tail defect is not active). num_groups=0 makes g_idx == -1 for every column. I allocated scales/zeros with an extra SENTINEL row physically preceding the supplied tensor (supplied = view starting at physical row 1, scales stride0=64, zeros stride0=8) so the below-base read is directly identifiable. Kernel output matched the sentinel-row reference EXACTLY (max abs err 0.0) and was wildly off the contract reference (max abs err 515.84 vs |C|max 19.35; out |max| 514.23). Result was deterministic across two runs, i.e. a silent wrong-answer out-of-bounds read rather than a fault.
 
 ### c3 - `confirmed`
 
-Statement: When K < group_size (e.g. K=16, group_size=32, scales/zeros with ceil(16/32)=1 row), the wrapper computes num_groups = 0 and clamp(..., max=-1) yields g_idx = -1 for every column, so the kernel gathers scales/zeros at a negative row offset (kernel.py lines 43-44), reading out of bounds and producing wrong results or a crash instead of using group row 0.
+Statement: For K not a multiple of BLOCK_SIZE_K=16 (e.g. K=40), the reduction loop runs num_pid_k = cdiv(K,16) = 3 iterations with no k-dimension mask: tl.load(a_ptrs, mask=a_mask) masks only rows, and tl.load(b_ptrs) / tl.load(g_ptrs) are fully unmasked, so the last iteration reads A columns 40..47, packed-B row 5 (beyond the K/8=5 rows) and g_idx entries 40..47 out of bounds and accumulates that garbage into the result — a wrong output (or OOB fault) independent of, and confounding with, the group-mapping defect.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt says the trailing (possibly only) short group is still a group of its own with its own scales/zeros row and that ceil(K/group_size) rows are supplied; K < group_size is the degenerate instance of that same stated requirement. Without a test.py fixing K, this is a contract-admissible representative input, though it is a more extreme case than claim 1.
+Scope rationale: The same "for any K" clause that makes non-multiple-of-group_size K legal also admits K values that are not multiples of 16 (e.g. K=40, which is a natural instantiation of the contract's trailing-partial-group case). Without a test.py the problem text is the operative input domain.
 
 Scope evidence:
-- `problem.txt`: 'the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros; scales and zeros are supplied with ceil(K / group_size) rows' — for K<group_size this means exactly one group, row 0.
-- `kernel.py lines 69-73`: num_groups = K // group_size becomes 0 and clamp(max=-1) produces g_idx = -1 for all columns.
+- `problem.txt`: "for any K -- including a K that is not an exact multiple of group_size" admits K values such as 40 that are also not multiples of the kernel's internal BLOCK_SIZE_K=16.
+- `kernel.py lines 41-54`: Loop over cdiv(K,16) tiles; a-load masks rows only, b-load and g_idx-load are unmasked, so the tail tile reads past the end of A, b_packed and g_idx and adds the result into the accumulator.
 
-Rationale: torch.clamp with max=-1 forces all entries to -1 since arange//group_size is 0; the kernel then computes scales_ptr + (-1)*stride_scales.
+Rationale: Lines 42, 47-48 have no offs_k + k*BLOCK_SIZE_K < K predicate and no other=0 on b/g loads, while the loop trip count is ceil-based.
 
 Evidence:
-- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t11: K=16 < group_size=32: the wrapper computes num_groups = 16//32 = 0 and clamp(max=-1) yields g_idx = -1 for every column (verified directly on host: wrapper_g_idx_unique == [-1]). The kernel then gathers scales/zeros at row -1. No crash occurred, but the output was identically zero (out_absmax 0.0) while the contract reference (single group row 0) has absmax 7.589, giving max_rel_err 1.0 — a 100% wrong result. The all-zero output is consistent with the negative-offset scales load returning zeroed memory preceding the allocation, making b = (b - zeros) * 0. Deterministic across two runs (run_to_run_max_diff 0.0).
+- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t11: Unmasked K-tail confirmed and isolated from the group-mapping defect. I used group_size=8 with K=40, so K is an exact multiple of group_size and the wrapper's g_idx equals the contract mapping (group_mapping_matches_contract=true) — any error is purely the unmasked third k-tile. Output was catastrophically wrong: max abs err 7.80e36 (ref |C|max 21.11, rel 3.7e35) at seed 2 and 1.97e25 (ref |C|max 23.11) at seed 3, i.e. garbage magnitude varying with heap contents rather than a bounded numeric drift. No NaN, deterministic within a run, no CUDA fault raised — a silent OOB read of A cols 40..47, packed-B row 5 and g_idx[40..47] accumulated into the result. Control K=32/gs=8 (K%16==0) matched the reference exactly (max abs err 0.0).
 
 ## Tool Events
 
@@ -624,39 +608,39 @@ Evidence:
 
 {
   "contract_model": [
-    "Compute C = A @ dequant(B) where A is (M,K) fp32 and B is 4-bit weights packed 8-per-int32 along K, shape (K//8, N).",
-    "dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n]; group_of(k) is the index of the consecutive K-group of width group_size that column k belongs to.",
-    "Groups partition K into consecutive blocks of group_size; the contract says K need not divide evenly, so there are ceil(K/group_size) groups and the final short group has its own scale/zero row.",
-    "scales/zeros are supplied with ceil(K/group_size) rows; every column must use its own group's parameters, including the trailing partial group.",
-    "Reference is the upstream AutoGPTQ kernel semantics (auto_gptq/nn_modules/triton_utils/kernels.py), so packing/zero-point conventions are expected to follow that implementation."
+    "C = A @ dequant(B) with dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k),n]) * scale[group_of(k),n]; A is (M,K) fp32, B is 4-bit values packed 8-per-int32 along K, output (M,N) fp32.",
+    "group_of(k) = k // group_size for ALL k, including the trailing shorter group when K % group_size != 0.",
+    "scales/zeros are supplied with ceil(K / group_size) rows, so the final partial group has its own row and must be used for the trailing columns.",
+    "Contract is explicitly stated to hold 'for any K', so non-multiple-of-group_size K is an in-scope, load-bearing case rather than an edge case the caller must avoid.",
+    "Public entry point is gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4); the group table is derived inside the wrapper, not passed in, so the wrapper's derivation is part of the tested behavior."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Standard AutoGPTQ 2/4/8-bit tiled matmul: grid over M/N tiles only, full K reduction inside a loop of num_pid_k = cdiv(K, BLOCK_SIZE_K) iterations, accumulator in fp32, tl.dot per tile.",
-    "Per-K group lookup is table-driven inside the kernel: g_idx = tl.load(g_ptrs) per K-tile, then scales/zeros rows are gathered as scales_ptr + g_idx*stride_scales (line 43) and zeros_ptr + g_idx*stride_zeros (line 44) \u2014 the kernel itself is agnostic to how g_idx was built.",
-    "B unpacking: b_ptrs index row offs_k // 8 (infeature_per_bits = 32//bits) with shifter = (offs_k % 8) * bits, i.e. 4-bit fields packed along K within each int32 (lines 32, 37, 49).",
-    "zeros are treated as PACKED int32 along N: zeros_ptrs uses offs_bn // 8 and zeros_shifter = (offs_bn % 8) * bits (lines 35, 38, 45), and the kernel applies the AutoGPTQ +1 convention (zeros = zeros + 1, line 46) before b = (b - zeros) * scales.",
-    "Host wrapper (lines 69-73) derives the group table as g_idx = clamp(arange(K)//group_size, max=K//group_size - 1), i.e. num_groups = floor(K/group_size)
-...[truncated 5524 chars]
+    "Wrapper (lines 69-73) computes num_groups = K // group_size (floor) and builds g_idx = clamp(arange(K) // group_size, max=num_groups-1). For K a multiple of group_size this equals the contract mapping; for K not a multiple, the trailing K % group_size columns are clamped down to group index floor(K/gs)-1 instead of their own group floor(K/gs).",
+    "Concretely with K=40, group_size=16: contract groups are {0,1,2} (ceil=3 rows supplied), kernel produces num_groups=2 and maps columns 32..39 to group 1, so the last partial group's scale/zero row is never read.",
+    "Kernel loop (lines 41-54) iterates num_pid_k = cdiv(K, BLOCK_SIZE_K=16) with no k-dimension masking: tl.load(a_ptrs, mask=a_mask) masks only rows (offs_am < M), and tl.load(b_ptrs) and tl.load(g_ptrs) are fully unmasked.",
+    "b/scales/zeros loads have no offs_bn < N mask, so N not a multiple of BLOCK_SIZE_N=32 implies out-of-bounds reads of b_packed, scales and zeros (results still masked at store, but reads are OOB and can pollute via dot only through b columns that are stored-masked).",
+    "Pointer
+...[truncated 5853 chars]
 
 ### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "num_groups uses floor division and the clamp caps g_idx at floor(K/group_size)-1, which is strictly less than the contract's ceil(K/group_size)-1 whenever K % group_size != 0. This is the exact case problem.txt calls out as required behavior.",
+  "rationale": "Lines 69-73 use floor division for the group count and clamp, which is only equivalent to k // group_size when group_size divides K. The problem explicitly defines group_of(k) = the group column k belongs to for any K and states ceil(K/group_size) rows are supplied.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract requires correct per-group dequant for any K including K not an exact multiple of group_size; trailing columns form a shorter final group with its own row, and scales/zeros have ceil(K/group_size) rows."
+      "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
     },
     {
       "source": "kernel.py lines 69-73",
-      "summary": "num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) \u2014 floor-based, clamps the trailing partial group onto the last full group's row."
+      "summary": "num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) \u2014 floor count plus clamp collapses the trailing partial group into the previous group."
     }
   ],
-  "scope_rationale": "problem.txt states the contract explicitly: \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... `scales` and `zeros` are supplied with ceil(K / group_size) rows\". No test.py exists, so I choose a representative admissible shape (K=80, group_size=32, K divisible by 8 for 4-bit packing and by BLOCK_SIZE_K=16 so no tail-masking confound).",
-  "statement": "When K is not a multiple of group_size (e.g. M=32, N=32, K=80, group_size=32, bits=4, with scales/zeros supplied as ceil(80/32)=3 rows), the host wrapper's g_idx = clamp(arange(K)//group_size, max=K//group_size - 1) (kernel.py lines 69-73) assigns the trailing short group's columns (k=64..79) to group row 1 instead of row 2, so those columns are dequantized with the wrong scale/zero and C differs from the reference C = A @ dequant(B); the last supplied scales/zeros row is never read.",
+  "scope_rationale": "problem.txt states the contract must hold \"for any K -- including a K that is not an exact multiple of group_size\", and that scales/zeros are supplied with ceil(K/group_size) rows. K=40 with group_size=16 is a representative case the contract explicitly admits; the group table is derived inside the wrapper so the caller cannot compensate.",
+  "statement": "For K not an exact multiple of group_size (e.g. M=64, N=64, K=40, group_size=16, bits=4), gptq_matmul's wrapper computes num_groups = K // group_size = 2 and clamps g_idx to num_groups-1 = 1, so the trailing columns k=32..39 are dequantized with row 1 of scales/zeros instead of their own final-group row 2; the last of the ceil(K/group_size)=3 supplied rows is never read and the output columns' contributions from k>=32 are wrong by the ratio of the two groups' scale/zero pairs (expect large, non-tolerance-level error, e.g. max abs error comparable to the magnitude of C itself, while a matching-K case with K=32 agrees).",
   "status": "open"
 }
 
@@ -664,20 +648,20 @@ Evidence:
 
 {
   "id": "c2",
-  "rationale": "a_mask only restricts offs_am < M; nothing restricts offs_k < K. b_ptrs and g_ptrs are advanced each iteration with fully unmasked tl.load. Additionally the g_idx OOB read can yield an arbitrary row index for the scales/zeros gather.",
+  "rationale": "torch.clamp(..., max=-1) forces all entries to -1 when num_groups is 0; lines 43-44 add g_idx*stride to the base pointers with no bounds check, so negative indices produce below-base reads.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract: 'every column must be dequantized ... for any K -- including a K that is not an exact multiple of group_size', implying K values that also need not align to the kernel's internal BLOCK_SIZE_K."
+      "summary": "Contract holds \"for any K\"; scales/zeros supplied with ceil(K/group_size) rows, so K=8 with group_size=16 is a legal input with exactly one group row."
     },
     {
-      "source": "kernel.py lines 41-54",
-      "summary": "Loop over cdiv(K,16) tiles; tl.load of b and g_idx have no mask, and a's mask covers only the M dimension."
+      "source": "kernel.py lines 69-73, 43-44",
+      "summary": "num_groups=0 gives g_idx=-1 everywhere; kernel adds g_idx*stride_scales / g_idx*stride_zeros to base pointers unguarded."
     }
   ],
-  "scope_rationale": "problem.txt requires correctness \"for any K\", and K=72 is an admissible 4-bit-packable K (72 % 8 == 0) with a non-multiple-of-group_size tail, which is precisely the case the contract highlights. No test.py narrows K, so a representative contract-admissible K is used.",
-  "statement": "When K is not a multiple of BLOCK_SIZE_K=16 but is a valid packed K (e.g. K=72 with group_size=32, N=32, M=32), the K loop runs cdiv(K,16)=5 iterations while the loads of a (masked only on M), b_packed, and g_idx carry no K-dimension mask (kernel.py lines 31, 42, 47-48), so the final iteration reads past the ends of A, b_packed and g_idx and adds out-of-bounds garbage into the accumulator, producing wrong C (or an illegal memory access).",
+  "scope_rationale": "problem.txt requires the mapping to be correct \"for any K\"; K smaller than group_size yields ceil(K/group_size)=1 valid group row, a case the stated contract admits. No test.py narrows the domain (test_code is empty, meta.json has passed=null), so the contract text is the only scope authority.",
+  "statement": "When K < group_size (e.g. K=8, group_size=16, ceil = 1 group row supplied), num_groups = 0 so g_idx = clamp(..., max=-1) = -1 for every column; the kernel then loads scales/zeros at negative row offsets (scales_ptr - stride_scales), reading memory before the tensor base and producing wrong output (or an illegal-memory-access / nondeterministic result) rather than using the single supplied group row 0.",
   "status": "open"
 }
 
@@ -685,20 +669,20 @@ Evidence:
 
 {
   "id": "c3",
-  "rationale": "torch.clamp with max=-1 forces all entries to -1 since arange//group_size is 0; the kernel then computes scales_ptr + (-1)*stride_scales.",
+  "rationale": "Lines 42, 47-48 have no offs_k + k*BLOCK_SIZE_K < K predicate and no other=0 on b/g loads, while the loop trip count is ceil-based.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "'the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros; scales and zeros are supplied with ceil(K / group_size) rows' \u2014 for K<group_size this means exactly one group, row 0."
+      "summary": "\"for any K -- including a K that is not an exact multiple of group_size\" admits K values such as 40 that are also not multiples of the kernel's internal BLOCK_SIZE_K=16."
     },
     {
-      "source": "kernel.py lines 69-73",
-      "summary": "num_groups = K // group_size becomes 0 and clamp(max=-1) produces g_idx = -1 for all columns."
+      "source": "kernel.py lines 41-54",
+      "summary": "Loop over cdiv(K,16) tiles; a-load masks rows only, b-load and g_idx-load are unmasked, so the tail tile reads past the end of A, b_packed and g_idx and adds the result into the accumulator."
     }
   ],
-  "scope_rationale": "problem.txt says the trailing (possibly only) short group is still a group of its own with its own scales/zeros row and that ceil(K/group_size) rows are supplied; K < group_size is the degenerate instance of that same stated requirement. Without a test.py fixing K, this is a contract-admissible representative input, though it is a more extreme case than claim 1.",
-  "statement": "When K < group_size (e.g. K=16, group_size=32, scales/zeros with ceil(16/32)=1 row), the wrapper computes num_groups = 0 and clamp(..., max=-1) yields g_idx = -1 for every column, so the kernel gathers scales/zeros at a negative row offset (kernel.py lines 43-44), reading out of bounds and producing wrong results or a crash instead of using group row 0.",
+  "scope_rationale": "The same \"for any K\" clause that makes non-multiple-of-group_size K legal also admits K values that are not multiples of 16 (e.g. K=40, which is a natural instantiation of the contract's trailing-partial-group case). Without a test.py the problem text is the operative input domain.",
+  "statement": "For K not a multiple of BLOCK_SIZE_K=16 (e.g. K=40), the reduction loop runs num_pid_k = cdiv(K,16) = 3 iterations with no k-dimension mask: tl.load(a_ptrs, mask=a_mask) masks only rows, and tl.load(b_ptrs) / tl.load(g_ptrs) are fully unmasked, so the last iteration reads A columns 40..47, packed-B row 5 (beyond the K/8=5 rows) and g_idx entries 40..47 out of bounds and accumulates that garbage into the result \u2014 a wrong output (or OOB fault) independent of, and confounding with, the group-mapping defect.",
   "status": "open"
 }
 
@@ -710,13 +694,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "5e8e83cd8fb2de92e2a82f34c68b07702452bdf161896de9e6a9d20f9eb5d29b"
+      "sha256": "8de544c4df400e165c187bcfbca4410cbc92d21586e6df8c96f52ecf425d1278"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "d3946f5546168390811cb11d3623f51a3814d00ca1115f0abd8efa30b6b904ab"
+      "sha256": "bbdab149d4efd3c11e7eaf7fc64bba8edb7ba2c216429b80a3ae675300010dc7"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -728,12 +712,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t9_json_result.json",
-      "sha256": "ca081764b21821d592678e505c6c9ba24c7ba945ea3e2cbf5099f5bf539b258e"
+      "sha256": "bc98f1cd9aef99e5c5322afbc17b2e6c62bc9b89317780cd2f3ce0abfc088999"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "When K is not a multiple of group_size (e.g. M=32, N=32, K=80, group_size=32, bits=4, with scales/zeros supplied as ceil(80/32)=3 rows), the host wrapper's g_idx = clamp(arange(K)//group_size, max=K//group_size - 1) (kernel.py lines 69-73) assigns the trailing short group's columns (k=64..79) to group row 1 instead of row 2, so those columns are dequantized with the wrong scale/zero and C differs from the reference C = A @ dequant(B); the last supplied scales/zeros row is never read.",
-  "duration_s": 8.898574,
+  "claim_statement": "For K not an exact multiple of group_size (e.g. M=64, N=64, K=40, group_size=16, bits=4), gptq_matmul's wrapper computes num_groups = K // group_size = 2 and clamps g_idx to num_groups-1 = 1, so the trailing columns k=32..39 are dequantized with row 1 of scales/zeros instead of their own final-group row 2; the last of the ceil(K/group_size)=3 supplied rows is never read and the output columns' contributions from k>=32 are wrong by the ratio of the two groups' scale/zero pairs (expect large, non-tolerance-level error, e.g. max abs error comparable to the magnitude of C itself, while a matching-K case with K=32 agrees).",
+  "duration_s": 11.796532,
   "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c1",
@@ -743,13 +727,10 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t9_probe.py",
-          "sha256": "5e8e83cd8fb2de92e2a82f34c68b07702452bdf161896de9e6a9d20f9eb5d29b"
+          "sha256": "8de544c4df400e165c187bcfbca4410cbc92d21586e6df8c96f52ecf425d1278"
         },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t9_stdout.tx
-...[truncated 4575 chars]
+      
+...[truncated 8390 chars]
 
 ### t10 - run_claim_probe - ok
 
@@ -759,13 +740,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t10_probe.py",
-      "sha256": "62c114800b7f29cbcb8a29d5de463d010d3ea8a3c590d07c72ab203dccd29f24"
+      "sha256": "1c40caa31fb958b7f2a854e7fabba6c6800eb7d359b3eb3805a75d55f037bd5e"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t10_stdout.txt",
-      "sha256": "4204cb1f83de5b02372a8db151a654e603196dca8d93af44c0915f80cefd778d"
+      "sha256": "c2009e691d53c96f57f6a101a19025807ff61fc0e52168a1a75a7f4ee720457e"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -777,12 +758,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t10_json_result.json",
-      "sha256": "60f123830b4e2b20dab0c4faa15433037612421e56480f45eb646d193d59fe54"
+      "sha256": "ac8ad1eabd98d8a3b9fbdfa22351a8d0a56589a074acac5894960e2bf19fe90e"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "When K is not a multiple of BLOCK_SIZE_K=16 but is a valid packed K (e.g. K=72 with group_size=32, N=32, M=32), the K loop runs cdiv(K,16)=5 iterations while the loads of a (masked only on M), b_packed, and g_idx carry no K-dimension mask (kernel.py lines 31, 42, 47-48), so the final iteration reads past the ends of A, b_packed and g_idx and adds out-of-bounds garbage into the accumulator, producing wrong C (or an illegal memory access).",
-  "duration_s": 6.050864,
+  "claim_statement": "When K < group_size (e.g. K=8, group_size=16, ceil = 1 group row supplied), num_groups = 0 so g_idx = clamp(..., max=-1) = -1 for every column; the kernel then loads scales/zeros at negative row offsets (scales_ptr - stride_scales), reading memory before the tensor base and producing wrong output (or an illegal-memory-access / nondeterministic result) rather than using the single supplied group row 0.",
+  "duration_s": 6.90556,
   "event_id": "t10",
   "evidence_draft": {
     "claim_id": "c2",
@@ -792,14 +773,14 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t10_probe.py",
-          "sha256": "62c114800b7f29cbcb8a29d5de463d010d3ea8a3c590d07c72ab203dccd29f24"
+          "sha256": "1c40caa31fb958b7f2a854e7fabba6c6800eb7d359b3eb3805a75d55f037bd5e"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t10_stdout.txt",
-          "sha256": "4204cb1f83de5b0
-...[truncated 4498 chars]
+          "sha256": "c2009e691d53c96f57f6a101a19025807ff61fc0e52168a1a75a7
+...[truncated 3620 chars]
 
 ### t11 - run_claim_probe - ok
 
@@ -809,13 +790,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t11_probe.py",
-      "sha256": "ee1c992ef29c27d42636e8270d884a0a2407c20221aae8bdfb9239c9f3ddba8f"
+      "sha256": "43a7e2ff4009f824376bdcda4e2a3b774949b0d38acf5d747394f9533e1f981e"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t11_stdout.txt",
-      "sha256": "451f9a0156f2b45af268200a5967af4a9a2d8286f4c11ba62c1d45215c45614e"
+      "sha256": "b3253f19f18cc96b8ee6d0d3117145e47742595d362c845d70bdd75afe4bc38d"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -827,12 +808,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t11_json_result.json",
-      "sha256": "7ae0110b0be5fed27b66822960759a324d2fbe247b211d750d1082e4f41b531f"
+      "sha256": "ae5b81dfbd99a66a7af0f8ca017e9e7a485d680acbad2a393e06684d1f82dcaf"
     }
   ],
   "claim_id": "c3",
-  "claim_statement": "When K < group_size (e.g. K=16, group_size=32, scales/zeros with ceil(16/32)=1 row), the wrapper computes num_groups = 0 and clamp(..., max=-1) yields g_idx = -1 for every column, so the kernel gathers scales/zeros at a negative row offset (kernel.py lines 43-44), reading out of bounds and producing wrong results or a crash instead of using group row 0.",
-  "duration_s": 5.56001,
+  "claim_statement": "For K not a multiple of BLOCK_SIZE_K=16 (e.g. K=40), the reduction loop runs num_pid_k = cdiv(K,16) = 3 iterations with no k-dimension mask: tl.load(a_ptrs, mask=a_mask) masks only rows, and tl.load(b_ptrs) / tl.load(g_ptrs) are fully unmasked, so the last iteration reads A columns 40..47, packed-B row 5 (beyond the K/8=5 rows) and g_idx entries 40..47 out of bounds and accumulates that garbage into the result \u2014 a wrong output (or OOB fault) independent of, and confounding with, the group-mapping defect.",
+  "duration_s": 7.048512,
   "event_id": "t11",
   "evidence_draft": {
     "claim_id": "c3",
@@ -842,17 +823,13 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t11_probe.py",
-          "sha256": "ee1c992ef29c27d42636e8270d884a0a2407c20221aae8bdfb9239c9f3ddba8f"
+          "sha256": "43a7e2ff4009f824376bdcda4e2a3b774949b0d38acf5d747394f9533e1f981e"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t11_stdout.txt",
-          "sha256": "451f9a0156f2b45af268200a5967af4a9a2d8286f4c11ba62c1d45215c45614e"
-        },
-        {
-          "desc
-...[truncated 2911 chars]
+      
+...[truncated 6598 chars]
 
 ### t12 - finalize_probe_evidence - ok
 
@@ -860,7 +837,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "K=80, group_size=32 (ceil=3 rows supplied, K%16==0 so no tail-mask confound): output deviates massively from the contract reference (max_abs_err 7.756 vs ref_absmax 21.25, max_rel_err 0.365, 98.0% of elements off by >1e-3 relative) yet matches the floor/clamp model reference to 4.2e-6 \u2014 i.e. the kernel reproduces exactly the behavior of g_idx = clamp(arange(K)//gs, max=K//gs-1), assigning k=64..79 to group row 1 instead of row 2, and never reading the third supplied scales/zeros row. The divisible control K=64, gs=32 matches the contract reference to 2.99e-6 (rel 2.1e-7, 0% elements off), so the packing/+1-zero conventions used in the probe are the ones the kernel expects and the failure is specifically the partial-group mapping.",
+  "summary": "Trailing-partial-group misassignment confirmed at K=48, group_size=32 (K%16==0, so no k-tail confound). Wrapper produced num_groups=1 and g_idx=0 for all 48 columns while the contract mapping is 0 for k<32 and 1 for k>=32; the second of the ceil(K/gs)=2 supplied scale/zero rows is never read. Kernel output is bit-close to the \"clamped\" model (max abs err 7.6e-6) and far from the contract reference (max abs err 25.65 on |C|max 26.82, rel 0.956, allclose False). Controls with K divisible by group_size (K=64/gs=32 and K=32/gs=32) match the contract reference to 9.5e-6 and 0.0, confirming the packing/zero+1 reference model is right and isolating the defect to the floor+clamp group derivation at lines 69-73.",
   "supports": "confirmed",
   "tool_event_id": "t9"
 }
@@ -871,7 +848,7 @@ Evidence:
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "Unmasked K tail confirmed by two independent signals. (a) Isolation case K=72, group_size=24 (K IS divisible by group_size, so the c1 group-table bug is inactive; K%BLOCK_SIZE_K==8, 5 K-tiles): output max_abs_err 1.92e36 against both the contract reference and the floor/clamp model (ref_absmax 13.4) \u2014 pure out-of-bounds garbage entering the accumulator, not a group-mapping artifact. (b) K=72, group_size=32 raised a hard CUDA \"illegal memory access\" (cudaErrorIllegalAddress), i.e. the unmasked tail loads of A / b_packed / g_idx (and the g_idx-driven scales/zeros gather with an OOB row index) run off allocated memory. run_to_run_max_diff was 0.0 for case (a), so the garbage was stable across the two calls in that process, but the magnitude (1e36) still shows it is uninitialized memory, not valid data.",
+  "summary": "Negative-index below-base read confirmed at K=16 < group_size=32 (K is a multiple of BLOCK_SIZE_K=16, so the k-tail defect is not active). num_groups=0 makes g_idx == -1 for every column. I allocated scales/zeros with an extra SENTINEL row physically preceding the supplied tensor (supplied = view starting at physical row 1, scales stride0=64, zeros stride0=8) so the below-base read is directly identifiable. Kernel output matched the sentinel-row reference EXACTLY (max abs err 0.0) and was wildly off the contract reference (max abs err 515.84 vs |C|max 19.35; out |max| 514.23). Result was deterministic across two runs, i.e. a silent wrong-answer out-of-bounds read rather than a fault.",
   "supports": "confirmed",
   "tool_event_id": "t10"
 }
@@ -882,97 +859,46 @@ Evidence:
   "claim_id": "c3",
   "claim_status": "confirmed",
   "evidence_id": "c3.e1",
-  "summary": "K=16 < group_size=32: the wrapper computes num_groups = 16//32 = 0 and clamp(max=-1) yields g_idx = -1 for every column (verified directly on host: wrapper_g_idx_unique == [-1]). The kernel then gathers scales/zeros at row -1. No crash occurred, but the output was identically zero (out_absmax 0.0) while the contract reference (single group row 0) has absmax 7.589, giving max_rel_err 1.0 \u2014 a 100% wrong result. The all-zero output is consistent with the negative-offset scales load returning zeroed memory preceding the allocation, making b = (b - zeros) * 0. Deterministic across two runs (run_to_run_max_diff 0.0).",
+  "summary": "Unmasked K-tail confirmed and isolated from the group-mapping defect. I used group_size=8 with K=40, so K is an exact multiple of group_size and the wrapper's g_idx equals the contract mapping (group_mapping_matches_contract=true) \u2014 any error is purely the unmasked third k-tile. Output was catastrophically wrong: max abs err 7.80e36 (ref |C|max 21.11, rel 3.7e35) at seed 2 and 1.97e25 (ref |C|max 23.11) at seed 3, i.e. garbage magnitude varying with heap contents rather than a bounded numeric drift. No NaN, deterministic within a run, no CUDA fault raised \u2014 a silent OOB read of A cols 40..47, packed-B row 5 and g_idx[40..47] accumulated into the result. Control K=32/gs=8 (K%16==0) matched the reference exactly (max abs err 0.0).",
   "supports": "confirmed",
   "tool_event_id": "t11"
 }
 
-### t15 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t15_probe.py",
-      "sha256": "756b87ba219d0cad1c48388095143d0c39b32ed7447fb961223fc22a21105ad7"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t15_stdout.txt",
-      "sha256": "c260b04f4b79d8e7117dad563da5b07c78d0d3c4fb1fdd4909a9ed9299ea56e8"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t15_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t15_json_result.json",
-      "sha256": "dde4ec78b480173b657185bc3c01caf6f5a8b2e05e5c0fb1cfc39582e3b770a3"
-    }
-  ],
-  "claim_id": "c3",
-  "claim_statement": "When K < group_size (e.g. K=16, group_size=32, scales/zeros with ceil(16/32)=1 row), the wrapper computes num_groups = 0 and clamp(..., max=-1) yields g_idx = -1 for every column, so the kernel gathers scales/zeros at a negative row offset (kernel.py lines 43-44), reading out of bounds and producing wrong results or a crash instead of using group row 0.",
-  "duration_s": 5.956329,
-  "event_id": "t15",
-  "evidence_draft": {
-    "claim_id": "c3",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t15_probe.py",
-          "sha256": "756b87ba219d0cad1c48388095143d0c39b32ed7447fb961223fc22a21105ad7"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t15_stdout.txt",
-          "sha256": "c260b04f4b79d8e7117dad563da5b07c78d0d3c4fb1fdd4909a9ed9299ea56e8"
-        },
-        {
-          "des
-...[truncated 3251 chars]
-
-### t16 - record_no_new_claims - ok
+### t15 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "All three recorded claims are confirmed by runtime evidence and jointly cover the kernel's failure surface for the contract's stated non-divisible-K requirement: (c1) floor-based num_groups mis-assigns the trailing partial group (K=80/gs=32 matches the floor/clamp model to 4.2e-6 while deviating 0.365 relative from the contract reference, with a clean K=64 control validating the packing conventions); (c2) unmasked K-tail loads inject OOB garbage (K=72/gs=24 isolation case gives 1.9e36 error; K=72/gs=32 raises cudaErrorIllegalAddress); (c3) K<group_size yields g_idx=-1 and a negative-row gather, now mechanistically pinned by the t15 sentinel probe (output matched the row -1 sentinel-scale reference to rel 1.6e-7 while being off the correct row-0 reference by 652.6). The supplementary probe adds mechanism detail to an already-confirmed claim and does not reveal any distinct, uncovered defect. Remaining unexplored surfaces (N not a multiple of 32, zeros layout convention, non-contiguous A) are either generalization notes or lack contract evidence tying them to the stated input domain, so they do not warrant a new claim that would delay the verdict.",
+  "reason": "All three recorded claims are confirmed by controlled runtime probes with clean isolation: c1 (trailing-partial-group misassignment at K=48/gs=32, K%16==0 so no k-tail confound; kernel matches the clamped model to 7.6e-6 and misses the contract reference by rel 0.956), c2 (num_groups=0 -> g_idx=-1 below-base read at K=16/gs=32, exact match to a sentinel row placed physically before the tensor base, deterministic silent wrong answer), and c3 (unmasked k-tail at K=40/gs=8 where the group mapping is provably contract-correct, giving 1e25-1e36 magnitude garbage). Divisible-K controls (K=64/gs=32, K=32/gs=32, K=32/gs=8) matched the contract reference to 0.0-9.5e-6, which rules out a reference-model/packing artifact and pins the failures to lines 69-73 and the unmasked loop loads. The remaining unexplored surfaces (unmasked N tail for N%32!=0, stride_ak==1 assumption on line 52) are not required by problem.txt's stated input contract and would only be non-decisive generalization notes, so they do not justify holding up the verdict. No new in-scope claim is needed.",
   "reviewed_claims": [
     "c1",
     "c2",
     "c3"
   ],
-  "reviewed_tool_event_count": 15,
+  "reviewed_tool_event_count": 14,
   "turn": 6
 }
 
-### t17 - record_verdict - ok
+### t16 - record_verdict - ok
 
 {
-  "confidence": 0.93,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "The artifact supplies no test.py/get_inputs (test_code is empty), so per scope policy problem.txt is the operative contract. That contract explicitly requires that every column be dequantized with its own group's scale/zero \\\"for any K -- including a K that is not an exact multiple of group_size\\\", with scales/zeros supplied as ceil(K/group_size) rows and the trailing short group treated as a group of its own. Claim c1 confirms the kernel does not implement that clause: the host wrapper builds g_idx = clamp(arange(K)//group_size, max=K//group_size - 1), i.e. floor rather than ceil groups. Probe t9 (K=80, gs=32, 3 rows supplied, K%16==0 so no tail-mask confound) shows max_abs_err 7.76 against ref_absmax 21.25, max_rel_err 0.365, 98% of elements off by >1e-3 relative, while matching the floor/clamp model to 4.2e-6 \u2014 the trailing columns k=64..79 are dequantized with row 1 and the third supplied row is never read. The divisible control (K=64, gs=32) matches to 2.99e-6 (rel 2.1e-7), which validates that the probe's packing, qzeros-along-N layout and +1 zero-point conventions are exactly the ones the kernel expects; the failure is therefore specifically the partial-group mapping, not a harness convention mismatch. This is not excusable as quantization/rounding noise: dequant here is exact integer arithmetic and the deviation is a wrong scale/zero selection, precisely the behavior the contract requires. Claim c2 independently confirms a second in-scope defect: the K loop runs cdiv(K,16) iterations with no K-dimension mask on the A, b_packed or g_idx loads, so for K=72 (a valid 4-bit-packable K) the isolation case gs=24 (K divisible by group_size, so c1 is inactive) produces max_abs_err 1.92e36 versus ref_absmax 13.4, and gs=32 raises a hard cudaErrorIllegalAddress. Claim c3 (K < group_size producing g_idx = -1 and a genuine negative-row gather, mechanistically pinned by the t15 se
-...[truncated 498 chars]
+  "reason": "The artifact contains only kernel.py, meta.json and problem.txt (no test.py/get_inputs, meta.json passed=null), so problem.txt is the operative contract. It explicitly requires that \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. Three confirmed, in-scope claims show the kernel does not implement that required behavior, each isolated by controls so the failures cannot be attributed to reference-model/packing ambiguity (the divisible-K controls K=64/gs=32, K=32/gs=32, K=32/gs=8 matched the contract reference to 0.0-9.5e-6, validating the packing and zero+1 reference model):\n\n- c1 (decisive): at K=48, group_size=32 (K%16==0, so no k-tail confound) the wrapper's num_groups = K//group_size plus clamp(max=num_groups-1) maps all 48 columns to group 0; the second of the two supplied scale/zero rows is never read. Output matches the \"clamped\" model to 7.6e-6 and misses the contract reference by max abs 25.65 on |C|max 26.82 (rel 0.956, allclose False). This is exactly the clause the contract spells out, not a tolerance/rounding artifact.\n- c2: at K=16 < group_size=32, num_groups=0 yields g_idx=-1 for every column and the kernel reads scales/zeros below the tensor base \u2014 it matched a deliberately placed sentinel row bit-exactly (0.0 error) while missing the contract reference by 515.8 vs |C|max 19.35. A silent out-of-bounds read on a K the contract admits.\n- c3: at K=40, group_size=8 (group mapping provably contract-correct) the unmasked k-tail tile reads past A, packed-B and g_idx, producing 1.97e25\u20137.80e36 magnitude garbage versus |C|max ~21\u201323, with the K=32 control exact.\n\nNone of the exculpatory categories apply: the reference is finite and well defined in every case, there i
+...[truncated 455 chars]
 
 ## Verdict
 
 {
-  "confidence": 0.93,
-  "created_at": "2026-09-08T03:40:58Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-08T06:34:26Z",
   "decisive_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "The artifact supplies no test.py/get_inputs (test_code is empty), so per scope policy problem.txt is the operative contract. That contract explicitly requires that every column be dequantized with its own group's scale/zero \\\"for any K -- including a K that is not an exact multiple of group_size\\\", with scales/zeros supplied as ceil(K/group_size) rows and the trailing short group treated as a group of its own. Claim c1 confirms the kernel does not implement that clause: the host wrapper builds g_idx = clamp(arange(K)//group_size, max=K//group_size - 1), i.e. floor rather than ceil groups. Probe t9 (K=80, gs=32, 3 rows supplied, K%16==0 so no tail-mask confound) shows max_abs_err 7.76 against ref_absmax 21.25, max_rel_err 0.365, 98% of elements off by >1e-3 relative, while matching the floor/clamp model to 4.2e-6 \u2014 the trailing columns k=64..79 are dequantized with row 1 and the third supplied row is never read. The divisible control (K=64, gs=32) matches to 2.99e-6 (rel 2.1e-7), which validates that the probe's packing, qzeros-along-N layout and +1 zero-point conventions are exactly the ones the kernel expects; the failure is therefore specifically the partial-group mapping, not a harness convention mismatch. This is not excusable as quantization/rounding noise: dequant here is exact integer arithmetic and the deviation is a wrong scale/zero selection, precisely the behavior the contract requires. Claim c2 independently confirms a second in-scope defect: the K loop runs cdiv(K,16) iterations with no K-dimension mask on the A, b_packed or g_idx loads, so for K=72 (a valid 4-bit-packable K) the isolation case gs=24 (K divisible by group_size, so c1 is inactive) produces max_abs_err 1.92e36 versus ref_absmax 13.4, and gs=32 raises a hard cudaErrorIllegalAddress. Claim c3 (K < group_size producing g_idx = -1 and a genuine negative-row gath
-...[truncated 538 chars]
+  "reason": "The artifact contains only kernel.py, meta.json and problem.txt (no test.py/get_inputs, meta.json passed=null), so problem.txt is the operative contract. It explicitly requires that \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. Three confirmed, in-scope claims show the kernel does not implement that required behavior, each isolated by controls so the failures cannot be attributed to reference-model/packing ambiguity (the divisible-K controls K=64/gs=32, K=32/gs=32, K=32/gs=8 matched the contract reference to 0.0-9.5e-6, validating the packing and zero+1 reference model):\n\n- c1 (decisive): at K=48, group_size=32 (K%16==0, so no k-tail confound) the wrapper's num_groups = K//group_size plus clamp(max=num_groups-1) maps all 48 columns to group 0; the second of the two supplied scale/zero rows is never read. Output matches the \"clamped\" model to 7.6e-6 and misses the contract reference by max abs 25.65 on |C|max 26.82 (rel 0.956, allclose False). This is exactly the clause the contract spells out, not a tolerance/rounding artifact.\n- c2: at K=16 < group_size=32, num_groups=0 yields g_idx=-1 for every column and the kernel reads scales/zeros below the tensor base \u2014 it matched a deliberately placed sentinel row bit-exactly (0.0 error) while missing the contract reference by 515.8 vs |C|max 19.35. A silent out-of-bounds read on a K the contract admits.\n- c3: at K=40, group_size=8 (group mapping provably contract-correct) the unmasked k-tail tile reads past A, packed-B and g_idx, producing 1.97e25\u20137.80e36 magnitude garbage versus |C|max ~21\u201323, with the K=32 control exact.\n\nNone of the exculpatory categories apply: the reference is finite
+...[truncated 495 chars]

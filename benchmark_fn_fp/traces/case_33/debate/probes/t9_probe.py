@@ -1,43 +1,53 @@
 
-import importlib.util, torch, numpy as np, json, math
-spec = importlib.util.spec_from_file_location("kmod","/root/cases/case_33/kernel.py")
-mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-dev='cuda'
-torch.manual_seed(0)
+import torch, numpy as np, importlib.util, json
+torch.backends.cuda.matmul.allow_tf32=False
+spec=importlib.util.spec_from_file_location("k","/root/cases/case_33/kernel.py")
+m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
-def build(M,N,K,gs):
-    A=torch.randn(M,K)
-    q=torch.randint(0,16,(K,N),dtype=torch.int32)
-    ng=math.ceil(K/gs)
-    scales=torch.rand(ng,N)*0.1+0.01
-    zv=torch.randint(0,15,(ng,N),dtype=torch.int32)
-    qn=q.numpy().astype(np.uint32); packed=np.zeros((K//8,N),dtype=np.uint32)
-    for kk in range(K): packed[kk//8] |= (qn[kk]<<((kk%8)*4))
-    zvn=zv.numpy().astype(np.uint32); zp=np.zeros((ng,N//8),dtype=np.uint32)
-    for nn in range(N): zp[:,nn//8] |= (zvn[:,nn]<<((nn%8)*4))
-    return dict(A=A,q=q,scales=scales,zv=zv,ng=ng,
-        b=torch.from_numpy(packed.astype(np.int32)),
-        qz=torch.from_numpy(zp.astype(np.int32)))
+def pack_k(q):
+    K,N=q.shape; Kp=K//8
+    out=np.zeros((Kp,N),np.uint32); qr=q.reshape(Kp,8,N).astype(np.uint32)
+    for j in range(8): out |= (qr[:,j,:]<<(4*j))
+    return out.view(np.int32)
+def pack_n(z):
+    G,N=z.shape; Nc=N//8
+    out=np.zeros((G,Nc),np.uint32); zr=z.reshape(G,Nc,8).astype(np.uint32)
+    for j in range(8): out |= (zr[:,:,j]<<(4*j))
+    return out.view(np.int32)
 
-def ref(d,K,gs,mode):
-    ar=torch.arange(K)
-    gi = ar//gs if mode=='ceil' else torch.clamp(ar//gs,max=max(K//gs-1,0))
-    z=d['zv'][gi].double()+1.0; s=d['scales'][gi].double()
-    deq=(d['q'].double()-z)*s
-    return d['A'].double()@deq
+def run_case(M,N,K,gs,seed=0):
+    rng=np.random.default_rng(seed)
+    q=rng.integers(0,16,size=(K,N)).astype(np.int64)
+    G=(K+gs-1)//gs
+    z=rng.integers(0,15,size=(G,N)).astype(np.int64)
+    s=(rng.random((G,N))*0.2+0.02).astype(np.float32)
+    torch.manual_seed(seed)
+    a=torch.randn(M,K,device='cuda',dtype=torch.float32)
+    bp=torch.from_numpy(pack_k(q)).cuda().contiguous()
+    zp=torch.from_numpy(pack_n(z)).cuda().contiguous()
+    st=torch.from_numpy(s).cuda().contiguous()
+    qt=torch.from_numpy(q).cuda().float(); zt=torch.from_numpy(z).cuda().float()
+    ar=torch.arange(K,device='cuda')
+    gc=ar//gs
+    ng=K//gs
+    gk=torch.clamp(ar//gs,max=ng-1)
+    deq_c=(qt-(zt[gc]+1))*st[gc]
+    deq_k=(qt-(zt[gk]+1))*st[gk]
+    ref_c=a@deq_c; ref_k=a@deq_k
+    out=m.gptq_matmul(a,bp,st,zp,gs,4); torch.cuda.synchronize()
+    d_c=(out-ref_c).abs(); d_k=(out-ref_k).abs()
+    return dict(M=M,N=N,K=K,gs=gs,G_supplied=G,num_groups_kernel=ng,
+                gidx_last8=gk[-8:].tolist(), gidx_contract_last8=gc[-8:].tolist(),
+                ref_absmax=float(ref_c.abs().max()),
+                max_abs_err_vs_contract=float(d_c.max()),
+                rel_err_vs_contract=float(d_c.max()/ref_c.abs().max()),
+                max_abs_err_vs_clamped_model=float(d_k.max()),
+                rel_err_vs_clamped_model=float(d_k.max()/ref_c.abs().max()),
+                allclose_contract=bool(torch.allclose(out,ref_c,rtol=1e-3,atol=1e-3)),
+                allclose_clamped=bool(torch.allclose(out,ref_k,rtol=1e-3,atol=1e-3)))
 
-out={}
-for name,(M,N,K,gs) in {'control_K64_gs32':(32,32,64,32),'target_K80_gs32':(32,32,80,32)}.items():
-    d=build(M,N,K,gs)
-    c=mod.gptq_matmul(d['A'].to(dev),d['b'].to(dev),d['scales'].to(dev),d['qz'].to(dev),gs)
-    torch.cuda.synchronize()
-    c=c.cpu().double()
-    r_ceil=ref(d,K,gs,'ceil'); r_floor=ref(d,K,gs,'floor')
-    out[name]=dict(K=K,group_size=gs,rows_supplied=d['ng'],
-      wrapper_num_groups=K//gs,
-      max_abs_err_vs_contract=float((c-r_ceil).abs().max()),
-      max_rel_err_vs_contract=float(((c-r_ceil).abs().max()/r_ceil.abs().max())),
-      max_abs_err_vs_floorclamp_model=float((c-r_floor).abs().max()),
-      ref_absmax=float(r_ceil.abs().max()),
-      frac_elems_off_gt_1e3rel=float(((c-r_ceil).abs()>1e-3*r_ceil.abs().max()).double().mean()))
-print(json.dumps(out))
+res={}
+res['bug_case_K48_gs32']=run_case(64,64,48,32)
+res['control_K64_gs32']=run_case(64,64,64,32)
+res['control_K32_gs32']=run_case(64,64,32,32)
+print(json.dumps(res))
