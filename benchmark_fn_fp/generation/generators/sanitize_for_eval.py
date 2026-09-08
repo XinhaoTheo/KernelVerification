@@ -23,7 +23,7 @@ and prints the demonstration outcome.
 The answer key stays in benchmark_fn_fp/triton/<name>/meta.json, which the
 evaluation harness reads separately for scoring.
 
-Run from repo root:  python docs/benchmark-generation/generators/sanitize_for_eval.py
+Run from repo root:  python benchmark_fn_fp/generation/generators/sanitize_for_eval.py
 """
 from __future__ import annotations
 

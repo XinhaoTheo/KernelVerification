@@ -11,7 +11,7 @@ a problem.txt that puts an irregular shape explicitly inside the required input
 domain. A conventional test uses a round shape and passes.
 
 Usage (from repo root):
-    python docs/benchmark-generation/generators/batch4_fn3_boundary.py
+    python benchmark_fn_fp/generation/generators/batch4_fn3_boundary.py
 """
 from __future__ import annotations
 

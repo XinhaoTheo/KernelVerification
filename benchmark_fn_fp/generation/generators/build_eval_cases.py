@@ -18,7 +18,7 @@ the scorer can resolve a verdict back to its answer key while nothing under
 eval_cases reveals it.
 
 Usage (from repo root):
-    python docs/benchmark-generation/generators/build_eval_cases.py
+    python benchmark_fn_fp/generation/generators/build_eval_cases.py
 """
 from __future__ import annotations
 

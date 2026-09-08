@@ -16,7 +16,7 @@ only a run settles it. fn13 below tests that directly; the other five fill out
 seeds that are currently single-sample.
 
 Usage (from repo root):
-    python docs/benchmark-generation/generators/batch5_mixed_seeds.py
+    python benchmark_fn_fp/generation/generators/batch5_mixed_seeds.py
 """
 from __future__ import annotations
 

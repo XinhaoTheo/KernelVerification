@@ -10,7 +10,7 @@ equivalence that does not hold, a parameter below the threshold that triggers
 it, and a wrong orthogonalisation formula.
 
 Usage (from repo root):
-    python docs/benchmark-generation/generators/batch6_remaining_seeds.py
+    python benchmark_fn_fp/generation/generators/batch6_remaining_seeds.py
 """
 from __future__ import annotations
 

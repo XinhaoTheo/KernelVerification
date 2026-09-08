@@ -4,7 +4,7 @@ Writes benchmark_fn_fp/<name>/{problem.txt,kernel.py,test.py,meta.json} for
 each case -- kept separate from dataset/ (the kernelagent/_advprec_* corpus).
 All cases are self-contained, CPU-only PyTorch (no CUDA/Triton needed).
 
-Run from the repo root: `python docs/benchmark-generation/generators/batch1_fn_fp.py`
+Run from the repo root: `python benchmark_fn_fp/generation/generators/batch1_fn_fp.py`
 Point kv-agentic-run at it with `--dataset-dir benchmark_fn_fp`.
 """
 import json

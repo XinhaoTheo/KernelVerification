@@ -22,6 +22,7 @@ benchmark_fn_fp/
 ├── eval/            评测脚本 + 结果
 ├── traces/          每次运行的完整记录
 │
+├── generation/      设计文档 + 造题脚本
 ├── numerical_pilot/ 早期的数值探索实验（已完成，留档）
 └── modal_runner.py  通用的 Modal GPU 执行封装
 ```
@@ -84,7 +85,7 @@ benchmark_fn_fp/
 
 ## `eval_cases/` — 验证器看到的副本
 
-由 `docs/benchmark-generation/generators/build_eval_cases.py` 从 `triton/` 生成。
+由 `benchmark_fn_fp/generation/generators/build_eval_cases.py` 从 `triton/` 生成。
 
 ```
 eval_cases/case_33/
@@ -192,6 +193,22 @@ traces/<case_id>/<arm>/
 
 ---
 
+## `generation/` — 设计文档和造题脚本
+
+| 文件 | 内容 |
+|---|---|
+| `benchmark_design.md` | 最初的设计 |
+| `benchmark_design_generalized.md` | 13 种种子的完整定义，以及每一条被证伪的假设 |
+| `generators/batch*.py` | 一批批造题的脚本，每个负责若干种子 |
+| `generators/build_eval_cases.py` | 从 `triton/` 生成 `eval_cases/`，含泄漏检查 |
+| `generators/sanitize_for_eval.py` | 早期的去答案脚本，已被上一个取代 |
+
+`benchmark_design_generalized.md` 里除了种子定义，还记着若干条**被实测推翻**的
+假设 —— 比如"模型没见过的冷门仓库更难"、"训练 cutoff 之后的代码更难"，两条都做过
+对照实验，都不成立。写在那里是为了别人不必再试一遍。
+
+---
+
 ## `numerical_pilot/` — 早期探索（留档）
 
 在造 benchmark 之前做的数值实验：先测清楚各种"合法的实现差异"实际能有多大偏差，
@@ -230,7 +247,7 @@ python benchmark_fn_fp/eval/audit_traces.py
    host wrapper 里的缺陷是可以的，**前提是 wrapper 跟着 `kernel.py` 一起发**。
 
 2. **加完题跑一次生成器**：
-   `python docs/benchmark-generation/generators/build_eval_cases.py`
+   `python benchmark_fn_fp/generation/generators/build_eval_cases.py`
    它会分配新 id、重建 `eval_cases/`、跑泄漏检查（禁用词、真名、目录名编码、
    配对题的可区分性）。已有的 id 不会重排 —— 历史结果是按 id 存的。
 

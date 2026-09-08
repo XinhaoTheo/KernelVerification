@@ -11,7 +11,7 @@ the case had no valid FP to demonstrate. Layout conventions for a per-channel
 scale do have that property, so this replaces it.
 
 Usage (from repo root):
-    python docs/benchmark-generation/generators/batch5b_fp7_layout.py
+    python benchmark_fn_fp/generation/generators/batch5b_fp7_layout.py
 """
 from __future__ import annotations
 
