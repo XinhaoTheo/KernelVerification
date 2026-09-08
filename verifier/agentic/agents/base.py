@@ -78,6 +78,16 @@ class LLMAgent:
                     default=str,
                 ),
                 "",
+                # An agent that cannot see what it already has will spend a turn
+                # fetching it. One did exactly that: it read a 68-byte meta.json
+                # and re-read a range of the kernel already in its prompt, which
+                # left the claim ledger empty for the round and skipped the
+                # Experimenter entirely.
+                "artifact.kernel_code above is the complete kernel source with line "
+                "numbers, and tool_events already carries problem.txt and the "
+                "artifact's file list. Do not spend a turn re-reading them. Read "
+                "what you have and act on it.",
+                "",
                 "Return your next action using the JSON protocol.",
             ]
         )
@@ -235,11 +245,23 @@ def _claims_for_prompt(state: RunState, *, role: str | None) -> list[dict[str, J
     return rendered
 
 
+def _number_lines(source: str) -> str:
+    """Render source with line numbers, the way inspect_kernel_source does.
+
+    Agents cite line numbers in claims and verdicts, and that is the only reason
+    the preload used to call inspect_kernel_source on top of load_artifact --
+    leaving two copies of the same file in the prompt (one raw, one numbered),
+    both re-sent on every later turn. Numbering the copy that is already there
+    removes the second one without taking away what it was for.
+    """
+    return "\n".join(f"{i}: {line}" for i, line in enumerate(source.splitlines(), start=1))
+
+
 def _state_for_prompt_unbounded(state: RunState, *, role: str | None = None) -> dict[str, JsonValue]:
     artifact = dict(state.artifact or {})
     for key in ("kernel_code", "test_code"):
-        if isinstance(artifact.get(key), str):
-            artifact[key] = _truncate(str(artifact[key]), 12000)
+        if isinstance(artifact.get(key), str) and artifact[key]:
+            artifact[key] = _truncate(_number_lines(str(artifact[key])), 12000)
     return cast(dict[str, JsonValue], {
         "entry": state.entry,
         "artifact": artifact,

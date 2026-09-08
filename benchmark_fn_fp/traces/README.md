@@ -31,7 +31,7 @@ they show what the difference looks like when there is one.
 | case | arm | turns | tool calls | probes | wall clock | cost |
 |---|---|---|---|---|---|---|
 | `case_03` | solo   | 7  | 15 | 3 | 268 s | $1.28 |
-| `case_03` | debate | 11 | 19 | 2 | 316 s | $2.35 |
+| `case_03` | debate | 11 | 17 | 3 | 396 s | $2.59 |
 | `case_04` | solo   | 9  | 14 | 2 | 217 s | $1.31 |
 | `case_04` | debate | 14 | 23 | 3 | 432 s | $3.53 |
 
@@ -45,6 +45,38 @@ costs, so the deviation is the contract being met rather than broken. The single
 call sees a large relative error described in the problem statement and rejects.
 That is the shape of difference worth looking for: the verdict turns on a
 quantity that is not in the source and can only be measured.
+
+## `case_03/debate_before_preload_fix/`
+
+The same case and arm before the preload was fixed, kept for comparison. In that
+run the Skeptic's one turn per round went on reading -- a 68-byte `meta.json`
+and a range of the kernel already in its prompt -- so it recorded no claim. An
+empty ledger skips the claim-coverage loop, so the Experimenter never spoke that
+round and the run dropped straight into the pre-Judge review slot, which told the
+Skeptic on round 1 of 4 that this was a final review. It answered:
+
+> This is flagged as a final review, but the ledger is empty and no probes have
+> been run, so I'm recording the two concrete, testable defects I can see in the
+> source rather than closing with nothing.
+
+The material was already in its prompt: the orchestrator preloads it before any
+model call. It fetched it again because nothing said it already had it, and
+because `meta.json` and the file list were the two things not preloaded. The
+kernel source then sat in the context three times over -- raw, numbered 1-120,
+and numbered 40-78 -- re-sent on every later turn.
+
+| | before | after |
+|---|---|---|
+| first agent prompt | 9,840 tokens | 5,967 tokens |
+| turns by role | describer 2, skeptic 4, **experimenter 2**, judge 2 | describer 1, skeptic 2, **experimenter 5**, judge 2 |
+| claims recorded | 2 | 3 |
+| probes run | 2 | 3 |
+| verdict | reject (correct) | reject (correct) |
+| cost | $2.35 | $2.59 |
+
+Cost did not fall. The freed budget went into verification instead: the
+Experimenter got five turns rather than two and ran a third probe. The same money
+buys more work, not the same work cheaper.
 
 ## Layout
 

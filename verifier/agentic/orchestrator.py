@@ -343,7 +343,20 @@ class AgenticOrchestrator:
                     # its usual "raise concrete bug hypotheses" instructions and
                     # tends to open a fresh claim here, which sends the run into
                     # another round instead of letting the Judge rule.
-                    self._record_skeptic_final_review_request()
+                    #
+                    # Only when there is something to review. An empty ledger
+                    # skips the claim-coverage loop entirely, so a Skeptic turn
+                    # spent reading rather than recording dropped the run here on
+                    # round 1 of 4, with the Experimenter never having spoken and
+                    # no probe ever run -- and told the Skeptic to close out. It
+                    # answered "the ledger is empty and no probes have been run,
+                    # so I'm recording ... rather than closing with nothing",
+                    # which is the right call but not one to depend on: a model
+                    # that complied would have handed the Judge a verdict backed
+                    # by nothing at all. With nothing to review, let the Skeptic
+                    # arrive with its normal instructions and do its actual job.
+                    if self.state.claims or self._has_new_probe_event_since(0):
+                        self._record_skeptic_final_review_request()
                     stop_reason = self._run_agent_and_check_verdict(
                         skeptic, outputs=outputs, describer=describer, stop_on_verdict=stop_on_verdict,
                     )
@@ -625,9 +638,18 @@ def build_context_response(entry: str) -> AgentResponse:
         tool_calls=[
             ToolCall(tool="load_artifact", args={"entry": entry}),
             ToolCall(tool="inspect_problem", args={"entry": entry}),
-            ToolCall(
-                tool="inspect_kernel_source",
-                args={"entry": entry, "start_line": 1, "end_line": 120},
-            ),
+            # The file list costs nothing and is the difference between an agent
+            # that knows the artifact holds three files and one that spends an
+            # LLM round-trip finding out. A Skeptic did exactly that, fetching a
+            # 68-byte meta.json and re-reading kernel lines it already had; the
+            # turn produced no claim, which left the ledger empty and skipped the
+            # Experimenter for the whole round.
+            ToolCall(tool="list_artifact_files", args={"entry": entry}),
+            ToolCall(tool="read_artifact_file", args={"entry": entry, "path": "meta.json"}),
+            # inspect_kernel_source is deliberately NOT called here. load_artifact
+            # already carries the whole file, and the prompt now numbers it, so
+            # calling this too put two copies of the same source in the prompt --
+            # about 4,300 tokens re-sent on every subsequent turn. The tool stays
+            # available for a kernel too long to render in full.
         ],
     )

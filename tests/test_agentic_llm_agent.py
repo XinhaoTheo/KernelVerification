@@ -1322,3 +1322,89 @@ def test_agentic_cli_solo_forces_verdict_when_rounds_run_out(tmp_path, monkeypat
     # reader can tell this verdict was reached on a spent budget.
     assert run_data["verdict"]["forced_final_round"]["unresolved_claims"] == ["c1"]
     assert [claim["status"] for claim in run_data["claims"]] == ["inconclusive"]
+
+
+def test_agentic_cli_does_not_flag_final_review_on_an_empty_ledger(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """A Skeptic turn spent reading must not skip the round.
+
+    An empty ledger skips the claim-coverage loop entirely, so a first Skeptic
+    turn that reads rather than records used to drop straight into the pre-Judge
+    review slot -- on round 1 of 4, before the Experimenter had spoken or any
+    probe had run -- and tell the Skeptic to close out. In the measured run it
+    replied "the ledger is empty and no probes have been run, so I'm recording
+    ... rather than closing with nothing"; a model that complied instead would
+    have handed the Judge a verdict backed by nothing. Here the Skeptic's first
+    turn only reads, and it must get a normal second turn, not a review request.
+    """
+    _write_artifact(tmp_path / "dataset")
+    fake = FakeLLMClient(
+        [
+            json.dumps({"message": "Describe the kernel.", "tool_calls": []}),
+            # Reads, records nothing -- the turn that used to skip the round.
+            json.dumps(
+                {
+                    "message": "Let me read the artifact before recording claims.",
+                    "tool_calls": [{"tool": "read_claim_ledger", "args": {}}],
+                }
+            ),
+            # Must arrive in hypothesis mode, not as a final review.
+            json.dumps(
+                {
+                    "message": "Now record the claim.",
+                    "tool_calls": [
+                        {
+                            "tool": "record_claim",
+                            "args": {
+                                "statement": "Boundary sizes may be mishandled.",
+                                "rationale": "No boundary evidence is present yet.",
+                            },
+                        }
+                    ],
+                }
+            ),
+            json.dumps({"message": "No probe this turn.", "tool_calls": []}),
+            json.dumps({"message": "Still uneasy about c1.", "tool_calls": []}),
+            json.dumps(
+                {
+                    "message": "Finalize.",
+                    "tool_calls": [
+                        {
+                            "tool": "record_verdict",
+                            "args": {
+                                "verdict": "needs_more_evidence",
+                                "confidence": 0.2,
+                                "decisive_claims": ["c1"],
+                                "reason": "c1 was never resolved before the budget ran out.",
+                            },
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    monkeypatch.setattr("verifier.agentic_run.build_llm_client", lambda provider=None, model=None: fake)
+
+    exit_code = agentic_main(
+        [
+            "toy",
+            "--dataset-dir",
+            str(tmp_path / "dataset"),
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--agents",
+            "describer,skeptic,experimenter,judge",
+            "--max-debate-rounds",
+            "1",
+        ]
+    )
+
+    assert exit_code == 0
+    # The Skeptic's second turn is the one at issue: it must not have been told
+    # this is a final review, because there was nothing yet to review.
+    second_skeptic_prompt = fake.calls[2]["user"]
+    assert "skeptic_final_review" not in second_skeptic_prompt
+    # And the claim it raised there is on the ledger, so the round did real work.
+    run_data = json.loads((tmp_path / "run" / "run.json").read_text())
+    assert [claim["id"] for claim in run_data["claims"]] == ["c1"]

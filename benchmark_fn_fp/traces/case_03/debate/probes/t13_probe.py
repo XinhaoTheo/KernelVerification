@@ -1,54 +1,77 @@
 
 import subprocess, sys, json
 
-CHILD = r'''
-import json, sys, torch, importlib.util
-spec = importlib.util.spec_from_file_location("kern", "/root/cases/case_03/kernel.py")
-kern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)
+script = r'''
+import torch, json, importlib.util
+spec = importlib.util.spec_from_file_location("kmod", "/root/cases/case_03/kernel.py")
+kmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(kmod)
 
-M, N, K = 32, 32, 32
-bits, ipb, group_size = 4, 8, 8
-torch.manual_seed(1)
-dev = "cuda"
-a = torch.randn(M, K, device=dev, dtype=torch.float32)
-b_packed = torch.randint(-2**31, 2**31-1, (K//ipb, N), device=dev, dtype=torch.int32)
-num_groups = K//group_size
-scales = (torch.rand(num_groups, N, device=dev)*0.1+0.01).float()
-g_idx = (torch.arange(K, device=dev)//group_size).to(torch.int32)
-k_idx = torch.arange(K, device=dev); n_idx = torch.arange(N, device=dev)
-q = (b_packed[k_idx//ipb, :].to(torch.int64) >> ((k_idx % ipb)*bits)[:,None]) & 15
-g = g_idx.long()
+def build(M, K, N, group_size, zcode_mode, seed):
+    g = torch.Generator().manual_seed(seed)
+    a = torch.randn(M, K, generator=g)
+    q = torch.randint(0, 16, (K, N), generator=g, dtype=torch.int32)
+    packed = torch.zeros(K // 8, N, dtype=torch.int32)
+    for j in range(8):
+        packed |= (q[j::8] << (4 * j))
+    ng = (K + group_size - 1) // group_size
+    g_idx = (torch.arange(K) // group_size).to(torch.int32)
+    if zcode_mode == "all15":
+        zcode = torch.full((ng, N), 15, dtype=torch.int32)
+    elif zcode_mode == "none15":
+        zcode = torch.randint(0, 15, (ng, N), generator=g, dtype=torch.int32)
+    else:  # mixed: every 3rd column is 15
+        zcode = torch.randint(0, 15, (ng, N), generator=g, dtype=torch.int32)
+        zcode[:, ::3] = 15
+    qzeros = torch.zeros(ng, N // 8, dtype=torch.int32)
+    for j in range(8):
+        qzeros |= (zcode[:, j::8] << (4 * j))
+    scales = (torch.rand(ng, N, generator=g) * 0.1 + 0.05)
+    gl = g_idx.long()
+    z_unwrapped = (zcode + 1).float()           # kernel semantics: zeros + 1, no mask
+    z_wrapped = ((zcode + 1) & 15).float()      # upstream AutoGPTQ: (zeros + 1) & maxq
+    z_raw = zcode.float()                       # problem.txt literal: zero, no +1
+    ref_unwrapped = a @ ((q.float() - z_unwrapped[gl]) * scales[gl])
+    ref_wrapped   = a @ ((q.float() - z_wrapped[gl]) * scales[gl])
+    ref_raw       = a @ ((q.float() - z_raw[gl]) * scales[gl])
+    return (a.cuda(), packed.cuda(), scales.cuda(), qzeros.cuda(), g_idx.cuda(),
+            ref_unwrapped.cuda(), ref_wrapped.cuda(), ref_raw.cuda(),
+            float(scales.max()), float(scales.min()), int((zcode == 15).sum()), zcode.numel())
 
-# ---- Case A: caller follows the DOCSTRING (unpacked (num_groups, N) zeros, values 0..15)
-zeros_unpacked = torch.randint(0, 16, (num_groups, N), device=dev, dtype=torch.int32)
-ref_unpacked_plus1 = (a @ ((q - (zeros_unpacked.to(torch.int64)[g,:]+1)).float() * scales[g,:]))
-ref_unpacked_raw   = (a @ ((q -  zeros_unpacked.to(torch.int64)[g,:]   ).float() * scales[g,:]))
-outA = kern.gptq_matmul(a, b_packed, scales, zeros_unpacked, g_idx, bits=bits); torch.cuda.synchronize()
-# what the kernel actually computes with this tensor: reads element [g, n//8] shifted by (n%8)*4
-zA = ((zeros_unpacked[:, n_idx//ipb].to(torch.int64) >> ((n_idx % ipb)*bits)[None,:]) & 15) + 1
-ref_kernel_semantics_A = a @ ((q - zA[g,:]).float() * scales[g,:])
+def run(tag, M, K, N, group_size, zcode_mode, seed=0):
+    a, packed, scales, qz, g_idx, r_un, r_wr, r_raw, smax, smin, n15, ntot = build(M, K, N, group_size, zcode_mode, seed)
+    out = {"tag": tag, "M": M, "K": K, "N": N, "group_size": group_size,
+           "zcode_mode": zcode_mode, "num_zero_codes_eq_15": n15, "num_zero_codes": ntot,
+           "scale_min": smin, "scale_max": smax}
+    try:
+        c = kmod.gptq_matmul(a, packed, scales, qz, g_idx, bits=4)
+        torch.cuda.synchronize()
+        out["err_vs_unwrapped_zero_plus_1"] = float((c - r_un).abs().max())
+        out["err_vs_wrapped_zero_plus_1_and_maxq"] = float((c - r_wr).abs().max())
+        out["err_vs_raw_zero_no_plus1"] = float((c - r_raw).abs().max())
+        out["ref_unwrapped_absmax"] = float(r_un.abs().max())
+        out["ref_wrapped_absmax"] = float(r_wr.abs().max())
+        out["ok"] = True
+    except Exception as e:
+        out["ok"] = False
+        out["exception"] = repr(e)[:300]
+    print(json.dumps(out), flush=True)
 
-# ---- Case B: caller follows the KERNEL BODY (packed (num_groups, N//8) zeros)
-zeros_packed = torch.randint(-2**31, 2**31-1, (num_groups, N//ipb), device=dev, dtype=torch.int32)
-zB = ((zeros_packed[:, n_idx//ipb].to(torch.int64) >> ((n_idx % ipb)*bits)[None,:]) & 15) + 1
-ref_packed = a @ ((q - zB[g,:]).float() * scales[g,:])
-outB = kern.gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=bits); torch.cuda.synchronize()
-
-def stats(o, r):
-    e = (o-r).abs(); s = float(r.abs().max())
-    return {"max_abs_err": float(e.max()), "ref_absmax": s, "max_rel_err": float(e.max())/s,
-            "frac_off_1pct": float((e > 0.01*s).float().mean())}
-
-print("RESULT " + json.dumps({
-  "docstring_layout_vs_ref_plus1": stats(outA, ref_unpacked_plus1),
-  "docstring_layout_vs_ref_raw":   stats(outA, ref_unpacked_raw),
-  "docstring_layout_vs_kernel_packed_semantics": stats(outA, ref_kernel_semantics_A),
-  "packed_layout_vs_packed_ref":   stats(outB, ref_packed),
-  "zeros_unpacked_shape": list(zeros_unpacked.shape),
-  "zeros_packed_shape": list(zeros_packed.shape),
-}))
+run("none15_control", 32, 128, 64, 64, "none15", seed=21)
+run("all15", 32, 128, 64, 64, "all15", seed=22)
+run("mixed15", 32, 128, 64, 64, "mixed", seed=23)
+print(json.dumps({"tag": "done"}), flush=True)
 '''
-p = subprocess.run([sys.executable, "-c", CHILD], capture_output=True, text=True, timeout=300)
-line = [l for l in p.stdout.splitlines() if l.startswith("RESULT ")]
-print(json.dumps(json.loads(line[0][7:]) if line else
-      {"crashed": True, "returncode": p.returncode, "stderr_tail": p.stderr.strip().splitlines()[-8:]}))
+
+p = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=480)
+res = []
+for l in p.stdout.splitlines():
+    l = l.strip()
+    if not l:
+        continue
+    try:
+        res.append(json.loads(l))
+    except Exception:
+        pass
+print("STDERR_TAIL:", p.stderr[-1200:])
+print(json.dumps({"returncode": p.returncode, "results": res,
+                  "reached_done": any(r.get("tag") == "done" for r in res)}))

@@ -21,14 +21,19 @@ def test_orchestrator_applies_dry_run_agent_response_and_persists(tmp_path) -> N
     )
     persisted = orchestrator.persist()
 
+    # inspect_kernel_source is absent on purpose: load_artifact already carries
+    # the whole file and the prompt numbers it, so preloading both put two copies
+    # of the same source in every later prompt. The file list and meta.json are
+    # here instead, so an agent never has to spend a turn discovering them.
     assert [item["tool"] for item in outputs] == [
         "load_artifact",
         "inspect_problem",
-        "inspect_kernel_source",
+        "list_artifact_files",
+        "read_artifact_file",
     ]
     assert orchestrator.state.entry == "toy"
     assert len(orchestrator.state.history) == 1
-    assert len(orchestrator.state.tool_events) == 3
+    assert len(orchestrator.state.tool_events) == 4
     assert persisted.run_json.exists()
     assert persisted.tool_events_jsonl.exists()
     assert persisted.claims_json.exists()
@@ -57,7 +62,7 @@ def test_agentic_run_dry_run_cli_writes_run_json(tmp_path, capsys) -> None:
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "tools_executed: 3" in captured.out
+    assert "tools_executed: 4" in captured.out
     assert (run_dir / "run.json").exists()
     assert (run_dir / "tool_events.jsonl").exists()
 
