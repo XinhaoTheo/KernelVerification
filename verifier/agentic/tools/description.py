@@ -162,6 +162,14 @@ def _get_description_task(context: ToolContext, task_id: str) -> DescriptionTask
 def _string_list(value: JsonValue | None, *, field: str) -> list[str]:
     if value is None:
         return []
+    if isinstance(value, str):
+        # A bare string is unambiguous: it is one entry. The Describer sent prose
+        # here on its first record_description_update in every debate run
+        # captured -- three for three -- and lost a whole turn to the rejection
+        # before resending the same content wrapped in a list. Nothing is gained
+        # by refusing input whose meaning is not in doubt.
+        cleaned = value.strip()
+        return [cleaned] if cleaned else []
     if not isinstance(value, list):
         raise ValueError(f"{field} must be a list of strings")
     result = []

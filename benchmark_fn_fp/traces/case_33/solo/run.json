@@ -1,0 +1,749 @@
+{
+  "artifact": {
+    "entry": "case_33",
+    "has_error": false,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef quant_matmul_248_kernel(\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\n    M, N, K, bits, maxq,\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\n    stride_scales, stride_zeros,\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\n    GROUP_SIZE_M: tl.constexpr,\n):\n    infearure_per_bits = 32 // bits\n    pid = tl.program_id(axis=0)\n    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\n    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\n    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\n    num_pid_in_group = GROUP_SIZE_M * num_pid_n\n    group_id = pid // num_pid_in_group\n    first_pid_m = group_id * GROUP_SIZE_M\n    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\n    pid_m = first_pid_m + (pid % group_size_m)\n    pid_n = (pid % num_pid_in_group) // group_size_m\n\n    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\n    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\n    offs_k = tl.arange(0, BLOCK_SIZE_K)\n    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\n    a_mask = offs_am[:, None] < M\n    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\n    g_ptrs = g_ptr + offs_k\n    scales_ptrs = scales_ptr + offs_bn[None, :]\n    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\n\n    shifter = (offs_k % infearure_per_bits) * bits\n    zeros_shifter = (offs_bn % infearure_per_bits) * bits\n    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\n\n    for k in range(0, num_pid_k):\n        g_idx = tl.load(g_ptrs)\n        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\n        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\n        zeros = (zeros >> zeros_shifter[None, :]) & maxq\n        zeros = zeros + 1\n        a = tl.load(a_ptrs, mask=a_mask, other=0.0)\n        b = tl.load(b_ptrs)\n        b = (b >> shifter[:, None]) & maxq\n        b = (b - zeros) * scales\n        accumulator += tl.dot(a, b)\n        a_ptrs += BLOCK_SIZE_K\n        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\n        g_ptrs += BLOCK_SIZE_K\n\n    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\n    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\n    tl.store(c_ptrs, accumulator, mask=c_mask)\n\n\ndef gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4):\n    \"\"\"Host wrapper. a: (M,K) fp32. b_packed: (K//(32//bits), N) int32.\n    scales/zeros: (num_groups, N), one row per group of `group_size` columns\n    along K. The per-column group table is derived here from group_size.\"\"\"\n    M, K = a.shape\n    N = b_packed.shape[1]\n    maxq = 2 ** bits - 1\n\n    num_groups = K // group_size\n    g_idx = torch.clamp(\n        torch.arange(K, device=a.device, dtype=torch.int32) // group_size,\n        max=num_groups - 1,\n    )\n\n    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\n    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\n    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\n    quant_matmul_248_kernel[grid](\n        a, b_packed, c, scales, zeros, g_idx,\n        M, N, K, bits, maxq,\n        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\n        scales.stride(0), zeros.stride(0),\n        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\n        GROUP_SIZE_M=GROUP_SIZE_M,\n    )\n    return c\n",
+    "passed": false,
+    "rounds": null,
+    "session_dir": "/root/cases/case_33",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T02:57:08Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T02:57:53Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "24f28f50a5015f1b25cfbf5238b642c640654d6ea3f957f5f9bca86e7e853d2e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "690330682b1f44481f4ad078c0e1133a754d650140f1360746e5b783b4189e70"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "control_K64_gs32": {
+              "allclose": true,
+              "max_abs_err": 1.9073486328125e-05
+            },
+            "duration_s": 8.104623,
+            "exit_code": 0,
+            "expected_signal": "Control (K=64) matches reference; K=80/K=48 show large mismatch, and kernel output instead matches the clamped-group semantics \u2014 confirming the group mapping defect.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "kernel_matches_clamped_semantics": {
+              "allclose": true,
+              "max_abs_err": 2.09808349609375e-05
+            },
+            "partial_K48_gs32": {
+              "allclose": false,
+              "ceil_groups": 2,
+              "g_contract_tail": 1,
+              "g_kernel_tail": 0,
+              "kernel_num_groups": 1,
+              "max_abs_err": 41.15261459350586,
+              "ref_absmax": 73.8553
+            },
+            "partial_K80_gs32": {
+              "allclose": false,
+              "ceil_groups": 3,
+              "g_contract_tail": 2,
+              "g_kernel_tail": 1,
+              "kernel_num_groups": 2,
+              "max_abs_err": 60.573341369628906,
+              "max_rel_err": 218.258,
+              "ref_absmax": 83.1006
+            },
+            "stderr": "",
+            "stdout": "{\n \"control_K64_gs32\": {\n  \"K\": 64,\n  \"gs\": 32,\n  \"ceil_groups\": 2,\n  \"kernel_num_groups\": 2,\n  \"max_abs_err\": 1.9073486328125e-05,\n  \"max_rel_err\": 7.685270247748122e-05,\n  \"ref_absmax\": 66.26416015625,\n  \"g_contract_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"g_kernel_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"allclose\": true\n },\n \"partial_K80_gs32\": {\n  \"K\": 80,\n  \"gs\": 32,\n  \"ceil_groups\": 3,\n  \"kernel_num_groups\": 2,\n  \"max_abs_err\": 60.573341369628906,\n  \"max_rel_err\": 218.2582244873047,\n  \"ref_absmax\": 83.10057830810547,\n  \"g_contract_tail\": [\n   2,\n   2,\n   2,\n   2,\n   2,\n   2,\n   2,\n   2\n  ],\n  \"g_kernel_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"allclose\": false\n },\n \"partial_K48_gs32\": {\n  \"K\": 48,\n  \"gs\": 32,\n  \"ceil_groups\": 2,\n  \"kernel_num_groups\": 1,\n  \"max_abs_err\": 41.15261459350586,\n  \"max_rel_err\": 103.28274536132812,\n  \"ref_absmax\": 73.85531616210938,\n  \"g_contract_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"g_kernel_tail\": [\n   0,\n   0,\n   0,\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"allclose\": false\n },\n \"kernel_matches_clamped_semantics\": {\n  \"max_abs_err\": 2.09808349609375e-05,\n  \"allclose\": true\n }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel matches contract only when K is an exact multiple of group_size. Control K=64,gs=32: max_abs_err 1.9e-5, allclose True. K=80,gs=32 (ceil=3 groups): max_abs_err 60.57 vs ref_absmax 83.10, allclose False; trailing k indices use g=1 instead of contract g=2. K=48,gs=32 (ceil=2): max_abs_err 41.15 vs ref_absmax 73.86, allclose False; tail uses g=0 instead of g=1. Cross-check: kernel output matches a reference built with the floor+clamp group mapping to 2.1e-5, isolating the defect precisely to the group index table (num_groups = K//group_size with clamp) rather than any numeric issue.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Line 69-73: num_groups = K // group_size, then g_idx = clamp(arange(K)//group_size, max=num_groups-1). For K=80, group_size=32, ceil = 3 groups but clamp caps g_idx at 1, so columns 64..79 (group 2) read scales/zeros row 1.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
+        },
+        {
+          "source": "problem.txt",
+          "summary": "Formula given: dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k),n]) * scale[group_of(k),n] where group_of(k) is the group column k belongs to."
+        }
+      ],
+      "scope_rationale": "problem.txt makes the non-multiple K case an explicit contract requirement, stating the trailing columns form a shorter final group with its own row and that scales/zeros are supplied with ceil(K/group_size) rows.",
+      "statement": "For K not an exact multiple of group_size, gptq_matmul assigns the trailing partial group the previous group's scale/zero row (because num_groups = K // group_size floor + clamp), producing C values that differ from the contract's dequant(B)[k,n] = (q - zero[group_of(k),n]) * scale[group_of(k),n] with group_of(k) = k // group_size and ceil(K/group_size) groups.",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T02:57:53Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_33",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_33"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_33"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_33"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_33",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 24.833696160000002,
+      "role": "solo",
+      "round": 2,
+      "text": "The contract explicitly requires correct group assignment when K is not a multiple of `group_size` (ceil(K/group_size) rows). The wrapper computes `num_groups = K // group_size` (floor) and clamps `g_idx` to that, which would fold the trailing partial group into the previous group's scale/zero row. Recording that claim and testing it.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Line 69-73: num_groups = K // group_size, then g_idx = clamp(arange(K)//group_size, max=num_groups-1). For K=80, group_size=32, ceil = 3 groups but clamp caps g_idx at 1, so columns 64..79 (group 2) read scales/zeros row 1.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
+              },
+              {
+                "source": "problem.txt",
+                "summary": "Formula given: dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k),n]) * scale[group_of(k),n] where group_of(k) is the group column k belongs to."
+              }
+            ],
+            "scope_rationale": "problem.txt makes the non-multiple K case an explicit contract requirement, stating the trailing columns form a shorter final group with its own row and that scales/zeros are supplied with ceil(K/group_size) rows.",
+            "statement": "For K not an exact multiple of group_size, gptq_matmul assigns the trailing partial group the previous group's scale/zero row (because num_groups = K // group_size floor + clamp), producing C values that differ from the contract's dequant(B)[k,n] = (q - zero[group_of(k),n]) * scale[group_of(k),n] with group_of(k) = k // group_size and ceil(K/group_size) groups."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 6910,
+        "cache_read_input_tokens": 0,
+        "duration_s": 24.834,
+        "input_tokens": 6264,
+        "output_tokens": 1918
+      }
+    },
+    {
+      "duration_s": 25.479813883000002,
+      "role": "solo",
+      "round": 3,
+      "text": "Recording the decisive probe: compare the kernel against a reference implementing the contract's group_of(k)=k//group_size with ceil(K/group_size) rows, both for an exact-multiple K (control) and a non-multiple K (K=80, group_size=32 \u2192 3 groups).",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, sys, importlib.util\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_33/kernel.py\")\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\n\ntorch.manual_seed(0)\ndev = \"cuda\"\n\ndef make(M, N, K, gs, bits=4):\n    ipb = 32 // bits\n    ngroups_ceil = -(-K // gs)\n    a = torch.randn(M, K, device=dev, dtype=torch.float32)\n    q = torch.randint(0, 2**bits, (K, N), device=dev, dtype=torch.int32)\n    # pack along K\n    b_packed = torch.zeros(K // ipb, N, device=dev, dtype=torch.int32)\n    for k in range(K):\n        b_packed[k // ipb] |= (q[k] << (bits * (k % ipb)))\n    scales = (torch.rand(ngroups_ceil, N, device=dev, dtype=torch.float32) * 0.5 + 0.05)\n    zq = torch.randint(0, 2**bits, (ngroups_ceil, N), device=dev, dtype=torch.int32)\n    zeros_packed = torch.zeros(ngroups_ceil, N // ipb, device=dev, dtype=torch.int32)\n    for n in range(N):\n        zeros_packed[:, n // ipb] |= (zq[:, n] << (bits * (n % ipb)))\n    return a, q, b_packed, scales, zq, zeros_packed, ngroups_ceil\n\ndef ref(a, q, scales, zq, gs):\n    K = a.shape[1]\n    kidx = torch.arange(K, device=dev)\n    g = kidx // gs                      # contract: group_of(k) = k // group_size\n    deq = (q.float() - (zq[g].float() + 1)) * scales[g]\n    return a @ deq, g\n\nout = {}\nfor tag, (M, N, K, gs) in {\n    \"control_K64_gs32\": (32, 32, 64, 32),\n    \"partial_K80_gs32\": (32, 32, 80, 32),\n    \"partial_K48_gs32\": (32, 32, 48, 32),\n}.items():\n    a, q, b_packed, scales, zq, zeros_packed, ng = make(M, N, K, gs)\n    c = kern.gptq_matmul(a, b_packed, scales, zeros_packed, gs, bits=4)\n    r, g = ref(a, q, scales, zq, gs)\n    err = (c - r).abs()\n    denom = r.abs().clamp_min(1e-6)\n    # what group indices the kernel actually used\n    num_groups_floor = K // gs\n    g_kernel = torch.clamp(torch.arange(K, device=dev) // gs, max=num_groups_floor - 1)\n    out[tag] = dict(\n        K=K, gs=gs, ceil_groups=ng, kernel_num_groups=num_groups_floor,\n        max_abs_err=err.max().item(), max_rel_err=(err/denom).max().item(),\n        ref_absmax=r.abs().max().item(),\n        g_contract_tail=g[-8:].tolist(), g_kernel_tail=g_kernel[-8:].tolist(),\n        allclose=torch.allclose(c, r, atol=1e-3, rtol=1e-3),\n    )\n\n# also verify kernel matches the *floor/clamp* semantics (i.e. bug is exactly the group mapping)\na, q, b_packed, scales, zq, zeros_packed, ng = make(32, 32, 80, 32)\nc = kern.gptq_matmul(a, b_packed, scales, zeros_packed, 32, bits=4)\ngk = torch.clamp(torch.arange(80, device=dev) // 32, max=80 // 32 - 1)\ndeq_k = (q.float() - (zq[gk].float() + 1)) * scales[gk]\nr_kernelsem = a @ deq_k\nout[\"kernel_matches_clamped_semantics\"] = dict(\n    max_abs_err=(c - r_kernelsem).abs().max().item(),\n    allclose=torch.allclose(c, r_kernelsem, atol=1e-3, rtol=1e-3),\n)\nprint(json.dumps(out, indent=1))\n",
+            "expected_signal": "Control (K=64) matches reference; K=80/K=48 show large mismatch, and kernel output instead matches the clamped-group semantics \u2014 confirming the group mapping defect."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 25.48,
+        "input_tokens": 9005,
+        "output_tokens": 2368
+      }
+    },
+    {
+      "duration_s": 10.628097948999994,
+      "role": "solo",
+      "round": 4,
+      "text": "Probe t6 came back clean: control K=64 matches (max abs err 1.9e-5), while K=80 and K=48 diverge massively, and the kernel output matches the clamped-group semantics exactly \u2014 confirming the group-mapping defect.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "control_K64_gs32": {
+                "allclose": true,
+                "max_abs_err": 1.9073486328125e-05
+              },
+              "kernel_matches_clamped_semantics": {
+                "allclose": true,
+                "max_abs_err": 2.09808349609375e-05
+              },
+              "partial_K48_gs32": {
+                "allclose": false,
+                "ceil_groups": 2,
+                "g_contract_tail": 1,
+                "g_kernel_tail": 0,
+                "kernel_num_groups": 1,
+                "max_abs_err": 41.15261459350586,
+                "ref_absmax": 73.8553
+              },
+              "partial_K80_gs32": {
+                "allclose": false,
+                "ceil_groups": 3,
+                "g_contract_tail": 2,
+                "g_kernel_tail": 1,
+                "kernel_num_groups": 2,
+                "max_abs_err": 60.573341369628906,
+                "max_rel_err": 218.258,
+                "ref_absmax": 83.1006
+              }
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "Kernel matches contract only when K is an exact multiple of group_size. Control K=64,gs=32: max_abs_err 1.9e-5, allclose True. K=80,gs=32 (ceil=3 groups): max_abs_err 60.57 vs ref_absmax 83.10, allclose False; trailing k indices use g=1 instead of contract g=2. K=48,gs=32 (ceil=2): max_abs_err 41.15 vs ref_absmax 73.86, allclose False; tail uses g=0 instead of g=1. Cross-check: kernel output matches a reference built with the floor+clamp group mapping to 2.1e-5, isolating the defect precisely to the group index table (num_groups = K//group_size with clamp) rather than any numeric issue.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 10.628,
+        "input_tokens": 15234,
+        "output_tokens": 812
+      }
+    },
+    {
+      "duration_s": 12.494904724999998,
+      "role": "solo",
+      "round": 5,
+      "text": "Claim c1 is confirmed with decisive runtime evidence and is scoped directly to an explicit contract requirement. No further probes would change the verdict, so I'm recording it.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The problem statement explicitly requires that every K-column be dequantized with the scale/zero of the group it actually belongs to \"for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. The host wrapper (kernel.py lines 69-73) instead computes num_groups = K // group_size (floor) and clamps g_idx to num_groups-1, so the trailing partial group reuses the previous group's scale/zero row.\n\nProbe t6 (finalized as evidence c1.e1 in event t7) ran the kernel against a reference implementing the contract's group_of(k) = k // group_size with ceil(K/group_size) rows, using packed 4-bit weights (K divisible by 8, so the packing layout the contract declares is respected):\n- Control K=64, gs=32 (exact multiple): max_abs_err 1.91e-5, allclose True \u2014 so packing, shifting, zero+1 convention and matmul are all correct.\n- K=80, gs=32 (ceil=3 groups): max_abs_err 60.57 against ref_absmax 83.10, max_rel_err 218, allclose False. Kernel used g=1 for the trailing 16 columns where the contract requires g=2.\n- K=48, gs=32 (ceil=2 groups): max_abs_err 41.15 vs ref_absmax 73.86, allclose False; tail used g=0 instead of g=1.\n- Cross-check: kernel output matches a reference built with the floor+clamp mapping to 2.1e-5 (allclose True), isolating the defect exactly to the group index table rather than any numeric/precision issue.\n\nThis is not a tolerance or reduction-order artifact \u2014 it is a wrong group assignment that the contract names as a required behaviour, and the error magnitude is comparable to the output scale itself.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 12.495,
+        "input_tokens": 23369,
+        "output_tokens": 924
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_33"
+      },
+      "created_at": "2026-09-08T02:56:42Z",
+      "id": "t1",
+      "output": {
+        "entry": "case_33",
+        "has_error": false,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef quant_matmul_248_kernel(\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\n    M, N, K, bits, maxq,\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\n    stride_scales, stride_zeros,\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\n    GROUP_SIZE_M: tl.constexpr,\n):\n    infearure_per_bits = 32 // bits\n    pid = tl.program_id(axis=0)\n    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\n    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\n    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\n    num_pid_in_group = GROUP_SIZE_M * num_pid_n\n    group_id = pid // num_pid_in_group\n    first_pid_m = group_id * GROUP_SIZE_M\n    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\n    pid_m = first_pid_m + (pid % group_size_m)\n    pid_n = (pid % num_pid_in_group) // group_size_m\n\n    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\n    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\n    offs_k = tl.arange(0, BLOCK_SIZE_K)\n    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\n    a_mask = offs_am[:, None] < M\n    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\n    g_ptrs = g_ptr + offs_k\n    scales_ptrs = scales_ptr + offs_bn[None, :]\n    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\n\n    shifter = (offs_k % infearure_per_bits) * bits\n    zeros_shifter = (offs_bn % infearure_per_bits) * bits\n    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\n\n    for k in range(0, num_pid_k):\n        g_idx = tl.load(g_ptrs)\n        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\n        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\n        zeros = (zeros >> zeros_shifter[None, :]) & maxq\n        zeros = zeros + 1\n        a = tl.load(a_ptrs, mask=a_mask, other=0.0)\n        b = tl.load(b_ptrs)\n        b = (b >> shifter[:, None]) & maxq\n        b = (b - zeros) * scales\n        accumulator += tl.dot(a, b)\n        a_ptrs += BLOCK_SIZE_K\n        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\n        g_ptrs += BLOCK_SIZE_K\n\n    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\n    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\n    tl.store(c_ptrs, accumulator, mask=c_mask)\n\n\ndef gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4):\n    \"\"\"Host wrapper. a: (M,K) fp32. b_packed: (K//(32//bits), N) int32.\n    scales/zeros: (num_groups, N), one row per group of `group_size` columns\n    along K. The per-column group table is derived here from group_size.\"\"\"\n    M, K = a.shape\n    N = b_packed.shape[1]\n    maxq = 2 ** bits - 1\n\n    num_groups = K // group_size\n    g_idx = torch.clamp(\n        torch.arange(K, device=a.device, dtype=torch.int32) // group_size,\n        max=num_groups - 1,\n    )\n\n    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\n    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\n    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\n    quant_matmul_248_kernel[grid](\n        a, b_packed, c, scales, zeros, g_idx,\n        M, N, K, bits, maxq,\n        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\n        scales.stride(0), zeros.stride(0),\n        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\n        GROUP_SIZE_M=GROUP_SIZE_M,\n    )\n    return c\n",
+        "passed": false,
+        "rounds": null,
+        "session_dir": "/root/cases/case_33",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_33"
+      },
+      "created_at": "2026-09-08T02:56:42Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: grouped INT4 dequantization fused with a matrix multiply\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\n\nWeights are stored as 4-bit values packed into int32 words. Columns along the\nreduction dimension K are split into consecutive groups of `group_size`, and\neach group carries its own scale and zero-point row in `scales` / `zeros`.\n\nContract: every column must be dequantized with the scale and zero-point of the\ngroup it actually belongs to, for any K -- including a K that is not an exact\nmultiple of group_size. In that case the trailing columns form a shorter final\ngroup which is still a group of its own, with its own row in `scales`/`zeros`;\n`scales` and `zeros` are supplied with ceil(K / group_size) rows accordingly.\n\nThe kernel computes  C = A @ dequant(B),  with dequant(B)[k,n] =\n(unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n],\nwhere group_of(k) is the index of the group column k belongs to.\n",
+        "entry": "case_33",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_33"
+      },
+      "created_at": "2026-09-08T02:56:42Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_33",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3551
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 983
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_33",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T02:56:42Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_33\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_33",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Line 69-73: num_groups = K // group_size, then g_idx = clamp(arange(K)//group_size, max=num_groups-1). For K=80, group_size=32, ceil = 3 groups but clamp caps g_idx at 1, so columns 64..79 (group 2) read scales/zeros row 1.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
+          },
+          {
+            "source": "problem.txt",
+            "summary": "Formula given: dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k),n]) * scale[group_of(k),n] where group_of(k) is the group column k belongs to."
+          }
+        ],
+        "scope_rationale": "problem.txt makes the non-multiple K case an explicit contract requirement, stating the trailing columns form a shorter final group with its own row and that scales/zeros are supplied with ceil(K/group_size) rows.",
+        "statement": "For K not an exact multiple of group_size, gptq_matmul assigns the trailing partial group the previous group's scale/zero row (because num_groups = K // group_size floor + clamp), producing C values that differ from the contract's dequant(B)[k,n] = (q - zero[group_of(k),n]) * scale[group_of(k),n] with group_of(k) = k // group_size and ceil(K/group_size) groups."
+      },
+      "created_at": "2026-09-08T02:57:08Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-08T02:57:08Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Line 69-73: num_groups = K // group_size, then g_idx = clamp(arange(K)//group_size, max=num_groups-1). For K=80, group_size=32, ceil = 3 groups but clamp caps g_idx at 1, so columns 64..79 (group 2) read scales/zeros row 1.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
+          },
+          {
+            "source": "problem.txt",
+            "summary": "Formula given: dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k),n]) * scale[group_of(k),n] where group_of(k) is the group column k belongs to."
+          }
+        ],
+        "scope_rationale": "problem.txt makes the non-multiple K case an explicit contract requirement, stating the trailing columns form a shorter final group with its own row and that scales/zeros are supplied with ceil(K/group_size) rows.",
+        "statement": "For K not an exact multiple of group_size, gptq_matmul assigns the trailing partial group the previous group's scale/zero row (because num_groups = K // group_size floor + clamp), producing C values that differ from the contract's dequant(B)[k,n] = (q - zero[group_of(k),n]) * scale[group_of(k),n] with group_of(k) = k // group_size and ceil(K/group_size) groups.",
+        "status": "open",
+        "updated_at": "2026-09-08T02:57:08Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, sys, importlib.util\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_33/kernel.py\")\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\n\ntorch.manual_seed(0)\ndev = \"cuda\"\n\ndef make(M, N, K, gs, bits=4):\n    ipb = 32 // bits\n    ngroups_ceil = -(-K // gs)\n    a = torch.randn(M, K, device=dev, dtype=torch.float32)\n    q = torch.randint(0, 2**bits, (K, N), device=dev, dtype=torch.int32)\n    # pack along K\n    b_packed = torch.zeros(K // ipb, N, device=dev, dtype=torch.int32)\n    for k in range(K):\n        b_packed[k // ipb] |= (q[k] << (bits * (k % ipb)))\n    scales = (torch.rand(ngroups_ceil, N, device=dev, dtype=torch.float32) * 0.5 + 0.05)\n    zq = torch.randint(0, 2**bits, (ngroups_ceil, N), device=dev, dtype=torch.int32)\n    zeros_packed = torch.zeros(ngroups_ceil, N // ipb, device=dev, dtype=torch.int32)\n    for n in range(N):\n        zeros_packed[:, n // ipb] |= (zq[:, n] << (bits * (n % ipb)))\n    return a, q, b_packed, scales, zq, zeros_packed, ngroups_ceil\n\ndef ref(a, q, scales, zq, gs):\n    K = a.shape[1]\n    kidx = torch.arange(K, device=dev)\n    g = kidx // gs                      # contract: group_of(k) = k // group_size\n    deq = (q.float() - (zq[g].float() + 1)) * scales[g]\n    return a @ deq, g\n\nout = {}\nfor tag, (M, N, K, gs) in {\n    \"control_K64_gs32\": (32, 32, 64, 32),\n    \"partial_K80_gs32\": (32, 32, 80, 32),\n    \"partial_K48_gs32\": (32, 32, 48, 32),\n}.items():\n    a, q, b_packed, scales, zq, zeros_packed, ng = make(M, N, K, gs)\n    c = kern.gptq_matmul(a, b_packed, scales, zeros_packed, gs, bits=4)\n    r, g = ref(a, q, scales, zq, gs)\n    err = (c - r).abs()\n    denom = r.abs().clamp_min(1e-6)\n    # what group indices the kernel actually used\n    num_groups_floor = K // gs\n    g_kernel = torch.clamp(torch.arange(K, device=dev) // gs, max=num_groups_floor - 1)\n    out[tag] = dict(\n        K=K, gs=gs, ceil_groups=ng, kernel_num_groups=num_groups_floor,\n        max_abs_err=err.max().item(), max_rel_err=(err/denom).max().item(),\n        ref_absmax=r.abs().max().item(),\n        g_contract_tail=g[-8:].tolist(), g_kernel_tail=g_kernel[-8:].tolist(),\n        allclose=torch.allclose(c, r, atol=1e-3, rtol=1e-3),\n    )\n\n# also verify kernel matches the *floor/clamp* semantics (i.e. bug is exactly the group mapping)\na, q, b_packed, scales, zq, zeros_packed, ng = make(32, 32, 80, 32)\nc = kern.gptq_matmul(a, b_packed, scales, zeros_packed, 32, bits=4)\ngk = torch.clamp(torch.arange(80, device=dev) // 32, max=80 // 32 - 1)\ndeq_k = (q.float() - (zq[gk].float() + 1)) * scales[gk]\nr_kernelsem = a @ deq_k\nout[\"kernel_matches_clamped_semantics\"] = dict(\n    max_abs_err=(c - r_kernelsem).abs().max().item(),\n    allclose=torch.allclose(c, r_kernelsem, atol=1e-3, rtol=1e-3),\n)\nprint(json.dumps(out, indent=1))\n",
+        "expected_signal": "Control (K=64) matches reference; K=80/K=48 show large mismatch, and kernel output instead matches the clamped-group semantics \u2014 confirming the group mapping defect."
+      },
+      "created_at": "2026-09-08T02:57:42Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "24f28f50a5015f1b25cfbf5238b642c640654d6ea3f957f5f9bca86e7e853d2e"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "690330682b1f44481f4ad078c0e1133a754d650140f1360746e5b783b4189e70"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For K not an exact multiple of group_size, gptq_matmul assigns the trailing partial group the previous group's scale/zero row (because num_groups = K // group_size floor + clamp), producing C values that differ from the contract's dequant(B)[k,n] = (q - zero[group_of(k),n]) * scale[group_of(k),n] with group_of(k) = k // group_size and ceil(K/group_size) groups.",
+        "cwd": "/root/cases/case_33",
+        "duration_s": 8.104623,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "24f28f50a5015f1b25cfbf5238b642c640654d6ea3f957f5f9bca86e7e853d2e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "690330682b1f44481f4ad078c0e1133a754d650140f1360746e5b783b4189e70"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 8.104623,
+            "exit_code": 0,
+            "expected_signal": "Control (K=64) matches reference; K=80/K=48 show large mismatch, and kernel output instead matches the clamped-group semantics \u2014 confirming the group mapping defect.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n \"control_K64_gs32\": {\n  \"K\": 64,\n  \"gs\": 32,\n  \"ceil_groups\": 2,\n  \"kernel_num_groups\": 2,\n  \"max_abs_err\": 1.9073486328125e-05,\n  \"max_rel_err\": 7.685270247748122e-05,\n  \"ref_absmax\": 66.26416015625,\n  \"g_contract_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"g_kernel_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"allclose\": true\n },\n \"partial_K80_gs32\": {\n  \"K\": 80,\n  \"gs\": 32,\n  \"ceil_groups\": 3,\n  \"kernel_num_groups\": 2,\n  \"max_abs_err\": 60.573341369628906,\n  \"max_rel_err\": 218.2582244873047,\n  \"ref_absmax\": 83.10057830810547,\n  \"g_contract_tail\": [\n   2,\n   2,\n   2,\n   2,\n   2,\n   2,\n   2,\n   2\n  ],\n  \"g_kernel_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"allclose\": false\n },\n \"partial_K48_gs32\": {\n  \"K\": 48,\n  \"gs\": 32,\n  \"ceil_groups\": 2,\n  \"kernel_num_groups\": 1,\n  \"max_abs_err\": 41.15261459350586,\n  \"max_rel_err\": 103.28274536132812,\n  \"ref_absmax\": 73.85531616210938,\n  \"g_contract_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"g_kernel_tail\": [\n   0,\n   0,\n   0,\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"allclose\": false\n },\n \"kernel_matches_clamped_semantics\": {\n  \"max_abs_err\": 2.09808349609375e-05,\n  \"allclose\": true\n }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": "Control (K=64) matches reference; K=80/K=48 show large mismatch, and kernel output instead matches the clamped-group semantics \u2014 confirming the group mapping defect.",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n \"control_K64_gs32\": {\n  \"K\": 64,\n  \"gs\": 32,\n  \"ceil_groups\": 2,\n  \"kernel_num_groups\": 2,\n  \"max_abs_err\": 1.9073486328125e-05,\n  \"max_rel_err\": 7.685270247748122e-05,\n  \"ref_absmax\": 66.26416015625,\n  \"g_contract_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"g_kernel_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"allclose\": true\n },\n \"partial_K80_gs32\": {\n  \"K\": 80,\n  \"gs\": 32,\n  \"ceil_groups\": 3,\n  \"kernel_num_groups\": 2,\n  \"max_abs_err\": 60.573341369628906,\n  \"max_rel_err\": 218.2582244873047,\n  \"ref_absmax\": 83.10057830810547,\n  \"g_contract_tail\": [\n   2,\n   2,\n   2,\n   2,\n   2,\n   2,\n   2,\n   2\n  ],\n  \"g_kernel_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"allclose\": false\n },\n \"partial_K48_gs32\": {\n  \"K\": 48,\n  \"gs\": 32,\n  \"ceil_groups\": 2,\n  \"kernel_num_groups\": 1,\n  \"max_abs_err\": 41.15261459350586,\n  \"max_rel_err\": 103.28274536132812,\n  \"ref_absmax\": 73.85531616210938,\n  \"g_contract_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"g_kernel_tail\": [\n   0,\n   0,\n   0,\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"allclose\": false\n },\n \"kernel_matches_clamped_semantics\": {\n  \"max_abs_err\": 2.09808349609375e-05,\n  \"allclose\": true\n }\n}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "control_K64_gs32": {
+            "allclose": true,
+            "max_abs_err": 1.9073486328125e-05
+          },
+          "kernel_matches_clamped_semantics": {
+            "allclose": true,
+            "max_abs_err": 2.09808349609375e-05
+          },
+          "partial_K48_gs32": {
+            "allclose": false,
+            "ceil_groups": 2,
+            "g_contract_tail": 1,
+            "g_kernel_tail": 0,
+            "kernel_num_groups": 1,
+            "max_abs_err": 41.15261459350586,
+            "ref_absmax": 73.8553
+          },
+          "partial_K80_gs32": {
+            "allclose": false,
+            "ceil_groups": 3,
+            "g_contract_tail": 2,
+            "g_kernel_tail": 1,
+            "kernel_num_groups": 2,
+            "max_abs_err": 60.573341369628906,
+            "max_rel_err": 218.258,
+            "ref_absmax": 83.1006
+          }
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "Kernel matches contract only when K is an exact multiple of group_size. Control K=64,gs=32: max_abs_err 1.9e-5, allclose True. K=80,gs=32 (ceil=3 groups): max_abs_err 60.57 vs ref_absmax 83.10, allclose False; trailing k indices use g=1 instead of contract g=2. K=48,gs=32 (ceil=2): max_abs_err 41.15 vs ref_absmax 73.86, allclose False; tail uses g=0 instead of g=1. Cross-check: kernel output matches a reference built with the floor+clamp group mapping to 2.1e-5, isolating the defect precisely to the group index table (num_groups = K//group_size with clamp) rather than any numeric issue.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T02:57:53Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T02:57:08Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T02:57:53Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "24f28f50a5015f1b25cfbf5238b642c640654d6ea3f957f5f9bca86e7e853d2e"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "690330682b1f44481f4ad078c0e1133a754d650140f1360746e5b783b4189e70"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "control_K64_gs32": {
+                  "allclose": true,
+                  "max_abs_err": 1.9073486328125e-05
+                },
+                "duration_s": 8.104623,
+                "exit_code": 0,
+                "expected_signal": "Control (K=64) matches reference; K=80/K=48 show large mismatch, and kernel output instead matches the clamped-group semantics \u2014 confirming the group mapping defect.",
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "kernel_matches_clamped_semantics": {
+                  "allclose": true,
+                  "max_abs_err": 2.09808349609375e-05
+                },
+                "partial_K48_gs32": {
+                  "allclose": false,
+                  "ceil_groups": 2,
+                  "g_contract_tail": 1,
+                  "g_kernel_tail": 0,
+                  "kernel_num_groups": 1,
+                  "max_abs_err": 41.15261459350586,
+                  "ref_absmax": 73.8553
+                },
+                "partial_K80_gs32": {
+                  "allclose": false,
+                  "ceil_groups": 3,
+                  "g_contract_tail": 2,
+                  "g_kernel_tail": 1,
+                  "kernel_num_groups": 2,
+                  "max_abs_err": 60.573341369628906,
+                  "max_rel_err": 218.258,
+                  "ref_absmax": 83.1006
+                },
+                "stderr": "",
+                "stdout": "{\n \"control_K64_gs32\": {\n  \"K\": 64,\n  \"gs\": 32,\n  \"ceil_groups\": 2,\n  \"kernel_num_groups\": 2,\n  \"max_abs_err\": 1.9073486328125e-05,\n  \"max_rel_err\": 7.685270247748122e-05,\n  \"ref_absmax\": 66.26416015625,\n  \"g_contract_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"g_kernel_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"allclose\": true\n },\n \"partial_K80_gs32\": {\n  \"K\": 80,\n  \"gs\": 32,\n  \"ceil_groups\": 3,\n  \"kernel_num_groups\": 2,\n  \"max_abs_err\": 60.573341369628906,\n  \"max_rel_err\": 218.2582244873047,\n  \"ref_absmax\": 83.10057830810547,\n  \"g_contract_tail\": [\n   2,\n   2,\n   2,\n   2,\n   2,\n   2,\n   2,\n   2\n  ],\n  \"g_kernel_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"allclose\": false\n },\n \"partial_K48_gs32\": {\n  \"K\": 48,\n  \"gs\": 32,\n  \"ceil_groups\": 2,\n  \"kernel_num_groups\": 1,\n  \"max_abs_err\": 41.15261459350586,\n  \"max_rel_err\": 103.28274536132812,\n  \"ref_absmax\": 73.85531616210938,\n  \"g_contract_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"g_kernel_tail\": [\n   0,\n   0,\n   0,\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"allclose\": false\n },\n \"kernel_matches_clamped_semantics\": {\n  \"max_abs_err\": 2.09808349609375e-05,\n  \"allclose\": true\n }\n}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Kernel matches contract only when K is an exact multiple of group_size. Control K=64,gs=32: max_abs_err 1.9e-5, allclose True. K=80,gs=32 (ceil=3 groups): max_abs_err 60.57 vs ref_absmax 83.10, allclose False; trailing k indices use g=1 instead of contract g=2. K=48,gs=32 (ceil=2): max_abs_err 41.15 vs ref_absmax 73.86, allclose False; tail uses g=0 instead of g=1. Cross-check: kernel output matches a reference built with the floor+clamp group mapping to 2.1e-5, isolating the defect precisely to the group index table (num_groups = K//group_size with clamp) rather than any numeric issue.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Line 69-73: num_groups = K // group_size, then g_idx = clamp(arange(K)//group_size, max=num_groups-1). For K=80, group_size=32, ceil = 3 groups but clamp caps g_idx at 1, so columns 64..79 (group 2) read scales/zeros row 1.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
+            },
+            {
+              "source": "problem.txt",
+              "summary": "Formula given: dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k),n]) * scale[group_of(k),n] where group_of(k) is the group column k belongs to."
+            }
+          ],
+          "scope_rationale": "problem.txt makes the non-multiple K case an explicit contract requirement, stating the trailing columns form a shorter final group with its own row and that scales/zeros are supplied with ceil(K/group_size) rows.",
+          "statement": "For K not an exact multiple of group_size, gptq_matmul assigns the trailing partial group the previous group's scale/zero row (because num_groups = K // group_size floor + clamp), producing C values that differ from the contract's dequant(B)[k,n] = (q - zero[group_of(k),n]) * scale[group_of(k),n] with group_of(k) = k // group_size and ceil(K/group_size) groups.",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T02:57:53Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T02:57:53Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "24f28f50a5015f1b25cfbf5238b642c640654d6ea3f957f5f9bca86e7e853d2e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "690330682b1f44481f4ad078c0e1133a754d650140f1360746e5b783b4189e70"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "control_K64_gs32": {
+              "allclose": true,
+              "max_abs_err": 1.9073486328125e-05
+            },
+            "duration_s": 8.104623,
+            "exit_code": 0,
+            "expected_signal": "Control (K=64) matches reference; K=80/K=48 show large mismatch, and kernel output instead matches the clamped-group semantics \u2014 confirming the group mapping defect.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "kernel_matches_clamped_semantics": {
+              "allclose": true,
+              "max_abs_err": 2.09808349609375e-05
+            },
+            "partial_K48_gs32": {
+              "allclose": false,
+              "ceil_groups": 2,
+              "g_contract_tail": 1,
+              "g_kernel_tail": 0,
+              "kernel_num_groups": 1,
+              "max_abs_err": 41.15261459350586,
+              "ref_absmax": 73.8553
+            },
+            "partial_K80_gs32": {
+              "allclose": false,
+              "ceil_groups": 3,
+              "g_contract_tail": 2,
+              "g_kernel_tail": 1,
+              "kernel_num_groups": 2,
+              "max_abs_err": 60.573341369628906,
+              "max_rel_err": 218.258,
+              "ref_absmax": 83.1006
+            },
+            "stderr": "",
+            "stdout": "{\n \"control_K64_gs32\": {\n  \"K\": 64,\n  \"gs\": 32,\n  \"ceil_groups\": 2,\n  \"kernel_num_groups\": 2,\n  \"max_abs_err\": 1.9073486328125e-05,\n  \"max_rel_err\": 7.685270247748122e-05,\n  \"ref_absmax\": 66.26416015625,\n  \"g_contract_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"g_kernel_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"allclose\": true\n },\n \"partial_K80_gs32\": {\n  \"K\": 80,\n  \"gs\": 32,\n  \"ceil_groups\": 3,\n  \"kernel_num_groups\": 2,\n  \"max_abs_err\": 60.573341369628906,\n  \"max_rel_err\": 218.2582244873047,\n  \"ref_absmax\": 83.10057830810547,\n  \"g_contract_tail\": [\n   2,\n   2,\n   2,\n   2,\n   2,\n   2,\n   2,\n   2\n  ],\n  \"g_kernel_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"allclose\": false\n },\n \"partial_K48_gs32\": {\n  \"K\": 48,\n  \"gs\": 32,\n  \"ceil_groups\": 2,\n  \"kernel_num_groups\": 1,\n  \"max_abs_err\": 41.15261459350586,\n  \"max_rel_err\": 103.28274536132812,\n  \"ref_absmax\": 73.85531616210938,\n  \"g_contract_tail\": [\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1,\n   1\n  ],\n  \"g_kernel_tail\": [\n   0,\n   0,\n   0,\n   0,\n   0,\n   0,\n   0,\n   0\n  ],\n  \"allclose\": false\n },\n \"kernel_matches_clamped_semantics\": {\n  \"max_abs_err\": 2.09808349609375e-05,\n  \"allclose\": true\n }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel matches contract only when K is an exact multiple of group_size. Control K=64,gs=32: max_abs_err 1.9e-5, allclose True. K=80,gs=32 (ceil=3 groups): max_abs_err 60.57 vs ref_absmax 83.10, allclose False; trailing k indices use g=1 instead of contract g=2. K=48,gs=32 (ceil=2): max_abs_err 41.15 vs ref_absmax 73.86, allclose False; tail uses g=0 instead of g=1. Cross-check: kernel output matches a reference built with the floor+clamp group mapping to 2.1e-5, isolating the defect precisely to the group index table (num_groups = K//group_size with clamp) rather than any numeric issue.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The problem statement explicitly requires that every K-column be dequantized with the scale/zero of the group it actually belongs to \"for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. The host wrapper (kernel.py lines 69-73) instead computes num_groups = K // group_size (floor) and clamps g_idx to num_groups-1, so the trailing partial group reuses the previous group's scale/zero row.\n\nProbe t6 (finalized as evidence c1.e1 in event t7) ran the kernel against a reference implementing the contract's group_of(k) = k // group_size with ceil(K/group_size) rows, using packed 4-bit weights (K divisible by 8, so the packing layout the contract declares is respected):\n- Control K=64, gs=32 (exact multiple): max_abs_err 1.91e-5, allclose True \u2014 so packing, shifting, zero+1 convention and matmul are all correct.\n- K=80, gs=32 (ceil=3 groups): max_abs_err 60.57 against ref_absmax 83.10, max_rel_err 218, allclose False. Kernel used g=1 for the trailing 16 columns where the contract requires g=2.\n- K=48, gs=32 (ceil=2 groups): max_abs_err 41.15 vs ref_absmax 73.86, allclose False; tail used g=0 instead of g=1.\n- Cross-check: kernel output matches a reference built with the floor+clamp mapping to 2.1e-5 (allclose True), isolating the defect exactly to the group index table rather than any numeric/precision issue.\n\nThis is not a tolerance or reduction-order artifact \u2014 it is a wrong group assignment that the contract names as a required behaviour, and the error magnitude is comparable to the output scale itself.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-08T02:58:05Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-08T02:58:05Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The problem statement explicitly requires that every K-column be dequantized with the scale/zero of the group it actually belongs to \"for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. The host wrapper (kernel.py lines 69-73) instead computes num_groups = K // group_size (floor) and clamps g_idx to num_groups-1, so the trailing partial group reuses the previous group's scale/zero row.\n\nProbe t6 (finalized as evidence c1.e1 in event t7) ran the kernel against a reference implementing the contract's group_of(k) = k // group_size with ceil(K/group_size) rows, using packed 4-bit weights (K divisible by 8, so the packing layout the contract declares is respected):\n- Control K=64, gs=32 (exact multiple): max_abs_err 1.91e-5, allclose True \u2014 so packing, shifting, zero+1 convention and matmul are all correct.\n- K=80, gs=32 (ceil=3 groups): max_abs_err 60.57 against ref_absmax 83.10, max_rel_err 218, allclose False. Kernel used g=1 for the trailing 16 columns where the contract requires g=2.\n- K=48, gs=32 (ceil=2 groups): max_abs_err 41.15 vs ref_absmax 73.86, allclose False; tail used g=0 instead of g=1.\n- Cross-check: kernel output matches a reference built with the floor+clamp mapping to 2.1e-5 (allclose True), isolating the defect exactly to the group index table rather than any numeric/precision issue.\n\nThis is not a tolerance or reduction-order artifact \u2014 it is a wrong group assignment that the contract names as a required behaviour, and the error magnitude is comparable to the output scale itself.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-08T02:58:05Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The problem statement explicitly requires that every K-column be dequantized with the scale/zero of the group it actually belongs to \"for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. The host wrapper (kernel.py lines 69-73) instead computes num_groups = K // group_size (floor) and clamps g_idx to num_groups-1, so the trailing partial group reuses the previous group's scale/zero row.\n\nProbe t6 (finalized as evidence c1.e1 in event t7) ran the kernel against a reference implementing the contract's group_of(k) = k // group_size with ceil(K/group_size) rows, using packed 4-bit weights (K divisible by 8, so the packing layout the contract declares is respected):\n- Control K=64, gs=32 (exact multiple): max_abs_err 1.91e-5, allclose True \u2014 so packing, shifting, zero+1 convention and matmul are all correct.\n- K=80, gs=32 (ceil=3 groups): max_abs_err 60.57 against ref_absmax 83.10, max_rel_err 218, allclose False. Kernel used g=1 for the trailing 16 columns where the contract requires g=2.\n- K=48, gs=32 (ceil=2 groups): max_abs_err 41.15 vs ref_absmax 73.86, allclose False; tail used g=0 instead of g=1.\n- Cross-check: kernel output matches a reference built with the floor+clamp mapping to 2.1e-5 (allclose True), isolating the defect exactly to the group index table rather than any numeric/precision issue.\n\nThis is not a tolerance or reduction-order artifact \u2014 it is a wrong group assignment that the contract names as a required behaviour, and the error magnitude is comparable to the output scale itself.",
+    "verdict": "reject"
+  }
+}

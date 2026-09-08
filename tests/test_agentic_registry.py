@@ -303,6 +303,33 @@ def test_record_description_update_is_describer_only() -> None:
     assert "not allowed" in result["message"]
 
 
+def test_record_description_update_accepts_a_bare_string_field() -> None:
+    """A prose value is one entry, not an error.
+
+    The Describer sent contract_model as a paragraph on its first
+    record_description_update in every debate run captured -- three for three --
+    because its instructions described each field in the singular and nothing
+    said they were lists. Each rejection cost a whole model call, and the next
+    turn resent the same content wrapped in a list. The instructions now say
+    "list", and a bare string is taken as the single entry it plainly is.
+    """
+    state = RunState()
+    registry = build_core_registry()
+
+    result = registry.call(
+        "record_description_update",
+        {
+            "summary": "First pass over the artifact.",
+            "contract_model": "The wrapper owns the group table, not the caller.",
+            "kernel_model": ["Launch config is fixed at 32x32x16."],
+        },
+        context=ToolContext(state=state, current_role=Role.DESCRIBER.value, current_turn=1),
+    )
+    model = result["description_model"]
+    assert model["contract_model"] == ["The wrapper owns the group table, not the caller."]
+    assert model["kernel_model"] == ["Launch config is fixed at 32x32x16."]
+
+
 def test_request_more_debate_tool_records_judge_request() -> None:
     state = RunState()
     registry = build_core_registry()

@@ -1,0 +1,9 @@
+{
+  "confidence": 0.95,
+  "created_at": "2026-09-08T02:58:05Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The problem statement explicitly requires that every K-column be dequantized with the scale/zero of the group it actually belongs to \"for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. The host wrapper (kernel.py lines 69-73) instead computes num_groups = K // group_size (floor) and clamps g_idx to num_groups-1, so the trailing partial group reuses the previous group's scale/zero row.\n\nProbe t6 (finalized as evidence c1.e1 in event t7) ran the kernel against a reference implementing the contract's group_of(k) = k // group_size with ceil(K/group_size) rows, using packed 4-bit weights (K divisible by 8, so the packing layout the contract declares is respected):\n- Control K=64, gs=32 (exact multiple): max_abs_err 1.91e-5, allclose True \u2014 so packing, shifting, zero+1 convention and matmul are all correct.\n- K=80, gs=32 (ceil=3 groups): max_abs_err 60.57 against ref_absmax 83.10, max_rel_err 218, allclose False. Kernel used g=1 for the trailing 16 columns where the contract requires g=2.\n- K=48, gs=32 (ceil=2 groups): max_abs_err 41.15 vs ref_absmax 73.86, allclose False; tail used g=0 instead of g=1.\n- Cross-check: kernel output matches a reference built with the floor+clamp mapping to 2.1e-5 (allclose True), isolating the defect exactly to the group index table rather than any numeric/precision issue.\n\nThis is not a tolerance or reduction-order artifact \u2014 it is a wrong group assignment that the contract names as a required behaviour, and the error magnitude is comparable to the output scale itself.",
+  "verdict": "reject"
+}

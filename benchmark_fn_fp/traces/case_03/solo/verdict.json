@@ -1,9 +1,0 @@
-{
-  "confidence": 0.9,
-  "created_at": "2026-09-08T00:12:00Z",
-  "decisive_claims": [
-    "c2"
-  ],
-  "reason": "problem.txt states the contract must hold \"for any K -- including a K that is not an exact multiple of group_size, where the trailing partial group is still a group of its own\". The kernel's reduction loop runs num_pid_k = cdiv(K, BLOCK_SIZE_K=16) iterations but applies no K-range mask to the loads of a (masked only on M, line 47), b (line 48) or g_idx (line 42), so the final iteration accumulates out-of-bounds columns. Probe t9 established the reference harness is faithful: K=64/gs32, K=48/gs32, K=80/gs32 and K=48/gs48 (partial trailing groups) match A@dequant(B) to max_abs <= 4.8e-6 (rel ~2.9e-7), so per-column g_idx group selection itself is correct (claim c1 confirmed). Probe t11 then showed K=40/gs32 (a legal packed shape, 40%8==0, with a trailing partial group of 8 columns) is wrong by max_abs 61.96 vs |ref|max 13.60 with 99.9% of elements off by >1e-3, and K=24/72/8 raised CUDA illegal memory access. Probe t13 re-ran every case in an isolated subprocess to rule out a poisoned CUDA context: K=64 (4.8e-6) and K=48 (1.9e-6) exact with frac_off 0.0, while K=40/gs32 max_abs 8.37 (rel 0.62, 99.9% off), K=72/gs32 max_abs 266.1 (rel 16.5, 100% off), K=24/gs16 max_abs 12.39 (rel 1.04, 100% off), K=56/gs32 max_abs 11.32 (rel 0.78, 99.9% off). These are not rounding-level deviations; they are whole-output corruption plus out-of-bounds reads on inputs the stated contract explicitly admits, so claim c2 is confirmed and in scope.",
-  "verdict": "reject"
-}

@@ -6,77 +6,53 @@ model, same GPU, same container image, same answer-free copy of the case, so a
 reader comparing the two arms on one case is seeing a difference in agent
 structure and nothing else.
 
-These are the first complete traces taken. The evaluation runners keep only the
-last 20,000 characters of `transcript.md`; everything else stayed in the Modal
-container and was discarded when it stopped.
+The evaluation runners keep only the last 20,000 characters of `transcript.md`;
+everything else stays in the Modal container and is discarded when it stops.
+These are captured with `capture_traces_modal.py`, which brings the whole run
+directory back.
 
 ## Why these two cases
 
-The benchmark has 32 cases. A single model call with no tools gets 30 of them
-right. `case_03` and `case_04` are the two it gets wrong — one missed defect and
-one false alarm — so they are the only cases in the set where the arms can
-currently be told apart at all. Both agentic arms get both right.
+`case_04` is one of the two cases in the 32 that a single model call with no
+tools gets wrong — it raises a false alarm there. `case_33` is a replacement
+case, built after the case it replaces turned out to be unanswerable from the
+files the verifier is given; these are its first runs.
 
-Read them as two worked examples, not as a measurement. Two cases chosen
-*because* the single call fails on them cannot establish an accuracy difference;
-they show what the difference looks like when there is one.
+Two cases chosen this way cannot establish an accuracy difference between the
+arms. Read them as worked examples of what a run looks like, not as a
+measurement of how often one arm beats another.
 
 ## What happened
 
 | case | ground truth | single call | solo | debate |
 |---|---|---|---|---|
-| `case_03` | reject | missed the defect | reject, conf 0.90 | reject, conf 0.93 |
-| `case_04` | trust  | false alarm       | trust, conf 0.85  | trust, conf 0.80  |
+| `case_33` | reject | not yet run | reject, conf 0.95 | reject, conf 0.93 |
+| `case_04` | trust  | false alarm | trust, conf 0.85  | trust, conf 0.68  |
 
 | case | arm | turns | tool calls | probes | wall clock | cost |
 |---|---|---|---|---|---|---|
-| `case_03` | solo   | 7  | 15 | 3 | 268 s | $1.28 |
-| `case_03` | debate | 11 | 17 | 3 | 396 s | $2.59 |
-| `case_04` | solo   | 9  | 14 | 2 | 217 s | $1.31 |
-| `case_04` | debate | 14 | 23 | 3 | 432 s | $3.53 |
+| `case_33` | solo   | 5 |  8 | 2 |  73 s | $0.50 |
+| `case_33` | debate | 7 | 17 | 4 | 262 s | $1.93 |
+| `case_04` | solo   | 9 | 14 | 2 | 217 s | $1.31 |
+| `case_04` | debate | 8 | 19 | 4 | 298 s | $1.62 |
 
 Cost is list price for the model used, counting cached reads at 0.1x and 1h
 cache writes at 2x.
 
-Both arms decide `case_04` the same way and for the same reason: they measure
-the deviation instead of judging it from the source. The worst relative error is
-about one fp32 ulp, which is what the operation's own reciprocal-square-root
-costs, so the deviation is the contract being met rather than broken. The single
-call sees a large relative error described in the problem statement and rejects.
+`case_04` is worth reading first. Both arms decide it the same way and for the
+same reason: they measure the deviation instead of judging it from the source.
+The worst relative error is about one fp32 ulp, which is what the operation's
+own reciprocal-square-root costs, so the deviation is the contract being met
+rather than broken. The single call sees a large relative error and rejects.
 That is the shape of difference worth looking for: the verdict turns on a
 quantity that is not in the source and can only be measured.
 
-## `case_03/debate_before_preload_fix/`
-
-The same case and arm before the preload was fixed, kept for comparison. In that
-run the Skeptic's one turn per round went on reading -- a 68-byte `meta.json`
-and a range of the kernel already in its prompt -- so it recorded no claim. An
-empty ledger skips the claim-coverage loop, so the Experimenter never spoke that
-round and the run dropped straight into the pre-Judge review slot, which told the
-Skeptic on round 1 of 4 that this was a final review. It answered:
-
-> This is flagged as a final review, but the ledger is empty and no probes have
-> been run, so I'm recording the two concrete, testable defects I can see in the
-> source rather than closing with nothing.
-
-The material was already in its prompt: the orchestrator preloads it before any
-model call. It fetched it again because nothing said it already had it, and
-because `meta.json` and the file list were the two things not preloaded. The
-kernel source then sat in the context three times over -- raw, numbered 1-120,
-and numbered 40-78 -- re-sent on every later turn.
-
-| | before | after |
-|---|---|---|
-| first agent prompt | 9,840 tokens | 5,967 tokens |
-| turns by role | describer 2, skeptic 4, **experimenter 2**, judge 2 | describer 1, skeptic 2, **experimenter 5**, judge 2 |
-| claims recorded | 2 | 3 |
-| probes run | 2 | 3 |
-| verdict | reject (correct) | reject (correct) |
-| cost | $2.35 | $2.59 |
-
-Cost did not fall. The freed budget went into verification instead: the
-Experimenter got five turns rather than two and ran a third probe. The same money
-buys more work, not the same work cheaper.
+`case_04` is also unstable. Two debate runs on identical code returned opposite
+verdicts, both at confidence 0.68, and both times the disputed claim was the
+same one: the kernel returns fp32 for a bf16 input, and `problem.txt` never
+states the output storage dtype. Whether the Skeptic scopes that `unknown` or
+`in_scope` decides the verdict, because the Judge is told an `unknown`-scope
+claim should usually produce trust. One case, one scope call, opposite answers.
 
 ## Layout
 
@@ -96,8 +72,8 @@ from those files.
 
 ## Reproducing
 
-    modal run benchmark_fn_fp/eval/capture_traces_modal.py --cases case_03 --arm solo   --max-rounds 10
-    modal run benchmark_fn_fp/eval/capture_traces_modal.py --cases case_03 --arm debate --max-rounds 4
+    modal run benchmark_fn_fp/eval/capture_traces_modal.py --cases case_33 --arm solo   --max-rounds 10
+    modal run benchmark_fn_fp/eval/capture_traces_modal.py --cases case_33 --arm debate --max-rounds 4
 
 `--max-tokens` defaults to 16384. Leave it there: adaptive thinking is billed
 against `max_tokens`, and at the 4096 default whole turns return no text and no
