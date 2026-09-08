@@ -84,9 +84,10 @@ class LLMAgent:
                 # left the claim ledger empty for the round and skipped the
                 # Experimenter entirely.
                 "artifact.kernel_code above is the complete kernel source with line "
-                "numbers, and tool_events already carries problem.txt and the "
-                "artifact's file list. Do not spend a turn re-reading them. Read "
-                "what you have and act on it.",
+                "numbers, artifact.problem_text is the operative contract in full, "
+                "and artifact.artifact_files lists every file the artifact holds. "
+                "All three are present on every turn. Do not spend a turn re-reading "
+                "them. Read what you have and act on it.",
                 "",
                 "Return your next action using the JSON protocol.",
             ]
@@ -145,6 +146,8 @@ _MIDDLE_TRUNCATE_KEYS = frozenset({"stdout", "stderr"})
 _PATH_STRING_LIMITS: dict[str, int] = {
     # The artifact under test: the agents' primary reading material.
     "artifact.kernel_code": 12000,
+    # The contract every verdict is judged against; never trim it to the generic default.
+    "artifact.problem_text": 12000,
     "history.text": _TURN_MESSAGE_LIMIT,
     "artifact.test_code": 12000,
     # Probe source and probe output, already capped by _tool_event_for_prompt;
@@ -238,9 +241,18 @@ def _claims_for_prompt(state: RunState, *, role: str | None) -> list[dict[str, J
         data["evidence"] = cast(JsonValue, evidence)
 
         if resolved:
-            # A settled claim only needs to say what it was and how it settled.
-            for key in ("rationale", "scope_evidence", "scope_rationale"):
-                data.pop(key, None)
+            # A settled claim no longer needs the suspicion that started it.
+            data.pop("rationale", None)
+            # But a CONFIRMED claim is the only kind that can support a reject,
+            # and the Skeptic's review turn is the last chance to challenge how
+            # it was scoped. Dropping scope_evidence there left it holding the
+            # verdict "in_scope" with no way to see what that rested on -- and,
+            # before problem.txt was pinned into the artifact block, no copy of
+            # the contract either. It signed off blind to both. Rebutted claims
+            # keep the compaction: nothing rests on their scope any more.
+            if _status_value(claim.status) == ClaimStatus.REBUTTED.value:
+                for key in ("scope_evidence", "scope_rationale"):
+                    data.pop(key, None)
         rendered.append(data)
     return rendered
 
@@ -262,6 +274,9 @@ def _state_for_prompt_unbounded(state: RunState, *, role: str | None = None) -> 
     for key in ("kernel_code", "test_code"):
         if isinstance(artifact.get(key), str) and artifact[key]:
             artifact[key] = _truncate(_number_lines(str(artifact[key])), 12000)
+    # The operative contract, prose rather than code, so it is not numbered.
+    if isinstance(artifact.get("problem_text"), str) and artifact["problem_text"]:
+        artifact["problem_text"] = _truncate(str(artifact["problem_text"]), 12000)
     return cast(dict[str, JsonValue], {
         "entry": state.entry,
         "artifact": artifact,

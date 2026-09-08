@@ -202,3 +202,51 @@ def _write_artifact(dataset_root: Path) -> None:
     (entry_dir / "problem.txt").write_text("Add one to every element.\n")
     (entry_dir / "kernel.py").write_text("def kernel(x):\n    return x + 1\n")
     (entry_dir / "test.py").write_text("def test():\n    pass\n")
+
+
+def test_finalize_requires_named_data_when_the_probe_printed_no_json(tmp_path) -> None:
+    """A claim settled on unstructured output alone must name its numbers.
+
+    stdout and json_result are carried into evidence `data` automatically, and
+    the claim ledger never scrolls, so measurements normally reach the Judge on
+    their own. A probe that printed no JSON is the exception: raw stdout is
+    trimmed to a budget it can exceed, and prose summaries are trimmed harder,
+    so a number that exists only there can be gone by the time the verdict is
+    written. Settling a claim on that is not allowed.
+    """
+    state = RunState(entry="adhoc")
+    registry = build_core_registry()
+    experimenter = ToolContext(state=state, run_dir=tmp_path / "run",
+                               current_role=Role.EXPERIMENTER.value)
+    claim = registry.call(
+        "record_claim",
+        {"statement": "The tail block is mishandled.", "rationale": "No masking is visible."},
+        context=ToolContext(state=state, run_dir=tmp_path / "run",
+                            current_role=Role.SKEPTIC.value),
+    )
+    probe = registry.call(
+        "run_claim_probe",
+        {"claim_id": claim["id"], "code": "print('no json here, just prose')",
+         "timeout_s": 5, "use_gpu": False},
+        context=experimenter,
+    )
+    assert probe["json_result"] is None
+
+    refused = registry.call(
+        "finalize_probe_evidence",
+        {"event_id": probe["event_id"], "supports": "confirmed",
+         "summary": "It looked wrong to me."},
+        context=experimenter,
+    )
+    assert refused["ok"] is False
+    assert "must name its decisive measurements" in refused["message"]
+
+    # Naming the measurement is all it takes.
+    ok = registry.call(
+        "finalize_probe_evidence",
+        {"event_id": probe["event_id"], "supports": "confirmed",
+         "summary": "Measured the tail-block difference.", "data": {"max_abs_err": 60.57}},
+        context=experimenter,
+    )
+    assert ok["claim"]["status"] == "confirmed"
+    assert ok["evidence"]["data"]["max_abs_err"] == 60.57

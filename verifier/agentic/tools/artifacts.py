@@ -77,8 +77,14 @@ def load_artifact(context: ToolContext, args: dict) -> dict:
     artifact = load_entry(entry, dataset_dir=dataset_dir)
 
     context.state.entry = entry
+    # problem.txt and the file list are pinned into the artifact block by their
+    # own tools and must survive a reload: the prompt carries only the last 12
+    # tool events, so anything living only there scrolls out mid-run.
+    previous = context.state.artifact or {}
     context.state.artifact = {
         "entry": entry,
+        "problem_text": previous.get("problem_text", ""),
+        "artifact_files": previous.get("artifact_files", []),
         "session_dir": artifact.get("session_dir"),
         "passed": bool(artifact.get("passed", False)),
         "status": str(artifact.get("status", "unknown")),
@@ -131,11 +137,19 @@ def inspect_problem(context: ToolContext, args: dict) -> dict:
             "exists": False,
             "content": "",
         }
+    content = _read_text(path)
+    # Pinned into the artifact block, not left to the tool-event window. The
+    # Judge decides whether the kernel violates the contract; in a captured run
+    # it reached its verdict with problem.txt already scrolled out of its
+    # prompt, and in another it spent a turn re-fetching it. The operative
+    # contract must be in front of every agent on every turn.
+    if isinstance(context.state.artifact, dict):
+        context.state.artifact["problem_text"] = content
     return {
         "entry": entry,
         "path": "problem.txt",
         "exists": True,
-        "content": _read_text(path),
+        "content": content,
     }
 
 
@@ -154,6 +168,10 @@ def list_artifact_files(context: ToolContext, args: dict) -> dict:
                 "size_bytes": path.stat().st_size,
             }
         )
+    # Pinned for the same reason as problem.txt: an agent that cannot see which
+    # files exist goes looking, and that costs a turn.
+    if isinstance(context.state.artifact, dict):
+        context.state.artifact["artifact_files"] = [f["path"] for f in files]
     return {"entry": entry, "files": files}
 
 

@@ -139,3 +139,33 @@ def test_inconclusive_claims_are_not_compacted_like_settled_ones() -> None:
     claim = _state_for_prompt(st, role="skeptic")["claims"][0]
     assert claim["rationale"] == "why this might be wrong"
     assert claim["scope_rationale"] == "domain note"
+
+
+def test_contract_stays_in_the_prompt_after_the_tool_window_scrolls() -> None:
+    """problem.txt must not scroll out of the prompt mid-run.
+
+    The prompt carries only the last 12 tool events. inspect_problem's output
+    lived nowhere else, so in a captured debate the Judge reached its verdict
+    with the contract already scrolled out of its context, and in another it
+    spent a whole turn re-fetching it. The Judge's entire job is deciding whether
+    the kernel violates that contract, so it has to be in front of every agent on
+    every turn regardless of how many tools have run since.
+    """
+    from verifier.agentic.agents.base import _state_for_prompt
+    from verifier.agentic.state import RunState, ToolEvent, ToolStatus
+
+    state = RunState(entry="toy")
+    state.artifact = {"entry": "toy", "kernel_code": "x = 1\n", "test_code": "",
+                      "problem_text": "CONTRACT: the tail group is a group of its own.",
+                      "artifact_files": ["kernel.py", "problem.txt"]}
+    # Far more than the 12-event window, so anything living only in tool_events
+    # from the start of the run is long gone.
+    for i in range(40):
+        state.tool_events.append(
+            ToolEvent(id=f"t{i+1}", tool="run_claim_probe", args={},
+                      status=ToolStatus.OK, output={"stdout": "noise"})
+        )
+
+    rendered = json.dumps(_state_for_prompt(state, role="judge"))
+    assert "CONTRACT: the tail group is a group of its own." in rendered
+    assert "problem.txt" in rendered

@@ -250,6 +250,20 @@ def finalize_probe_evidence(context: ToolContext, args: dict) -> dict:
     data = args.get("data") or {}
     if not isinstance(data, dict):
         raise LedgerError("data must be an object")
+    supports = str(args["supports"])
+    if supports in {"confirmed", "rebutted"} and not data and output.get("json_result") is None:
+        # A probe's stdout and json_result are carried into evidence `data`
+        # automatically, and the claim ledger never scrolls, so numbers normally
+        # survive to the Judge on their own. The exception is a probe that
+        # printed no JSON: then the only structured record is whatever the agent
+        # names here, and raw stdout is trimmed to a budget it can exceed. A
+        # claim settled on unstructured output alone has nothing durable behind
+        # it, so require the measurement to be named.
+        raise LedgerError(
+            f"this probe produced no json_result, so a {supports} verdict on it "
+            f"must name its decisive measurements in `data` as key/value pairs; "
+            f"raw stdout is trimmed and may not survive to the Judge"
+        )
     merged_data = _probe_evidence_data(output, _optional_str(output.get("expected_signal")))
     merged_data.update(data)
 
@@ -262,7 +276,7 @@ def finalize_probe_evidence(context: ToolContext, args: dict) -> dict:
         tool_event_id=event_id,
         data=merged_data,
     )
-    status = str(args.get("status") or args["supports"])
+    status = str(args.get("status") or supports)
     claim = ledger.update_claim_status(claim_id=claim_id, status=status)
     return {"claim": claim.to_dict(), "evidence": evidence.to_dict()}
 
