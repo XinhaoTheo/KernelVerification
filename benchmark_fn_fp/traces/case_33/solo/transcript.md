@@ -5,8 +5,8 @@
 - Tool events: 8
 - Claims: 1
 - Description updates: 0
-- LLM time: 67.651s across 4 calls | tokens: in=52422 out=5122 total=57544
-- Cache tokens: created=0 read=27640
+- LLM time: 66.882s across 4 calls | tokens: in=52291 out=5155 total=57446
+- Cache tokens: created=6910 read=20730
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.93
@@ -61,12 +61,12 @@ Tool calls:
     "entry": "case_33"
   }
 
-### Turn 2 - `solo` (17.800944832000027s, in=7221 out=1240)
+### Turn 2 - `solo` (21.064704883s, in=7221 out=1570)
 
 Message:
 
 ```text
-Key suspicion: the host wrapper uses `num_groups = K // group_size` (floor) and clamps `g_idx`, so trailing columns of a short final group get the *previous* group's scale/zero — contradicting the contract's explicit ceil(K/group_size) requirement. Recording and probing that.
+Primary suspicion: the host wrapper computes `num_groups = K // group_size` (floor) and clamps `g_idx` to `num_groups - 1`, while the contract requires ceil(K/group_size) groups with the trailing short group having its own scale/zero row. I'll record that and test with K=48, group_size=32 (K still a multiple of BLOCK_SIZE_K=16, so no K-tail masking confound).
 ```
 
 Tool calls:
@@ -74,44 +74,45 @@ Tool calls:
 - `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "Lines 69-73 compute floor division for num_groups and clamp the arange//group_size table to num_groups-1, which folds the last partial group into the preceding one. Contract explicitly states scales/zeros have ceil(K/group_size) rows and the trailing columns form their own group.",
+    "rationale": "kernel.py lines 69-73 use floor division for num_groups and clamp; contract text explicitly requires ceil(K/group_size) rows and that trailing columns form their own group.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires correct grouping for any K including K not a multiple of group_size, with ceil(K/group_size) rows of scales/zeros and the trailing short group treated as its own group."
+        "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
       },
       {
-        "source": "kernel.py lines 69-73",
-        "summary": "num_groups = K // group_size and g_idx clamped to num_groups-1, which cannot address the ceil-th group row."
+        "source": "kernel.py:69-73",
+        "summary": "num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) -- floor instead of ceil."
       }
     ],
-    "scope_rationale"
-  ...[truncated 829 chars]
+    "scope_rationale": "The contract paragraph is explicit that cor
+  ...[truncated 584 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Lines 69-73 compute floor division for num_groups and clamp the arange//group_size table to num_groups-1, which folds the last partial group into the preceding one. Contract explicitly states scales/zeros have ceil(K/group_size) rows and the trailing columns form their own group.",
+    "rationale": "kernel.py lines 69-73 use floor division for num_groups and clamp; contract text explicitly requires ceil(K/group_size) rows and that trailing columns form their own group.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires correct grouping for any K including K not a multiple of group_size, with ceil(K/group_size) rows of scales/zeros and the trailing short group treated as its own group."
+        "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
       },
       {
-        "source": "kernel.py lines 69-73",
-        "summary": "num_groups = K // group_size and g_idx clamped to num_groups-1, which cannot address the ceil-th group row."
+        "source": "kernel.py:69-73",
+        "summary": "num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) -- floor instead of ceil."
       }
     ],
-    "scope_rationale": "problem.txt names non-multiple K as a required case: \"for any K -- including a K that is not an exact multiple of group_size... the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros; scales and zeros are supplied with ceil(K / group_size) rows accordingly.\" No test.py exists, so representative admitted inputs (K=48, g
-  ...[truncated 463 chars]
+    "scope_rationale": "The contract paragraph is explicit that correctness must hold \"for any K -- including a K that is not an exact multiple of group_size\", and states scales/zeros are supplied with ceil(K/group_size) rows. So K=48, group_size=32 with 2 scale/zero rows is an admitted input.",
+    "statement": "The host wrapper's group table uses num_groups = K // group_size and clamps g_idx to num_groups-1, so when K is not an exact multiple of g
+  ...[truncated 218 chars]
 
-### Turn 3 - `solo` (26.995206819999908s, in=10024 out=2279)
+### Turn 3 - `solo` (23.856022507000002s, in=9726 out=2030)
 
 Message:
 
 ```text
-Recording nothing new yet — I'll run the decisive probe for c1: K=48 with group_size=32 (contract's non-multiple case), comparing against a reference that uses the kernel's own zero-point convention so only the grouping differs. I also include a K=64 control.
+Recorded claim c1 already; now I'll probe it directly. I'll run two configurations: K=64 with group_size=32 (exact multiple, sanity that the kernel's dequant convention is otherwise right) and K=48 with group_size=32 (non-multiple, ceil→2 groups), comparing against a reference that uses the kernel's own zero+1 convention.
 ```
 
 Tool calls:
@@ -120,8 +121,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_33/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(0)\ndev='cuda'\n\ndef build(M,K,N,gs,bits=4):\n    per=32//bits; maxq=(1<<bits)-1\n    ng=-(-K//gs)  # ceil per contract\n    q=torch.randint(0,maxq+1,(K,N),device=dev,dtype=torch.int32)\n    bp=torch.zeros((K//per,N),device=dev,dtype=torch.int32)\n    for k in range(K):\n        bp[k//per]|= (q[k]&maxq)<<((k%per)*bits)\n    zq=torch.randint(0,maxq+1,(ng,N),device=dev,dtype=torch.int32)\n    zp=torch.zeros((ng,N//per),device=dev,dtype=torch.int32)\n    for n in range(N):\n        zp[:,n//per]|=(zq[:,n]&maxq)<<((n%per)*bits)\n    sc=(torch.rand((
-  ...[truncated 1414 chars]
+    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_33/kernel.py\")\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\n\ntorch.manual_seed(0)\ndev = \"cuda\"\nbits, ipb = 4, 8\nmaxq = 15\n\ndef build(K, N, M, gs):\n    ng_ceil = -(-K // gs)\n    q = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n    # pack along K\n    b_packed = torch.zeros((K // ipb, N), device=dev, dtype=torch.int32)\n    for k in range(K):\n        b_packed[k // ipb] |= (q[k] << ((k % ipb) * bits))\n    scales = (torch.rand((ng_ceil, N), device=dev) * 0.1 + 0.01).float()\n    zq = torch.randint(0, 16, (ng_ceil, N), device=dev, dtype=torch.int32)\n    zeros = torch.zeros((ng_ceil, N // i
+  ...[truncated 1567 chars]
   Output summary:
   {
     "artifacts": [
@@ -129,13 +130,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t6_probe.py",
-        "sha256": "3ed3632ec9469686acb27c211080d7955e1c3aa6c6cf0314a439ab4de139db8d"
+        "sha256": "f27268df3010a793d3f6fddaaadf07b43156e2b44732fb47f3e968497363ab0e"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t6_stdout.txt",
-        "sha256": "15a97473e018d59fb2a372d19f8a2117036a270d79ed94d12805ee04a00da930"
+        "sha256": "be525ef2dab57445b3f73bc8be9bc7ee3be33597a8c9259a3cd9519de0d51bb2"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -145,19 +146,22 @@ Tool calls:
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "When K is not an exact multiple of group_size, gptq_matmul assigns the trailing (short final group) columns the previous group's scale/zero row instead of their own group row, because num_groups = K // group_size (floor) and g_idx is clamped to num_groups-1. This violates the contract's dequant(B)[k,n] = (q - zero[group_of(k),n]) * scale[group_of(k),n] with ceil(K/group_size) group rows.",
-    "duration_s": 5.534782,
+    "claim_statement": "The host wrapper's group table uses num_groups = K // group_size and clamps g_idx to num_groups-1, so when K is not an exact multiple of group_size the trailing columns are dequantized with the previous group's scale/zero instead of their own final-group row, violating the stated contract (which requires ceil(K/group_size) groups).",
+    "duration_s": 8.366034,
     "event_id": "t6",
     "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
    
-  ...[truncated 2676 chars]
+  ...[truncated 2921 chars]
 
-### Turn 4 - `solo` (11.936669975000086s, in=14631 out=839)
+### Turn 4 - `solo` (9.722279998000005s, in=14534 out=763)
 
 Message:
 
 ```text
-The probe is decisive: with K=48, group_size=32 (a case the contract explicitly names), the kernel's output matches the *clamped* (wrong-group) reference to 3e-6 while differing from the contract-correct reference by 88% relative error; the K=64 control matches exactly.
+Probe t6 gives a clean result: exact-multiple K=64 matches the contract reference to 5e-6, while K=48 (group_size 32, 2 supplied rows) deviates by 9.26 absolute (65% relative) from the ceil-group reference and matches the floor-clamp behaviour exactly. I'll finalize that evidence and record the verdict.
 ```
 
 Tool calls:
@@ -166,30 +170,30 @@ Tool calls:
   Args:
   {
     "data": {
-      "K48_max_abs_err_vs_clamped_ref": 2.86102294921875e-06,
-      "K48_max_abs_err_vs_correct_ref": 10.497809410095215,
-      "K48_num_tail_cols": 16,
-      "K48_ref_absmax": 11.931314468383789,
-      "K48_rel_vs_correct_ref": 0.8798535466194153,
-      "K64_control_max_abs_err": 5.7220458984375e-06,
-      "K64_rel": 2.70417103820364e-07,
-      "scales_rows_supplied": 2
+      "exact_K64_max_abs_err_vs_ceil_ref": 4.76837158203125e-06,
+      "exact_rel_err": 2.896958051223919e-07,
+      "group_size": 32,
+      "nonmultiple_K48_max_abs_err_vs_ceil_ref": 9.255824089050293,
+      "nonmultiple_max_abs_err_vs_floorclamp_ref": 2.86102294921875e-06,
+      "nonmultiple_rel_err_vs_ceil": 0.6497411131858826,
+      "ref_absmax_K48": 14.245404243469238,
+      "rows_supplied": 2
     },
     "event_id": "t6",
     "status": "confirmed",
-    "summary": "K=48, group_size=32, bits=4, M=N=32: scales/zeros supplied with ceil(48/32)=2 rows per contract. Kernel output vs contract-correct reference (columns 32..47 use group row 1): max_abs_err=10.4978 against ref_absmax=11.9313 (rel 0.880). Kernel output vs the clamped/buggy reference (tail columns forced onto group row 0): max_abs_err=2.86e-06, i.e. bit-level agreeme
-  ...[truncated 294 chars]
+    "summary": "With K=64, group_size=32 (exact multiple) the kernel matches the contract reference to max_abs_err 4.8e-6 (rel 2.9e-7), showing the dequant convention (zero+1, scale, packing) is otherwise correct. With K=48, group_size=32 and 2 supplied scale/zero rows (exactly the ceil(K/group_size) supply the contract describes), the kernel deviate
+  ...[truncated 330 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "K=48, group_size=32, bits=4, M=N=32: scales/zeros supplied with ceil(48/32)=2 rows per contract. Kernel output vs contract-correct reference (columns 32..47 use group row 1): max_abs_err=10.4978 against ref_absmax=11.9313 (rel 0.880). Kernel output vs the clamped/buggy reference (tail columns forced onto group row 0): max_abs_err=2.86e-06, i.e. bit-level agreement with the wrong grouping. Control K=64 (exact multiple) matches the correct reference to 5.7e-06 (rel 2.7e-07), so the failure is isolated to the short final group, exactly as predicted from lines 69-73 (num_groups = K//group_size floor + clamp to num_groups-1).",
+    "summary": "With K=64, group_size=32 (exact multiple) the kernel matches the contract reference to max_abs_err 4.8e-6 (rel 2.9e-7), showing the dequant convention (zero+1, scale, packing) is otherwise correct. With K=48, group_size=32 and 2 supplied scale/zero rows (exactly the ceil(K/group_size) supply the contract describes), the kernel deviates from the contract reference by max_abs_err 9.256 on ref_absmax 14.25 (rel 0.65), while matching a floor-clamp reference (g_idx = clamp(k//gs, max=K//gs-1)) to 2.9e-6. This is direct confirmation that trailing columns k>=32 are dequantized with group 0's scale/zero instead of their own group-1 row.",
     "supports": "confirmed",
     "tool_event_id": "t6"
   }
 
-### Turn 5 - `solo` (10.917796262000024s, in=20546 out=764)
+### Turn 5 - `solo` (12.239395312s, in=20810 out=792)
 
 Message:
 
@@ -206,16 +210,16 @@ Tool calls:
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract explicitly requires correct group assignment \"for any K -- including a K that is not an exact multiple of group_size\", with the trailing short group being its own group and scales/zeros supplied with ceil(K/group_size) rows. The host wrapper (kernel.py lines 69-73) instead computes num_groups = K // group_size (floor) and clamps the per-column table to num_groups-1, so the trailing short group can never index its own scale/zero row.\\n\\nProbe t6 (run_claim_probe on c1) built packed INT4 weights with the kernel's own zero+1 convention and supplied ceil(K/group_size) group rows. With K=48, group_size=32, bits=4, M=N=32 the kernel output differed from the contract-correct reference by max_abs_err=10.498 
-  ...[truncated 578 chars]
+    "reason": "The contract (problem.txt) explicitly requires that \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. The host wrapper (kernel.py:69-73) instead builds the group table with num_groups = K // group_size (floor) and clamps g_idx to num_groups-1, so a short trailing group is never addressed.\n\nProbe t6 tested this on the real kernel. Control case K=64, group_size=32 (exact multiple, 2 rows): kernel matches the contract reference to max_abs_err 4.8e-6 (rel 2.9e-7), confirming the packing/zero+1/scale conventions and the reference harness are 
+  ...[truncated 670 chars]
   Output summary:
   {
     "confidence": 0.93,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract explicitly requires correct group assignment \"for any K -- including a K that is not an exact multiple of group_size\", with the trailing short group being its own group and scales/zeros supplied with ceil(K/group_size) rows. The host wrapper (kernel.py lines 69-73) instead computes num_groups = K // group_size (floor) and clamps the per-column table to num_groups-1, so the trailing short group can never index its own scale/zero row.\\n\\nProbe t6 (run_claim_probe on c1) built packed INT4 weights with the kernel's own zero+1 convention and supplied ceil(K/group_size) group rows. With K=48, group_size=32, bits=4, M=N=32 the kernel output differed from the contract-correct reference by max_abs_err=10.498 against ref_absmax=11.931 (rel 0.880), while matching a deliberately wrong \"clamped\" reference (columns 32..47 forced onto group row 0) to max_abs_err=2.86e-06 \u2014 i.e. bit-level agreement with the incorrect grouping, not a precision artifact. The K=64 control (exact multiple) matched the correct reference to 5.72e-06 (rel 2.7e-07), isolating the failure to the short final group exactly as th
-  ...[truncated 178 chars]
+    "reason": "The contract (problem.txt) explicitly requires that \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. The host wrapper (kernel.py:69-73) instead builds the group table with num_groups = K // group_size (floor) and clamps g_idx to num_groups-1, so a short trailing group is never addressed.\n\nProbe t6 tested this on the real kernel. Control case K=64, group_size=32 (exact multiple, 2 rows): kernel matches the contract reference to max_abs_err 4.8e-6 (rel 2.9e-7), confirming the packing/zero+1/scale conventions and the reference harness are consistent. Violating case K=48, group_size=32 with the contract-mandated ceil(48/32)=2 scale/zero rows: kernel deviates from the contract reference by max_abs_err 9.256 against ref_absmax 14.25 (rel error 0.65), while matching a floor-clamp reference (g = clamp(k//gs, max=K//gs-1)) to 2.9e-6. That pins the cause exactly: the trailing 16 columns (k>=32) are dequantized with group 0's scale/zero ra
+  ...[truncated 270 chars]
 
 ## Description Model
 
@@ -225,20 +229,20 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: When K is not an exact multiple of group_size, gptq_matmul assigns the trailing (short final group) columns the previous group's scale/zero row instead of their own group row, because num_groups = K // group_size (floor) and g_idx is clamped to num_groups-1. This violates the contract's dequant(B)[k,n] = (q - zero[group_of(k),n]) * scale[group_of(k),n] with ceil(K/group_size) group rows.
+Statement: The host wrapper's group table uses num_groups = K // group_size and clamps g_idx to num_groups-1, so when K is not an exact multiple of group_size the trailing columns are dequantized with the previous group's scale/zero instead of their own final-group row, violating the stated contract (which requires ceil(K/group_size) groups).
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt names non-multiple K as a required case: "for any K -- including a K that is not an exact multiple of group_size... the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros; scales and zeros are supplied with ceil(K / group_size) rows accordingly." No test.py exists, so representative admitted inputs (K=48, group_size=32, bits=4) are used.
+Scope rationale: The contract paragraph is explicit that correctness must hold "for any K -- including a K that is not an exact multiple of group_size", and states scales/zeros are supplied with ceil(K/group_size) rows. So K=48, group_size=32 with 2 scale/zero rows is an admitted input.
 
 Scope evidence:
-- `problem.txt`: Contract requires correct grouping for any K including K not a multiple of group_size, with ceil(K/group_size) rows of scales/zeros and the trailing short group treated as its own group.
-- `kernel.py lines 69-73`: num_groups = K // group_size and g_idx clamped to num_groups-1, which cannot address the ceil-th group row.
+- `problem.txt`: "every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly."
+- `kernel.py:69-73`: num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) -- floor instead of ceil.
 
-Rationale: Lines 69-73 compute floor division for num_groups and clamp the arange//group_size table to num_groups-1, which folds the last partial group into the preceding one. Contract explicitly states scales/zeros have ceil(K/group_size) rows and the trailing columns form their own group.
+Rationale: kernel.py lines 69-73 use floor division for num_groups and clamp; contract text explicitly requires ceil(K/group_size) rows and that trailing columns form their own group.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: K=48, group_size=32, bits=4, M=N=32: scales/zeros supplied with ceil(48/32)=2 rows per contract. Kernel output vs contract-correct reference (columns 32..47 use group row 1): max_abs_err=10.4978 against ref_absmax=11.9313 (rel 0.880). Kernel output vs the clamped/buggy reference (tail columns forced onto group row 0): max_abs_err=2.86e-06, i.e. bit-level agreement with the wrong grouping. Control K=64 (exact multiple) matches the correct reference to 5.7e-06 (rel 2.7e-07), so the failure is isolated to the short final group, exactly as predicted from lines 69-73 (num_groups = K//group_size floor + clamp to num_groups-1).
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: With K=64, group_size=32 (exact multiple) the kernel matches the contract reference to max_abs_err 4.8e-6 (rel 2.9e-7), showing the dequant convention (zero+1, scale, packing) is otherwise correct. With K=48, group_size=32 and 2 supplied scale/zero rows (exactly the ceil(K/group_size) supply the contract describes), the kernel deviates from the contract reference by max_abs_err 9.256 on ref_absmax 14.25 (rel 0.65), while matching a floor-clamp reference (g_idx = clamp(k//gs, max=K//gs-1)) to 2.9e-6. This is direct confirmation that trailing columns k>=32 are dequantized with group 0's scale/zero instead of their own group-1 row.
 
 ## Tool Events
 
@@ -270,20 +274,20 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "Lines 69-73 compute floor division for num_groups and clamp the arange//group_size table to num_groups-1, which folds the last partial group into the preceding one. Contract explicitly states scales/zeros have ceil(K/group_size) rows and the trailing columns form their own group.",
+  "rationale": "kernel.py lines 69-73 use floor division for num_groups and clamp; contract text explicitly requires ceil(K/group_size) rows and that trailing columns form their own group.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract requires correct grouping for any K including K not a multiple of group_size, with ceil(K/group_size) rows of scales/zeros and the trailing short group treated as its own group."
+      "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
     },
     {
-      "source": "kernel.py lines 69-73",
-      "summary": "num_groups = K // group_size and g_idx clamped to num_groups-1, which cannot address the ceil-th group row."
+      "source": "kernel.py:69-73",
+      "summary": "num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) -- floor instead of ceil."
     }
   ],
-  "scope_rationale": "problem.txt names non-multiple K as a required case: \"for any K -- including a K that is not an exact multiple of group_size... the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros; scales and zeros are supplied with ceil(K / group_size) rows accordingly.\" No test.py exists, so representative admitted inputs (K=48, group_size=32, bits=4) are used.",
-  "statement": "When K is not an exact multiple of group_size, gptq_matmul assigns the trailing (short final group) columns the previous group's scale/zero row instead of their own group row, because num_groups = K // group_size (floor) and g_idx is clamped to num_groups-1. This violates the contract's dequant(B)[k,n] = (q - zero[group_of(k),n]) * scale[group_of(k),n] with ceil(K/group_size) group rows.",
+  "scope_rationale": "The contract paragraph is explicit that correctness must hold \"for any K -- including a K that is not an exact multiple of group_size\", and states scales/zeros are supplied with ceil(K/group_size) rows. So K=48, group_size=32 with 2 scale/zero rows is an admitted input.",
+  "statement": "The host wrapper's group table uses num_groups = K // group_size and clamps g_idx to num_groups-1, so when K is not an exact multiple of group_size the trailing columns are dequantized with the previous group's scale/zero instead of their own final-group row, violating the stated contract (which requires ceil(K/group_size) groups).",
   "status": "open"
 }
 
@@ -295,13 +299,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t6_probe.py",
-      "sha256": "3ed3632ec9469686acb27c211080d7955e1c3aa6c6cf0314a439ab4de139db8d"
+      "sha256": "f27268df3010a793d3f6fddaaadf07b43156e2b44732fb47f3e968497363ab0e"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t6_stdout.txt",
-      "sha256": "15a97473e018d59fb2a372d19f8a2117036a270d79ed94d12805ee04a00da930"
+      "sha256": "be525ef2dab57445b3f73bc8be9bc7ee3be33597a8c9259a3cd9519de0d51bb2"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -311,8 +315,8 @@ Evidence:
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "When K is not an exact multiple of group_size, gptq_matmul assigns the trailing (short final group) columns the previous group's scale/zero row instead of their own group row, because num_groups = K // group_size (floor) and g_idx is clamped to num_groups-1. This violates the contract's dequant(B)[k,n] = (q - zero[group_of(k),n]) * scale[group_of(k),n] with ceil(K/group_size) group rows.",
-  "duration_s": 5.534782,
+  "claim_statement": "The host wrapper's group table uses num_groups = K // group_size and clamps g_idx to num_groups-1, so when K is not an exact multiple of group_size the trailing columns are dequantized with the previous group's scale/zero instead of their own final-group row, violating the stated contract (which requires ceil(K/group_size) groups).",
+  "duration_s": 8.366034,
   "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
@@ -322,13 +326,13 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t6_probe.py",
-          "sha256": "3ed3632ec9469686acb27c211080d7955e1c3aa6c6cf0314a439ab4de139db8d"
+          "sha256": "f27268df3010a793d3f6fddaaadf07b43156e2b44732fb47f3e968497363ab0e"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t6_stdout.txt",
-          "sha256": "15a97473e018d59fb2a372d19f8a2117036a270d79ed94d12805ee04a00da930"
+          "sha256": "be525ef2dab57445b3f73bc8be9bc7ee3be33597a8c9259a3cd9519de0d51bb2"
         },
         {
           "description": "Captured stderr from the probe process.",
@@ -336,8 +340,10 @@ Evidence:
           "path": "probes/t6_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
-
-...[truncated 1876 chars]
+      ],
+      "duration_s": 8.366034,
+      "exit_code":
+...[truncated 2121 chars]
 
 ### t7 - finalize_probe_evidence - ok
 
@@ -345,7 +351,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "K=48, group_size=32, bits=4, M=N=32: scales/zeros supplied with ceil(48/32)=2 rows per contract. Kernel output vs contract-correct reference (columns 32..47 use group row 1): max_abs_err=10.4978 against ref_absmax=11.9313 (rel 0.880). Kernel output vs the clamped/buggy reference (tail columns forced onto group row 0): max_abs_err=2.86e-06, i.e. bit-level agreement with the wrong grouping. Control K=64 (exact multiple) matches the correct reference to 5.7e-06 (rel 2.7e-07), so the failure is isolated to the short final group, exactly as predicted from lines 69-73 (num_groups = K//group_size floor + clamp to num_groups-1).",
+  "summary": "With K=64, group_size=32 (exact multiple) the kernel matches the contract reference to max_abs_err 4.8e-6 (rel 2.9e-7), showing the dequant convention (zero+1, scale, packing) is otherwise correct. With K=48, group_size=32 and 2 supplied scale/zero rows (exactly the ceil(K/group_size) supply the contract describes), the kernel deviates from the contract reference by max_abs_err 9.256 on ref_absmax 14.25 (rel 0.65), while matching a floor-clamp reference (g_idx = clamp(k//gs, max=K//gs-1)) to 2.9e-6. This is direct confirmation that trailing columns k>=32 are dequantized with group 0's scale/zero instead of their own group-1 row.",
   "supports": "confirmed",
   "tool_event_id": "t6"
 }
@@ -357,7 +363,7 @@ Evidence:
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract explicitly requires correct group assignment \"for any K -- including a K that is not an exact multiple of group_size\", with the trailing short group being its own group and scales/zeros supplied with ceil(K/group_size) rows. The host wrapper (kernel.py lines 69-73) instead computes num_groups = K // group_size (floor) and clamps the per-column table to num_groups-1, so the trailing short group can never index its own scale/zero row.\\n\\nProbe t6 (run_claim_probe on c1) built packed INT4 weights with the kernel's own zero+1 convention and supplied ceil(K/group_size) group rows. With K=48, group_size=32, bits=4, M=N=32 the kernel output differed from the contract-correct reference by max_abs_err=10.498 against ref_absmax=11.931 (rel 0.880), while matching a deliberately wrong \"clamped\" reference (columns 32..47 forced onto group row 0) to max_abs_err=2.86e-06 \u2014 i.e. bit-level agreement with the incorrect grouping, not a precision artifact. The K=64 control (exact multiple) matched the correct reference to 5.72e-06 (rel 2.7e-07), isolating the failure to the short final group exactly as the source predicted. Evidence finalized as c1.e1 (event t6), claim status confirmed, scope in_scope on problem.txt's explicit non-multiple-K requirement.",
+  "reason": "The contract (problem.txt) explicitly requires that \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. The host wrapper (kernel.py:69-73) instead builds the group table with num_groups = K // group_size (floor) and clamps g_idx to num_groups-1, so a short trailing group is never addressed.\n\nProbe t6 tested this on the real kernel. Control case K=64, group_size=32 (exact multiple, 2 rows): kernel matches the contract reference to max_abs_err 4.8e-6 (rel 2.9e-7), confirming the packing/zero+1/scale conventions and the reference harness are consistent. Violating case K=48, group_size=32 with the contract-mandated ceil(48/32)=2 scale/zero rows: kernel deviates from the contract reference by max_abs_err 9.256 against ref_absmax 14.25 (rel error 0.65), while matching a floor-clamp reference (g = clamp(k//gs, max=K//gs-1)) to 2.9e-6. That pins the cause exactly: the trailing 16 columns (k>=32) are dequantized with group 0's scale/zero rather than their own group-1 row, and the supplied group-1 row is never read.\n\nThis is a violation of an explicitly stated required behaviour on an input the contract expressly admits, so it is a defect rather than tolerable numeric deviation.",
   "verdict": "reject"
 }
 
@@ -365,10 +371,10 @@ Evidence:
 
 {
   "confidence": 0.93,
-  "created_at": "2026-09-08T14:54:58Z",
+  "created_at": "2026-09-08T18:00:15Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract explicitly requires correct group assignment \"for any K -- including a K that is not an exact multiple of group_size\", with the trailing short group being its own group and scales/zeros supplied with ceil(K/group_size) rows. The host wrapper (kernel.py lines 69-73) instead computes num_groups = K // group_size (floor) and clamps the per-column table to num_groups-1, so the trailing short group can never index its own scale/zero row.\\n\\nProbe t6 (run_claim_probe on c1) built packed INT4 weights with the kernel's own zero+1 convention and supplied ceil(K/group_size) group rows. With K=48, group_size=32, bits=4, M=N=32 the kernel output differed from the contract-correct reference by max_abs_err=10.498 against ref_absmax=11.931 (rel 0.880), while matching a deliberately wrong \"clamped\" reference (columns 32..47 forced onto group row 0) to max_abs_err=2.86e-06 \u2014 i.e. bit-level agreement with the incorrect grouping, not a precision artifact. The K=64 control (exact multiple) matched the correct reference to 5.72e-06 (rel 2.7e-07), isolating the failure to the short final group exactly as the source predicted. Evidence finalized as c1.e1 (event t6), claim status confirmed, scope in_scope on problem.txt's explicit non-multiple-K requirement.",
+  "reason": "The contract (problem.txt) explicitly requires that \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. The host wrapper (kernel.py:69-73) instead builds the group table with num_groups = K // group_size (floor) and clamps g_idx to num_groups-1, so a short trailing group is never addressed.\n\nProbe t6 tested this on the real kernel. Control case K=64, group_size=32 (exact multiple, 2 rows): kernel matches the contract reference to max_abs_err 4.8e-6 (rel 2.9e-7), confirming the packing/zero+1/scale conventions and the reference harness are consistent. Violating case K=48, group_size=32 with the contract-mandated ceil(48/32)=2 scale/zero rows: kernel deviates from the contract reference by max_abs_err 9.256 against ref_absmax 14.25 (rel error 0.65), while matching a floor-clamp reference (g = clamp(k//gs, max=K//gs-1)) to 2.9e-6. That pins the cause exactly: the trailing 16 columns (k>=32) are dequantized with group 0's scale/zero rather than their own group-1 row, and the supplied group-1 row is never read.\n\nThis is a violation of an explicitly stated required behaviour on an input the contract expressly admits, so it is a defect rather than tolerable numeric deviation.",
   "verdict": "reject"
 }

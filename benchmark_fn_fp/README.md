@@ -141,12 +141,17 @@ FP 题。
 
 ### 四个 baseline
 
-| 脚本 | 这一档是什么 | 能不能跑实验 |
+| 档 | 脚本 | 能不能跑实验 |
 |---|---|---|
-| `baseline1_allclose_modal.py` | 固定容差 `allclose` | — |
-| `baseline2_single_llm.py` | 模型单次调用，不给工具 | ❌ 只能读代码推理 |
-| `baseline2_5_solo_modal.py` | **单 agent + 全套工具** | ✅ 能写代码在 GPU 上跑 |
-| `baseline3_debate_modal.py` | **四角色 debate** | ✅ 能跑，且互相质疑 |
+| 固定容差 `allclose` | `baseline1_allclose_modal.py` | — |
+| 模型单次调用，不给工具 | `baseline2_single_llm.py` | ❌ 只能读代码推理 |
+| **单 agent + 全套工具** | `run_agentic_modal.py --arm solo` | ✅ 能写代码在 GPU 上跑 |
+| **四角色 debate** | `run_agentic_modal.py --arm debate` | ✅ 能跑，且互相质疑 |
+
+后两档共用一个脚本。它们原本是两个几乎一样的文件、加上一个单题抓取脚本，共
+506 行，实质差异只有 agent 名单那一行。三份拷贝保持同步这件事我做不到 ——
+`--max-tokens` 改了两份漏了第三份，一次 32 题的全量跑出三道零 claim 零探针的题，
+烧掉约 $33。现在只有一份。
 
 这四档是一个消融：从第一档到第二档，量的是"会推理"值多少；第二到第三档，量的是
 "能执行"值多少；第三到第四档，量的是"辩论结构"值多少。
@@ -158,9 +163,14 @@ FP 题。
 | `common.py` | 载入用例、按 `case_map.json` 打分 |
 | `traces.py` | **所有 runner 都必须经它写 trace**，见下 |
 | `audit_traces.py` | 自动审计 trace，八项检查 |
-| `capture_traces_modal.py` | 单题抓取，用来做前后对比 |
-| `results_baseline*.json` | 各次运行的汇总结果 |
+| `summarize_traces.py` | **从 traces 重算记分板**，输出 `scoreboard.json` |
 | `README.md` | 说明哪些历史结果已作废、为什么 |
+
+**记分板是算出来的，不是写出来的。** 原本每个 runner 各写各的
+`results_baselineN.json` 并整个覆盖，于是一批 14 题把一次 32 题的运行冲掉了 ——
+`results_baseline3.json` 最后只剩 32 题里的 14 题，而单次调用那一档散在八个文件里、
+只有加起来才有意义。trace 不能从汇总恢复，汇总永远能从 trace 重算，所以现在只有
+`summarize_traces.py` 写它。
 
 **为什么 trace 是强制的**：前十五次运行都只保留了 `transcript.md` 的最后两万字符，
 其余全丢在容器里。三个改变结论的缺陷 —— Skeptic 白白重读提示词里已有的材料、
@@ -220,17 +230,22 @@ traces/<case_id>/<arm>/
 ## 怎么跑
 
 ```bash
-# 单题，抓完整 trace（前后对比用）
-modal run benchmark_fn_fp/eval/capture_traces_modal.py --cases case_33 --arm solo   --max-rounds 10
-modal run benchmark_fn_fp/eval/capture_traces_modal.py --cases case_33 --arm debate --max-rounds 4
+# 单题（改完代码先跑这个，别直接上全量）
+modal run benchmark_fn_fp/eval/run_agentic_modal.py --arm debate --cases case_33
 
 # 全量
-modal run benchmark_fn_fp/eval/baseline2_5_solo_modal.py  --all --max-debate-rounds 10
-modal run benchmark_fn_fp/eval/baseline3_debate_modal.py  --all --max-debate-rounds 4
+modal run benchmark_fn_fp/eval/run_agentic_modal.py --arm solo   --all
+modal run benchmark_fn_fp/eval/run_agentic_modal.py --arm debate --all
 
-# 跑完先审计，再看分数
+# 中断后续跑，跳过已有 trace 的题（代码没变时才用）
+modal run benchmark_fn_fp/eval/run_agentic_modal.py --arm debate --all --skip-existing
+
+# 跑完先审计，全绿再看分数
 python benchmark_fn_fp/eval/audit_traces.py
+python benchmark_fn_fp/eval/summarize_traces.py
 ```
+
+`--max-rounds` 不传时按档取默认：debate 4，solo 10。
 
 `--max-tokens` 默认 16384，别调低。adaptive thinking 是算在 `max_tokens` 里的，
 4096 时一整轮可能全花在思考块里、返回空文本和零个工具调用 —— 有一次全量跑出三道题

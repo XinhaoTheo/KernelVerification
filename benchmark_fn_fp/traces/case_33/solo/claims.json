@@ -1,30 +1,23 @@
 [
   {
-    "created_at": "2026-09-08T14:54:03Z",
+    "created_at": "2026-09-08T17:59:21Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-08T14:54:47Z",
+        "created_at": "2026-09-08T18:00:03Z",
         "data": {
-          "K48_max_abs_err_vs_clamped_ref": 2.86102294921875e-06,
-          "K48_max_abs_err_vs_correct_ref": 10.497809410095215,
-          "K48_num_tail_cols": 16,
-          "K48_ref_absmax": 11.931314468383789,
-          "K48_rel_vs_correct_ref": 0.8798535466194153,
-          "K64_control_max_abs_err": 5.7220458984375e-06,
-          "K64_rel": 2.70417103820364e-07,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t6_probe.py",
-              "sha256": "3ed3632ec9469686acb27c211080d7955e1c3aa6c6cf0314a439ab4de139db8d"
+              "sha256": "f27268df3010a793d3f6fddaaadf07b43156e2b44732fb47f3e968497363ab0e"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t6_stdout.txt",
-              "sha256": "15a97473e018d59fb2a372d19f8a2117036a270d79ed94d12805ee04a00da930"
+              "sha256": "be525ef2dab57445b3f73bc8be9bc7ee3be33597a8c9259a3cd9519de0d51bb2"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -33,41 +26,48 @@
               "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             }
           ],
-          "duration_s": 5.534782,
+          "duration_s": 8.366034,
+          "exact_K64_max_abs_err_vs_ceil_ref": 4.76837158203125e-06,
+          "exact_rel_err": 2.896958051223919e-07,
           "exit_code": 0,
-          "expected_signal": "Control K=64 (multiple of group_size) matches reference; K=48 shows large error confined to contributions from columns 32..47 which use group row 0 instead of row 1.",
+          "expected_signal": "K=64 exact-multiple case matches reference closely; K=48 case shows large mismatch on rows k>=32 columns, and kernel output instead matches a \"group 0 for all k\" reference.",
+          "group_size": 32,
           "json_parse_error": "last stdout line is not JSON: Expecting value",
           "json_result": null,
-          "scales_rows_supplied": 2,
+          "nonmultiple_K48_max_abs_err_vs_ceil_ref": 9.255824089050293,
+          "nonmultiple_max_abs_err_vs_floorclamp_ref": 2.86102294921875e-06,
+          "nonmultiple_rel_err_vs_ceil": 0.6497411131858826,
+          "ref_absmax_K48": 14.245404243469238,
+          "rows_supplied": 2,
           "stderr": "",
-          "stdout": "{\n \"M32_K64_N32_gs32\": {\n  \"scales_rows\": 2,\n  \"max_abs_err\": 5.7220458984375e-06,\n  \"ref_absmax\": 21.16007423400879,\n  \"rel\": 2.70417103820364e-07,\n  \"num_tail_cols\": 0\n },\n \"M32_K48_N32_gs32\": {\n  \"scales_rows\": 2,\n  \"max_abs_err\": 10.497809410095215,\n  \"ref_absmax\": 11.931314468383789,\n  \"rel\": 0.8798535466194153,\n  \"num_tail_cols\": 16,\n  \"max_abs_err_vs_clamped_ref\": 2.86102294921875e-06\n }\n}\n",
+          "stdout": "{\n  \"exact\": {\n    \"K\": 64,\n    \"group_size\": 32,\n    \"rows_supplied\": 2,\n    \"max_abs_err_vs_ceil_ref\": 4.76837158203125e-06,\n    \"max_abs_err_vs_floorclamp_ref\": 4.76837158203125e-06,\n    \"ref_absmax\": 16.45992660522461,\n    \"rel_err_vs_ceil\": 2.896958051223919e-07\n  },\n  \"nonmultiple\": {\n    \"K\": 48,\n    \"group_size\": 32,\n    \"rows_supplied\": 2,\n    \"max_abs_err_vs_ceil_ref\": 9.255824089050293,\n    \"max_abs_err_vs_floorclamp_ref\": 2.86102294921875e-06,\n    \"ref_absmax\": 14.245404243469238,\n    \"rel_err_vs_ceil\": 0.6497411131858826\n  }\n}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "K=48, group_size=32, bits=4, M=N=32: scales/zeros supplied with ceil(48/32)=2 rows per contract. Kernel output vs contract-correct reference (columns 32..47 use group row 1): max_abs_err=10.4978 against ref_absmax=11.9313 (rel 0.880). Kernel output vs the clamped/buggy reference (tail columns forced onto group row 0): max_abs_err=2.86e-06, i.e. bit-level agreement with the wrong grouping. Control K=64 (exact multiple) matches the correct reference to 5.7e-06 (rel 2.7e-07), so the failure is isolated to the short final group, exactly as predicted from lines 69-73 (num_groups = K//group_size floor + clamp to num_groups-1).",
+        "summary": "With K=64, group_size=32 (exact multiple) the kernel matches the contract reference to max_abs_err 4.8e-6 (rel 2.9e-7), showing the dequant convention (zero+1, scale, packing) is otherwise correct. With K=48, group_size=32 and 2 supplied scale/zero rows (exactly the ceil(K/group_size) supply the contract describes), the kernel deviates from the contract reference by max_abs_err 9.256 on ref_absmax 14.25 (rel 0.65), while matching a floor-clamp reference (g_idx = clamp(k//gs, max=K//gs-1)) to 2.9e-6. This is direct confirmation that trailing columns k>=32 are dequantized with group 0's scale/zero instead of their own group-1 row.",
         "supports": "confirmed",
         "tool_event_id": "t6"
       }
     ],
     "id": "c1",
     "raised_by": "solo",
-    "rationale": "Lines 69-73 compute floor division for num_groups and clamp the arange//group_size table to num_groups-1, which folds the last partial group into the preceding one. Contract explicitly states scales/zeros have ceil(K/group_size) rows and the trailing columns form their own group.",
+    "rationale": "kernel.py lines 69-73 use floor division for num_groups and clamp; contract text explicitly requires ceil(K/group_size) rows and that trailing columns form their own group.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires correct grouping for any K including K not a multiple of group_size, with ceil(K/group_size) rows of scales/zeros and the trailing short group treated as its own group."
+        "summary": "\"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size... scales and zeros are supplied with ceil(K / group_size) rows accordingly.\""
       },
       {
-        "source": "kernel.py lines 69-73",
-        "summary": "num_groups = K // group_size and g_idx clamped to num_groups-1, which cannot address the ceil-th group row."
+        "source": "kernel.py:69-73",
+        "summary": "num_groups = K // group_size; g_idx = clamp(arange(K)//group_size, max=num_groups-1) -- floor instead of ceil."
       }
     ],
-    "scope_rationale": "problem.txt names non-multiple K as a required case: \"for any K -- including a K that is not an exact multiple of group_size... the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros; scales and zeros are supplied with ceil(K / group_size) rows accordingly.\" No test.py exists, so representative admitted inputs (K=48, group_size=32, bits=4) are used.",
-    "statement": "When K is not an exact multiple of group_size, gptq_matmul assigns the trailing (short final group) columns the previous group's scale/zero row instead of their own group row, because num_groups = K // group_size (floor) and g_idx is clamped to num_groups-1. This violates the contract's dequant(B)[k,n] = (q - zero[group_of(k),n]) * scale[group_of(k),n] with ceil(K/group_size) group rows.",
+    "scope_rationale": "The contract paragraph is explicit that correctness must hold \"for any K -- including a K that is not an exact multiple of group_size\", and states scales/zeros are supplied with ceil(K/group_size) rows. So K=48, group_size=32 with 2 scale/zero rows is an admitted input.",
+    "statement": "The host wrapper's group table uses num_groups = K // group_size and clamps g_idx to num_groups-1, so when K is not an exact multiple of group_size the trailing columns are dequantized with the previous group's scale/zero instead of their own final-group row, violating the stated contract (which requires ceil(K/group_size) groups).",
     "status": "confirmed",
-    "updated_at": "2026-09-08T14:54:47Z"
+    "updated_at": "2026-09-08T18:00:03Z"
   }
 ]

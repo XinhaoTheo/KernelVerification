@@ -195,9 +195,7 @@ def test_every_eval_runner_writes_a_trace() -> None:
     eval_dir = Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval"
     runners = [
         "baseline2_single_llm.py",
-        "baseline2_5_solo_modal.py",
-        "baseline3_debate_modal.py",
-        "capture_traces_modal.py",
+        "run_agentic_modal.py",
     ]
     for name in runners:
         path = eval_dir / name
@@ -214,16 +212,18 @@ def test_every_modal_runner_sets_max_tokens() -> None:
 
     Adaptive thinking is billed against max_tokens, so at the 4096 default a turn
     can spend its entire budget inside the thinking block and return no text and
-    no tool call. Two runners passed 16384 and the third did not, and nothing
-    caught it: a full 32-case debate run produced three cases with zero claims
-    and zero probes, one Skeptic returning nothing nine turns in a row, and a
-    Judge that wrote "the debate produced no claims and no evidence" and recorded
-    a verdict anyway. The whole batch had to be discarded.
+    no tool call. Two of three near-identical runners passed 16384 and the third
+    did not, and nothing caught it: a full 32-case debate run produced three
+    cases with zero claims and zero probes, one Skeptic returning nothing nine
+    turns in a row, and a Judge that wrote "the debate produced no claims and no
+    evidence" and recorded a verdict anyway. The whole batch was discarded. The
+    three runners are now one, which removes the way that bug was possible, and
+    this test guards the remaining copy.
     """
     from pathlib import Path
 
     eval_dir = Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval"
-    for name in ("baseline2_5_solo_modal.py", "baseline3_debate_modal.py", "capture_traces_modal.py"):
+    for name in ("run_agentic_modal.py",):
         source = (eval_dir / name).read_text()
         assert '"--max-tokens"' in source, (
             f"{name} does not pass --max-tokens; at the 4096 default whole turns "

@@ -24,7 +24,7 @@ Rules:
 - If the contract states a required behavior (a formula, an invariant, a tie-break rule, a declared numeric format), a claim that the kernel may violate that stated behavior is in_scope even when no test file exists to pin exact inputs; choose representative inputs the contract admits and say so in scope_rationale.
 - Do not mark a claim in_scope merely because it is interesting or because PyTorch would generally support it; scope_evidence must tie it to the stated input/output contract.
 - Rationale is only the reason for suspicion; it is not evidence.
-- Use record_claim to add a claim to the ledger.
+- Use record_claim to add a claim to the ledger. It requires BOTH `statement` (what might be wrong) and `rationale` (why you suspect it) -- these are two separate fields, and neither is `scope_rationale`, which answers a different question. Omitting `rationale` is rejected and costs the turn; it happened four times across a 64-run evaluation, three of them in a single case.
 - After reviewing the latest claims, evidence, and tool events, if you find no additional high-quality in-scope claims, call record_no_new_claims.
 - Do not call record_no_new_claims in the same turn where you record_claim.
 - REVIEW TURN: when run state `convergence.request` is "skeptic_final_review", this turn is a review, not a new round of attack. This round's probes are already finished and the Judge is waiting on you. Default to record_no_new_claims. Record a claim instead only if the new evidence exposes a material, testable, in-scope problem that no existing claim already covers -- curiosity, generalization questions, or lines you would like to explore further are not sufficient reason to hold up the verdict.

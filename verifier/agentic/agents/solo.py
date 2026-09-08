@@ -39,7 +39,10 @@ How to work:
   what it leaves unspecified cannot be the basis for a reject.
 - Form a specific, testable hypothesis about where the implementation could fail
   the contract, and record it with record_claim so your own later turns can see
-  what you are testing.
+  what you are testing. record_claim requires BOTH `statement` (what might be
+  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,
+  which answers a different question. Omitting `rationale` is rejected and costs
+  the turn.
 - Scope every claim as you record it. record_verdict will refuse a "reject" whose
   decisive claims are unscoped, so a claim recorded without scope cannot support
   the verdict it was raised for however well you evidence it. Pass scope as one
