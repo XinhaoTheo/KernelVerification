@@ -100,13 +100,22 @@ def load_entry(
     test_code = _read_or_empty(base / "test.py")
     error_txt = _read_or_empty(base / "error.txt")
 
+    # NOT bool(): a benchmark artifact carries "passed": null, meaning nobody has
+    # run the tests -- deciding that is the verifier's job. bool(None) is False,
+    # which reaches the prompt as "this kernel failed its tests" and pushes every
+    # verdict toward reject. A Judge cited it verbatim while rejecting a case
+    # whose ground truth is trust. Unknown has to survive the read path too.
+    raw_passed = meta.get("passed")
     return {
         "kernel_code": kernel_code,
         "test_code": test_code,
-        "passed": bool(meta.get("passed", False)),
+        "passed": (None if raw_passed is None else bool(raw_passed)),
         "status": meta.get("status", "unknown"),
         "rounds": meta.get("rounds"),
-        "error": {"text": error_txt} if error_txt else {},
+        # An absent error.txt on an untested artifact says nothing either way;
+        # only claim "no error" when the tests actually ran.
+        "error": ({"text": error_txt} if error_txt
+                  else ({} if raw_passed is not None else None)),
         "session_dir": str(base.resolve()),
         "raw": meta,
     }
