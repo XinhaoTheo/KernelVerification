@@ -169,3 +169,30 @@ def test_contract_stays_in_the_prompt_after_the_tool_window_scrolls() -> None:
     rendered = json.dumps(_state_for_prompt(state, role="judge"))
     assert "CONTRACT: the tail group is a group of its own." in rendered
     assert "problem.txt" in rendered
+
+
+def test_unknown_test_status_is_not_rendered_as_a_failure() -> None:
+    """"Nobody ran the tests" must not reach the prompt as "the tests failed".
+
+    The eval artifacts carry "passed": null, and load_artifact ran it through
+    bool(), which turns None into False. Every case therefore told every agent,
+    on every turn, that the kernel under test had failed -- a standing push
+    toward reject across the entire benchmark. It was found in a Judge's own
+    words, corroborating a reject with "consistent with artifact.passed = false",
+    on a case whose ground truth is trust.
+    """
+    from verifier.agentic.agents.base import _state_for_prompt
+    from verifier.agentic.state import RunState
+
+    state = RunState(entry="toy")
+    state.artifact = {"entry": "toy", "kernel_code": "x = 1\n", "test_code": "",
+                      "problem_text": "CONTRACT", "passed": None, "has_error": None}
+    artifact = _state_for_prompt(state, role="judge")["artifact"]
+    assert artifact["passed"] == "unknown"
+    assert artifact["has_error"] == "unknown"
+
+    # A real result still comes through as a real result.
+    state.artifact = {**state.artifact, "passed": False, "has_error": True}
+    artifact = _state_for_prompt(state, role="judge")["artifact"]
+    assert artifact["passed"] is False
+    assert artifact["has_error"] is True

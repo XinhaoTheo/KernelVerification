@@ -277,6 +277,11 @@ def _state_for_prompt_unbounded(state: RunState, *, role: str | None = None) -> 
     # The operative contract, prose rather than code, so it is not numbered.
     if isinstance(artifact.get("problem_text"), str) and artifact["problem_text"]:
         artifact["problem_text"] = _truncate(str(artifact["problem_text"]), 12000)
+    # A null here means "nobody ran the tests", but rendered as JSON null beside
+    # a field named `passed` it reads as a failing result. Say what it means.
+    for key in ("passed", "has_error"):
+        if artifact.get(key) is None:
+            artifact[key] = "unknown"
     return cast(dict[str, JsonValue], {
         "entry": state.entry,
         "artifact": artifact,

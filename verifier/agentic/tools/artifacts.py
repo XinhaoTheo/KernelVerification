@@ -86,12 +86,19 @@ def load_artifact(context: ToolContext, args: dict) -> dict:
         "problem_text": previous.get("problem_text", ""),
         "artifact_files": previous.get("artifact_files", []),
         "session_dir": artifact.get("session_dir"),
-        "passed": bool(artifact.get("passed", False)),
+        # NOT bool(): the eval artifacts carry "passed": null, meaning nobody has
+        # run the tests, and bool(None) is False. Every case therefore told every
+        # agent, on every turn, that this kernel had failed its tests -- a
+        # standing push toward reject across the whole benchmark. A Judge cited
+        # it verbatim ("consistent with artifact.passed = false") while rejecting
+        # a case whose ground truth is trust. Unknown has to stay unknown.
+        "passed": (None if artifact.get("passed") is None else bool(artifact.get("passed"))),
         "status": str(artifact.get("status", "unknown")),
         "rounds": artifact.get("rounds"),
         "kernel_code": artifact.get("kernel_code", ""),
         "test_code": artifact.get("test_code", ""),
-        "has_error": bool(artifact.get("error")),
+        # Same reasoning: absent means unknown, not "there is no error".
+        "has_error": (None if artifact.get("error") is None else bool(artifact.get("error"))),
     }
     return context.state.artifact
 
