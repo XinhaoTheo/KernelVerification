@@ -1246,3 +1246,79 @@ def test_agentic_cli_final_round_forces_verdict_and_discloses_unresolved_claims(
         "unresolved_claims": ["c1"],
         "skeptic_signed_off": False,
     }
+
+
+def test_agentic_cli_solo_forces_verdict_when_rounds_run_out(tmp_path, monkeypatch, capsys) -> None:
+    """A solo run must answer, not just run out of rounds.
+
+    The first measured solo run spent 23 tool calls and 13 turns opening new
+    claims and probing them, hit `max_rounds_exhausted`, and recorded no verdict
+    at all -- $3.59 for nothing. The debate workflow never does that because its
+    last round tells the Judge the budget is spent and keeps the floor until it
+    decides; the sequential loop had no equivalent. Here the solo agent spends
+    its first round investigating and would happily spend the second the same
+    way, but the forced last round makes it decide instead.
+    """
+    _write_artifact(tmp_path / "dataset")
+    fake = FakeLLMClient(
+        [
+            # Round 1: open a claim and leave it open, exactly as the real run did.
+            json.dumps(
+                {
+                    "message": "Open a line of inquiry.",
+                    "tool_calls": [
+                        {
+                            "tool": "record_claim",
+                            "args": {
+                                "statement": "Boundary sizes may be mishandled.",
+                                "rationale": "No boundary evidence is present yet.",
+                            },
+                        }
+                    ],
+                }
+            ),
+            # Round 2 is the last: the close-out lands first, so this turn decides.
+            json.dumps(
+                {
+                    "message": "Budget is spent; decide on what is established.",
+                    "tool_calls": [
+                        {
+                            "tool": "record_verdict",
+                            "args": {
+                                "verdict": "needs_more_evidence",
+                                "confidence": 0.3,
+                                "decisive_claims": ["c1"],
+                                "reason": "c1 was never settled before the round budget ran out.",
+                            },
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    monkeypatch.setattr("verifier.agentic_run.build_llm_client", lambda provider=None, model=None: fake)
+
+    exit_code = agentic_main(
+        [
+            "toy",
+            "--dataset-dir",
+            str(tmp_path / "dataset"),
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--agents",
+            "solo",
+            "--max-debate-rounds",
+            "2",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "stop_reason: verdict_recorded" in captured.out
+
+    run_data = json.loads((tmp_path / "run" / "run.json").read_text())
+    assert run_data["verdict"]["verdict"] == "needs_more_evidence"
+    # The unsettled claim is disclosed the same way the debate discloses it, so a
+    # reader can tell this verdict was reached on a spent budget.
+    assert run_data["verdict"]["forced_final_round"]["unresolved_claims"] == ["c1"]
+    assert [claim["status"] for claim in run_data["claims"]] == ["inconclusive"]

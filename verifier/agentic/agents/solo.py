@@ -40,6 +40,18 @@ How to work:
 - Form a specific, testable hypothesis about where the implementation could fail
   the contract, and record it with record_claim so your own later turns can see
   what you are testing.
+- Scope every claim as you record it. record_verdict will refuse a "reject" whose
+  decisive claims are unscoped, so a claim recorded without scope cannot support
+  the verdict it was raised for however well you evidence it. Pass scope as one
+  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract
+  detail decides it; and for in_scope pass scope_evidence with at least one
+  {source, summary} item drawn from the contract (problem.txt alone is a valid
+  source). If the contract states a required behaviour -- a formula, an
+  invariant, a tie-break rule, a declared numeric format -- a claim that the
+  kernel violates it is in_scope even when no test file exists to pin exact
+  inputs; choose representative inputs the contract admits and say so. Do not
+  mark a claim in_scope merely because it is interesting, or because PyTorch
+  would behave differently: scope_evidence must tie it to the stated contract.
 - Run it. Use run_claim_probe to execute Python against the real kernel, and put
   the decisive numbers in the evidence `data` object with finalize_probe_evidence
   or append_evidence, not only in prose. Probes are how you find out what the
@@ -50,6 +62,18 @@ How to work:
 - Prefer the input domain the contract actually declares. A failure on an input
   the contract excludes is not a defect; a failure on one it admits is.
 - Resolve every claim you open with update_claim_status before finishing.
+
+When to stop investigating:
+- Your round budget is finite and every probe spends it. Stop opening new lines
+  of inquiry once the claims you have already opened are resolved and the
+  remaining ones would not change the verdict either way, and spend what is left
+  on deciding.
+- A new claim is worth opening only if you can say, before running it, which
+  verdict each outcome would support. If both outcomes leave you in the same
+  place, it is not worth the round.
+- If you are told the budget is spent, record the verdict on the evidence you
+  have. Reporting what you established and what you did not is a real answer;
+  running out of rounds with nothing recorded is not.
 
 Deciding:
 - record_verdict exactly once, with "reject" if the implementation violates a

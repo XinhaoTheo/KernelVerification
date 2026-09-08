@@ -202,6 +202,10 @@ def _run_one_entry_unsafe(
                 tool_budget=args.tool_budget,
                 stop_when_no_open_claims=args.stop_when_no_open_claims,
                 require_claim_coverage=not args.no_require_claim_coverage,
+                # Only the solo arm. It is the one sequential configuration
+                # that is supposed to answer on its own, and without this it
+                # spends its whole budget investigating and records nothing.
+                force_verdict_on_last_round=agent_names == ["solo"],
             )
         outputs.extend(loop_result.outputs)
 

@@ -147,6 +147,7 @@ class AgenticOrchestrator:
         stop_on_verdict: bool = True,
         stop_when_no_open_claims: bool = False,
         require_claim_coverage: bool = False,
+        force_verdict_on_last_round: bool = False,
     ) -> LoopResult:
         if max_rounds < 1:
             raise ValueError("max_rounds must be >= 1")
@@ -157,6 +158,37 @@ class AgenticOrchestrator:
         describer = _first_agent_with_role(agents, Role.DESCRIBER)
 
         for round_no in range(1, max_rounds + 1):
+            # The debate workflow tells the Judge when the budget is spent; a
+            # sequential run had no equivalent, so an agent with tools could keep
+            # opening claims until the rounds ran out and never decide. Reuse the
+            # workflow's own close-out so the two arms differ in structure, not in
+            # whether anything ever asks for an answer.
+            final_round = force_verdict_on_last_round and round_no == max_rounds
+            if final_round:
+                notice = self._close_out_for_forced_verdict()
+                forced_context: dict[str, JsonValue] = {
+                    "unresolved_claims": notice["unresolved_claims"],
+                    "skeptic_signed_off": notice["skeptic_signed_off"],
+                }
+                # A single turn is not enough to guarantee an answer: the agent
+                # can spend it on one more probe and end the run with nothing.
+                # The Judge has the same problem and solves it by keeping the
+                # floor until it decides; give the last round the same loop.
+                for agent in agents:
+                    stop_reason = self._run_judge_until_decision(
+                        agent, outputs=outputs, describer=describer,
+                        stop_on_verdict=stop_on_verdict,
+                    )
+                    if self.state.verdict is not None:
+                        # Same reason the workflow stamps this: a verdict reached
+                        # on a spent budget with claims still open is not the same
+                        # result as one reached after everything was settled, and
+                        # record_verdict clears `convergence`, so it would
+                        # otherwise leave no trace in the persisted run.
+                        self.state.verdict["forced_final_round"] = cast(JsonValue, forced_context)
+                    if stop_reason is not None:
+                        return LoopResult(outputs, round_no, stop_reason)
+                continue
             for agent in agents:
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
                     return LoopResult(outputs, round_no - 1, StopReason.TOOL_BUDGET_EXHAUSTED)
