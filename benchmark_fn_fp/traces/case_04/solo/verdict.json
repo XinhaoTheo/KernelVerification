@@ -1,0 +1,10 @@
+{
+  "confidence": 0.85,
+  "created_at": "2026-09-08T00:16:24Z",
+  "decisive_claims": [
+    "c1",
+    "c2"
+  ],
+  "reason": "The contract (problem.txt, t2) requires per-row y = x * 1/sqrt(sum(x*x)/n_cols + eps) with float32 accumulation, on inputs that may arrive as fp32 or after a bf16 round-trip, and on rows whose magnitude is near zero. Probe t8 compared the kernel against an fp32-accumulation reference across exactly those families: fp32 randn 4096x1024 max_rel 2.38e-7; non-power-of-2 n_cols=777 max_rel 2.28e-7; bf16 round-trip 2.18e-7; native bf16 input 2.18e-7; near-zero rows at 1e-3/1e-8/1e-20 and exact-zero rows bit-identical (max_abs 0.0); an overflow row (1e18, mean_square=inf -> rstd=0) matched the reference exactly; eps in {0, 1e-12, 1e-5, 1e-2} all <=2.34e-7 max_rel; no NaN/Inf introduced. Probe t10 swept 11 shapes (1x1, 1x3, 7x5, 32x31, 32x33, 128x2048, 16x4096, 8x8192, 4x16384, 3x1000, 2048x64) against an fp64 reference: worst max relative error 1.78e-7 (~1 fp32 ulp), no shape errored, output bit-identical across repeated calls, and exactly scale-invariant at eps=0. These deviations are at the 1-2 ulp level expected from libdevice rsqrt, which the referenced Liger kernel also uses, so c1 is rebutted. Claim c2 (output is always fp32 regardless of input storage dtype, source line 32) was confirmed factually by the out_dtype fields in t8/t10, but problem.txt never states the returned tensor's storage dtype and explicitly declares float32 computation, and there is no test.py narrowing this; it is therefore out of scope and cannot support a reject. Remaining untested generalizations (non-contiguous inner stride, non-2D inputs) are outside the stated contract.",
+  "verdict": "trust"
+}

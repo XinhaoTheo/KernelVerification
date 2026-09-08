@@ -1,0 +1,1401 @@
+{
+  "artifact": {
+    "entry": "case_04",
+    "has_error": false,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\ntry:\n    from triton.language.extra.libdevice import rsqrt\nexcept ModuleNotFoundError:\n    from triton.language.extra.cuda.libdevice import rsqrt\n\n\n@triton.jit\ndef _rms_norm_forward_kernel(\n    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,\n    n_cols, eps,\n    BLOCK_SIZE: tl.constexpr,\n):\n    row_idx = tl.program_id(0).to(tl.int64)\n    col_offsets = tl.arange(0, BLOCK_SIZE)\n    mask = col_offsets < n_cols\n    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0).to(tl.float32)\n    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols\n    rstd = rsqrt(mean_square + eps)\n    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)\n    Y_row = X_row * rstd\n    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)\n\n\ndef rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:\n    num_rows, n_cols = X.shape\n    BLOCK_SIZE = triton.next_power_of_2(n_cols)\n    X32 = X.float()\n    Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)\n    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)\n    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X32, X32.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)\n    return Y\n",
+    "passed": false,
+    "rounds": null,
+    "session_dir": "/root/cases/case_04",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T00:13:23Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T00:15:08Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "dc3523eef0d2096d4f8aed0197dead34686cd275f8d75ebfbba7c9d4dd409715"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "6079165f27ecb6b6cf3c6247a6e4d6b9f5715f0c3858f1a08ea33dc1fb03d704"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 8.448953,
+            "exit_code": 0,
+            "expected_signal": "max_rel near float32 eps (<1e-6) for all cases => rebut c1; large deviation on any admitted family => confirm.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "max_abs_exact_zero_rows": 0.0,
+            "max_abs_near_zero_1e-20": 0.0,
+            "max_abs_near_zero_1e-8": 0.0,
+            "max_rel_bf16_roundtrip": 2.178e-07,
+            "max_rel_eps_sweep_worst": 2.34e-07,
+            "max_rel_fp32_randn": 2.379e-07,
+            "nan_inf_introduced": 0,
+            "stderr": "",
+            "stdout": "{\n \"fp32_randn_4096x1024\": {\n  \"shape\": [\n   4096,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 9.5367431640625e-07,\n  \"max_rel\": 2.3793120362824993e-07,\n  \"ref_absmax\": 5.055400848388672,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"fp32_nonpow2_ncols_777\": {\n  \"shape\": [\n   64,\n   777\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2839121527340467e-07,\n  \"ref_absmax\": 3.867262840270996,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_roundtrip\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_native_input\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.bfloat16\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-3\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 2.384185791015625e-07,\n  \"max_rel\": 1.702180725260405e-07,\n  \"ref_absmax\": 2.818197250366211,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-8\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.277399420971051e-05,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-20\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.154879909506085e-17,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"exact_zero_rows\": {\n  \"shape\": [\n   8,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"large_1e18\": {\n  \"shape\": [\n   16,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"mixed_rows\": {\n  \"shape\": [\n   6,\n   512\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 3.567396402359009,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"eps_0.0\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2811074984474544e-07\n },\n \"eps_1e-12\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.340423179703066e-07\n },\n \"eps_1e-05\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.0910547959829273e-07\n },\n \"eps_0.01\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.307904196641175e-07\n }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Ran kernel vs fp32-accumulation reference y=x*rsqrt(mean(x*x)+eps) across contract-named families. fp32 randn (4096x1024): max_rel 2.38e-7; non-pow2 n_cols=777: 2.28e-7; bf16 round-trip (fp32 storage): 2.18e-7; native bf16 input: 2.18e-7; near-zero rows at 1e-3/1e-8/1e-20 and exact-zero rows: max_abs 0.0 (bit-identical); overflow row (1e18, ms=inf -> rstd=0): matches reference exactly; mixed zero/1e-25/1e5 rows: bit-identical; eps in {0, 1e-12, 1e-5, 1e-2}: max_rel <= 2.34e-7. No NaN/Inf introduced. Deviations are at the 2-ulp level expected from libdevice rsqrt.approx, which the referenced Liger kernel also uses.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        },
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T00:15:36Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "0a26a76ab28f574ee93b5d4b47e4f568ad5bbd0017b64ed2aef33895f744e115"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "c64a9a4b634bb90f154c42aa288d30e499189b01e85951f8ac601d0d5e67eda0"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "determinism_max_abs_diff": 0.0,
+            "duration_s": 7.279591,
+            "errors": 0,
+            "exit_code": 0,
+            "expected_signal": "worst_rel_vs_fp64 ~<=3e-7 across all shapes/dtypes and deterministic => c1 rebutted; any shape with large error or failure => confirm.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "rel_bf16_input": 1.81e-07,
+            "rel_fp16_input": 1.628e-07,
+            "scale_invariance_max_abs": 0.0,
+            "shapes_tested": 11,
+            "stderr": "",
+            "stdout": "{\n \"1x1\": {\n  \"max_rel_vs_fp64\": 2.607877247084066e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"1x3\": {\n  \"max_rel_vs_fp64\": 4.3742707616556724e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"7x5\": {\n  \"max_rel_vs_fp64\": 1.0994291315266248e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"32x31\": {\n  \"max_rel_vs_fp64\": 1.243697891432591e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"32x33\": {\n  \"max_rel_vs_fp64\": 1.725374943003321e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"128x2048\": {\n  \"max_rel_vs_fp64\": 1.472133547685573e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"16x4096\": {\n  \"max_rel_vs_fp64\": 1.4896526367506028e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"8x8192\": {\n  \"max_rel_vs_fp64\": 1.627657470053608e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"4x16384\": {\n  \"max_rel_vs_fp64\": 1.2299932283448667e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"3x1000\": {\n  \"max_rel_vs_fp64\": 7.722412311357965e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"2048x64\": {\n  \"max_rel_vs_fp64\": 1.783053259285453e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.float32\": {\n  \"max_rel_vs_fp64\": 1.6063602379717298e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.bfloat16\": {\n  \"max_rel_vs_fp64\": 1.8100355983636847e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.float16\": {\n  \"max_rel_vs_fp64\": 1.627837350970324e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"determinism_max_abs_diff\": 0.0,\n \"scale_invariance_max_abs\": 0.0,\n \"worst_rel_vs_fp64_shapes\": 1.783053259285453e-07\n}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "worst_rel_vs_fp64_shapes": 1.783e-07
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Shape/dtype sweep vs an fp64 reference of the stated formula. Worst max relative error over shapes (1x1, 1x3, 7x5, 32x31, 32x33, 128x2048, 16x4096, 8x8192, 4x16384, 3x1000, 2048x64) = 1.78e-7, i.e. ~1 fp32 ulp. Input dtype variants fp32/bf16/fp16 all <=1.81e-7. Output is bit-identical across repeated calls (determinism diff 0.0) and exactly scale-invariant at eps=0 (diff 0.0). No shape errored, including non-power-of-2 n_cols and n_cols up to 16384.",
+          "supports": "rebutted",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The contract states an exact formula with float32 accumulation and explicitly calls out near-zero-magnitude rows and mixed storage precisions. The kernel upcasts with X.float() outside the kernel and uses libdevice rsqrt; need to verify values match the stated formula on those input families.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt (t2)",
+          "summary": "Specifies mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd computed with float32 accumulation, and says the kernel is expected to run on inputs at different storage precisions (fp32, bf16 round-trip) and on rows whose magnitude is close to zero."
+        }
+      ],
+      "scope_rationale": "problem.txt states the formula, the float32 accumulation requirement, and names the input families (fp32 tensor, bf16 round-trip, near-zero rows) the kernel is expected to handle, so these inputs are contractually admitted.",
+      "statement": "For inputs the contract admits (fp32 rows, bf16-round-tripped rows, and rows whose magnitude is near zero), rms_norm_forward's output deviates from the specified formula y = x * 1/sqrt(mean(x*x)+eps) computed in float32 by more than float32 rounding.",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T00:15:36Z"
+    },
+    {
+      "created_at": "2026-09-08T00:13:23Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T00:15:59Z",
+          "data": {
+            "contract_states_output_dtype": false,
+            "in_bfloat16_out_dtype": "torch.float32",
+            "in_float16_out_dtype": "torch.float32",
+            "in_float32_out_dtype": "torch.float32",
+            "source_line_32": "Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)"
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Probes t8 and t10 recorded out_dtype for every case: with in_dtype torch.bfloat16 and torch.float16 the returned tensor is torch.float32 (t8 'bf16_native_input': in_dtype bfloat16 -> out_dtype float32; t10 'dtype_torch.bfloat16' and 'dtype_torch.float16' -> out_dtype float32). Source line 32 hardcodes dtype=torch.float32. So the factual claim holds: output is always fp32. However problem.txt (t2) states only the formula and that it is 'computed with float32 accumulation', and names bf16 round-trip inputs (an fp32 tensor whose values passed through bf16), never requiring the return tensor to carry the input storage dtype; there is no test.py to pin it. The behaviour is therefore consistent with the contract's declared fp32 computation and cannot support a reject.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "Line 32 hardcodes dtype=torch.float32 for Y, and the reference Liger kernel writes Y in the input dtype. Need to determine whether the contract requires output dtype to follow input dtype.",
+      "scope": "unknown",
+      "scope_evidence": [
+        {
+          "source": "problem.txt (t2)",
+          "summary": "Describes the math and float32 accumulation but makes no statement about the dtype of the returned tensor."
+        }
+      ],
+      "scope_rationale": "problem.txt specifies the arithmetic and that accumulation is float32, but does not state the output storage dtype; no test.py exists to pin it. Scope therefore undetermined pending analysis.",
+      "statement": "rms_norm_forward always returns a float32 tensor regardless of the input storage dtype (e.g. bf16 input yields fp32 output), rather than returning the result in the input's dtype.",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T00:16:24Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_04",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_04"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_04"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "end_line": 120,
+            "entry": "case_04",
+            "start_line": 1
+          },
+          "tool": "inspect_kernel_source"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 2.66570014,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll start by looking at what other artifact files exist (tests, metadata) to pin the input contract.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_04"
+          },
+          "tool": "list_artifact_files"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 2.666,
+        "input_tokens": 5045,
+        "output_tokens": 87
+      }
+    },
+    {
+      "duration_s": 3.2927986779999996,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll read the metadata, then form claims about the numeric behavior.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_04",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 3.293,
+        "input_tokens": 5395,
+        "output_tokens": 101
+      }
+    },
+    {
+      "duration_s": 45.639854516999996,
+      "role": "solo",
+      "round": 4,
+      "text": "I have the problem text and source. Let me record the two hypotheses worth testing and run a numeric probe against the real kernel.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The contract states an exact formula with float32 accumulation and explicitly calls out near-zero-magnitude rows and mixed storage precisions. The kernel upcasts with X.float() outside the kernel and uses libdevice rsqrt; need to verify values match the stated formula on those input families.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt (t2)",
+                "summary": "Specifies mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd computed with float32 accumulation, and says the kernel is expected to run on inputs at different storage precisions (fp32, bf16 round-trip) and on rows whose magnitude is close to zero."
+              }
+            ],
+            "scope_rationale": "problem.txt states the formula, the float32 accumulation requirement, and names the input families (fp32 tensor, bf16 round-trip, near-zero rows) the kernel is expected to handle, so these inputs are contractually admitted.",
+            "statement": "For inputs the contract admits (fp32 rows, bf16-round-tripped rows, and rows whose magnitude is near zero), rms_norm_forward's output deviates from the specified formula y = x * 1/sqrt(mean(x*x)+eps) computed in float32 by more than float32 rounding."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Line 32 hardcodes dtype=torch.float32 for Y, and the reference Liger kernel writes Y in the input dtype. Need to determine whether the contract requires output dtype to follow input dtype.",
+            "scope": "unknown",
+            "scope_evidence": [
+              {
+                "source": "problem.txt (t2)",
+                "summary": "Describes the math and float32 accumulation but makes no statement about the dtype of the returned tensor."
+              }
+            ],
+            "scope_rationale": "problem.txt specifies the arithmetic and that accumulation is float32, but does not state the output storage dtype; no test.py exists to pin it. Scope therefore undetermined pending analysis.",
+            "statement": "rms_norm_forward always returns a float32 tensor regardless of the input storage dtype (e.g. bf16 input yields fp32 output), rather than returning the result in the input's dtype."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 45.64,
+        "input_tokens": 5720,
+        "output_tokens": 3720
+      }
+    },
+    {
+      "duration_s": 25.783258283000002,
+      "role": "solo",
+      "round": 5,
+      "text": "Recording context is done; now I'll run the decisive numeric probe for c1 across the contract's named input families (fp32, bf16 round-trip, near-zero rows), comparing against an fp32-accumulation reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util, math\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_04/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(X, eps):\n    X32 = X.float()\n    ms = (X32*X32).sum(dim=1, keepdim=True)/X32.shape[1]\n    return X32 * torch.rsqrt(ms + eps)\n\ntorch.manual_seed(0)\nres = {}\ncases = {}\ncases[\"fp32_randn_4096x1024\"] = torch.randn(4096,1024, device=\"cuda\")\ncases[\"fp32_nonpow2_ncols_777\"] = torch.randn(64,777, device=\"cuda\")\nx = torch.randn(64,1024, device=\"cuda\")\ncases[\"bf16_roundtrip\"] = x.to(torch.bfloat16).float()\ncases[\"bf16_native_input\"] = x.to(torch.bfloat16)\ncases[\"near_zero_1e-3\"] = torch.randn(64,1024, device=\"cuda\")*1e-3\ncases[\"near_zero_1e-8\"] = torch.randn(64,1024, device=\"cuda\")*1e-8\ncases[\"near_zero_1e-20\"] = torch.randn(64,1024, device=\"cuda\")*1e-20\ncases[\"exact_zero_rows\"] = torch.zeros(8,1024, device=\"cuda\")\ncases[\"large_1e18\"] = torch.randn(16,1024, device=\"cuda\")*1e18\ncases[\"mixed_rows\"] = torch.cat([torch.zeros(2,512,device=\"cuda\"),\n                                 torch.randn(2,512,device=\"cuda\")*1e-25,\n                                 torch.randn(2,512,device=\"cuda\")*1e5], 0)\n\neps = 1e-6\nfor name, X in cases.items():\n    try:\n        Y = k.rms_norm_forward(X, eps)\n        R = ref(X, eps)\n        d = (Y.float()-R).abs()\n        denom = R.abs().clamp_min(1e-30)\n        res[name] = dict(shape=list(X.shape), in_dtype=str(X.dtype), out_dtype=str(Y.dtype),\n                         max_abs=float(d.max()), max_rel=float((d/denom).max()),\n                         ref_absmax=float(R.abs().max()),\n                         y_nan=int(torch.isnan(Y).sum()), y_inf=int(torch.isinf(Y).sum()),\n                         ref_nan=int(torch.isnan(R).sum()), ref_inf=int(torch.isinf(R).sum()))\n    except Exception as e:\n        res[name] = dict(error=repr(e))\n\n# eps variation\nfor eps2 in [0.0, 1e-12, 1e-5, 1e-2]:\n    X = torch.randn(32,512, device=\"cuda\")\n    Y = k.rms_norm_forward(X, eps2); R = ref(X, eps2)\n    res[f\"eps_{eps2}\"] = dict(max_abs=float((Y-R).abs().max()), max_rel=float(((Y-R).abs()/R.abs().clamp_min(1e-30)).max()))\n\nprint(json.dumps(res, indent=1))\n",
+            "expected_signal": "max_rel near float32 eps (<1e-6) for all cases => rebut c1; large deviation on any admitted family => confirm."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 25.783,
+        "input_tokens": 9490,
+        "output_tokens": 2255
+      }
+    },
+    {
+      "duration_s": 70.991393352,
+      "role": "solo",
+      "round": 6,
+      "text": "Probe t8 came back clean: all contract-named input families match an fp32-accumulation reference to ~2e-7 relative (consistent with libdevice `rsqrt.approx` / fp32 ulp). I'll log that evidence and run a shape/dtype sweep against an fp64 reference to make sure the agreement isn't shape-specific.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "max_abs_exact_zero_rows": 0.0,
+              "max_abs_near_zero_1e-20": 0.0,
+              "max_abs_near_zero_1e-8": 0.0,
+              "max_rel_bf16_roundtrip": 2.178e-07,
+              "max_rel_eps_sweep_worst": 2.34e-07,
+              "max_rel_fp32_randn": 2.379e-07,
+              "nan_inf_introduced": 0
+            },
+            "event_id": "t8",
+            "status": null,
+            "summary": "Ran kernel vs fp32-accumulation reference y=x*rsqrt(mean(x*x)+eps) across contract-named families. fp32 randn (4096x1024): max_rel 2.38e-7; non-pow2 n_cols=777: 2.28e-7; bf16 round-trip (fp32 storage): 2.18e-7; native bf16 input: 2.18e-7; near-zero rows at 1e-3/1e-8/1e-20 and exact-zero rows: max_abs 0.0 (bit-identical); overflow row (1e18, ms=inf -> rstd=0): matches reference exactly; mixed zero/1e-25/1e5 rows: bit-identical; eps in {0, 1e-12, 1e-5, 1e-2}: max_rel <= 2.34e-7. No NaN/Inf introduced. Deviations are at the 2-ulp level expected from libdevice rsqrt.approx, which the referenced Liger kernel also uses.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_04/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref64(X, eps):\n    X64 = X.double()\n    ms = (X64*X64).sum(dim=1, keepdim=True)/X64.shape[1]\n    return X64 * torch.rsqrt(ms + eps)\n\ntorch.manual_seed(1)\nout = {}\neps = 1e-6\nshapes = [(1,1),(1,3),(7,5),(32,31),(32,33),(128,2048),(16,4096),(8,8192),(4,16384),(3,1000),(2048,64)]\nworst = 0.0\nfor (r,c) in shapes:\n    X = torch.randn(r,c, device=\"cuda\")\n    try:\n        Y = k.rms_norm_forward(X, eps)\n        R = ref64(X, eps)\n        rel = ((Y.double()-R).abs()/R.abs().clamp_min(1e-300)).max().item()\n        out[f\"{r}x{c}\"] = dict(max_rel_vs_fp64=rel, out_dtype=str(Y.dtype))\n        worst = max(worst, rel)\n    except Exception as e:\n        out[f\"{r}x{c}\"] = dict(error=repr(e))\n\n# dtype variants\nfor dt in [torch.float32, torch.bfloat16, torch.float16]:\n    X = (torch.randn(64,512, device=\"cuda\")).to(dt)\n    Y = k.rms_norm_forward(X, eps)\n    R = ref64(X.float(), eps)\n    out[f\"dtype_{dt}\"] = dict(max_rel_vs_fp64=((Y.double()-R).abs()/R.abs().clamp_min(1e-300)).max().item(),\n                              out_dtype=str(Y.dtype))\n\n# determinism\nX = torch.randn(256,1024, device=\"cuda\")\nY1 = k.rms_norm_forward(X, eps); Y2 = k.rms_norm_forward(X, eps)\nout[\"determinism_max_abs_diff\"] = float((Y1-Y2).abs().max())\n\n# scaling invariance sanity (eps=0): y should be scale-invariant\nX = torch.randn(32,256, device=\"cuda\")\nYa = k.rms_norm_forward(X, 0.0); Yb = k.rms_norm_forward(X*1024.0, 0.0)\nout[\"scale_invariance_max_abs\"] = float((Ya-Yb).abs().max())\nout[\"worst_rel_vs_fp64_shapes\"] = worst\nprint(json.dumps(out, indent=1))\n",
+            "expected_signal": "worst_rel_vs_fp64 ~<=3e-7 across all shapes/dtypes and deterministic => c1 rebutted; any shape with large error or failure => confirm."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 70.991,
+        "input_tokens": 18132,
+        "output_tokens": 5854
+      }
+    },
+    {
+      "duration_s": 20.576989369000017,
+      "role": "solo",
+      "round": 7,
+      "text": "Probe t10 confirms accuracy across shapes/dtypes. I'll attach it to c1, then resolve c2 (output dtype) with the dtype data already in hand.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "determinism_max_abs_diff": 0.0,
+              "errors": 0,
+              "rel_bf16_input": 1.81e-07,
+              "rel_fp16_input": 1.628e-07,
+              "scale_invariance_max_abs": 0.0,
+              "shapes_tested": 11,
+              "worst_rel_vs_fp64_shapes": 1.783e-07
+            },
+            "event_id": "t10",
+            "status": "rebutted",
+            "summary": "Shape/dtype sweep vs an fp64 reference of the stated formula. Worst max relative error over shapes (1x1, 1x3, 7x5, 32x31, 32x33, 128x2048, 16x4096, 8x8192, 4x16384, 3x1000, 2048x64) = 1.78e-7, i.e. ~1 fp32 ulp. Input dtype variants fp32/bf16/fp16 all <=1.81e-7. Output is bit-identical across repeated calls (determinism diff 0.0) and exactly scale-invariant at eps=0 (diff 0.0). No shape errored, including non-power-of-2 n_cols and n_cols up to 16384.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 20.577,
+        "input_tokens": 35545,
+        "output_tokens": 1563
+      }
+    },
+    {
+      "duration_s": 22.69701393400001,
+      "role": "solo",
+      "round": 8,
+      "text": "Claim c1 is rebutted with two runtime probes. Only c2 (output dtype) remains; I already have decisive data in t8/t10 showing bf16 input yields fp32 output, so I'll attach that evidence and resolve it, noting the contract is silent on output storage dtype.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "data": {
+              "contract_states_output_dtype": false,
+              "in_bfloat16_out_dtype": "torch.float32",
+              "in_float16_out_dtype": "torch.float32",
+              "in_float32_out_dtype": "torch.float32",
+              "source_line_32": "Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)"
+            },
+            "kind": "runtime_probe",
+            "summary": "Probes t8 and t10 recorded out_dtype for every case: with in_dtype torch.bfloat16 and torch.float16 the returned tensor is torch.float32 (t8 'bf16_native_input': in_dtype bfloat16 -> out_dtype float32; t10 'dtype_torch.bfloat16' and 'dtype_torch.float16' -> out_dtype float32). Source line 32 hardcodes dtype=torch.float32. So the factual claim holds: output is always fp32. However problem.txt (t2) states only the formula and that it is 'computed with float32 accumulation', and names bf16 round-trip inputs (an fp32 tensor whose values passed through bf16), never requiring the return tensor to carry the input storage dtype; there is no test.py to pin it. The behaviour is therefore consistent with the contract's declared fp32 computation and cannot support a reject.",
+            "supports": "confirmed",
+            "tool_event_id": "t8"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 22.697,
+        "input_tokens": 46320,
+        "output_tokens": 1643
+      }
+    },
+    {
+      "duration_s": 25.77582869599999,
+      "role": "solo",
+      "round": 9,
+      "text": "Claim c1 is rebutted by two runtime probes; c2 is factually true but the contract is silent on output storage dtype, so it is out of scope. I'll close c2 and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "status": "confirmed"
+          },
+          "tool": "update_claim_status"
+        },
+        {
+          "args": {
+            "confidence": 0.85,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The contract (problem.txt, t2) requires per-row y = x * 1/sqrt(sum(x*x)/n_cols + eps) with float32 accumulation, on inputs that may arrive as fp32 or after a bf16 round-trip, and on rows whose magnitude is near zero. Probe t8 compared the kernel against an fp32-accumulation reference across exactly those families: fp32 randn 4096x1024 max_rel 2.38e-7; non-power-of-2 n_cols=777 max_rel 2.28e-7; bf16 round-trip 2.18e-7; native bf16 input 2.18e-7; near-zero rows at 1e-3/1e-8/1e-20 and exact-zero rows bit-identical (max_abs 0.0); an overflow row (1e18, mean_square=inf -> rstd=0) matched the reference exactly; eps in {0, 1e-12, 1e-5, 1e-2} all <=2.34e-7 max_rel; no NaN/Inf introduced. Probe t10 swept 11 shapes (1x1, 1x3, 7x5, 32x31, 32x33, 128x2048, 16x4096, 8x8192, 4x16384, 3x1000, 2048x64) against an fp64 reference: worst max relative error 1.78e-7 (~1 fp32 ulp), no shape errored, output bit-identical across repeated calls, and exactly scale-invariant at eps=0. These deviations are at the 1-2 ulp level expected from libdevice rsqrt, which the referenced Liger kernel also uses, so c1 is rebutted. Claim c2 (output is always fp32 regardless of input storage dtype, source line 32) was confirmed factually by the out_dtype fields in t8/t10, but problem.txt never states the returned tensor's storage dtype and explicitly declares float32 computation, and there is no test.py narrowing this; it is therefore out of scope and cannot support a reject. Remaining untested generalizations (non-contiguous inner stride, non-2D inputs) are outside the stated contract.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 25.776,
+        "input_tokens": 48488,
+        "output_tokens": 1188
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_04"
+      },
+      "created_at": "2026-09-08T00:12:29Z",
+      "id": "t1",
+      "output": {
+        "entry": "case_04",
+        "has_error": false,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\ntry:\n    from triton.language.extra.libdevice import rsqrt\nexcept ModuleNotFoundError:\n    from triton.language.extra.cuda.libdevice import rsqrt\n\n\n@triton.jit\ndef _rms_norm_forward_kernel(\n    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,\n    n_cols, eps,\n    BLOCK_SIZE: tl.constexpr,\n):\n    row_idx = tl.program_id(0).to(tl.int64)\n    col_offsets = tl.arange(0, BLOCK_SIZE)\n    mask = col_offsets < n_cols\n    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0).to(tl.float32)\n    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols\n    rstd = rsqrt(mean_square + eps)\n    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)\n    Y_row = X_row * rstd\n    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)\n\n\ndef rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:\n    num_rows, n_cols = X.shape\n    BLOCK_SIZE = triton.next_power_of_2(n_cols)\n    X32 = X.float()\n    Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)\n    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)\n    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X32, X32.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)\n    return Y\n",
+        "passed": false,
+        "rounds": null,
+        "session_dir": "/root/cases/case_04",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_04"
+      },
+      "created_at": "2026-09-08T00:12:29Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\ncomputed with float32 accumulation. The kernel is expected to be run on inputs\nthat may arrive at different storage precisions (e.g. an fp32 tensor, or the\nsame tensor after a bf16 round-trip), and on rows whose magnitude is close to\nzero.\n",
+        "entry": "case_04",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "end_line": 120,
+        "entry": "case_04",
+        "start_line": 1
+      },
+      "created_at": "2026-09-08T00:12:29Z",
+      "id": "t3",
+      "output": {
+        "content": "1: import torch\n2: import triton\n3: import triton.language as tl\n4: \n5: try:\n6:     from triton.language.extra.libdevice import rsqrt\n7: except ModuleNotFoundError:\n8:     from triton.language.extra.cuda.libdevice import rsqrt\n9: \n10: \n11: @triton.jit\n12: def _rms_norm_forward_kernel(\n13:     Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,\n14:     n_cols, eps,\n15:     BLOCK_SIZE: tl.constexpr,\n16: ):\n17:     row_idx = tl.program_id(0).to(tl.int64)\n18:     col_offsets = tl.arange(0, BLOCK_SIZE)\n19:     mask = col_offsets < n_cols\n20:     X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0).to(tl.float32)\n21:     mean_square = tl.sum(X_row * X_row, axis=0) / n_cols\n22:     rstd = rsqrt(mean_square + eps)\n23:     tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)\n24:     Y_row = X_row * rstd\n25:     tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)\n26: \n27: \n28: def rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:\n29:     num_rows, n_cols = X.shape\n30:     BLOCK_SIZE = triton.next_power_of_2(n_cols)\n31:     X32 = X.float()\n32:     Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)\n33:     RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)\n34:     _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X32, X32.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)\n35:     return Y",
+        "end_line": 35,
+        "entry": "case_04",
+        "lines": [
+          {
+            "line": 1,
+            "text": "import torch"
+          },
+          {
+            "line": 2,
+            "text": "import triton"
+          },
+          {
+            "line": 3,
+            "text": "import triton.language as tl"
+          },
+          {
+            "line": 4,
+            "text": ""
+          },
+          {
+            "line": 5,
+            "text": "try:"
+          },
+          {
+            "line": 6,
+            "text": "    from triton.language.extra.libdevice import rsqrt"
+          },
+          {
+            "line": 7,
+            "text": "except ModuleNotFoundError:"
+          },
+          {
+            "line": 8,
+            "text": "    from triton.language.extra.cuda.libdevice import rsqrt"
+          },
+          {
+            "line": 9,
+            "text": ""
+          },
+          {
+            "line": 10,
+            "text": ""
+          },
+          {
+            "line": 11,
+            "text": "@triton.jit"
+          },
+          {
+            "line": 12,
+            "text": "def _rms_norm_forward_kernel("
+          },
+          {
+            "line": 13,
+            "text": "    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,"
+          },
+          {
+            "line": 14,
+            "text": "    n_cols, eps,"
+          },
+          {
+            "line": 15,
+            "text": "    BLOCK_SIZE: tl.constexpr,"
+          },
+          {
+            "line": 16,
+            "text": "):"
+          },
+          {
+            "line": 17,
+            "text": "    row_idx = tl.program_id(0).to(tl.int64)"
+          },
+          {
+            "line": 18,
+            "text": "    col_offsets = tl.arange(0, BLOCK_SIZE)"
+          },
+          {
+            "line": 19,
+            "text": "    mask = col_offsets < n_cols"
+          },
+          {
+            "line": 20,
+            "text": "    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0).to(tl.float32)"
+          },
+          {
+            "line": 21,
+            "text": "    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols"
+          },
+          {
+            "line": 22,
+            "text": "    rstd = rsqrt(mean_square + eps)"
+          },
+          {
+            "line": 23,
+            "text": "    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)"
+          },
+          {
+            "line": 24,
+            "text": "    Y_row = X_row * rstd"
+          },
+          {
+            "line": 25,
+            "text": "    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)"
+          },
+          {
+            "line": 26,
+            "text": ""
+          },
+          {
+            "line": 27,
+            "text": ""
+          },
+          {
+            "line": 28,
+            "text": "def rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:"
+          },
+          {
+            "line": 29,
+            "text": "    num_rows, n_cols = X.shape"
+          },
+          {
+            "line": 30,
+            "text": "    BLOCK_SIZE = triton.next_power_of_2(n_cols)"
+          },
+          {
+            "line": 31,
+            "text": "    X32 = X.float()"
+          },
+          {
+            "line": 32,
+            "text": "    Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)"
+          },
+          {
+            "line": 33,
+            "text": "    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)"
+          },
+          {
+            "line": 34,
+            "text": "    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X32, X32.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)"
+          },
+          {
+            "line": 35,
+            "text": "    return Y"
+          }
+        ],
+        "path": "kernel.py",
+        "start_line": 1,
+        "total_lines": 35
+      },
+      "status": "ok",
+      "tool": "inspect_kernel_source"
+    },
+    {
+      "args": {
+        "entry": "case_04"
+      },
+      "created_at": "2026-09-08T00:12:34Z",
+      "id": "t4",
+      "output": {
+        "entry": "case_04",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1308
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 482
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_04",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T00:12:37Z",
+      "id": "t5",
+      "output": {
+        "content": "{\n  \"name\": \"case_04\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_04",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The contract states an exact formula with float32 accumulation and explicitly calls out near-zero-magnitude rows and mixed storage precisions. The kernel upcasts with X.float() outside the kernel and uses libdevice rsqrt; need to verify values match the stated formula on those input families.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt (t2)",
+            "summary": "Specifies mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd computed with float32 accumulation, and says the kernel is expected to run on inputs at different storage precisions (fp32, bf16 round-trip) and on rows whose magnitude is close to zero."
+          }
+        ],
+        "scope_rationale": "problem.txt states the formula, the float32 accumulation requirement, and names the input families (fp32 tensor, bf16 round-trip, near-zero rows) the kernel is expected to handle, so these inputs are contractually admitted.",
+        "statement": "For inputs the contract admits (fp32 rows, bf16-round-tripped rows, and rows whose magnitude is near zero), rms_norm_forward's output deviates from the specified formula y = x * 1/sqrt(mean(x*x)+eps) computed in float32 by more than float32 rounding."
+      },
+      "created_at": "2026-09-08T00:13:23Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-08T00:13:23Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The contract states an exact formula with float32 accumulation and explicitly calls out near-zero-magnitude rows and mixed storage precisions. The kernel upcasts with X.float() outside the kernel and uses libdevice rsqrt; need to verify values match the stated formula on those input families.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt (t2)",
+            "summary": "Specifies mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd computed with float32 accumulation, and says the kernel is expected to run on inputs at different storage precisions (fp32, bf16 round-trip) and on rows whose magnitude is close to zero."
+          }
+        ],
+        "scope_rationale": "problem.txt states the formula, the float32 accumulation requirement, and names the input families (fp32 tensor, bf16 round-trip, near-zero rows) the kernel is expected to handle, so these inputs are contractually admitted.",
+        "statement": "For inputs the contract admits (fp32 rows, bf16-round-tripped rows, and rows whose magnitude is near zero), rms_norm_forward's output deviates from the specified formula y = x * 1/sqrt(mean(x*x)+eps) computed in float32 by more than float32 rounding.",
+        "status": "open",
+        "updated_at": "2026-09-08T00:13:23Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Line 32 hardcodes dtype=torch.float32 for Y, and the reference Liger kernel writes Y in the input dtype. Need to determine whether the contract requires output dtype to follow input dtype.",
+        "scope": "unknown",
+        "scope_evidence": [
+          {
+            "source": "problem.txt (t2)",
+            "summary": "Describes the math and float32 accumulation but makes no statement about the dtype of the returned tensor."
+          }
+        ],
+        "scope_rationale": "problem.txt specifies the arithmetic and that accumulation is float32, but does not state the output storage dtype; no test.py exists to pin it. Scope therefore undetermined pending analysis.",
+        "statement": "rms_norm_forward always returns a float32 tensor regardless of the input storage dtype (e.g. bf16 input yields fp32 output), rather than returning the result in the input's dtype."
+      },
+      "created_at": "2026-09-08T00:13:23Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-08T00:13:23Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Line 32 hardcodes dtype=torch.float32 for Y, and the reference Liger kernel writes Y in the input dtype. Need to determine whether the contract requires output dtype to follow input dtype.",
+        "scope": "unknown",
+        "scope_evidence": [
+          {
+            "source": "problem.txt (t2)",
+            "summary": "Describes the math and float32 accumulation but makes no statement about the dtype of the returned tensor."
+          }
+        ],
+        "scope_rationale": "problem.txt specifies the arithmetic and that accumulation is float32, but does not state the output storage dtype; no test.py exists to pin it. Scope therefore undetermined pending analysis.",
+        "statement": "rms_norm_forward always returns a float32 tensor regardless of the input storage dtype (e.g. bf16 input yields fp32 output), rather than returning the result in the input's dtype.",
+        "status": "open",
+        "updated_at": "2026-09-08T00:13:23Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util, math\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_04/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(X, eps):\n    X32 = X.float()\n    ms = (X32*X32).sum(dim=1, keepdim=True)/X32.shape[1]\n    return X32 * torch.rsqrt(ms + eps)\n\ntorch.manual_seed(0)\nres = {}\ncases = {}\ncases[\"fp32_randn_4096x1024\"] = torch.randn(4096,1024, device=\"cuda\")\ncases[\"fp32_nonpow2_ncols_777\"] = torch.randn(64,777, device=\"cuda\")\nx = torch.randn(64,1024, device=\"cuda\")\ncases[\"bf16_roundtrip\"] = x.to(torch.bfloat16).float()\ncases[\"bf16_native_input\"] = x.to(torch.bfloat16)\ncases[\"near_zero_1e-3\"] = torch.randn(64,1024, device=\"cuda\")*1e-3\ncases[\"near_zero_1e-8\"] = torch.randn(64,1024, device=\"cuda\")*1e-8\ncases[\"near_zero_1e-20\"] = torch.randn(64,1024, device=\"cuda\")*1e-20\ncases[\"exact_zero_rows\"] = torch.zeros(8,1024, device=\"cuda\")\ncases[\"large_1e18\"] = torch.randn(16,1024, device=\"cuda\")*1e18\ncases[\"mixed_rows\"] = torch.cat([torch.zeros(2,512,device=\"cuda\"),\n                                 torch.randn(2,512,device=\"cuda\")*1e-25,\n                                 torch.randn(2,512,device=\"cuda\")*1e5], 0)\n\neps = 1e-6\nfor name, X in cases.items():\n    try:\n        Y = k.rms_norm_forward(X, eps)\n        R = ref(X, eps)\n        d = (Y.float()-R).abs()\n        denom = R.abs().clamp_min(1e-30)\n        res[name] = dict(shape=list(X.shape), in_dtype=str(X.dtype), out_dtype=str(Y.dtype),\n                         max_abs=float(d.max()), max_rel=float((d/denom).max()),\n                         ref_absmax=float(R.abs().max()),\n                         y_nan=int(torch.isnan(Y).sum()), y_inf=int(torch.isinf(Y).sum()),\n                         ref_nan=int(torch.isnan(R).sum()), ref_inf=int(torch.isinf(R).sum()))\n    except Exception as e:\n        res[name] = dict(error=repr(e))\n\n# eps variation\nfor eps2 in [0.0, 1e-12, 1e-5, 1e-2]:\n    X = torch.randn(32,512, device=\"cuda\")\n    Y = k.rms_norm_forward(X, eps2); R = ref(X, eps2)\n    res[f\"eps_{eps2}\"] = dict(max_abs=float((Y-R).abs().max()), max_rel=float(((Y-R).abs()/R.abs().clamp_min(1e-30)).max()))\n\nprint(json.dumps(res, indent=1))\n",
+        "expected_signal": "max_rel near float32 eps (<1e-6) for all cases => rebut c1; large deviation on any admitted family => confirm."
+      },
+      "created_at": "2026-09-08T00:13:57Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "dc3523eef0d2096d4f8aed0197dead34686cd275f8d75ebfbba7c9d4dd409715"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "6079165f27ecb6b6cf3c6247a6e4d6b9f5715f0c3858f1a08ea33dc1fb03d704"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For inputs the contract admits (fp32 rows, bf16-round-tripped rows, and rows whose magnitude is near zero), rms_norm_forward's output deviates from the specified formula y = x * 1/sqrt(mean(x*x)+eps) computed in float32 by more than float32 rounding.",
+        "cwd": "/root/cases/case_04",
+        "duration_s": 8.448953,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "dc3523eef0d2096d4f8aed0197dead34686cd275f8d75ebfbba7c9d4dd409715"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "6079165f27ecb6b6cf3c6247a6e4d6b9f5715f0c3858f1a08ea33dc1fb03d704"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 8.448953,
+            "exit_code": 0,
+            "expected_signal": "max_rel near float32 eps (<1e-6) for all cases => rebut c1; large deviation on any admitted family => confirm.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n \"fp32_randn_4096x1024\": {\n  \"shape\": [\n   4096,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 9.5367431640625e-07,\n  \"max_rel\": 2.3793120362824993e-07,\n  \"ref_absmax\": 5.055400848388672,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"fp32_nonpow2_ncols_777\": {\n  \"shape\": [\n   64,\n   777\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2839121527340467e-07,\n  \"ref_absmax\": 3.867262840270996,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_roundtrip\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_native_input\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.bfloat16\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-3\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 2.384185791015625e-07,\n  \"max_rel\": 1.702180725260405e-07,\n  \"ref_absmax\": 2.818197250366211,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-8\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.277399420971051e-05,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-20\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.154879909506085e-17,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"exact_zero_rows\": {\n  \"shape\": [\n   8,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"large_1e18\": {\n  \"shape\": [\n   16,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"mixed_rows\": {\n  \"shape\": [\n   6,\n   512\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 3.567396402359009,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"eps_0.0\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2811074984474544e-07\n },\n \"eps_1e-12\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.340423179703066e-07\n },\n \"eps_1e-05\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.0910547959829273e-07\n },\n \"eps_0.01\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.307904196641175e-07\n }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "max_rel near float32 eps (<1e-6) for all cases => rebut c1; large deviation on any admitted family => confirm.",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n \"fp32_randn_4096x1024\": {\n  \"shape\": [\n   4096,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 9.5367431640625e-07,\n  \"max_rel\": 2.3793120362824993e-07,\n  \"ref_absmax\": 5.055400848388672,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"fp32_nonpow2_ncols_777\": {\n  \"shape\": [\n   64,\n   777\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2839121527340467e-07,\n  \"ref_absmax\": 3.867262840270996,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_roundtrip\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_native_input\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.bfloat16\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-3\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 2.384185791015625e-07,\n  \"max_rel\": 1.702180725260405e-07,\n  \"ref_absmax\": 2.818197250366211,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-8\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.277399420971051e-05,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-20\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.154879909506085e-17,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"exact_zero_rows\": {\n  \"shape\": [\n   8,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"large_1e18\": {\n  \"shape\": [\n   16,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"mixed_rows\": {\n  \"shape\": [\n   6,\n   512\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 3.567396402359009,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"eps_0.0\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2811074984474544e-07\n },\n \"eps_1e-12\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.340423179703066e-07\n },\n \"eps_1e-05\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.0910547959829273e-07\n },\n \"eps_0.01\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.307904196641175e-07\n }\n}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_exact_zero_rows": 0.0,
+          "max_abs_near_zero_1e-20": 0.0,
+          "max_abs_near_zero_1e-8": 0.0,
+          "max_rel_bf16_roundtrip": 2.178e-07,
+          "max_rel_eps_sweep_worst": 2.34e-07,
+          "max_rel_fp32_randn": 2.379e-07,
+          "nan_inf_introduced": 0
+        },
+        "event_id": "t8",
+        "status": null,
+        "summary": "Ran kernel vs fp32-accumulation reference y=x*rsqrt(mean(x*x)+eps) across contract-named families. fp32 randn (4096x1024): max_rel 2.38e-7; non-pow2 n_cols=777: 2.28e-7; bf16 round-trip (fp32 storage): 2.18e-7; native bf16 input: 2.18e-7; near-zero rows at 1e-3/1e-8/1e-20 and exact-zero rows: max_abs 0.0 (bit-identical); overflow row (1e18, ms=inf -> rstd=0): matches reference exactly; mixed zero/1e-25/1e5 rows: bit-identical; eps in {0, 1e-12, 1e-5, 1e-2}: max_rel <= 2.34e-7. No NaN/Inf introduced. Deviations are at the 2-ulp level expected from libdevice rsqrt.approx, which the referenced Liger kernel also uses.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T00:15:08Z",
+      "id": "t9",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T00:13:23Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T00:15:08Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "dc3523eef0d2096d4f8aed0197dead34686cd275f8d75ebfbba7c9d4dd409715"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "6079165f27ecb6b6cf3c6247a6e4d6b9f5715f0c3858f1a08ea33dc1fb03d704"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "duration_s": 8.448953,
+                "exit_code": 0,
+                "expected_signal": "max_rel near float32 eps (<1e-6) for all cases => rebut c1; large deviation on any admitted family => confirm.",
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "max_abs_exact_zero_rows": 0.0,
+                "max_abs_near_zero_1e-20": 0.0,
+                "max_abs_near_zero_1e-8": 0.0,
+                "max_rel_bf16_roundtrip": 2.178e-07,
+                "max_rel_eps_sweep_worst": 2.34e-07,
+                "max_rel_fp32_randn": 2.379e-07,
+                "nan_inf_introduced": 0,
+                "stderr": "",
+                "stdout": "{\n \"fp32_randn_4096x1024\": {\n  \"shape\": [\n   4096,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 9.5367431640625e-07,\n  \"max_rel\": 2.3793120362824993e-07,\n  \"ref_absmax\": 5.055400848388672,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"fp32_nonpow2_ncols_777\": {\n  \"shape\": [\n   64,\n   777\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2839121527340467e-07,\n  \"ref_absmax\": 3.867262840270996,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_roundtrip\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_native_input\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.bfloat16\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-3\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 2.384185791015625e-07,\n  \"max_rel\": 1.702180725260405e-07,\n  \"ref_absmax\": 2.818197250366211,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-8\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.277399420971051e-05,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-20\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.154879909506085e-17,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"exact_zero_rows\": {\n  \"shape\": [\n   8,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"large_1e18\": {\n  \"shape\": [\n   16,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"mixed_rows\": {\n  \"shape\": [\n   6,\n   512\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 3.567396402359009,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"eps_0.0\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2811074984474544e-07\n },\n \"eps_1e-12\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.340423179703066e-07\n },\n \"eps_1e-05\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.0910547959829273e-07\n },\n \"eps_0.01\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.307904196641175e-07\n }\n}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Ran kernel vs fp32-accumulation reference y=x*rsqrt(mean(x*x)+eps) across contract-named families. fp32 randn (4096x1024): max_rel 2.38e-7; non-pow2 n_cols=777: 2.28e-7; bf16 round-trip (fp32 storage): 2.18e-7; native bf16 input: 2.18e-7; near-zero rows at 1e-3/1e-8/1e-20 and exact-zero rows: max_abs 0.0 (bit-identical); overflow row (1e18, ms=inf -> rstd=0): matches reference exactly; mixed zero/1e-25/1e5 rows: bit-identical; eps in {0, 1e-12, 1e-5, 1e-2}: max_rel <= 2.34e-7. No NaN/Inf introduced. Deviations are at the 2-ulp level expected from libdevice rsqrt.approx, which the referenced Liger kernel also uses.",
+              "supports": "rebutted",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The contract states an exact formula with float32 accumulation and explicitly calls out near-zero-magnitude rows and mixed storage precisions. The kernel upcasts with X.float() outside the kernel and uses libdevice rsqrt; need to verify values match the stated formula on those input families.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt (t2)",
+              "summary": "Specifies mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd computed with float32 accumulation, and says the kernel is expected to run on inputs at different storage precisions (fp32, bf16 round-trip) and on rows whose magnitude is close to zero."
+            }
+          ],
+          "scope_rationale": "problem.txt states the formula, the float32 accumulation requirement, and names the input families (fp32 tensor, bf16 round-trip, near-zero rows) the kernel is expected to handle, so these inputs are contractually admitted.",
+          "statement": "For inputs the contract admits (fp32 rows, bf16-round-tripped rows, and rows whose magnitude is near zero), rms_norm_forward's output deviates from the specified formula y = x * 1/sqrt(mean(x*x)+eps) computed in float32 by more than float32 rounding.",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T00:15:08Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T00:15:08Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "dc3523eef0d2096d4f8aed0197dead34686cd275f8d75ebfbba7c9d4dd409715"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "6079165f27ecb6b6cf3c6247a6e4d6b9f5715f0c3858f1a08ea33dc1fb03d704"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 8.448953,
+            "exit_code": 0,
+            "expected_signal": "max_rel near float32 eps (<1e-6) for all cases => rebut c1; large deviation on any admitted family => confirm.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "max_abs_exact_zero_rows": 0.0,
+            "max_abs_near_zero_1e-20": 0.0,
+            "max_abs_near_zero_1e-8": 0.0,
+            "max_rel_bf16_roundtrip": 2.178e-07,
+            "max_rel_eps_sweep_worst": 2.34e-07,
+            "max_rel_fp32_randn": 2.379e-07,
+            "nan_inf_introduced": 0,
+            "stderr": "",
+            "stdout": "{\n \"fp32_randn_4096x1024\": {\n  \"shape\": [\n   4096,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 9.5367431640625e-07,\n  \"max_rel\": 2.3793120362824993e-07,\n  \"ref_absmax\": 5.055400848388672,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"fp32_nonpow2_ncols_777\": {\n  \"shape\": [\n   64,\n   777\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2839121527340467e-07,\n  \"ref_absmax\": 3.867262840270996,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_roundtrip\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_native_input\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.bfloat16\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-3\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 2.384185791015625e-07,\n  \"max_rel\": 1.702180725260405e-07,\n  \"ref_absmax\": 2.818197250366211,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-8\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.277399420971051e-05,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-20\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.154879909506085e-17,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"exact_zero_rows\": {\n  \"shape\": [\n   8,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"large_1e18\": {\n  \"shape\": [\n   16,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"mixed_rows\": {\n  \"shape\": [\n   6,\n   512\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 3.567396402359009,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"eps_0.0\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2811074984474544e-07\n },\n \"eps_1e-12\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.340423179703066e-07\n },\n \"eps_1e-05\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.0910547959829273e-07\n },\n \"eps_0.01\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.307904196641175e-07\n }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Ran kernel vs fp32-accumulation reference y=x*rsqrt(mean(x*x)+eps) across contract-named families. fp32 randn (4096x1024): max_rel 2.38e-7; non-pow2 n_cols=777: 2.28e-7; bf16 round-trip (fp32 storage): 2.18e-7; native bf16 input: 2.18e-7; near-zero rows at 1e-3/1e-8/1e-20 and exact-zero rows: max_abs 0.0 (bit-identical); overflow row (1e18, ms=inf -> rstd=0): matches reference exactly; mixed zero/1e-25/1e5 rows: bit-identical; eps in {0, 1e-12, 1e-5, 1e-2}: max_rel <= 2.34e-7. No NaN/Inf introduced. Deviations are at the 2-ulp level expected from libdevice rsqrt.approx, which the referenced Liger kernel also uses.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_04/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref64(X, eps):\n    X64 = X.double()\n    ms = (X64*X64).sum(dim=1, keepdim=True)/X64.shape[1]\n    return X64 * torch.rsqrt(ms + eps)\n\ntorch.manual_seed(1)\nout = {}\neps = 1e-6\nshapes = [(1,1),(1,3),(7,5),(32,31),(32,33),(128,2048),(16,4096),(8,8192),(4,16384),(3,1000),(2048,64)]\nworst = 0.0\nfor (r,c) in shapes:\n    X = torch.randn(r,c, device=\"cuda\")\n    try:\n        Y = k.rms_norm_forward(X, eps)\n        R = ref64(X, eps)\n        rel = ((Y.double()-R).abs()/R.abs().clamp_min(1e-300)).max().item()\n        out[f\"{r}x{c}\"] = dict(max_rel_vs_fp64=rel, out_dtype=str(Y.dtype))\n        worst = max(worst, rel)\n    except Exception as e:\n        out[f\"{r}x{c}\"] = dict(error=repr(e))\n\n# dtype variants\nfor dt in [torch.float32, torch.bfloat16, torch.float16]:\n    X = (torch.randn(64,512, device=\"cuda\")).to(dt)\n    Y = k.rms_norm_forward(X, eps)\n    R = ref64(X.float(), eps)\n    out[f\"dtype_{dt}\"] = dict(max_rel_vs_fp64=((Y.double()-R).abs()/R.abs().clamp_min(1e-300)).max().item(),\n                              out_dtype=str(Y.dtype))\n\n# determinism\nX = torch.randn(256,1024, device=\"cuda\")\nY1 = k.rms_norm_forward(X, eps); Y2 = k.rms_norm_forward(X, eps)\nout[\"determinism_max_abs_diff\"] = float((Y1-Y2).abs().max())\n\n# scaling invariance sanity (eps=0): y should be scale-invariant\nX = torch.randn(32,256, device=\"cuda\")\nYa = k.rms_norm_forward(X, 0.0); Yb = k.rms_norm_forward(X*1024.0, 0.0)\nout[\"scale_invariance_max_abs\"] = float((Ya-Yb).abs().max())\nout[\"worst_rel_vs_fp64_shapes\"] = worst\nprint(json.dumps(out, indent=1))\n",
+        "expected_signal": "worst_rel_vs_fp64 ~<=3e-7 across all shapes/dtypes and deterministic => c1 rebutted; any shape with large error or failure => confirm."
+      },
+      "created_at": "2026-09-08T00:15:15Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "0a26a76ab28f574ee93b5d4b47e4f568ad5bbd0017b64ed2aef33895f744e115"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "c64a9a4b634bb90f154c42aa288d30e499189b01e85951f8ac601d0d5e67eda0"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For inputs the contract admits (fp32 rows, bf16-round-tripped rows, and rows whose magnitude is near zero), rms_norm_forward's output deviates from the specified formula y = x * 1/sqrt(mean(x*x)+eps) computed in float32 by more than float32 rounding.",
+        "cwd": "/root/cases/case_04",
+        "duration_s": 7.279591,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "0a26a76ab28f574ee93b5d4b47e4f568ad5bbd0017b64ed2aef33895f744e115"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "c64a9a4b634bb90f154c42aa288d30e499189b01e85951f8ac601d0d5e67eda0"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 7.279591,
+            "exit_code": 0,
+            "expected_signal": "worst_rel_vs_fp64 ~<=3e-7 across all shapes/dtypes and deterministic => c1 rebutted; any shape with large error or failure => confirm.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n \"1x1\": {\n  \"max_rel_vs_fp64\": 2.607877247084066e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"1x3\": {\n  \"max_rel_vs_fp64\": 4.3742707616556724e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"7x5\": {\n  \"max_rel_vs_fp64\": 1.0994291315266248e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"32x31\": {\n  \"max_rel_vs_fp64\": 1.243697891432591e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"32x33\": {\n  \"max_rel_vs_fp64\": 1.725374943003321e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"128x2048\": {\n  \"max_rel_vs_fp64\": 1.472133547685573e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"16x4096\": {\n  \"max_rel_vs_fp64\": 1.4896526367506028e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"8x8192\": {\n  \"max_rel_vs_fp64\": 1.627657470053608e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"4x16384\": {\n  \"max_rel_vs_fp64\": 1.2299932283448667e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"3x1000\": {\n  \"max_rel_vs_fp64\": 7.722412311357965e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"2048x64\": {\n  \"max_rel_vs_fp64\": 1.783053259285453e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.float32\": {\n  \"max_rel_vs_fp64\": 1.6063602379717298e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.bfloat16\": {\n  \"max_rel_vs_fp64\": 1.8100355983636847e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.float16\": {\n  \"max_rel_vs_fp64\": 1.627837350970324e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"determinism_max_abs_diff\": 0.0,\n \"scale_invariance_max_abs\": 0.0,\n \"worst_rel_vs_fp64_shapes\": 1.783053259285453e-07\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": "worst_rel_vs_fp64 ~<=3e-7 across all shapes/dtypes and deterministic => c1 rebutted; any shape with large error or failure => confirm.",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n \"1x1\": {\n  \"max_rel_vs_fp64\": 2.607877247084066e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"1x3\": {\n  \"max_rel_vs_fp64\": 4.3742707616556724e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"7x5\": {\n  \"max_rel_vs_fp64\": 1.0994291315266248e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"32x31\": {\n  \"max_rel_vs_fp64\": 1.243697891432591e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"32x33\": {\n  \"max_rel_vs_fp64\": 1.725374943003321e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"128x2048\": {\n  \"max_rel_vs_fp64\": 1.472133547685573e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"16x4096\": {\n  \"max_rel_vs_fp64\": 1.4896526367506028e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"8x8192\": {\n  \"max_rel_vs_fp64\": 1.627657470053608e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"4x16384\": {\n  \"max_rel_vs_fp64\": 1.2299932283448667e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"3x1000\": {\n  \"max_rel_vs_fp64\": 7.722412311357965e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"2048x64\": {\n  \"max_rel_vs_fp64\": 1.783053259285453e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.float32\": {\n  \"max_rel_vs_fp64\": 1.6063602379717298e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.bfloat16\": {\n  \"max_rel_vs_fp64\": 1.8100355983636847e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.float16\": {\n  \"max_rel_vs_fp64\": 1.627837350970324e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"determinism_max_abs_diff\": 0.0,\n \"scale_invariance_max_abs\": 0.0,\n \"worst_rel_vs_fp64_shapes\": 1.783053259285453e-07\n}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "determinism_max_abs_diff": 0.0,
+          "errors": 0,
+          "rel_bf16_input": 1.81e-07,
+          "rel_fp16_input": 1.628e-07,
+          "scale_invariance_max_abs": 0.0,
+          "shapes_tested": 11,
+          "worst_rel_vs_fp64_shapes": 1.783e-07
+        },
+        "event_id": "t10",
+        "status": "rebutted",
+        "summary": "Shape/dtype sweep vs an fp64 reference of the stated formula. Worst max relative error over shapes (1x1, 1x3, 7x5, 32x31, 32x33, 128x2048, 16x4096, 8x8192, 4x16384, 3x1000, 2048x64) = 1.78e-7, i.e. ~1 fp32 ulp. Input dtype variants fp32/bf16/fp16 all <=1.81e-7. Output is bit-identical across repeated calls (determinism diff 0.0) and exactly scale-invariant at eps=0 (diff 0.0). No shape errored, including non-power-of-2 n_cols and n_cols up to 16384.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-08T00:15:36Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T00:13:23Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T00:15:08Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "dc3523eef0d2096d4f8aed0197dead34686cd275f8d75ebfbba7c9d4dd409715"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "6079165f27ecb6b6cf3c6247a6e4d6b9f5715f0c3858f1a08ea33dc1fb03d704"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "duration_s": 8.448953,
+                "exit_code": 0,
+                "expected_signal": "max_rel near float32 eps (<1e-6) for all cases => rebut c1; large deviation on any admitted family => confirm.",
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "max_abs_exact_zero_rows": 0.0,
+                "max_abs_near_zero_1e-20": 0.0,
+                "max_abs_near_zero_1e-8": 0.0,
+                "max_rel_bf16_roundtrip": 2.178e-07,
+                "max_rel_eps_sweep_worst": 2.34e-07,
+                "max_rel_fp32_randn": 2.379e-07,
+                "nan_inf_introduced": 0,
+                "stderr": "",
+                "stdout": "{\n \"fp32_randn_4096x1024\": {\n  \"shape\": [\n   4096,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 9.5367431640625e-07,\n  \"max_rel\": 2.3793120362824993e-07,\n  \"ref_absmax\": 5.055400848388672,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"fp32_nonpow2_ncols_777\": {\n  \"shape\": [\n   64,\n   777\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2839121527340467e-07,\n  \"ref_absmax\": 3.867262840270996,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_roundtrip\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"bf16_native_input\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.bfloat16\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.1777678682610713e-07,\n  \"ref_absmax\": 4.037481307983398,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-3\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 2.384185791015625e-07,\n  \"max_rel\": 1.702180725260405e-07,\n  \"ref_absmax\": 2.818197250366211,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-8\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.277399420971051e-05,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"near_zero_1e-20\": {\n  \"shape\": [\n   64,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 4.154879909506085e-17,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"exact_zero_rows\": {\n  \"shape\": [\n   8,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"large_1e18\": {\n  \"shape\": [\n   16,\n   1024\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 0.0,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"mixed_rows\": {\n  \"shape\": [\n   6,\n   512\n  ],\n  \"in_dtype\": \"torch.float32\",\n  \"out_dtype\": \"torch.float32\",\n  \"max_abs\": 0.0,\n  \"max_rel\": 0.0,\n  \"ref_absmax\": 3.567396402359009,\n  \"y_nan\": 0,\n  \"y_inf\": 0,\n  \"ref_nan\": 0,\n  \"ref_inf\": 0\n },\n \"eps_0.0\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.2811074984474544e-07\n },\n \"eps_1e-12\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.340423179703066e-07\n },\n \"eps_1e-05\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.0910547959829273e-07\n },\n \"eps_0.01\": {\n  \"max_abs\": 4.76837158203125e-07,\n  \"max_rel\": 2.307904196641175e-07\n }\n}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Ran kernel vs fp32-accumulation reference y=x*rsqrt(mean(x*x)+eps) across contract-named families. fp32 randn (4096x1024): max_rel 2.38e-7; non-pow2 n_cols=777: 2.28e-7; bf16 round-trip (fp32 storage): 2.18e-7; native bf16 input: 2.18e-7; near-zero rows at 1e-3/1e-8/1e-20 and exact-zero rows: max_abs 0.0 (bit-identical); overflow row (1e18, ms=inf -> rstd=0): matches reference exactly; mixed zero/1e-25/1e5 rows: bit-identical; eps in {0, 1e-12, 1e-5, 1e-2}: max_rel <= 2.34e-7. No NaN/Inf introduced. Deviations are at the 2-ulp level expected from libdevice rsqrt.approx, which the referenced Liger kernel also uses.",
+              "supports": "rebutted",
+              "tool_event_id": "t8"
+            },
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T00:15:36Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "0a26a76ab28f574ee93b5d4b47e4f568ad5bbd0017b64ed2aef33895f744e115"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "c64a9a4b634bb90f154c42aa288d30e499189b01e85951f8ac601d0d5e67eda0"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "determinism_max_abs_diff": 0.0,
+                "duration_s": 7.279591,
+                "errors": 0,
+                "exit_code": 0,
+                "expected_signal": "worst_rel_vs_fp64 ~<=3e-7 across all shapes/dtypes and deterministic => c1 rebutted; any shape with large error or failure => confirm.",
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "rel_bf16_input": 1.81e-07,
+                "rel_fp16_input": 1.628e-07,
+                "scale_invariance_max_abs": 0.0,
+                "shapes_tested": 11,
+                "stderr": "",
+                "stdout": "{\n \"1x1\": {\n  \"max_rel_vs_fp64\": 2.607877247084066e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"1x3\": {\n  \"max_rel_vs_fp64\": 4.3742707616556724e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"7x5\": {\n  \"max_rel_vs_fp64\": 1.0994291315266248e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"32x31\": {\n  \"max_rel_vs_fp64\": 1.243697891432591e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"32x33\": {\n  \"max_rel_vs_fp64\": 1.725374943003321e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"128x2048\": {\n  \"max_rel_vs_fp64\": 1.472133547685573e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"16x4096\": {\n  \"max_rel_vs_fp64\": 1.4896526367506028e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"8x8192\": {\n  \"max_rel_vs_fp64\": 1.627657470053608e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"4x16384\": {\n  \"max_rel_vs_fp64\": 1.2299932283448667e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"3x1000\": {\n  \"max_rel_vs_fp64\": 7.722412311357965e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"2048x64\": {\n  \"max_rel_vs_fp64\": 1.783053259285453e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.float32\": {\n  \"max_rel_vs_fp64\": 1.6063602379717298e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.bfloat16\": {\n  \"max_rel_vs_fp64\": 1.8100355983636847e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.float16\": {\n  \"max_rel_vs_fp64\": 1.627837350970324e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"determinism_max_abs_diff\": 0.0,\n \"scale_invariance_max_abs\": 0.0,\n \"worst_rel_vs_fp64_shapes\": 1.783053259285453e-07\n}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "worst_rel_vs_fp64_shapes": 1.783e-07
+              },
+              "id": "c1.e2",
+              "kind": "runtime_probe",
+              "summary": "Shape/dtype sweep vs an fp64 reference of the stated formula. Worst max relative error over shapes (1x1, 1x3, 7x5, 32x31, 32x33, 128x2048, 16x4096, 8x8192, 4x16384, 3x1000, 2048x64) = 1.78e-7, i.e. ~1 fp32 ulp. Input dtype variants fp32/bf16/fp16 all <=1.81e-7. Output is bit-identical across repeated calls (determinism diff 0.0) and exactly scale-invariant at eps=0 (diff 0.0). No shape errored, including non-power-of-2 n_cols and n_cols up to 16384.",
+              "supports": "rebutted",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The contract states an exact formula with float32 accumulation and explicitly calls out near-zero-magnitude rows and mixed storage precisions. The kernel upcasts with X.float() outside the kernel and uses libdevice rsqrt; need to verify values match the stated formula on those input families.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt (t2)",
+              "summary": "Specifies mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd computed with float32 accumulation, and says the kernel is expected to run on inputs at different storage precisions (fp32, bf16 round-trip) and on rows whose magnitude is close to zero."
+            }
+          ],
+          "scope_rationale": "problem.txt states the formula, the float32 accumulation requirement, and names the input families (fp32 tensor, bf16 round-trip, near-zero rows) the kernel is expected to handle, so these inputs are contractually admitted.",
+          "statement": "For inputs the contract admits (fp32 rows, bf16-round-tripped rows, and rows whose magnitude is near zero), rms_norm_forward's output deviates from the specified formula y = x * 1/sqrt(mean(x*x)+eps) computed in float32 by more than float32 rounding.",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T00:15:36Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T00:15:36Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "0a26a76ab28f574ee93b5d4b47e4f568ad5bbd0017b64ed2aef33895f744e115"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "c64a9a4b634bb90f154c42aa288d30e499189b01e85951f8ac601d0d5e67eda0"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "determinism_max_abs_diff": 0.0,
+            "duration_s": 7.279591,
+            "errors": 0,
+            "exit_code": 0,
+            "expected_signal": "worst_rel_vs_fp64 ~<=3e-7 across all shapes/dtypes and deterministic => c1 rebutted; any shape with large error or failure => confirm.",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "rel_bf16_input": 1.81e-07,
+            "rel_fp16_input": 1.628e-07,
+            "scale_invariance_max_abs": 0.0,
+            "shapes_tested": 11,
+            "stderr": "",
+            "stdout": "{\n \"1x1\": {\n  \"max_rel_vs_fp64\": 2.607877247084066e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"1x3\": {\n  \"max_rel_vs_fp64\": 4.3742707616556724e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"7x5\": {\n  \"max_rel_vs_fp64\": 1.0994291315266248e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"32x31\": {\n  \"max_rel_vs_fp64\": 1.243697891432591e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"32x33\": {\n  \"max_rel_vs_fp64\": 1.725374943003321e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"128x2048\": {\n  \"max_rel_vs_fp64\": 1.472133547685573e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"16x4096\": {\n  \"max_rel_vs_fp64\": 1.4896526367506028e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"8x8192\": {\n  \"max_rel_vs_fp64\": 1.627657470053608e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"4x16384\": {\n  \"max_rel_vs_fp64\": 1.2299932283448667e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"3x1000\": {\n  \"max_rel_vs_fp64\": 7.722412311357965e-08,\n  \"out_dtype\": \"torch.float32\"\n },\n \"2048x64\": {\n  \"max_rel_vs_fp64\": 1.783053259285453e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.float32\": {\n  \"max_rel_vs_fp64\": 1.6063602379717298e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.bfloat16\": {\n  \"max_rel_vs_fp64\": 1.8100355983636847e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"dtype_torch.float16\": {\n  \"max_rel_vs_fp64\": 1.627837350970324e-07,\n  \"out_dtype\": \"torch.float32\"\n },\n \"determinism_max_abs_diff\": 0.0,\n \"scale_invariance_max_abs\": 0.0,\n \"worst_rel_vs_fp64_shapes\": 1.783053259285453e-07\n}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "worst_rel_vs_fp64_shapes": 1.783e-07
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Shape/dtype sweep vs an fp64 reference of the stated formula. Worst max relative error over shapes (1x1, 1x3, 7x5, 32x31, 32x33, 128x2048, 16x4096, 8x8192, 4x16384, 3x1000, 2048x64) = 1.78e-7, i.e. ~1 fp32 ulp. Input dtype variants fp32/bf16/fp16 all <=1.81e-7. Output is bit-identical across repeated calls (determinism diff 0.0) and exactly scale-invariant at eps=0 (diff 0.0). No shape errored, including non-power-of-2 n_cols and n_cols up to 16384.",
+          "supports": "rebutted",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "data": {
+          "contract_states_output_dtype": false,
+          "in_bfloat16_out_dtype": "torch.float32",
+          "in_float16_out_dtype": "torch.float32",
+          "in_float32_out_dtype": "torch.float32",
+          "source_line_32": "Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)"
+        },
+        "kind": "runtime_probe",
+        "summary": "Probes t8 and t10 recorded out_dtype for every case: with in_dtype torch.bfloat16 and torch.float16 the returned tensor is torch.float32 (t8 'bf16_native_input': in_dtype bfloat16 -> out_dtype float32; t10 'dtype_torch.bfloat16' and 'dtype_torch.float16' -> out_dtype float32). Source line 32 hardcodes dtype=torch.float32. So the factual claim holds: output is always fp32. However problem.txt (t2) states only the formula and that it is 'computed with float32 accumulation', and names bf16 round-trip inputs (an fp32 tensor whose values passed through bf16), never requiring the return tensor to carry the input storage dtype; there is no test.py to pin it. The behaviour is therefore consistent with the contract's declared fp32 computation and cannot support a reject.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      },
+      "created_at": "2026-09-08T00:15:59Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-09-08T00:15:59Z",
+        "data": {
+          "contract_states_output_dtype": false,
+          "in_bfloat16_out_dtype": "torch.float32",
+          "in_float16_out_dtype": "torch.float32",
+          "in_float32_out_dtype": "torch.float32",
+          "source_line_32": "Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)"
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Probes t8 and t10 recorded out_dtype for every case: with in_dtype torch.bfloat16 and torch.float16 the returned tensor is torch.float32 (t8 'bf16_native_input': in_dtype bfloat16 -> out_dtype float32; t10 'dtype_torch.bfloat16' and 'dtype_torch.float16' -> out_dtype float32). Source line 32 hardcodes dtype=torch.float32. So the factual claim holds: output is always fp32. However problem.txt (t2) states only the formula and that it is 'computed with float32 accumulation', and names bf16 round-trip inputs (an fp32 tensor whose values passed through bf16), never requiring the return tensor to carry the input storage dtype; there is no test.py to pin it. The behaviour is therefore consistent with the contract's declared fp32 computation and cannot support a reject.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "status": "confirmed"
+      },
+      "created_at": "2026-09-08T00:16:24Z",
+      "id": "t13",
+      "output": {
+        "created_at": "2026-09-08T00:13:23Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-09-08T00:15:59Z",
+            "data": {
+              "contract_states_output_dtype": false,
+              "in_bfloat16_out_dtype": "torch.float32",
+              "in_float16_out_dtype": "torch.float32",
+              "in_float32_out_dtype": "torch.float32",
+              "source_line_32": "Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)"
+            },
+            "id": "c2.e1",
+            "kind": "runtime_probe",
+            "summary": "Probes t8 and t10 recorded out_dtype for every case: with in_dtype torch.bfloat16 and torch.float16 the returned tensor is torch.float32 (t8 'bf16_native_input': in_dtype bfloat16 -> out_dtype float32; t10 'dtype_torch.bfloat16' and 'dtype_torch.float16' -> out_dtype float32). Source line 32 hardcodes dtype=torch.float32. So the factual claim holds: output is always fp32. However problem.txt (t2) states only the formula and that it is 'computed with float32 accumulation', and names bf16 round-trip inputs (an fp32 tensor whose values passed through bf16), never requiring the return tensor to carry the input storage dtype; there is no test.py to pin it. The behaviour is therefore consistent with the contract's declared fp32 computation and cannot support a reject.",
+            "supports": "confirmed",
+            "tool_event_id": "t8"
+          }
+        ],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Line 32 hardcodes dtype=torch.float32 for Y, and the reference Liger kernel writes Y in the input dtype. Need to determine whether the contract requires output dtype to follow input dtype.",
+        "scope": "unknown",
+        "scope_evidence": [
+          {
+            "source": "problem.txt (t2)",
+            "summary": "Describes the math and float32 accumulation but makes no statement about the dtype of the returned tensor."
+          }
+        ],
+        "scope_rationale": "problem.txt specifies the arithmetic and that accumulation is float32, but does not state the output storage dtype; no test.py exists to pin it. Scope therefore undetermined pending analysis.",
+        "statement": "rms_norm_forward always returns a float32 tensor regardless of the input storage dtype (e.g. bf16 input yields fp32 output), rather than returning the result in the input's dtype.",
+        "status": "confirmed",
+        "updated_at": "2026-09-08T00:16:24Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "confidence": 0.85,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt, t2) requires per-row y = x * 1/sqrt(sum(x*x)/n_cols + eps) with float32 accumulation, on inputs that may arrive as fp32 or after a bf16 round-trip, and on rows whose magnitude is near zero. Probe t8 compared the kernel against an fp32-accumulation reference across exactly those families: fp32 randn 4096x1024 max_rel 2.38e-7; non-power-of-2 n_cols=777 max_rel 2.28e-7; bf16 round-trip 2.18e-7; native bf16 input 2.18e-7; near-zero rows at 1e-3/1e-8/1e-20 and exact-zero rows bit-identical (max_abs 0.0); an overflow row (1e18, mean_square=inf -> rstd=0) matched the reference exactly; eps in {0, 1e-12, 1e-5, 1e-2} all <=2.34e-7 max_rel; no NaN/Inf introduced. Probe t10 swept 11 shapes (1x1, 1x3, 7x5, 32x31, 32x33, 128x2048, 16x4096, 8x8192, 4x16384, 3x1000, 2048x64) against an fp64 reference: worst max relative error 1.78e-7 (~1 fp32 ulp), no shape errored, output bit-identical across repeated calls, and exactly scale-invariant at eps=0. These deviations are at the 1-2 ulp level expected from libdevice rsqrt, which the referenced Liger kernel also uses, so c1 is rebutted. Claim c2 (output is always fp32 regardless of input storage dtype, source line 32) was confirmed factually by the out_dtype fields in t8/t10, but problem.txt never states the returned tensor's storage dtype and explicitly declares float32 computation, and there is no test.py narrowing this; it is therefore out of scope and cannot support a reject. Remaining untested generalizations (non-contiguous inner stride, non-2D inputs) are outside the stated contract.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-08T00:16:24Z",
+      "id": "t14",
+      "output": {
+        "confidence": 0.85,
+        "created_at": "2026-09-08T00:16:24Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt, t2) requires per-row y = x * 1/sqrt(sum(x*x)/n_cols + eps) with float32 accumulation, on inputs that may arrive as fp32 or after a bf16 round-trip, and on rows whose magnitude is near zero. Probe t8 compared the kernel against an fp32-accumulation reference across exactly those families: fp32 randn 4096x1024 max_rel 2.38e-7; non-power-of-2 n_cols=777 max_rel 2.28e-7; bf16 round-trip 2.18e-7; native bf16 input 2.18e-7; near-zero rows at 1e-3/1e-8/1e-20 and exact-zero rows bit-identical (max_abs 0.0); an overflow row (1e18, mean_square=inf -> rstd=0) matched the reference exactly; eps in {0, 1e-12, 1e-5, 1e-2} all <=2.34e-7 max_rel; no NaN/Inf introduced. Probe t10 swept 11 shapes (1x1, 1x3, 7x5, 32x31, 32x33, 128x2048, 16x4096, 8x8192, 4x16384, 3x1000, 2048x64) against an fp64 reference: worst max relative error 1.78e-7 (~1 fp32 ulp), no shape errored, output bit-identical across repeated calls, and exactly scale-invariant at eps=0. These deviations are at the 1-2 ulp level expected from libdevice rsqrt, which the referenced Liger kernel also uses, so c1 is rebutted. Claim c2 (output is always fp32 regardless of input storage dtype, source line 32) was confirmed factually by the out_dtype fields in t8/t10, but problem.txt never states the returned tensor's storage dtype and explicitly declares float32 computation, and there is no test.py narrowing this; it is therefore out of scope and cannot support a reject. Remaining untested generalizations (non-contiguous inner stride, non-2D inputs) are outside the stated contract.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.85,
+    "created_at": "2026-09-08T00:16:24Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The contract (problem.txt, t2) requires per-row y = x * 1/sqrt(sum(x*x)/n_cols + eps) with float32 accumulation, on inputs that may arrive as fp32 or after a bf16 round-trip, and on rows whose magnitude is near zero. Probe t8 compared the kernel against an fp32-accumulation reference across exactly those families: fp32 randn 4096x1024 max_rel 2.38e-7; non-power-of-2 n_cols=777 max_rel 2.28e-7; bf16 round-trip 2.18e-7; native bf16 input 2.18e-7; near-zero rows at 1e-3/1e-8/1e-20 and exact-zero rows bit-identical (max_abs 0.0); an overflow row (1e18, mean_square=inf -> rstd=0) matched the reference exactly; eps in {0, 1e-12, 1e-5, 1e-2} all <=2.34e-7 max_rel; no NaN/Inf introduced. Probe t10 swept 11 shapes (1x1, 1x3, 7x5, 32x31, 32x33, 128x2048, 16x4096, 8x8192, 4x16384, 3x1000, 2048x64) against an fp64 reference: worst max relative error 1.78e-7 (~1 fp32 ulp), no shape errored, output bit-identical across repeated calls, and exactly scale-invariant at eps=0. These deviations are at the 1-2 ulp level expected from libdevice rsqrt, which the referenced Liger kernel also uses, so c1 is rebutted. Claim c2 (output is always fp32 regardless of input storage dtype, source line 32) was confirmed factually by the out_dtype fields in t8/t10, but problem.txt never states the returned tensor's storage dtype and explicitly declares float32 computation, and there is no test.py narrowing this; it is therefore out of scope and cannot support a reject. Remaining untested generalizations (non-contiguous inner stride, non-2D inputs) are outside the stated contract.",
+    "verdict": "trust"
+  }
+}
