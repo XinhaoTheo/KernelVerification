@@ -18,6 +18,9 @@ import sys
 
 import modal
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from traces import write_trace  # noqa: E402
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CASES_DIR = REPO_ROOT / "benchmark_fn_fp" / "eval_cases"  # answer-free copy: no test.py, no verdict in meta.json
 
@@ -45,8 +48,10 @@ AGENTS = "describer,skeptic,experimenter,judge"
 def run_debate(entry: str, max_debate_rounds: int, model: str) -> dict:
     """Run the full agentic debate for one case inside this GPU container."""
     import os
+    import io as _io
     import io
     import contextlib
+    import tarfile as _tarfile
     import traceback
     from pathlib import Path
 
@@ -85,6 +90,14 @@ def run_debate(entry: str, max_debate_rounds: int, model: str) -> dict:
         transcript_path = run_dir / "transcript.md"
         if transcript_path.exists():
             result["transcript"] = transcript_path.read_text()[-20000:]
+        # The whole run directory comes back too: probes, tool events, claims,
+        # the untruncated transcript. The 20k tail above is only for the summary
+        # JSON; a run whose complete record was thrown away cannot be diagnosed.
+        blob = _io.BytesIO()
+        if run_dir.exists():
+            with _tarfile.open(fileobj=blob, mode="w:gz") as tar:
+                tar.add(str(run_dir), arcname=".")
+            result["tar"] = blob.getvalue()
         if verdict_path.exists():
             result["verdict"] = json.loads(verdict_path.read_text())
             result["ok"] = True
@@ -116,6 +129,15 @@ def main(cases: str = "", all: bool = False, max_debate_rounds: int = 3,
     details: dict[str, dict] = {}
     for r in outputs:
         entry = r["entry"]
+        # Written before anything else in the loop: a crash while scoring must
+        # not be what costs us the record of a run that already happened.
+        trace_dir = write_trace(
+            entry, "debate",
+            tar=r.pop("tar", None),
+            files={"runner_stdout.txt": r.get("stdout") or "",
+                   "runner_error.txt": r.get("error") or ""},
+        )
+        print(f"  trace: {trace_dir}")
         details[entry] = r
         # "the system judged this inconclusive" and "the system never produced a
         # verdict" are different outcomes and must not be scored as the same

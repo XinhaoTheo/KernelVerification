@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from traces import write_trace  # noqa: E402
 from common import (  # noqa: E402
     INCONCLUSIVE,
     NO_VERDICT,
@@ -114,6 +115,7 @@ def judge_one(client, model: str, case, *, max_tokens: int = _DEFAULT_MAX_TOKENS
     """One case, one call. Retries transient API failures; never guesses a verdict."""
     last_error: str | None = None
     escalations = 0
+    user_prompt = USER_TEMPLATE.format(problem=case.problem_txt, kernel=case.kernel_py)
     for attempt in range(1, MAX_ATTEMPTS + _MAX_TOKEN_ESCALATIONS + 1):
         try:
             resp = client.messages.create(
@@ -121,11 +123,7 @@ def judge_one(client, model: str, case, *, max_tokens: int = _DEFAULT_MAX_TOKENS
                 max_tokens=max_tokens,
                 system=SYSTEM_PROMPT,
                 output_config={"format": {"type": "json_schema", "schema": VERDICT_SCHEMA}},
-                messages=[{
-                    "role": "user",
-                    "content": USER_TEMPLATE.format(problem=case.problem_txt,
-                                                    kernel=case.kernel_py),
-                }],
+                messages=[{"role": "user", "content": user_prompt}],
             )
         except Exception as exc:  # transient 429/5xx, connection resets
             last_error = f"{type(exc).__name__}: {exc}"
@@ -153,6 +151,21 @@ def judge_one(client, model: str, case, *, max_tokens: int = _DEFAULT_MAX_TOKENS
         # The schema-conforming JSON arrives in a text block. Opus 5 may emit a
         # thinking block first, so select by type rather than taking content[0].
         text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+        # This arm has no orchestrator run directory, so without writing them here
+        # the exact prompt and the raw reply -- the only record of what was asked
+        # and what came back -- would exist nowhere once the process exits.
+        thinking = "".join(getattr(b, "thinking", "") or ""
+                           for b in resp.content if getattr(b, "type", None) == "thinking")
+        write_trace(
+            case.name, "single_call",
+            files={
+                "system_prompt.txt": SYSTEM_PROMPT,
+                "user_prompt.txt": user_prompt,
+                "response_text.json": text,
+                "response_thinking.txt": thinking,
+                "usage.json": json.dumps({**base, "model": model}, indent=2),
+            },
+        )
         try:
             args = json.loads(text)
             verdict = str(args["verdict"])

@@ -176,3 +176,34 @@ def _write_artifact(dataset_root) -> None:
     (entry_dir / "problem.txt").write_text("Add one to every element.\n")
     (entry_dir / "kernel.py").write_text("def kernel(x):\n    return x + 1\n")
     (entry_dir / "test.py").write_text("def test():\n    pass\n")
+
+
+def test_every_eval_runner_writes_a_trace() -> None:
+    """No runner may finish a run without leaving its complete record.
+
+    Fifteen-odd evaluation runs were made before traces existed, and not one left
+    a complete record: the Modal runners kept the last 20,000 characters of
+    transcript.md and discarded run.json, tool_events.jsonl, claims.json and
+    every probe. Three defects that changed conclusions -- a Skeptic re-reading
+    material already in its prompt, a tool rejecting the Describer's first call
+    in every run, an agent reaching the right verdict for three wrong reasons --
+    were invisible until full traces existed. This test fails if a runner ever
+    stops writing one.
+    """
+    from pathlib import Path
+
+    eval_dir = Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval"
+    runners = [
+        "baseline2_single_llm.py",
+        "baseline2_5_solo_modal.py",
+        "baseline3_debate_modal.py",
+        "capture_traces_modal.py",
+    ]
+    for name in runners:
+        path = eval_dir / name
+        assert path.exists(), f"missing runner {name}"
+        source = path.read_text()
+        assert "write_trace" in source or "TRACES_DIR" in source, (
+            f"{name} does not write a trace; a run whose record is thrown away "
+            f"cannot be diagnosed afterwards"
+        )
