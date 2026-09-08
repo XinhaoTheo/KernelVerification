@@ -42,7 +42,7 @@ AGENTS = "describer,skeptic,experimenter,judge"
     max_containers=4,
     secrets=[modal.Secret.from_dotenv(REPO_ROOT)],
 )
-def run_debate(entry: str, max_debate_rounds: int, model: str) -> dict:
+def run_debate(entry: str, max_debate_rounds: int, model: str, max_tokens: int) -> dict:
     """Run the full agentic debate for one case inside this GPU container."""
     import os
     import io as _io
@@ -74,6 +74,13 @@ def run_debate(entry: str, max_debate_rounds: int, model: str) -> dict:
         "--agents", AGENTS,
         "--max-debate-rounds", str(max_debate_rounds),
         "--model", model,
+        # Adaptive thinking is billed against max_tokens. At the 4096 default a
+        # turn spends its whole budget inside the thinking block and returns no
+        # text and no tool call. The other two runners already passed this and
+        # this one did not, so a full 32-case run produced three cases with zero
+        # claims and zero probes -- the Judge in one of them wrote "the debate
+        # produced no claims and no evidence" and recorded a verdict anyway.
+        "--max-tokens", str(max_tokens),
     ]
 
     buf = io.StringIO()
@@ -109,7 +116,7 @@ def run_debate(entry: str, max_debate_rounds: int, model: str) -> dict:
 
 @app.local_entrypoint()
 def main(cases: str = "", all: bool = False, max_debate_rounds: int = 3,
-         model: str = "claude-opus-5", out: str = "benchmark_fn_fp/eval/results_baseline3.json"):
+         model: str = "claude-opus-5", max_tokens: int = 16384, out: str = "benchmark_fn_fp/eval/results_baseline3.json"):
     names = [c.strip() for c in cases.split(",") if c.strip()] if cases else None
     if not names and not all:
         print("pass --cases a,b or --all", file=sys.stderr)
@@ -119,7 +126,7 @@ def main(cases: str = "", all: bool = False, max_debate_rounds: int = 3,
                        if d.is_dir() and (d / "meta.json").exists())
 
     print(f"running debate system on {len(names)} case(s), model={model}, rounds={max_debate_rounds}")
-    jobs = [(n, max_debate_rounds, model) for n in names]
+    jobs = [(n, max_debate_rounds, model, max_tokens) for n in names]
     # NOT list(): starmap yields each result as its container finishes, and
     # materialising the whole iterator first means nothing reaches disk until
     # all 32 cases are done. A failure at case 30 would then throw away the 29

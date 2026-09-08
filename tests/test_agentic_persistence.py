@@ -207,3 +207,25 @@ def test_every_eval_runner_writes_a_trace() -> None:
             f"{name} does not write a trace; a run whose record is thrown away "
             f"cannot be diagnosed afterwards"
         )
+
+
+def test_every_modal_runner_sets_max_tokens() -> None:
+    """A runner that leaves max_tokens at the default silently produces nothing.
+
+    Adaptive thinking is billed against max_tokens, so at the 4096 default a turn
+    can spend its entire budget inside the thinking block and return no text and
+    no tool call. Two runners passed 16384 and the third did not, and nothing
+    caught it: a full 32-case debate run produced three cases with zero claims
+    and zero probes, one Skeptic returning nothing nine turns in a row, and a
+    Judge that wrote "the debate produced no claims and no evidence" and recorded
+    a verdict anyway. The whole batch had to be discarded.
+    """
+    from pathlib import Path
+
+    eval_dir = Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval"
+    for name in ("baseline2_5_solo_modal.py", "baseline3_debate_modal.py", "capture_traces_modal.py"):
+        source = (eval_dir / name).read_text()
+        assert '"--max-tokens"' in source, (
+            f"{name} does not pass --max-tokens; at the 4096 default whole turns "
+            f"return no text and no tool call"
+        )
