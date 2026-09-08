@@ -29,9 +29,6 @@ import sys
 
 import modal
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from traces import write_trace  # noqa: E402
-
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 CASES_DIR = REPO_ROOT / "benchmark_fn_fp" / "eval_cases"  # answer-free copy: no test.py, no verdict in meta.json
 
@@ -141,6 +138,14 @@ def main(cases: str = "", all: bool = False, max_debate_rounds: int = 3,
     print(f"running solo agent on {len(names)} case(s), model={model}, rounds={max_debate_rounds}")
     jobs = [(n, max_debate_rounds, model) for n in names]
     outputs = list(run_solo.starmap(jobs))
+
+    # Imported here, not at module scope: Modal imports this module inside
+    # the container as well, and only /root/verifier and /root/cases are
+    # mounted there. A module-level import of a sibling in this directory
+    # therefore crashes every container at startup -- which it did, and the
+    # run hung for hours retrying before I noticed.
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    from traces import write_trace
 
     results: dict[str, str] = {}
     details: dict[str, dict] = {}
