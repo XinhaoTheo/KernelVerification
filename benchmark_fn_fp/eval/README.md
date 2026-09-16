@@ -21,7 +21,7 @@ inflated every figure that counted it.
 
 ## Where numbers come from
 
-`scoreboard.json` is rebuilt from `../traces/` by `summarize_traces.py`, and
+`scoreboard.json` is rebuilt from the `../traces_*/` trees by `summarize_traces.py`, and
 nothing else writes it.
 
 It used to work the other way. Each runner wrote its own

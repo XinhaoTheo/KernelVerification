@@ -24,7 +24,8 @@ benchmark_fn_fp/
 ├── case_map.json    the mapping between them          ← lives outside eval_cases
 │
 ├── eval/            harness and scoreboard
-├── traces/          the complete record of every run
+├── traces_opus5/    every run on claude-opus-5      (see TRACES.md)
+├── traces_glm/      every run on z-ai/glm-5.3-flash
 │
 ├── generation/      design notes and the case builders
 ├── numerical_pilot/ early numerical survey (finished, kept for reference)
@@ -197,30 +198,21 @@ if a runner stops writing a trace or omits `--max-tokens`.
 
 ---
 
-## `traces/` — the record of every run
+## `traces_*/` — the record of every run
+
+One tree per model, one directory per case, one per arm inside that:
 
 ```
-traces/<case_id>/<arm>/
-├── transcript.md      the run as prose, in order  ← start here
-├── verdict.json       verdict, confidence, reasoning
-├── claims.json        the claim ledger: hypotheses, evidence, scope, status
-├── tool_events.jsonl  one line per tool call, with arguments and result
-├── run.json           full state, including per-turn token usage
-├── probes/            every probe the agent wrote: source, stdout, stderr
-└── runner_stdout.txt  the runner's own log
+benchmark_fn_fp/traces_opus5/case_33/debate/
+benchmark_fn_fp/traces_glm/case_33/debate/     same case, same arm, other model
 ```
 
-`<arm>` is `solo` or `debate`, so both configurations of one case sit side by
-side.
+The tree comes from the model, via `eval/models.py`, so a $1 run on an open
+model cannot land anywhere near the $88 of Opus runs the current numbers come
+from. `tests/` fails if two models ever name the same tree.
 
-**How to read one.** Only `transcript.md` is meant for a person. It has four
-sections and reads fastest backwards: `## Verdict` → `## Claims` → then
-`## Timeline` if something needs checking.
-
-`probes/` is the part a single model call has no counterpart for: `tN_probe.py`
-is code the agent wrote and ran on a real GPU during the run, and
-`tN_stdout.txt` is what came back. Every measurement a verdict cites is
-reproducible from those files.
+`TRACES.md` covers what a run directory holds, how to read one, and what the two
+trees show so far.
 
 ---
 

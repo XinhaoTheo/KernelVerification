@@ -15,7 +15,7 @@ trace here, and a run that produced no trace is a bug in the runner.
 
 Layout, one directory per case per arm:
 
-    benchmark_fn_fp/traces/<case_id>/<arm>/
+    benchmark_fn_fp/traces_<model>/<case_id>/<arm>/
 
 `arm` is the configuration being measured -- "solo", "debate", "single_call" --
 so the same case under two configurations sits side by side.
@@ -29,7 +29,19 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-TRACES_DIR = REPO_ROOT / "benchmark_fn_fp" / "traces"
+BENCHMARK_DIR = REPO_ROOT / "benchmark_fn_fp"
+# One tree per model, e.g. traces_opus5/ and traces_glm/. Runners pass the name
+# from models.traces_dir_for(model); nothing here picks a default, so a run
+# cannot land in another model's tree by omission.
+TRACES_GLOB = "traces_*"
+
+
+def traces_root(traces_dir: str) -> Path:
+    return BENCHMARK_DIR / traces_dir
+
+
+def all_traces_roots() -> list[Path]:
+    return sorted(p for p in BENCHMARK_DIR.glob(TRACES_GLOB) if p.is_dir())
 
 
 def pack_run_dir(run_dir: Path) -> bytes | None:
@@ -43,15 +55,15 @@ def pack_run_dir(run_dir: Path) -> bytes | None:
     return blob.getvalue()
 
 
-def write_trace(case_id: str, arm: str, *, tar: bytes | None = None,
+def write_trace(case_id: str, arm: str, *, traces_dir: str, tar: bytes | None = None,
                 files: dict[str, str] | None = None) -> Path:
-    """Write one run's complete record under traces/<case_id>/<arm>/.
+    """Write one run's complete record under <traces_dir>/<case_id>/<arm>/.
 
     `tar` is an archive from pack_run_dir; `files` is any additional plain-text
     content to drop alongside it (a runner log, a raw prompt and response for an
     arm that has no orchestrator run directory at all).
     """
-    dest = TRACES_DIR / case_id / arm
+    dest = traces_root(traces_dir) / case_id / arm
     dest.mkdir(parents=True, exist_ok=True)
     if tar:
         with tarfile.open(fileobj=io.BytesIO(tar), mode="r:gz") as archive:
@@ -61,8 +73,8 @@ def write_trace(case_id: str, arm: str, *, tar: bytes | None = None,
     return dest
 
 
-def write_json(case_id: str, arm: str, name: str, payload: Any) -> Path:
-    dest = TRACES_DIR / case_id / arm
+def write_json(case_id: str, arm: str, name: str, payload: Any, *, traces_dir: str) -> Path:
+    dest = traces_root(traces_dir) / case_id / arm
     dest.mkdir(parents=True, exist_ok=True)
     path = dest / name
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")

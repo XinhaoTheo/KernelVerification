@@ -19,14 +19,27 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-TRACES = REPO / "benchmark_fn_fp" / "traces"
+# One tree per model: traces_opus5/, traces_glm/, ...
+BENCHMARK = REPO / "benchmark_fn_fp"
 SOURCE = REPO / "benchmark_fn_fp" / "triton"
 MAP = REPO / "benchmark_fn_fp" / "case_map.json"
 OUT = REPO / "benchmark_fn_fp" / "eval" / "scoreboard.json"
 
-# Anthropic list price, USD per million tokens, for the model these runs used.
-USD_IN, USD_OUT = 5.0, 25.0
-CACHE_WRITE_MULT, CACHE_READ_MULT = 2.0, 0.1
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from models import PROFILES, label_for_traces_dir, profile_for  # noqa: E402
+
+
+def profile_for_tree(traces_dir: str):
+    """The model that produced a trace tree, from the directory name alone.
+
+    Each model writes to its own tree (models.traces_dir_for), so the same table
+    that set a run's max_tokens also prices it. Charging a $0.075/M open model at
+    Opus rates would overstate its cost seventy-fold.
+    """
+    for profile in PROFILES.values():
+        if profile.traces_dir == traces_dir:
+            return profile
+    return profile_for(f"unprofiled:{traces_dir}")
 
 
 def ground_truth() -> dict[str, str]:
@@ -38,35 +51,41 @@ def ground_truth() -> dict[str, str]:
     return out
 
 
-def read_run(path: Path) -> dict:
+def read_run(path: Path, profile) -> dict:
     run = json.loads(path.read_text())
     usage = [t.get("usage") or {} for t in run.get("history", [])]
 
     def total(key: str) -> int:
         return sum(u.get(key) or 0 for u in usage)
 
-    usd = (total("input_tokens") * USD_IN
-           + total("output_tokens") * USD_OUT
-           + total("cache_creation_input_tokens") * USD_IN * CACHE_WRITE_MULT
-           + total("cache_read_input_tokens") * USD_IN * CACHE_READ_MULT) / 1e6
+    usd = (total("input_tokens") * profile.price_in
+           + total("output_tokens") * profile.price_out
+           + total("cache_creation_input_tokens") * profile.price_in * profile.cache_write
+           + total("cache_read_input_tokens") * profile.price_in * profile.cache_read) / 1e6
     verdict = run.get("verdict") or {}
     return {
+        # None, not 0.0, for a model with no profile: a run whose price is
+        # unknown must not be summed into a total as if it were free.
+        "model": profile.model or None,
         "verdict": verdict.get("verdict"),
         "confidence": verdict.get("confidence"),
         "turns": len(run.get("history", [])),
         "claims": len(run.get("claims") or []),
         "probes": sum(1 for e in run.get("tool_events") or []
                       if e.get("tool") == "run_claim_probe"),
-        "usd": round(usd, 4),
+        "usd": round(usd, 4) if profile.known else None,
     }
 
 
 def main() -> int:
     gt = ground_truth()
     arms: dict[str, dict[str, dict]] = {}
-    for run_json in sorted(TRACES.glob("*/*/run.json")):
-        case, arm = run_json.parts[-3], run_json.parts[-2]
-        arms.setdefault(arm, {})[case] = read_run(run_json)
+    for run_json in sorted(BENCHMARK.glob("traces_*/*/*/run.json")):
+        tree, case, arm = run_json.parts[-4], run_json.parts[-3], run_json.parts[-2]
+        # `opus5/solo`, `glm/debate`: the model is part of the arm's name, so two
+        # models' results for one case sit on separate rows and never merge.
+        name = f"{label_for_traces_dir(tree)}/{arm}"
+        arms.setdefault(name, {})[case] = read_run(run_json, profile_for_tree(tree))
 
     report: dict[str, object] = {"ground_truth": gt, "arms": {}}
     for arm in sorted(arms):
@@ -84,7 +103,8 @@ def main() -> int:
             "fn_total": len(fn),
             "fp_correct": sum(1 for c in fp if scored[c]["verdict"] == gt[c]),
             "fp_total": len(fp),
-            "usd": round(sum(r["usd"] for r in scored.values()), 2),
+            "usd": round(sum(r["usd"] or 0.0 for r in scored.values()), 2),
+            "unpriced": sum(1 for r in scored.values() if r["usd"] is None),
             "wrong": sorted(c for c in scored if scored[c]["verdict"] != gt[c]),
             "per_case": scored,
         }
@@ -107,11 +127,12 @@ def main() -> int:
         print()
         for n in names:
             a = report["arms"][n]
-            print(f"{n:10s} {a['correct']}/{a['cases']}   "
+            note = f"  ({a['unpriced']} unpriced)" if a["unpriced"] else ""
+            print(f"{n:16s} {a['correct']}/{a['cases']}   "
                   f"FN {a['fn_correct']}/{a['fn_total']}   "
-                  f"FP {a['fp_correct']}/{a['fp_total']}   ${a['usd']}")
+                  f"FP {a['fp_correct']}/{a['fp_total']}   ${a['usd']}{note}")
             if a["wrong"]:
-                print(f"{'':10s} wrong: {', '.join(a['wrong'])}")
+                print(f"{'':16s} wrong: {', '.join(a['wrong'])}")
 
     OUT.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"\nwrote {OUT.relative_to(REPO)}")

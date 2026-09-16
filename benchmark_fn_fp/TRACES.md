@@ -1,80 +1,75 @@
 # Complete agent traces
 
-Four full runs: two cases, each verified twice — once by a single agent holding
-the whole toolset (`solo/`), once by the four-role debate (`debate/`). Same
-model, same GPU, same container image, same answer-free copy of the case, so a
-reader comparing the two arms on one case is seeing a difference in agent
-structure and nothing else.
+One tree per model. Within a tree, one directory per case, and inside that one
+directory per arm — so `traces_opus5/case_33/debate/` and
+`traces_glm/case_33/debate/` are the same case and the same arm, run by
+different models.
 
-The evaluation runners keep only the last 20,000 characters of `transcript.md`;
-everything else stays in the Modal container and is discarded when it stops.
-These are captured with `capture_traces_modal.py`, which brings the whole run
-directory back.
+```
+benchmark_fn_fp/
+├── traces_opus5/     claude-opus-5      32 cases x {solo, debate}
+└── traces_glm/       z-ai/glm-5.3-flash  1 case  x {solo, debate}
+```
 
-## Why these two cases
+The tree comes from the model, via `eval/models.py`. A model with no profile
+gets its own `traces_<slug>/` rather than sharing one, because a $1 run on an
+open model must not land anywhere near the $88 of Opus runs the current numbers
+come from. `tests/` fails if two models ever name the same tree.
 
-`case_04` is one of the two cases in the 32 that a single model call with no
-tools gets wrong — it raises a false alarm there. `case_33` is a replacement
-case, built after the case it replaces turned out to be unanswerable from the
-files the verifier is given; these are its first runs.
+Nothing here is a summary. `eval/scoreboard.json` is derived from these trees by
+`summarize_traces.py` and can be rebuilt at any time; a trace cannot be rebuilt
+from a scoreboard.
 
-Two cases chosen this way cannot establish an accuracy difference between the
-arms. Read them as worked examples of what a run looks like, not as a
-measurement of how often one arm beats another.
+## What one run holds
 
-## What happened
+```
+traces_<model>/<case_id>/<arm>/
+├── transcript.md      the run as prose, in order  ← start here
+├── verdict.json       verdict, confidence, reasoning
+├── claims.json        the claim ledger: hypotheses, evidence, scope, status
+├── tool_events.jsonl  one line per tool call, with arguments and result
+├── run.json           full state, including per-turn token usage
+├── probes/            every probe the agent wrote: source, stdout, stderr
+└── runner_stdout.txt  the runner's own log
+```
 
-| case | ground truth | single call | solo | debate |
-|---|---|---|---|---|
-| `case_33` | reject | not yet run | reject, conf 0.95 | reject, conf 0.93 |
-| `case_04` | trust  | false alarm | trust, conf 0.85  | trust, conf 0.68  |
+Only `transcript.md` is meant for a person. It has four sections and reads
+fastest backwards: `## Verdict` → `## Claims` → then `## Timeline` if something
+needs checking.
 
-| case | arm | turns | tool calls | probes | wall clock | cost |
-|---|---|---|---|---|---|---|
-| `case_33` | solo   | 5 |  8 | 2 |  73 s | $0.50 |
-| `case_33` | debate | 7 | 17 | 4 | 262 s | $1.93 |
-| `case_04` | solo   | 9 | 14 | 2 | 217 s | $1.31 |
-| `case_04` | debate | 8 | 19 | 4 | 298 s | $1.62 |
+`probes/` is the part a single model call has no counterpart for. `tN_probe.py`
+is code the agent wrote and ran on a real GPU during the run, `tN_stdout.txt` is
+what came back, and `tN_stderr.txt` is how it failed when it did. Every
+measurement a verdict cites is reproducible from those files.
 
-Cost is list price for the model used, counting cached reads at 0.1x and 1h
-cache writes at 2x.
+## What the two trees show so far
 
-`case_04` is worth reading first. Both arms decide it the same way and for the
-same reason: they measure the deviation instead of judging it from the source.
-The worst relative error is about one fp32 ulp, which is what the operation's
-own reciprocal-square-root costs, so the deviation is the contract being met
-rather than broken. The single call sees a large relative error and rejects.
-That is the shape of difference worth looking for: the verdict turns on a
-quantity that is not in the source and can only be measured.
+`traces_opus5/` is the measurement: 32 cases, both arms, and the source of every
+number in `eval/README.md`.
 
-`case_04` is also unstable. Two debate runs on identical code returned opposite
-verdicts, both at confidence 0.68, and both times the disputed claim was the
-same one: the kernel returns fp32 for a bf16 input, and `problem.txt` never
-states the output storage dtype. Whether the Skeptic scopes that `unknown` or
-`in_scope` decides the verdict, because the Judge is told an `unknown`-scope
-claim should usually produce trust. One case, one scope call, opposite answers.
+`traces_glm/` is one case, run twice, to answer whether an open model can carry
+the tool-calling load at all. It can — both arms reached the correct verdict —
+but the probe code it writes is a different story:
 
-## Layout
+| tree | arm | probes | failed | turns | cost |
+|---|---|---|---|---|---|
+| `traces_opus5` | solo | 2 | 0 | 5 | $0.47 |
+| `traces_opus5` | debate | 9 | 0 | 10 | $3.41 |
+| `traces_glm` | solo | 5 | **4** | 10 | $0.018 |
+| `traces_glm` | debate | 8 | **5** | 10 | $0.022 |
 
-    <case>/<arm>/
-      transcript.md      the run as prose, in order — start here
-      run.json           full state: every turn, its tool calls, token usage
-      tool_events.jsonl  one line per tool call, with arguments and result
-      claims.json        the claim ledger, with evidence and scope
-      verdict.json       the final verdict, confidence, and reason
-      probes/            every probe: source, stdout, stderr
-      runner_stdout.txt  the runner's own log
+Opus wrote 11 probes and none failed. GLM wrote 13 and 9 failed — tensor-shape
+errors in its int4 bit-packing, and one CUDA illegal memory access that showed
+up as an XID fault in the host log. It recovered each time by reading the
+traceback and rewriting, which is the loop working as intended, but the turns
+that recovery costs come out of the same budget the run needs for real work.
 
-`probes/` is the part that has no counterpart in a single call. `tN_probe.py` is
-code the agent wrote and ran on the GPU during the run, and `tN_stdout.txt` is
-what came back. Everything the verdict cites as a measurement is reproducible
-from those files.
+## Why full traces are kept
 
-## Reproducing
-
-    modal run benchmark_fn_fp/eval/capture_traces_modal.py --cases case_33 --arm solo   --max-rounds 10
-    modal run benchmark_fn_fp/eval/capture_traces_modal.py --cases case_33 --arm debate --max-rounds 4
-
-`--max-tokens` defaults to 16384. Leave it there: adaptive thinking is billed
-against `max_tokens`, and at the 4096 default whole turns return no text and no
-tool call because the budget is spent inside the thinking block.
+The first fifteen runs kept only the last 20,000 characters of `transcript.md`
+and let the container discard the rest. Three defects that each changed a
+conclusion — a Skeptic spending its turn re-reading material already in its
+prompt, `record_description_update` rejecting the Describer's first call in every
+single run, an agent reaching the right verdict for three wrong reasons — were
+invisible until full traces existed, and every one of them had been happening on
+every run the whole time. `tests/` now fails if a runner stops writing a trace.

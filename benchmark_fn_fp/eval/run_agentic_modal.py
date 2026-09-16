@@ -23,7 +23,7 @@ Usage (from repo root):
     modal run benchmark_fn_fp/eval/run_agentic_modal.py --arm debate --all
     modal run benchmark_fn_fp/eval/run_agentic_modal.py --arm debate --cases case_33
 
-Every run writes a complete trace to benchmark_fn_fp/traces/<case>/<arm>/.
+Every run writes a complete trace to benchmark_fn_fp/traces_<model>/<case>/<arm>/.
 The scoreboard is built from those traces by summarize_traces.py, not from a
 summary file this script overwrites -- results_baseline3.json lost 18 of 32
 cases exactly that way.
@@ -65,7 +65,8 @@ image = (
     max_containers=4,
     secrets=[modal.Secret.from_dotenv(REPO_ROOT)],
 )
-def run_one(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int) -> dict:
+def run_one(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int,
+            provider: str, timeout_s: int) -> dict:
     """Run one case under one arm inside this GPU container."""
     import contextlib
     import io
@@ -76,17 +77,20 @@ def run_one(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int) 
 
     os.chdir("/root")
     sys.path.insert(0, "/root")
+    # Both set explicitly, not setdefault: Secret.from_dotenv injects the whole
+    # .env into the container, and it pins AGENTIC_PROVIDER and AGENTIC_MODEL.
+    # A setdefault would silently keep those and run the wrong model under the
+    # right flag.
     os.environ["AGENTIC_MODEL"] = model
-    os.environ.setdefault("AGENTIC_PROVIDER", "anthropic")
+    os.environ["AGENTIC_PROVIDER"] = provider
     # The probe sandbox shells out to systemd; Modal containers have no user
     # session bus, so leave it off and rely on the wall-clock and CPU limits the
     # tool already applies.
     os.environ.setdefault("AGENTIC_PROBE_SANDBOX", "off")
-    # The client default is 60s, and a single turn with a large max_tokens and
-    # adaptive thinking exceeds it: the solo agent's first run died on
-    # APITimeoutError, and debate turns were measured at 45-52s, close enough to
-    # the default that staying under it was luck.
-    os.environ.setdefault("AGENTIC_LLM_TIMEOUT_SECONDS", "600")
+    # Set explicitly, like the two above: the client default is 60s, .env pins a
+    # value of its own, and one measured GLM turn ran 769s. The per-model number
+    # comes from models.PROFILES.
+    os.environ["AGENTIC_LLM_TIMEOUT_SECONDS"] = str(timeout_s)
 
     from verifier.agentic_run import main as agentic_main
 
@@ -97,6 +101,7 @@ def run_one(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int) 
         "--agents", agents,
         "--max-debate-rounds", str(max_rounds),
         "--model", model,
+        "--provider", provider,
         # Adaptive thinking is billed against max_tokens. At the 4096 default a
         # turn spends its whole budget inside the thinking block and returns no
         # text and no tool call at all. Measured peaks per role are 6.3k-8.5k,
@@ -136,15 +141,38 @@ def run_one(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int) 
 
 @app.local_entrypoint()
 def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
-         model: str = "claude-opus-5", max_tokens: int = 16384,
+         provider: str = "anthropic", model: str = "", max_tokens: int = 0,
          skip_existing: bool = False):
     if arm not in ARMS:
         print(f"--arm must be one of {sorted(ARMS)}", file=sys.stderr)
         raise SystemExit(1)
+
+    # Imported here, not at module scope: Modal imports this module inside the
+    # container too, where only /root/verifier and /root/cases are mounted. A
+    # module-level import of a sibling in this directory crashes every container
+    # at startup -- which it did, and the run hung for hours retrying.
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    from traces import write_trace, traces_root
+    from models import DEFAULT_MODEL_FOR_PROVIDER, profile_for
     # The debate reaches a verdict in 7 turns; the solo agent needs more rounds
     # because one agent does every role's work in sequence.
     if not max_rounds:
         max_rounds = 4 if arm == "debate" else 10
+    if not model:
+        model = DEFAULT_MODEL_FOR_PROVIDER.get(provider, "")
+        if not model:
+            print(f"pass --model for provider {provider}", file=sys.stderr)
+            raise SystemExit(1)
+
+    # Every per-model setting comes from one row, so switching model cannot
+    # leave max_tokens or the timeout behind at another model's value.
+    profile = profile_for(model)
+    if not max_tokens:
+        max_tokens = profile.max_tokens
+    if not profile.known:
+        print(f"note: no profile for {model}; using max_tokens={max_tokens}, "
+              f"timeout={profile.timeout_s}s, and its cost will read as unknown. "
+              f"Add a row to models.PROFILES to fix both.", file=sys.stderr)
 
     names = [c.strip() for c in cases.split(",") if c.strip()] if cases else None
     if not names and not all:
@@ -154,19 +182,13 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
         names = sorted(d.name for d in CASES_DIR.iterdir()
                        if d.is_dir() and (d / "meta.json").exists())
 
-    # Imported here, not at module scope: Modal imports this module inside the
-    # container too, where only /root/verifier and /root/cases are mounted. A
-    # module-level import of a sibling in this directory crashes every container
-    # at startup -- which it did, and the run hung for hours retrying.
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-    from traces import write_trace, TRACES_DIR
-
     if skip_existing:
         # Restarting a --all run used to re-run cases already paid for; two
         # restarts of one batch threw away real money that way. This does NOT
         # protect traces made before a behaviour change -- delete those, or
         # leave the flag off, when the agents themselves have changed.
-        kept = [n for n in names if not (TRACES_DIR / n / arm / "verdict.json").exists()]
+        root = traces_root(profile.traces_dir)
+        kept = [n for n in names if not (root / n / arm / "verdict.json").exists()]
         for n in names:
             if n not in kept:
                 print(f"  skip {n}: trace already has a verdict")
@@ -175,9 +197,10 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
             print("nothing to run: every case already has a trace")
             return
 
-    print(f"running {arm} on {len(names)} case(s), model={model}, "
+    print(f"running {arm} on {len(names)} case(s), {provider}/{model}, "
           f"rounds={max_rounds}, max_tokens={max_tokens}", flush=True)
-    jobs = [(n, arm, max_rounds, model, max_tokens) for n in names]
+    jobs = [(n, arm, max_rounds, model, max_tokens, provider, profile.timeout_s)
+            for n in names]
     # NOT list(): starmap yields each result as its container finishes, so each
     # trace reaches disk the moment it arrives. Materialising the iterator first
     # meant a failure at case 30 discarded the 29 runs already paid for.
@@ -188,7 +211,9 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
         # Written before anything else in the loop: a crash while reporting must
         # not cost the record of a run that already happened.
         trace_dir = write_trace(
-            entry, arm,
+            # The model picks the tree, so a $1 GLM run cannot land anywhere
+            # near the $88 of Opus traces the current numbers come from.
+            entry, arm, traces_dir=profile.traces_dir,
             tar=r.pop("tar", None),
             files={"runner_stdout.txt": r.get("stdout") or "",
                    "runner_error.txt": r.get("error") or ""},

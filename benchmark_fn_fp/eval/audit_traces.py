@@ -14,7 +14,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-TRACES = REPO / "benchmark_fn_fp" / "traces"
+# One tree per model: traces_opus5/, traces_glm/, ...
+BENCHMARK = REPO / "benchmark_fn_fp"
 TOOL_EVENT_WINDOW = 12  # must match base.py's state.tool_events[-12:]
 
 
@@ -83,9 +84,9 @@ def audit(run_dir: Path) -> list[str]:
 
 
 def main() -> int:
-    dirs = sorted(p.parent for p in TRACES.glob("*/*/run.json"))
+    dirs = sorted(p.parent for p in BENCHMARK.glob("traces_*/*/*/run.json"))
     if not dirs:
-        print(f"no traces under {TRACES}", file=sys.stderr)
+        print(f"no traces under {BENCHMARK}/traces_*", file=sys.stderr)
         return 1
     total = 0
     for d in dirs:

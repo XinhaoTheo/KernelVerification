@@ -201,7 +201,7 @@ def test_every_eval_runner_writes_a_trace() -> None:
         path = eval_dir / name
         assert path.exists(), f"missing runner {name}"
         source = path.read_text()
-        assert "write_trace" in source or "TRACES_DIR" in source, (
+        assert "write_trace" in source or "traces_root" in source, (
             f"{name} does not write a trace; a run whose record is thrown away "
             f"cannot be diagnosed afterwards"
         )
@@ -229,3 +229,87 @@ def test_every_modal_runner_sets_max_tokens() -> None:
             f"{name} does not pass --max-tokens; at the 4096 default whole turns "
             f"return no text and no tool call"
         )
+
+
+def _eval_models():
+    """Import benchmark_fn_fp/eval/models.py without importing modal."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval" / "models.py"
+    spec = importlib.util.spec_from_file_location("_eval_models", path)
+    module = importlib.util.module_from_spec(spec)
+    # Registered before exec: @dataclass looks its class's module up in
+    # sys.modules while building __init__, and fails on a module that is not
+    # there yet.
+    sys.modules["_eval_models"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_model_profiles_cannot_collide_on_a_trace_directory() -> None:
+    """Two models sharing a trace tree silently overwrite each other.
+
+    Each model writes to its own top-level tree (models.traces_dir_for), so
+    within a tree an arm is just `solo` or `debate`. Two models naming the same
+    tree means a run on one lands on top of the other's traces -- and traces are
+    the only record a scoreboard can be rebuilt from. $88 of Opus runs sit in
+    traces_opus5/.
+    """
+    models = _eval_models()
+    dirs = [p.traces_dir for p in models.PROFILES.values()]
+    assert len(dirs) == len(set(dirs)), f"two models share a trace tree: {dirs}"
+    assert all(d.startswith("traces_") for d in dirs), (
+        "trace trees must be named traces_*; the summarizer and auditor glob for it"
+    )
+
+
+def test_every_default_model_has_a_profile() -> None:
+    """`--provider X` with no --model must not select an unprofiled model.
+
+    Without a profile the run silently falls back to another model's max_tokens
+    and reports its cost as unknown, which is exactly the class of mismatch this
+    table exists to prevent.
+    """
+    models = _eval_models()
+    for provider, model in models.DEFAULT_MODEL_FOR_PROVIDER.items():
+        assert model in models.PROFILES, f"{provider} defaults to unprofiled {model}"
+        assert models.PROFILES[model].provider == provider
+
+
+def test_unknown_model_is_unpriced_rather_than_free() -> None:
+    """A model with no profile must not be summed into a total as if free.
+
+    Reporting an unmeasured run at $0.00 understates a bill instead of admitting
+    it is not known, which is worse than refusing to price it.
+    """
+    models = _eval_models()
+    profile = models.profile_for("some/model-nobody-has-profiled")
+    assert profile.known is False
+    assert profile.price_in == 0.0 and profile.price_out == 0.0
+    assert profile.traces_dir.startswith("traces_") and profile.traces_dir != "traces_", (
+        "an unprofiled model still needs its own trace tree"
+    )
+
+
+def test_runner_takes_max_tokens_from_the_profile() -> None:
+    """The flat per-run default must not come back.
+
+    One shared max_tokens across every model is what let a 32-case debate run go
+    out at 4096 and return three cases with zero claims and zero probes. The
+    runner now defaults it to 0 and fills it from models.PROFILES, so a model's
+    budget travels with the model.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval"
+              / "run_agentic_modal.py").read_text()
+    assert "max_tokens: int = 0" in source, (
+        "run_agentic_modal hardcodes a max_tokens default again; it must come "
+        "from the model's profile"
+    )
+    assert "profile.max_tokens" in source
+    assert "AGENTIC_LLM_TIMEOUT_SECONDS\"] = str(timeout_s)" in source, (
+        "the per-model timeout is not being applied"
+    )
