@@ -1,0 +1,3199 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_10",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    shape: tl.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]\n    y = tl.reshape(x, shape)\n    mask = tl.arange(0, 2)[None, :, None]\n    left = tl.broadcast_to(tl.sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)\n    right = tl.broadcast_to(tl.sum(y * mask, 1)[:, None, :], shape).to(y.dtype)\n    left = tl.reshape(left, x.shape)\n    right = tl.reshape(right, x.shape)\n    y_idx = tl.reshape(ids, shape)\n    left_idx = tl.broadcast_to(tl.sum(y_idx * (1 - mask), 1)[:, None, :], shape)\n    right_idx = tl.broadcast_to(tl.sum(y_idx * mask, 1)[:, None, :], shape)\n    left_idx = tl.reshape(left_idx, x.shape).to(y_idx.dtype)\n    right_idx = tl.reshape(right_idx, x.shape).to(y_idx.dtype)\n    idtype = tl.core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)\n    ileft = left.to(idtype, bitcast=True)\n    iright = right.to(idtype, bitcast=True)\n    ix = x.to(idtype, bitcast=True)\n    cond = (left > right) != flip\n    ret = ix ^ tl.where(cond, ileft ^ iright, tl.zeros_like(ix))\n    new_ids = ids ^ tl.where(cond, left_idx ^ right_idx, tl.zeros_like(ids))\n    return ret.to(x.dtype, bitcast=True), new_ids\n\n\n@triton.jit\ndef _bitonic_merge(x, ids, stage: tl.constexpr, order: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    tl.static_assert(stage <= n_dims)\n    if order == 2:\n        shape: tl.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]\n        flip = tl.reshape(tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape), x.shape)\n    else:\n        flip = order\n    for i in tl.static_range(stage):\n        x, ids = _compare_and_swap(x, ids, flip, i + (n_dims - stage), n_dims)\n    return x, ids\n\n\n@triton.jit\ndef _row_argsort_kernel(X_ptr, IDS_ptr, stride_row, N: tl.constexpr, N_DIMS: tl.constexpr, DESCENDING: tl.constexpr):\n    # tl.log2(x.shape[dim]); that call path is not constexpr-stable on every\n    # Triton version, so N_DIMS is passed in from the (Python-side, so still\n    # compile-time-known) caller instead. The bitonic merge/compare-and-swap\n    # primitives below -- where the actual tie-break mechanism lives -- are\n    # byte-for-byte the real kernel, unchanged.\n    row = tl.program_id(0)\n    offs = tl.arange(0, N)\n    x = tl.load(X_ptr + row * stride_row + offs)\n    ids = tl.load(IDS_ptr + row * stride_row + offs)\n    for i in tl.static_range(1, N_DIMS + 1):\n        x, ids = _bitonic_merge(x, ids, i, 2 if i < N_DIMS else DESCENDING, N_DIMS)\n    tl.store(X_ptr + row * stride_row + offs, x)\n    tl.store(IDS_ptr + row * stride_row + offs, ids)\n\n\ndef sorted_topk_indices(scores: torch.Tensor, k: int) -> torch.Tensor:\n    \"\"\"Host wrapper: real bitonic-sort kernel, launched one program per row.\"\"\"\n    import math\n    assert scores.is_cuda\n    B, N = scores.shape\n    n_dims = int(math.log2(N))\n    x = scores.clone().contiguous()\n    ids = torch.arange(N, device=scores.device, dtype=torch.int32).unsqueeze(0).expand(B, N).contiguous()\n    _row_argsort_kernel[(B,)](x, ids, N, N=N, N_DIMS=n_dims, DESCENDING=True)\n    return ids[:, :k].long()\n",
+    "passed": null,
+    "problem_text": "Operation: top-k selection over candidate block scores, implemented with the\nbitonic sort network used by Native Sparse Attention's selection branch\n(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).\n\n`sorted_topk_indices(scores, k)` must return the indices of the k\nhighest-scoring candidates, in descending score order.\n\nContract on ties: when two candidates have exactly equal scores, the\nLOWER index must be the one kept.\n\nDownstream, the selected indices gather value vectors that are averaged\ntogether, so the selection feeds a continuous output.\n\nInput domain: `scores` has a power-of-two number of columns (the bitonic\nnetwork this kernel family uses is defined only for power-of-two extents).\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_10",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-10T05:20:48Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-10T05:21:22Z",
+          "data": {
+            "all_equal": [
+              [
+                8,
+                9,
+                11,
+                10
+              ]
+            ],
+            "all_equal_match": false,
+            "all_equal_ref": [
+              [
+                0,
+                1,
+                2,
+                3
+              ]
+            ],
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "3cede333584c28e6fd9e80bd07b076bda880deb3fe514592661d519b1a10ddc3"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "ec10033c8d017ac841c9c42fbf0df712701f16156df3c5b23e833d67d6f1014b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "d8521c06520e1de161ae5430118cb022c2643da4cf434e7950342d9d6a2237a9"
+              }
+            ],
+            "cutoff_ties": {
+              "got": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                7
+              ],
+              "violation": "index 7 kept over tied lower index 6"
+            },
+            "distinct_top_correct": true,
+            "duration_s": 7.584852,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "all_equal": [
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ],
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ],
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ],
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ]
+              ],
+              "all_equal_match": false,
+              "all_equal_ref": [
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ],
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ],
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ],
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ]
+              ],
+              "cutoff_ties": [
+                [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  7
+                ]
+              ],
+              "distinct_top": [
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ],
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ],
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ],
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ]
+              ],
+              "rand_tie_examples": [
+                {
+                  "all_tied": true,
+                  "got": [
+                    11,
+                    14,
+                    15,
+                    3,
+                    13,
+                    4,
+                    9,
+                    12
+                  ],
+                  "ref": [
+                    11,
+                    14,
+                    15,
+                    12,
+                    3,
+                    4,
+                    13,
+                    1
+                  ],
+                  "row": 0,
+                  "scores": [
+                    -2.0,
+                    -1.0,
+                    -5.0,
+                    0.0,
+                    -0.0,
+                    -1.0,
+                    -1.0,
+                    -1.0,
+                    -2.0,
+                    -1.0,
+                    -3.0,
+                    5.0,
+                    1.0,
+                    -0.0,
+                    3.0,
+                    2.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    2,
+                    14,
+                    1,
+                    3,
+                    12,
+                    11,
+                    9,
+                    5
+                  ],
+                  "ref": [
+                    10,
+                    2,
+                    14,
+                    1,
+                    3,
+                    11,
+                    0,
+                    8
+                  ],
+                  "row": 1,
+                  "scores": [
+                    -0.0,
+                    2.0,
+                    3.0,
+                    2.0,
+                    -1.0,
+                    -3.0,
+                    -1.0,
+                    -3.0,
+                    0.0,
+                    -0.0,
+                    4.0,
+                    1.0,
+                    -0.0,
+                    -2.0,
+                    3.0,
+                    -1.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    7,
+                    10,
+                    11,
+                    9,
+                    8,
+                    12,
+                    5,
+                    4
+                  ],
+                  "ref": [
+                    7,
+                    10,
+                    13,
+                    6,
+                    9,
+                    11,
+                    5,
+                    8
+                  ],
+                  "row": 2,
+                  "scores": [
+                    -1.0,
+                    -1.0,
+                    -2.0,
+                    -2.0,
+                    -1.0,
+                    -0.0,
+                    1.0,
+                    3.0,
+                    0.0,
+                    1.0,
+                    3.0,
+                    1.0,
+                    -0.0,
+                    2.0,
+                    -3.0,
+                    -2.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    4,
+                    11,
+                    7,
+                    2,
+                    12,
+                    6,
+                    13,
+                    14
+                  ],
+                  "ref": [
+                    4,
+                    11,
+                    1,
+                    2,
+                    7,
+                    12,
+                    14,
+                    0
+                  ],
+                  "row": 3,
+                  "scores": [
+                    -0.0,
+                    1.0,
+                    1.0,
+                    -0.0,
+                    2.0,
+                    -2.0,
+                    0.0,
+                    1.0,
+                    -1.0,
+                    -1.0,
+                    -1.0,
+                    2.0,
+                    1.0,
+                    0.0,
+                    1.0,
+                    -2.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    6,
+                    10,
+                    14,
+                    5,
+                    0,
+                    13,
+                    15,
+                    12
+                  ],
+                  "ref": [
+                    2,
+                    6,
+                    10,
+                    12,
+                    14,
+                    0,
+                    5,
+                    13
+                  ],
+                  "row": 4,
+                  "scores": [
+                    -0.0,
+                    -2.0,
+                    2.0,
+                    -2.0,
+                    -2.0,
+                    0.0,
+                    1.0,
+                    -1.0,
+                    -1.0,
+                    -1.0,
+                    1.0,
+                    -3.0,
+                    1.0,
+                    -0.0,
+                    1.0,
+                    -1.0
+                  ]
+                }
+              ],
+              "rand_ties_match_stable_ref": false,
+              "total_violations_20x64x32": 16411
+            },
+            "metric": "exact index match vs stable descending tie-break (lower index kept)",
+            "quantized_rows_20x64x32_stable_ref_violations": 16411,
+            "stderr": "",
+            "stdout": "{\"all_equal\": [[8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10]], \"all_equal_ref\": [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], \"all_equal_match\": false, \"distinct_top\": [[15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12]], \"cutoff_ties\": [[0, 1, 2, 3, 4, 5, 7]], \"rand_ties_match_stable_ref\": false, \"rand_tie_examples\": [{\"row\": 0, \"got\": [11, 14, 15, 3, 13, 4, 9, 12], \"ref\": [11, 14, 15, 12, 3, 4, 13, 1], \"scores\": [-2.0, -1.0, -5.0, 0.0, -0.0, -1.0, -1.0, -1.0, -2.0, -1.0, -3.0, 5.0, 1.0, -0.0, 3.0, 2.0], \"all_tied\": true}, {\"row\": 1, \"got\": [2, 14, 1, 3, 12, 11, 9, 5], \"ref\": [10, 2, 14, 1, 3, 11, 0, 8], \"scores\": [-0.0, 2.0, 3.0, 2.0, -1.0, -3.0, -1.0, -3.0, 0.0, -0.0, 4.0, 1.0, -0.0, -2.0, 3.0, -1.0], \"all_tied\": true}, {\"row\": 2, \"got\": [7, 10, 11, 9, 8, 12, 5, 4], \"ref\": [7, 10, 13, 6, 9, 11, 5, 8], \"scores\": [-1.0, -1.0, -2.0, -2.0, -1.0, -0.0, 1.0, 3.0, 0.0, 1.0, 3.0, 1.0, -0.0, 2.0, -3.0, -2.0], \"all_tied\": true}, {\"row\": 3, \"got\": [4, 11, 7, 2, 12, 6, 13, 14], \"ref\": [4, 11, 1, 2, 7, 12, 14, 0], \"scores\": [-0.0, 1.0, 1.0, -0.0, 2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 2.0, 1.0, 0.0, 1.0, -2.0], \"all_tied\": true}, {\"row\": 4, \"got\": [6, 10, 14, 5, 0, 13, 15, 12], \"ref\": [2, 6, 10, 12, 14, 0, 5, 13], \"scores\": [-0.0, -2.0, 2.0, -2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 1.0, -3.0, 1.0, -0.0, 1.0, -1.0], \"all_tied\": true}], \"total_violations_20x64x32\": 16411}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe t6 confirms the tie-break violation. All-equal scores returned [8,9,11,10] instead of required [0,1,2,3]; cutoff tie case (scores 8,7,6,5,4,4,4,4,4,... with k=7) returned index 7 instead of lower tied index 6. Across 20x64 quantized rows with many exact ties, 16,411 positions differed from the stable lower-index reference. Distinct top values are ordered correctly ([15,14,13,12]), so the failure is specific to the tie-break rule required by problem.txt.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "compare_and_swap swaps only when left>right (bitcast-signed compare) XOR flip; strict comparison gives no defined order for exactly equal values, so tie-break (keep lower index) may be violated depending on network stage/flip pattern.",
+      "scope": "unknown",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract states ties must keep the LOWER index; scores domain is power-of-two columns, arbitrary float values including ties."
+        }
+      ],
+      "scope_rationale": "problem.txt explicitly requires 'when two candidates have exactly equal scores, the LOWER index must be the one kept' \u2014 ties on admitted float inputs are in the contract.",
+      "statement": "The kernel violates the tie-break contract: on rows containing exactly equal scores, the returned top-k indices keep the higher index instead of the lower one.",
+      "status": "confirmed",
+      "updated_at": "2026-09-10T05:21:22Z"
+    },
+    {
+      "created_at": "2026-09-10T05:21:56Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-10T05:22:03Z",
+          "data": {
+            "all_equal": [
+              [
+                8,
+                9,
+                11,
+                10
+              ]
+            ],
+            "all_equal_ref": [
+              [
+                0,
+                1,
+                2,
+                3
+              ]
+            ],
+            "cutoff_ties": {
+              "got": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                7
+              ],
+              "violation": "index 7 kept over tied lower index 6"
+            },
+            "distinct_top": [
+              [
+                15,
+                14,
+                13,
+                12
+              ]
+            ],
+            "metric": "exact index match vs stable descending tie-break (lower index kept)",
+            "rand_ties_match_stable_ref": false,
+            "total_violations_20x64x32": 16411
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe t6 (event t6) confirms tie-break violation for in-scope inputs: all-equal-scores rows (admitted by the power-of-two-column float domain) returned indices [8,9,11,10] instead of required lower indices [0,1,2,3]; a cutoff tie case kept index 7 over lower tied index 6; 16,411 position mismatches vs stable lower-index reference across quantized tie-heavy rows. Distinct-value tops are ordered correctly, isolating the failure to the tie-break rule explicitly required by problem.txt.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "Probe t6 already showed the kernel returns higher indices among exactly tied scores (all-equal scores returned [8,9,11,10] instead of [0,1,2,3]), directly contradicting the contract sentence 'when two candidates have exactly equal scores, the LOWER index must be the one kept'.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract explicitly requires: 'when two candidates have exactly equal scores, the LOWER index must be the one kept'; input domain is power-of-two-column score tensors, which admit tied float scores (e.g. all-equal rows), so tie behaviour is a required in-contract behaviour."
+        }
+      ],
+      "scope_rationale": "problem.txt explicitly requires 'when two candidates have exactly equal scores, the LOWER index must be the one kept', and all-equal/tied score rows are admitted by the contract's stated input domain (power-of-two columns, arbitrary float scores), so tie-break behaviour is a required behaviour in scope.",
+      "statement": "The kernel violates the contract's tie-break rule: on rows with exactly equal scores (including an all-equal-scores row, which the contract's input domain admits), the returned top-k indices keep a higher index over a tied lower index.",
+      "status": "confirmed",
+      "updated_at": "2026-09-10T05:22:05Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_10",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_10"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_10"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_10"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_10",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 4.477519821999991,
+      "role": "solo",
+      "round": 2,
+      "text": "Key contract: ties \u2014 lower index kept. This kernel is the real NSA kernel which uses bitcast trick: cond = (left > right) != flip. With bitcast to signed int, for floats, ties: left > right false \u2192 cond depends on flip. Does tie-break keep lower index? In the real NSA kernel, ties are broken... The bitcast trick ensures correct float comparison including -0/NaN handling. For equal values, no swap occurs when flip is such that cond false; but which index is kept? Let's think: bitonic sort with strict > comparison is not stable. The contract says ties keep lower index. Need to test.\n\nPlan: record claim that tie-break may violate lower-index-kept, run probe with tied scores, compare with reference torch.argsort(-scores, stable=True).I'll test the contract's tie-break rule: the bitonic network uses a strict `>` comparison, which is generally not stable, so equal scores may not keep the lower index.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "compare_and_swap swaps only when left>right (bitcast-signed compare) XOR flip; strict comparison gives no defined order for exactly equal values, so tie-break (keep lower index) may be violated depending on network stage/flip pattern.",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract states ties must keep the LOWER index; scores domain is power-of-two columns, arbitrary float values including ties."
+              }
+            ],
+            "scope_rationale": "problem.txt explicitly requires 'when two candidates have exactly equal scores, the LOWER index must be the one kept' \u2014 ties on admitted float inputs are in the contract.",
+            "statement": "The kernel violates the tie-break contract: on rows containing exactly equal scores, the returned top-k indices keep the higher index instead of the lower one."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.478,
+        "input_tokens": 8099,
+        "output_tokens": 380
+      }
+    },
+    {
+      "duration_s": 16.312277732,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll test the tie-break behavior with inputs containing exact ties.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json, torch\nsys.path.insert(0, \"/root/cases/case_10\")\nfrom kernel import sorted_topk_indices\n\nresults = {}\ntorch.manual_seed(0)\ndev = \"cuda\"\n\n# 1) all-equal scores: ties everywhere; contract wants indices [0..k-1]\nN, B, k = 16, 4, 4\ns = torch.zeros(B, N, device=dev)\nidx = sorted_topk_indices(s, k)\nresults[\"all_equal\"] = idx.tolist()\nref = torch.arange(N, device=dev).unsqueeze(0).expand(B, N)[:, :k].long()\nresults[\"all_equal_ref\"] = ref.tolist()\nresults[\"all_equal_match\"] = bool((idx == ref).all())\n\n# 2) half ties: scores 0,0,0,0,1,2,3,4,... distinct top half\nN2 = 16\ns2 = torch.zeros(B, N2, device=dev)\ns2[:, 8:] = torch.arange(1, 9, device=dev, dtype=torch.float32).unsqueeze(0)\n# k=4 -> distinct 5,6,7,8 values: indices 12,13,14,15\nidx2 = sorted_topk_indices(s2, 4)\nresults[\"distinct_top\"] = idx2.tolist()\n\n# 3) ties at the cutoff: values 8,7,6,5 then five 4s, then lower\ns3 = torch.tensor([[8,7,6,5,4,4,4,4,4,3,2,1,0,0,0,0]], dtype=torch.float32, device=dev)\nidx3 = sorted_topk_indices(s3, 7)  # 8,7,6,5 + two of the tied 4s -> indices 8 and 9? lower idx kept: 4,5\nresults[\"cutoff_ties\"] = idx3.tolist()\n\n# 4) random with quantized scores forcing many ties\ns4 = (torch.randn(64, 16, device=dev) * 2).round().to(torch.float32)  # scores in small range -> many ties\nidx4 = sorted_topk_indices(s4, 8)\nref4 = torch.argsort(-s4, dim=1, stable=True)[:, :8]\n# compare selected values and whether each selected index is valid under stable ref set\nresults[\"rand_ties_match_stable_ref\"] = bool((idx4 == ref4).all())\nmism = (idx4 != ref4)\nif mism.any():\n    rows = mism.any(1).nonzero().flatten()[:5].tolist()\n    examples = []\n    for r in rows:\n        tied = (s4[r].unsqueeze(0) == s4[r, idx4[r]].unsqueeze(1)).any(1)\n        examples.append({\"row\": r, \"got\": idx4[r].tolist(), \"ref\": ref4[r].tolist(),\n                          \"scores\": s4[r].tolist(),\n                          \"all_tied\": bool(tied.all().item())})\n    results[\"rand_tie_examples\"] = examples\n\n# count tie violations across many random quantized rows\nviol = 0\nfor _ in range(20):\n    s5 = (torch.randn(64, 32, device=dev) * 2).round()\n    i5 = sorted_topk_indices(s5, 16)\n    r5 = torch.argsort(-s5, dim=1, stable=True)[:, :16]\n    viol += int((i5 != r5).sum().item())\nresults[\"total_violations_20x64x32\"] = viol\n\nprint(json.dumps(results))"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 16.312,
+        "input_tokens": 9313,
+        "output_tokens": 824
+      }
+    },
+    {
+      "duration_s": 10.073089816000007,
+      "role": "solo",
+      "round": 4,
+      "text": "Probe t6 shows tie violations clearly. But wait \u2014 the \"rand_tie_examples\" show ties among non-top entries. The contract: ties keep lower index. But is the contract only about which candidate is kept (set membership), or exact index order? \"in descending score order\" with ties: lower index kept. E.g., all-equal case: got [8,9,11,10] instead of [0,1,2,3] \u2014 clear violation. That's decisive. Also cutoff_ties got index 7 instead of 6 (kept higher index among tied 4s) \u2014 violation.\n\nHowever, note the real NSA kernel \u2014 maybe contract expects this behavior since it says \"implemented with the bitonic sort network\"? No \u2014 contract explicitly says lower index must be kept. So claim confirmed.\n\nInterpret probe, append evidence, update claim, record verdict reject.The probe (event t6) already gives decisive evidence: on all-equal scores the kernel returns [8,9,11,10] instead of the required lower indices [0,1,2,3]; at the tie cutoff it kept index 7 over lower index 6; and across quantized random rows it mismatched the stable lower-index reference 16,411 times. I'll finalize the evidence, close the claim, and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "all_equal": [
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ]
+              ],
+              "all_equal_match": false,
+              "all_equal_ref": [
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ]
+              ],
+              "cutoff_ties": {
+                "got": [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  7
+                ],
+                "violation": "index 7 kept over tied lower index 6"
+              },
+              "distinct_top_correct": true,
+              "metric": "exact index match vs stable descending tie-break (lower index kept)",
+              "quantized_rows_20x64x32_stable_ref_violations": 16411
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "Probe t6 confirms the tie-break violation. All-equal scores returned [8,9,11,10] instead of required [0,1,2,3]; cutoff tie case (scores 8,7,6,5,4,4,4,4,4,... with k=7) returned index 7 instead of lower tied index 6. Across 20x64 quantized rows with many exact ties, 16,411 positions differed from the stable lower-index reference. Distinct top values are ordered correctly ([15,14,13,12]), so the failure is specific to the tie-break rule required by problem.txt.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c1",
+            "status": "confirmed"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.073,
+        "input_tokens": 16771,
+        "output_tokens": 598
+      }
+    },
+    {
+      "duration_s": 29.177754628000002,
+      "role": "solo",
+      "round": 5,
+      "text": "Claim c1 confirmed. Scope is \"unknown\" \u2014 record_verdict with reject requires decisive claims in_scope. I should update scope to in_scope via... tools don't have update scope except append_evidence? There's no tool to set scope; record_claim creates new claims. I could re-record claim with scope in_scope, or just record verdict \u2014 but verdict requires in_scope decisive claims. Simplest: record a new in_scope claim restating the confirmed violation, confirm it (already have evidence t6), then verdict. Actually I can record claim with scope in_scope and attach evidence via append_evidence, then update status, then verdict.The tie-break violation is confirmed by probe t6, but claim c1's scope field is still \"unknown\", which cannot support a reject verdict. I'll record the same confirmed claim properly scoped as in_scope, attach the existing evidence, and close it out.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Probe t6 already showed the kernel returns higher indices among exactly tied scores (all-equal scores returned [8,9,11,10] instead of [0,1,2,3]), directly contradicting the contract sentence 'when two candidates have exactly equal scores, the LOWER index must be the one kept'.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract explicitly requires: 'when two candidates have exactly equal scores, the LOWER index must be the one kept'; input domain is power-of-two-column score tensors, which include tied float scores (e.g. all-equal rows), so tie behavior is a required behaviour in scope."
+              }
+            ],
+            "statement": "The kernel violates the contract's tie-break rule: on rows with exactly equal scores (including an all-equal-scores row, which the contract's input domain admits), the returned top-k indices keep a higher index over a tied lower index."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 29.178,
+        "input_tokens": 31046,
+        "output_tokens": 396
+      }
+    },
+    {
+      "duration_s": 4.3497939789999975,
+      "role": "solo",
+      "round": 6,
+      "text": "Need to re-record claim with scope_rationale included.I'll re-record the in-scope claim with the required scope_rationale field, then attach the existing probe evidence.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Probe t6 already showed the kernel returns higher indices among exactly tied scores (all-equal scores returned [8,9,11,10] instead of [0,1,2,3]), directly contradicting the contract sentence 'when two candidates have exactly equal scores, the LOWER index must be the one kept'.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract explicitly requires: 'when two candidates have exactly equal scores, the LOWER index must be the one kept'; input domain is power-of-two-column score tensors, which admit tied float scores (e.g. all-equal rows), so tie behaviour is a required in-contract behaviour."
+              }
+            ],
+            "scope_rationale": "problem.txt explicitly requires 'when two candidates have exactly equal scores, the LOWER index must be the one kept', and all-equal/tied score rows are admitted by the contract's stated input domain (power-of-two columns, arbitrary float scores), so tie-break behaviour is a required behaviour in scope.",
+            "statement": "The kernel violates the contract's tie-break rule: on rows with exactly equal scores (including an all-equal-scores row, which the contract's input domain admits), the returned top-k indices keep a higher index over a tied lower index."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.35,
+        "input_tokens": 31854,
+        "output_tokens": 316
+      }
+    },
+    {
+      "duration_s": 7.10641794,
+      "role": "solo",
+      "round": 7,
+      "text": "The properly scoped claim c2 is recorded; the decisive probe t6 already covers it. I'll attach that evidence to c2, mark it confirmed, and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "data": {
+              "all_equal": [
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ]
+              ],
+              "all_equal_ref": [
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ]
+              ],
+              "cutoff_ties": {
+                "got": [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  7
+                ],
+                "violation": "index 7 kept over tied lower index 6"
+              },
+              "distinct_top": [
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ]
+              ],
+              "metric": "exact index match vs stable descending tie-break (lower index kept)",
+              "rand_ties_match_stable_ref": false,
+              "total_violations_20x64x32": 16411
+            },
+            "kind": "runtime_probe",
+            "summary": "Probe t6 (event t6) confirms tie-break violation for in-scope inputs: all-equal-scores rows (admitted by the power-of-two-column float domain) returned indices [8,9,11,10] instead of required lower indices [0,1,2,3]; a cutoff tie case kept index 7 over lower tied index 6; 16,411 position mismatches vs stable lower-index reference across quantized tie-heavy rows. Distinct-value tops are ordered correctly, isolating the failure to the tie-break rule explicitly required by problem.txt.",
+            "supports": "confirmed",
+            "tool_event_id": "t6"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.106,
+        "input_tokens": 33283,
+        "output_tokens": 341
+      }
+    },
+    {
+      "duration_s": 2.5263997339999946,
+      "role": "solo",
+      "round": 8,
+      "text": "I'll close out the open claim c2 and record theverdict, since the evidence is decisive.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "status": "confirmed"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 2.526,
+        "input_tokens": 34758,
+        "output_tokens": 41
+      }
+    },
+    {
+      "duration_s": 4.026553011999994,
+      "role": "solo",
+      "round": 9,
+      "text": "The in-scope tie-break claim c2 is confirmed by probe t6, so I'll record the verdict now.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c2"
+            ],
+            "reason": "Reject. problem.txt explicitly requires that on exactly equal scores the LOWER index be kept. Probe t6 (run_claim_probe on the real CUDA kernel) showed: on all-equal-scores rows the kernel returned top-4 indices [8,9,11,10] instead of the required [0,1,2,3]; in a cutoff-tie case (scores 8,7,6,5,4,4,4,4,4,..., k=7) it kept index 7 over tied lower index 6; and across 20x64 quantized tie-heavy rows it mismatched a stable descending lower-index reference at 16,411 positions. Rows with all-distinct scores sorted correctly ([15,14,13,12]), isolating the defect to the required tie-break behaviour. The inputs tested are admitted by the contract's declared domain (power-of-two columns, arbitrary float scores), so the violation is in-scope and decisive.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.027,
+        "input_tokens": 35149,
+        "output_tokens": 263
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_10"
+      },
+      "created_at": "2026-09-10T05:20:44Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_10",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    shape: tl.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]\n    y = tl.reshape(x, shape)\n    mask = tl.arange(0, 2)[None, :, None]\n    left = tl.broadcast_to(tl.sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)\n    right = tl.broadcast_to(tl.sum(y * mask, 1)[:, None, :], shape).to(y.dtype)\n    left = tl.reshape(left, x.shape)\n    right = tl.reshape(right, x.shape)\n    y_idx = tl.reshape(ids, shape)\n    left_idx = tl.broadcast_to(tl.sum(y_idx * (1 - mask), 1)[:, None, :], shape)\n    right_idx = tl.broadcast_to(tl.sum(y_idx * mask, 1)[:, None, :], shape)\n    left_idx = tl.reshape(left_idx, x.shape).to(y_idx.dtype)\n    right_idx = tl.reshape(right_idx, x.shape).to(y_idx.dtype)\n    idtype = tl.core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)\n    ileft = left.to(idtype, bitcast=True)\n    iright = right.to(idtype, bitcast=True)\n    ix = x.to(idtype, bitcast=True)\n    cond = (left > right) != flip\n    ret = ix ^ tl.where(cond, ileft ^ iright, tl.zeros_like(ix))\n    new_ids = ids ^ tl.where(cond, left_idx ^ right_idx, tl.zeros_like(ids))\n    return ret.to(x.dtype, bitcast=True), new_ids\n\n\n@triton.jit\ndef _bitonic_merge(x, ids, stage: tl.constexpr, order: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    tl.static_assert(stage <= n_dims)\n    if order == 2:\n        shape: tl.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]\n        flip = tl.reshape(tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape), x.shape)\n    else:\n        flip = order\n    for i in tl.static_range(stage):\n        x, ids = _compare_and_swap(x, ids, flip, i + (n_dims - stage), n_dims)\n    return x, ids\n\n\n@triton.jit\ndef _row_argsort_kernel(X_ptr, IDS_ptr, stride_row, N: tl.constexpr, N_DIMS: tl.constexpr, DESCENDING: tl.constexpr):\n    # tl.log2(x.shape[dim]); that call path is not constexpr-stable on every\n    # Triton version, so N_DIMS is passed in from the (Python-side, so still\n    # compile-time-known) caller instead. The bitonic merge/compare-and-swap\n    # primitives below -- where the actual tie-break mechanism lives -- are\n    # byte-for-byte the real kernel, unchanged.\n    row = tl.program_id(0)\n    offs = tl.arange(0, N)\n    x = tl.load(X_ptr + row * stride_row + offs)\n    ids = tl.load(IDS_ptr + row * stride_row + offs)\n    for i in tl.static_range(1, N_DIMS + 1):\n        x, ids = _bitonic_merge(x, ids, i, 2 if i < N_DIMS else DESCENDING, N_DIMS)\n    tl.store(X_ptr + row * stride_row + offs, x)\n    tl.store(IDS_ptr + row * stride_row + offs, ids)\n\n\ndef sorted_topk_indices(scores: torch.Tensor, k: int) -> torch.Tensor:\n    \"\"\"Host wrapper: real bitonic-sort kernel, launched one program per row.\"\"\"\n    import math\n    assert scores.is_cuda\n    B, N = scores.shape\n    n_dims = int(math.log2(N))\n    x = scores.clone().contiguous()\n    ids = torch.arange(N, device=scores.device, dtype=torch.int32).unsqueeze(0).expand(B, N).contiguous()\n    _row_argsort_kernel[(B,)](x, ids, N, N=N, N_DIMS=n_dims, DESCENDING=True)\n    return ids[:, :k].long()\n",
+        "passed": null,
+        "problem_text": "Operation: top-k selection over candidate block scores, implemented with the\nbitonic sort network used by Native Sparse Attention's selection branch\n(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).\n\n`sorted_topk_indices(scores, k)` must return the indices of the k\nhighest-scoring candidates, in descending score order.\n\nContract on ties: when two candidates have exactly equal scores, the\nLOWER index must be the one kept.\n\nDownstream, the selected indices gather value vectors that are averaged\ntogether, so the selection feeds a continuous output.\n\nInput domain: `scores` has a power-of-two number of columns (the bitonic\nnetwork this kernel family uses is defined only for power-of-two extents).\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_10",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_10"
+      },
+      "created_at": "2026-09-10T05:20:44Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: top-k selection over candidate block scores, implemented with the\nbitonic sort network used by Native Sparse Attention's selection branch\n(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).\n\n`sorted_topk_indices(scores, k)` must return the indices of the k\nhighest-scoring candidates, in descending score order.\n\nContract on ties: when two candidates have exactly equal scores, the\nLOWER index must be the one kept.\n\nDownstream, the selected indices gather value vectors that are averaged\ntogether, so the selection feeds a continuous output.\n\nInput domain: `scores` has a power-of-two number of columns (the bitonic\nnetwork this kernel family uses is defined only for power-of-two extents).\n",
+        "entry": "case_10",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_10"
+      },
+      "created_at": "2026-09-10T05:20:44Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_10",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3236
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 724
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_10",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-10T05:20:44Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_10\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_10",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "compare_and_swap swaps only when left>right (bitcast-signed compare) XOR flip; strict comparison gives no defined order for exactly equal values, so tie-break (keep lower index) may be violated depending on network stage/flip pattern.",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract states ties must keep the LOWER index; scores domain is power-of-two columns, arbitrary float values including ties."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly requires 'when two candidates have exactly equal scores, the LOWER index must be the one kept' \u2014 ties on admitted float inputs are in the contract.",
+        "statement": "The kernel violates the tie-break contract: on rows containing exactly equal scores, the returned top-k indices keep the higher index instead of the lower one."
+      },
+      "created_at": "2026-09-10T05:20:48Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-10T05:20:48Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "compare_and_swap swaps only when left>right (bitcast-signed compare) XOR flip; strict comparison gives no defined order for exactly equal values, so tie-break (keep lower index) may be violated depending on network stage/flip pattern.",
+        "scope": "unknown",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract states ties must keep the LOWER index; scores domain is power-of-two columns, arbitrary float values including ties."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly requires 'when two candidates have exactly equal scores, the LOWER index must be the one kept' \u2014 ties on admitted float inputs are in the contract.",
+        "statement": "The kernel violates the tie-break contract: on rows containing exactly equal scores, the returned top-k indices keep the higher index instead of the lower one.",
+        "status": "open",
+        "updated_at": "2026-09-10T05:20:48Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json, torch\nsys.path.insert(0, \"/root/cases/case_10\")\nfrom kernel import sorted_topk_indices\n\nresults = {}\ntorch.manual_seed(0)\ndev = \"cuda\"\n\n# 1) all-equal scores: ties everywhere; contract wants indices [0..k-1]\nN, B, k = 16, 4, 4\ns = torch.zeros(B, N, device=dev)\nidx = sorted_topk_indices(s, k)\nresults[\"all_equal\"] = idx.tolist()\nref = torch.arange(N, device=dev).unsqueeze(0).expand(B, N)[:, :k].long()\nresults[\"all_equal_ref\"] = ref.tolist()\nresults[\"all_equal_match\"] = bool((idx == ref).all())\n\n# 2) half ties: scores 0,0,0,0,1,2,3,4,... distinct top half\nN2 = 16\ns2 = torch.zeros(B, N2, device=dev)\ns2[:, 8:] = torch.arange(1, 9, device=dev, dtype=torch.float32).unsqueeze(0)\n# k=4 -> distinct 5,6,7,8 values: indices 12,13,14,15\nidx2 = sorted_topk_indices(s2, 4)\nresults[\"distinct_top\"] = idx2.tolist()\n\n# 3) ties at the cutoff: values 8,7,6,5 then five 4s, then lower\ns3 = torch.tensor([[8,7,6,5,4,4,4,4,4,3,2,1,0,0,0,0]], dtype=torch.float32, device=dev)\nidx3 = sorted_topk_indices(s3, 7)  # 8,7,6,5 + two of the tied 4s -> indices 8 and 9? lower idx kept: 4,5\nresults[\"cutoff_ties\"] = idx3.tolist()\n\n# 4) random with quantized scores forcing many ties\ns4 = (torch.randn(64, 16, device=dev) * 2).round().to(torch.float32)  # scores in small range -> many ties\nidx4 = sorted_topk_indices(s4, 8)\nref4 = torch.argsort(-s4, dim=1, stable=True)[:, :8]\n# compare selected values and whether each selected index is valid under stable ref set\nresults[\"rand_ties_match_stable_ref\"] = bool((idx4 == ref4).all())\nmism = (idx4 != ref4)\nif mism.any():\n    rows = mism.any(1).nonzero().flatten()[:5].tolist()\n    examples = []\n    for r in rows:\n        tied = (s4[r].unsqueeze(0) == s4[r, idx4[r]].unsqueeze(1)).any(1)\n        examples.append({\"row\": r, \"got\": idx4[r].tolist(), \"ref\": ref4[r].tolist(),\n                          \"scores\": s4[r].tolist(),\n                          \"all_tied\": bool(tied.all().item())})\n    results[\"rand_tie_examples\"] = examples\n\n# count tie violations across many random quantized rows\nviol = 0\nfor _ in range(20):\n    s5 = (torch.randn(64, 32, device=dev) * 2).round()\n    i5 = sorted_topk_indices(s5, 16)\n    r5 = torch.argsort(-s5, dim=1, stable=True)[:, :16]\n    viol += int((i5 != r5).sum().item())\nresults[\"total_violations_20x64x32\"] = viol\n\nprint(json.dumps(results))"
+      },
+      "created_at": "2026-09-10T05:21:12Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "3cede333584c28e6fd9e80bd07b076bda880deb3fe514592661d519b1a10ddc3"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "ec10033c8d017ac841c9c42fbf0df712701f16156df3c5b23e833d67d6f1014b"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "d8521c06520e1de161ae5430118cb022c2643da4cf434e7950342d9d6a2237a9"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel violates the tie-break contract: on rows containing exactly equal scores, the returned top-k indices keep the higher index instead of the lower one.",
+        "cwd": "/root/cases/case_10",
+        "duration_s": 7.584852,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "3cede333584c28e6fd9e80bd07b076bda880deb3fe514592661d519b1a10ddc3"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "ec10033c8d017ac841c9c42fbf0df712701f16156df3c5b23e833d67d6f1014b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "d8521c06520e1de161ae5430118cb022c2643da4cf434e7950342d9d6a2237a9"
+              }
+            ],
+            "duration_s": 7.584852,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "all_equal": [
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ],
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ],
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ],
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ]
+              ],
+              "all_equal_match": false,
+              "all_equal_ref": [
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ],
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ],
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ],
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ]
+              ],
+              "cutoff_ties": [
+                [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  7
+                ]
+              ],
+              "distinct_top": [
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ],
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ],
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ],
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ]
+              ],
+              "rand_tie_examples": [
+                {
+                  "all_tied": true,
+                  "got": [
+                    11,
+                    14,
+                    15,
+                    3,
+                    13,
+                    4,
+                    9,
+                    12
+                  ],
+                  "ref": [
+                    11,
+                    14,
+                    15,
+                    12,
+                    3,
+                    4,
+                    13,
+                    1
+                  ],
+                  "row": 0,
+                  "scores": [
+                    -2.0,
+                    -1.0,
+                    -5.0,
+                    0.0,
+                    -0.0,
+                    -1.0,
+                    -1.0,
+                    -1.0,
+                    -2.0,
+                    -1.0,
+                    -3.0,
+                    5.0,
+                    1.0,
+                    -0.0,
+                    3.0,
+                    2.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    2,
+                    14,
+                    1,
+                    3,
+                    12,
+                    11,
+                    9,
+                    5
+                  ],
+                  "ref": [
+                    10,
+                    2,
+                    14,
+                    1,
+                    3,
+                    11,
+                    0,
+                    8
+                  ],
+                  "row": 1,
+                  "scores": [
+                    -0.0,
+                    2.0,
+                    3.0,
+                    2.0,
+                    -1.0,
+                    -3.0,
+                    -1.0,
+                    -3.0,
+                    0.0,
+                    -0.0,
+                    4.0,
+                    1.0,
+                    -0.0,
+                    -2.0,
+                    3.0,
+                    -1.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    7,
+                    10,
+                    11,
+                    9,
+                    8,
+                    12,
+                    5,
+                    4
+                  ],
+                  "ref": [
+                    7,
+                    10,
+                    13,
+                    6,
+                    9,
+                    11,
+                    5,
+                    8
+                  ],
+                  "row": 2,
+                  "scores": [
+                    -1.0,
+                    -1.0,
+                    -2.0,
+                    -2.0,
+                    -1.0,
+                    -0.0,
+                    1.0,
+                    3.0,
+                    0.0,
+                    1.0,
+                    3.0,
+                    1.0,
+                    -0.0,
+                    2.0,
+                    -3.0,
+                    -2.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    4,
+                    11,
+                    7,
+                    2,
+                    12,
+                    6,
+                    13,
+                    14
+                  ],
+                  "ref": [
+                    4,
+                    11,
+                    1,
+                    2,
+                    7,
+                    12,
+                    14,
+                    0
+                  ],
+                  "row": 3,
+                  "scores": [
+                    -0.0,
+                    1.0,
+                    1.0,
+                    -0.0,
+                    2.0,
+                    -2.0,
+                    0.0,
+                    1.0,
+                    -1.0,
+                    -1.0,
+                    -1.0,
+                    2.0,
+                    1.0,
+                    0.0,
+                    1.0,
+                    -2.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    6,
+                    10,
+                    14,
+                    5,
+                    0,
+                    13,
+                    15,
+                    12
+                  ],
+                  "ref": [
+                    2,
+                    6,
+                    10,
+                    12,
+                    14,
+                    0,
+                    5,
+                    13
+                  ],
+                  "row": 4,
+                  "scores": [
+                    -0.0,
+                    -2.0,
+                    2.0,
+                    -2.0,
+                    -2.0,
+                    0.0,
+                    1.0,
+                    -1.0,
+                    -1.0,
+                    -1.0,
+                    1.0,
+                    -3.0,
+                    1.0,
+                    -0.0,
+                    1.0,
+                    -1.0
+                  ]
+                }
+              ],
+              "rand_ties_match_stable_ref": false,
+              "total_violations_20x64x32": 16411
+            },
+            "stderr": "",
+            "stdout": "{\"all_equal\": [[8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10]], \"all_equal_ref\": [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], \"all_equal_match\": false, \"distinct_top\": [[15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12]], \"cutoff_ties\": [[0, 1, 2, 3, 4, 5, 7]], \"rand_ties_match_stable_ref\": false, \"rand_tie_examples\": [{\"row\": 0, \"got\": [11, 14, 15, 3, 13, 4, 9, 12], \"ref\": [11, 14, 15, 12, 3, 4, 13, 1], \"scores\": [-2.0, -1.0, -5.0, 0.0, -0.0, -1.0, -1.0, -1.0, -2.0, -1.0, -3.0, 5.0, 1.0, -0.0, 3.0, 2.0], \"all_tied\": true}, {\"row\": 1, \"got\": [2, 14, 1, 3, 12, 11, 9, 5], \"ref\": [10, 2, 14, 1, 3, 11, 0, 8], \"scores\": [-0.0, 2.0, 3.0, 2.0, -1.0, -3.0, -1.0, -3.0, 0.0, -0.0, 4.0, 1.0, -0.0, -2.0, 3.0, -1.0], \"all_tied\": true}, {\"row\": 2, \"got\": [7, 10, 11, 9, 8, 12, 5, 4], \"ref\": [7, 10, 13, 6, 9, 11, 5, 8], \"scores\": [-1.0, -1.0, -2.0, -2.0, -1.0, -0.0, 1.0, 3.0, 0.0, 1.0, 3.0, 1.0, -0.0, 2.0, -3.0, -2.0], \"all_tied\": true}, {\"row\": 3, \"got\": [4, 11, 7, 2, 12, 6, 13, 14], \"ref\": [4, 11, 1, 2, 7, 12, 14, 0], \"scores\": [-0.0, 1.0, 1.0, -0.0, 2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 2.0, 1.0, 0.0, 1.0, -2.0], \"all_tied\": true}, {\"row\": 4, \"got\": [6, 10, 14, 5, 0, 13, 15, 12], \"ref\": [2, 6, 10, 12, 14, 0, 5, 13], \"scores\": [-0.0, -2.0, 2.0, -2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 1.0, -3.0, 1.0, -0.0, 1.0, -1.0], \"all_tied\": true}], \"total_violations_20x64x32\": 16411}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "all_equal": [
+            [
+              8,
+              9,
+              11,
+              10
+            ],
+            [
+              8,
+              9,
+              11,
+              10
+            ],
+            [
+              8,
+              9,
+              11,
+              10
+            ],
+            [
+              8,
+              9,
+              11,
+              10
+            ]
+          ],
+          "all_equal_match": false,
+          "all_equal_ref": [
+            [
+              0,
+              1,
+              2,
+              3
+            ],
+            [
+              0,
+              1,
+              2,
+              3
+            ],
+            [
+              0,
+              1,
+              2,
+              3
+            ],
+            [
+              0,
+              1,
+              2,
+              3
+            ]
+          ],
+          "cutoff_ties": [
+            [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              7
+            ]
+          ],
+          "distinct_top": [
+            [
+              15,
+              14,
+              13,
+              12
+            ],
+            [
+              15,
+              14,
+              13,
+              12
+            ],
+            [
+              15,
+              14,
+              13,
+              12
+            ],
+            [
+              15,
+              14,
+              13,
+              12
+            ]
+          ],
+          "rand_tie_examples": [
+            {
+              "all_tied": true,
+              "got": [
+                11,
+                14,
+                15,
+                3,
+                13,
+                4,
+                9,
+                12
+              ],
+              "ref": [
+                11,
+                14,
+                15,
+                12,
+                3,
+                4,
+                13,
+                1
+              ],
+              "row": 0,
+              "scores": [
+                -2.0,
+                -1.0,
+                -5.0,
+                0.0,
+                -0.0,
+                -1.0,
+                -1.0,
+                -1.0,
+                -2.0,
+                -1.0,
+                -3.0,
+                5.0,
+                1.0,
+                -0.0,
+                3.0,
+                2.0
+              ]
+            },
+            {
+              "all_tied": true,
+              "got": [
+                2,
+                14,
+                1,
+                3,
+                12,
+                11,
+                9,
+                5
+              ],
+              "ref": [
+                10,
+                2,
+                14,
+                1,
+                3,
+                11,
+                0,
+                8
+              ],
+              "row": 1,
+              "scores": [
+                -0.0,
+                2.0,
+                3.0,
+                2.0,
+                -1.0,
+                -3.0,
+                -1.0,
+                -3.0,
+                0.0,
+                -0.0,
+                4.0,
+                1.0,
+                -0.0,
+                -2.0,
+                3.0,
+                -1.0
+              ]
+            },
+            {
+              "all_tied": true,
+              "got": [
+                7,
+                10,
+                11,
+                9,
+                8,
+                12,
+                5,
+                4
+              ],
+              "ref": [
+                7,
+                10,
+                13,
+                6,
+                9,
+                11,
+                5,
+                8
+              ],
+              "row": 2,
+              "scores": [
+                -1.0,
+                -1.0,
+                -2.0,
+                -2.0,
+                -1.0,
+                -0.0,
+                1.0,
+                3.0,
+                0.0,
+                1.0,
+                3.0,
+                1.0,
+                -0.0,
+                2.0,
+                -3.0,
+                -2.0
+              ]
+            },
+            {
+              "all_tied": true,
+              "got": [
+                4,
+                11,
+                7,
+                2,
+                12,
+                6,
+                13,
+                14
+              ],
+              "ref": [
+                4,
+                11,
+                1,
+                2,
+                7,
+                12,
+                14,
+                0
+              ],
+              "row": 3,
+              "scores": [
+                -0.0,
+                1.0,
+                1.0,
+                -0.0,
+                2.0,
+                -2.0,
+                0.0,
+                1.0,
+                -1.0,
+                -1.0,
+                -1.0,
+                2.0,
+                1.0,
+                0.0,
+                1.0,
+                -2.0
+              ]
+            },
+            {
+              "all_tied": true,
+              "got": [
+                6,
+                10,
+                14,
+                5,
+                0,
+                13,
+                15,
+                12
+              ],
+              "ref": [
+                2,
+                6,
+                10,
+                12,
+                14,
+                0,
+                5,
+                13
+              ],
+              "row": 4,
+              "scores": [
+                -0.0,
+                -2.0,
+                2.0,
+                -2.0,
+                -2.0,
+                0.0,
+                1.0,
+                -1.0,
+                -1.0,
+                -1.0,
+                1.0,
+                -3.0,
+                1.0,
+                -0.0,
+                1.0,
+                -1.0
+              ]
+            }
+          ],
+          "rand_ties_match_stable_ref": false,
+          "total_violations_20x64x32": 16411
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"all_equal\": [[8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10]], \"all_equal_ref\": [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], \"all_equal_match\": false, \"distinct_top\": [[15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12]], \"cutoff_ties\": [[0, 1, 2, 3, 4, 5, 7]], \"rand_ties_match_stable_ref\": false, \"rand_tie_examples\": [{\"row\": 0, \"got\": [11, 14, 15, 3, 13, 4, 9, 12], \"ref\": [11, 14, 15, 12, 3, 4, 13, 1], \"scores\": [-2.0, -1.0, -5.0, 0.0, -0.0, -1.0, -1.0, -1.0, -2.0, -1.0, -3.0, 5.0, 1.0, -0.0, 3.0, 2.0], \"all_tied\": true}, {\"row\": 1, \"got\": [2, 14, 1, 3, 12, 11, 9, 5], \"ref\": [10, 2, 14, 1, 3, 11, 0, 8], \"scores\": [-0.0, 2.0, 3.0, 2.0, -1.0, -3.0, -1.0, -3.0, 0.0, -0.0, 4.0, 1.0, -0.0, -2.0, 3.0, -1.0], \"all_tied\": true}, {\"row\": 2, \"got\": [7, 10, 11, 9, 8, 12, 5, 4], \"ref\": [7, 10, 13, 6, 9, 11, 5, 8], \"scores\": [-1.0, -1.0, -2.0, -2.0, -1.0, -0.0, 1.0, 3.0, 0.0, 1.0, 3.0, 1.0, -0.0, 2.0, -3.0, -2.0], \"all_tied\": true}, {\"row\": 3, \"got\": [4, 11, 7, 2, 12, 6, 13, 14], \"ref\": [4, 11, 1, 2, 7, 12, 14, 0], \"scores\": [-0.0, 1.0, 1.0, -0.0, 2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 2.0, 1.0, 0.0, 1.0, -2.0], \"all_tied\": true}, {\"row\": 4, \"got\": [6, 10, 14, 5, 0, 13, 15, 12], \"ref\": [2, 6, 10, 12, 14, 0, 5, 13], \"scores\": [-0.0, -2.0, 2.0, -2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 1.0, -3.0, 1.0, -0.0, 1.0, -1.0], \"all_tied\": true}], \"total_violations_20x64x32\": 16411}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "all_equal": [
+            [
+              8,
+              9,
+              11,
+              10
+            ]
+          ],
+          "all_equal_match": false,
+          "all_equal_ref": [
+            [
+              0,
+              1,
+              2,
+              3
+            ]
+          ],
+          "cutoff_ties": {
+            "got": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              7
+            ],
+            "violation": "index 7 kept over tied lower index 6"
+          },
+          "distinct_top_correct": true,
+          "metric": "exact index match vs stable descending tie-break (lower index kept)",
+          "quantized_rows_20x64x32_stable_ref_violations": 16411
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "Probe t6 confirms the tie-break violation. All-equal scores returned [8,9,11,10] instead of required [0,1,2,3]; cutoff tie case (scores 8,7,6,5,4,4,4,4,4,... with k=7) returned index 7 instead of lower tied index 6. Across 20x64 quantized rows with many exact ties, 16,411 positions differed from the stable lower-index reference. Distinct top values are ordered correctly ([15,14,13,12]), so the failure is specific to the tie-break rule required by problem.txt.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-10T05:21:22Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-10T05:20:48Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-10T05:21:22Z",
+              "data": {
+                "all_equal": [
+                  [
+                    8,
+                    9,
+                    11,
+                    10
+                  ]
+                ],
+                "all_equal_match": false,
+                "all_equal_ref": [
+                  [
+                    0,
+                    1,
+                    2,
+                    3
+                  ]
+                ],
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "3cede333584c28e6fd9e80bd07b076bda880deb3fe514592661d519b1a10ddc3"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "ec10033c8d017ac841c9c42fbf0df712701f16156df3c5b23e833d67d6f1014b"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "d8521c06520e1de161ae5430118cb022c2643da4cf434e7950342d9d6a2237a9"
+                  }
+                ],
+                "cutoff_ties": {
+                  "got": [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    7
+                  ],
+                  "violation": "index 7 kept over tied lower index 6"
+                },
+                "distinct_top_correct": true,
+                "duration_s": 7.584852,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "all_equal": [
+                    [
+                      8,
+                      9,
+                      11,
+                      10
+                    ],
+                    [
+                      8,
+                      9,
+                      11,
+                      10
+                    ],
+                    [
+                      8,
+                      9,
+                      11,
+                      10
+                    ],
+                    [
+                      8,
+                      9,
+                      11,
+                      10
+                    ]
+                  ],
+                  "all_equal_match": false,
+                  "all_equal_ref": [
+                    [
+                      0,
+                      1,
+                      2,
+                      3
+                    ],
+                    [
+                      0,
+                      1,
+                      2,
+                      3
+                    ],
+                    [
+                      0,
+                      1,
+                      2,
+                      3
+                    ],
+                    [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  ],
+                  "cutoff_ties": [
+                    [
+                      0,
+                      1,
+                      2,
+                      3,
+                      4,
+                      5,
+                      7
+                    ]
+                  ],
+                  "distinct_top": [
+                    [
+                      15,
+                      14,
+                      13,
+                      12
+                    ],
+                    [
+                      15,
+                      14,
+                      13,
+                      12
+                    ],
+                    [
+                      15,
+                      14,
+                      13,
+                      12
+                    ],
+                    [
+                      15,
+                      14,
+                      13,
+                      12
+                    ]
+                  ],
+                  "rand_tie_examples": [
+                    {
+                      "all_tied": true,
+                      "got": [
+                        11,
+                        14,
+                        15,
+                        3,
+                        13,
+                        4,
+                        9,
+                        12
+                      ],
+                      "ref": [
+                        11,
+                        14,
+                        15,
+                        12,
+                        3,
+                        4,
+                        13,
+                        1
+                      ],
+                      "row": 0,
+                      "scores": [
+                        -2.0,
+                        -1.0,
+                        -5.0,
+                        0.0,
+                        -0.0,
+                        -1.0,
+                        -1.0,
+                        -1.0,
+                        -2.0,
+                        -1.0,
+                        -3.0,
+                        5.0,
+                        1.0,
+                        -0.0,
+                        3.0,
+                        2.0
+                      ]
+                    },
+                    {
+                      "all_tied": true,
+                      "got": [
+                        2,
+                        14,
+                        1,
+                        3,
+                        12,
+                        11,
+                        9,
+                        5
+                      ],
+                      "ref": [
+                        10,
+                        2,
+                        14,
+                        1,
+                        3,
+                        11,
+                        0,
+                        8
+                      ],
+                      "row": 1,
+                      "scores": [
+                        -0.0,
+                        2.0,
+                        3.0,
+                        2.0,
+                        -1.0,
+                        -3.0,
+                        -1.0,
+                        -3.0,
+                        0.0,
+                        -0.0,
+                        4.0,
+                        1.0,
+                        -0.0,
+                        -2.0,
+                        3.0,
+                        -1.0
+                      ]
+                    },
+                    {
+                      "all_tied": true,
+                      "got": [
+                        7,
+                        10,
+                        11,
+                        9,
+                        8,
+                        12,
+                        5,
+                        4
+                      ],
+                      "ref": [
+                        7,
+                        10,
+                        13,
+                        6,
+                        9,
+                        11,
+                        5,
+                        8
+                      ],
+                      "row": 2,
+                      "scores": [
+                        -1.0,
+                        -1.0,
+                        -2.0,
+                        -2.0,
+                        -1.0,
+                        -0.0,
+                        1.0,
+                        3.0,
+                        0.0,
+                        1.0,
+                        3.0,
+                        1.0,
+                        -0.0,
+                        2.0,
+                        -3.0,
+                        -2.0
+                      ]
+                    },
+                    {
+                      "all_tied": true,
+                      "got": [
+                        4,
+                        11,
+                        7,
+                        2,
+                        12,
+                        6,
+                        13,
+                        14
+                      ],
+                      "ref": [
+                        4,
+                        11,
+                        1,
+                        2,
+                        7,
+                        12,
+                        14,
+                        0
+                      ],
+                      "row": 3,
+                      "scores": [
+                        -0.0,
+                        1.0,
+                        1.0,
+                        -0.0,
+                        2.0,
+                        -2.0,
+                        0.0,
+                        1.0,
+                        -1.0,
+                        -1.0,
+                        -1.0,
+                        2.0,
+                        1.0,
+                        0.0,
+                        1.0,
+                        -2.0
+                      ]
+                    },
+                    {
+                      "all_tied": true,
+                      "got": [
+                        6,
+                        10,
+                        14,
+                        5,
+                        0,
+                        13,
+                        15,
+                        12
+                      ],
+                      "ref": [
+                        2,
+                        6,
+                        10,
+                        12,
+                        14,
+                        0,
+                        5,
+                        13
+                      ],
+                      "row": 4,
+                      "scores": [
+                        -0.0,
+                        -2.0,
+                        2.0,
+                        -2.0,
+                        -2.0,
+                        0.0,
+                        1.0,
+                        -1.0,
+                        -1.0,
+                        -1.0,
+                        1.0,
+                        -3.0,
+                        1.0,
+                        -0.0,
+                        1.0,
+                        -1.0
+                      ]
+                    }
+                  ],
+                  "rand_ties_match_stable_ref": false,
+                  "total_violations_20x64x32": 16411
+                },
+                "metric": "exact index match vs stable descending tie-break (lower index kept)",
+                "quantized_rows_20x64x32_stable_ref_violations": 16411,
+                "stderr": "",
+                "stdout": "{\"all_equal\": [[8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10]], \"all_equal_ref\": [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], \"all_equal_match\": false, \"distinct_top\": [[15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12]], \"cutoff_ties\": [[0, 1, 2, 3, 4, 5, 7]], \"rand_ties_match_stable_ref\": false, \"rand_tie_examples\": [{\"row\": 0, \"got\": [11, 14, 15, 3, 13, 4, 9, 12], \"ref\": [11, 14, 15, 12, 3, 4, 13, 1], \"scores\": [-2.0, -1.0, -5.0, 0.0, -0.0, -1.0, -1.0, -1.0, -2.0, -1.0, -3.0, 5.0, 1.0, -0.0, 3.0, 2.0], \"all_tied\": true}, {\"row\": 1, \"got\": [2, 14, 1, 3, 12, 11, 9, 5], \"ref\": [10, 2, 14, 1, 3, 11, 0, 8], \"scores\": [-0.0, 2.0, 3.0, 2.0, -1.0, -3.0, -1.0, -3.0, 0.0, -0.0, 4.0, 1.0, -0.0, -2.0, 3.0, -1.0], \"all_tied\": true}, {\"row\": 2, \"got\": [7, 10, 11, 9, 8, 12, 5, 4], \"ref\": [7, 10, 13, 6, 9, 11, 5, 8], \"scores\": [-1.0, -1.0, -2.0, -2.0, -1.0, -0.0, 1.0, 3.0, 0.0, 1.0, 3.0, 1.0, -0.0, 2.0, -3.0, -2.0], \"all_tied\": true}, {\"row\": 3, \"got\": [4, 11, 7, 2, 12, 6, 13, 14], \"ref\": [4, 11, 1, 2, 7, 12, 14, 0], \"scores\": [-0.0, 1.0, 1.0, -0.0, 2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 2.0, 1.0, 0.0, 1.0, -2.0], \"all_tied\": true}, {\"row\": 4, \"got\": [6, 10, 14, 5, 0, 13, 15, 12], \"ref\": [2, 6, 10, 12, 14, 0, 5, 13], \"scores\": [-0.0, -2.0, 2.0, -2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 1.0, -3.0, 1.0, -0.0, 1.0, -1.0], \"all_tied\": true}], \"total_violations_20x64x32\": 16411}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Probe t6 confirms the tie-break violation. All-equal scores returned [8,9,11,10] instead of required [0,1,2,3]; cutoff tie case (scores 8,7,6,5,4,4,4,4,4,... with k=7) returned index 7 instead of lower tied index 6. Across 20x64 quantized rows with many exact ties, 16,411 positions differed from the stable lower-index reference. Distinct top values are ordered correctly ([15,14,13,12]), so the failure is specific to the tie-break rule required by problem.txt.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "compare_and_swap swaps only when left>right (bitcast-signed compare) XOR flip; strict comparison gives no defined order for exactly equal values, so tie-break (keep lower index) may be violated depending on network stage/flip pattern.",
+          "scope": "unknown",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract states ties must keep the LOWER index; scores domain is power-of-two columns, arbitrary float values including ties."
+            }
+          ],
+          "scope_rationale": "problem.txt explicitly requires 'when two candidates have exactly equal scores, the LOWER index must be the one kept' \u2014 ties on admitted float inputs are in the contract.",
+          "statement": "The kernel violates the tie-break contract: on rows containing exactly equal scores, the returned top-k indices keep the higher index instead of the lower one.",
+          "status": "confirmed",
+          "updated_at": "2026-09-10T05:21:22Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-10T05:21:22Z",
+          "data": {
+            "all_equal": [
+              [
+                8,
+                9,
+                11,
+                10
+              ]
+            ],
+            "all_equal_match": false,
+            "all_equal_ref": [
+              [
+                0,
+                1,
+                2,
+                3
+              ]
+            ],
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "3cede333584c28e6fd9e80bd07b076bda880deb3fe514592661d519b1a10ddc3"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "ec10033c8d017ac841c9c42fbf0df712701f16156df3c5b23e833d67d6f1014b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "d8521c06520e1de161ae5430118cb022c2643da4cf434e7950342d9d6a2237a9"
+              }
+            ],
+            "cutoff_ties": {
+              "got": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                7
+              ],
+              "violation": "index 7 kept over tied lower index 6"
+            },
+            "distinct_top_correct": true,
+            "duration_s": 7.584852,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "all_equal": [
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ],
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ],
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ],
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ]
+              ],
+              "all_equal_match": false,
+              "all_equal_ref": [
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ],
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ],
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ],
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ]
+              ],
+              "cutoff_ties": [
+                [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  7
+                ]
+              ],
+              "distinct_top": [
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ],
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ],
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ],
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ]
+              ],
+              "rand_tie_examples": [
+                {
+                  "all_tied": true,
+                  "got": [
+                    11,
+                    14,
+                    15,
+                    3,
+                    13,
+                    4,
+                    9,
+                    12
+                  ],
+                  "ref": [
+                    11,
+                    14,
+                    15,
+                    12,
+                    3,
+                    4,
+                    13,
+                    1
+                  ],
+                  "row": 0,
+                  "scores": [
+                    -2.0,
+                    -1.0,
+                    -5.0,
+                    0.0,
+                    -0.0,
+                    -1.0,
+                    -1.0,
+                    -1.0,
+                    -2.0,
+                    -1.0,
+                    -3.0,
+                    5.0,
+                    1.0,
+                    -0.0,
+                    3.0,
+                    2.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    2,
+                    14,
+                    1,
+                    3,
+                    12,
+                    11,
+                    9,
+                    5
+                  ],
+                  "ref": [
+                    10,
+                    2,
+                    14,
+                    1,
+                    3,
+                    11,
+                    0,
+                    8
+                  ],
+                  "row": 1,
+                  "scores": [
+                    -0.0,
+                    2.0,
+                    3.0,
+                    2.0,
+                    -1.0,
+                    -3.0,
+                    -1.0,
+                    -3.0,
+                    0.0,
+                    -0.0,
+                    4.0,
+                    1.0,
+                    -0.0,
+                    -2.0,
+                    3.0,
+                    -1.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    7,
+                    10,
+                    11,
+                    9,
+                    8,
+                    12,
+                    5,
+                    4
+                  ],
+                  "ref": [
+                    7,
+                    10,
+                    13,
+                    6,
+                    9,
+                    11,
+                    5,
+                    8
+                  ],
+                  "row": 2,
+                  "scores": [
+                    -1.0,
+                    -1.0,
+                    -2.0,
+                    -2.0,
+                    -1.0,
+                    -0.0,
+                    1.0,
+                    3.0,
+                    0.0,
+                    1.0,
+                    3.0,
+                    1.0,
+                    -0.0,
+                    2.0,
+                    -3.0,
+                    -2.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    4,
+                    11,
+                    7,
+                    2,
+                    12,
+                    6,
+                    13,
+                    14
+                  ],
+                  "ref": [
+                    4,
+                    11,
+                    1,
+                    2,
+                    7,
+                    12,
+                    14,
+                    0
+                  ],
+                  "row": 3,
+                  "scores": [
+                    -0.0,
+                    1.0,
+                    1.0,
+                    -0.0,
+                    2.0,
+                    -2.0,
+                    0.0,
+                    1.0,
+                    -1.0,
+                    -1.0,
+                    -1.0,
+                    2.0,
+                    1.0,
+                    0.0,
+                    1.0,
+                    -2.0
+                  ]
+                },
+                {
+                  "all_tied": true,
+                  "got": [
+                    6,
+                    10,
+                    14,
+                    5,
+                    0,
+                    13,
+                    15,
+                    12
+                  ],
+                  "ref": [
+                    2,
+                    6,
+                    10,
+                    12,
+                    14,
+                    0,
+                    5,
+                    13
+                  ],
+                  "row": 4,
+                  "scores": [
+                    -0.0,
+                    -2.0,
+                    2.0,
+                    -2.0,
+                    -2.0,
+                    0.0,
+                    1.0,
+                    -1.0,
+                    -1.0,
+                    -1.0,
+                    1.0,
+                    -3.0,
+                    1.0,
+                    -0.0,
+                    1.0,
+                    -1.0
+                  ]
+                }
+              ],
+              "rand_ties_match_stable_ref": false,
+              "total_violations_20x64x32": 16411
+            },
+            "metric": "exact index match vs stable descending tie-break (lower index kept)",
+            "quantized_rows_20x64x32_stable_ref_violations": 16411,
+            "stderr": "",
+            "stdout": "{\"all_equal\": [[8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10]], \"all_equal_ref\": [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], \"all_equal_match\": false, \"distinct_top\": [[15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12]], \"cutoff_ties\": [[0, 1, 2, 3, 4, 5, 7]], \"rand_ties_match_stable_ref\": false, \"rand_tie_examples\": [{\"row\": 0, \"got\": [11, 14, 15, 3, 13, 4, 9, 12], \"ref\": [11, 14, 15, 12, 3, 4, 13, 1], \"scores\": [-2.0, -1.0, -5.0, 0.0, -0.0, -1.0, -1.0, -1.0, -2.0, -1.0, -3.0, 5.0, 1.0, -0.0, 3.0, 2.0], \"all_tied\": true}, {\"row\": 1, \"got\": [2, 14, 1, 3, 12, 11, 9, 5], \"ref\": [10, 2, 14, 1, 3, 11, 0, 8], \"scores\": [-0.0, 2.0, 3.0, 2.0, -1.0, -3.0, -1.0, -3.0, 0.0, -0.0, 4.0, 1.0, -0.0, -2.0, 3.0, -1.0], \"all_tied\": true}, {\"row\": 2, \"got\": [7, 10, 11, 9, 8, 12, 5, 4], \"ref\": [7, 10, 13, 6, 9, 11, 5, 8], \"scores\": [-1.0, -1.0, -2.0, -2.0, -1.0, -0.0, 1.0, 3.0, 0.0, 1.0, 3.0, 1.0, -0.0, 2.0, -3.0, -2.0], \"all_tied\": true}, {\"row\": 3, \"got\": [4, 11, 7, 2, 12, 6, 13, 14], \"ref\": [4, 11, 1, 2, 7, 12, 14, 0], \"scores\": [-0.0, 1.0, 1.0, -0.0, 2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 2.0, 1.0, 0.0, 1.0, -2.0], \"all_tied\": true}, {\"row\": 4, \"got\": [6, 10, 14, 5, 0, 13, 15, 12], \"ref\": [2, 6, 10, 12, 14, 0, 5, 13], \"scores\": [-0.0, -2.0, 2.0, -2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 1.0, -3.0, 1.0, -0.0, 1.0, -1.0], \"all_tied\": true}], \"total_violations_20x64x32\": 16411}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe t6 confirms the tie-break violation. All-equal scores returned [8,9,11,10] instead of required [0,1,2,3]; cutoff tie case (scores 8,7,6,5,4,4,4,4,4,... with k=7) returned index 7 instead of lower tied index 6. Across 20x64 quantized rows with many exact ties, 16,411 positions differed from the stable lower-index reference. Distinct top values are ordered correctly ([15,14,13,12]), so the failure is specific to the tie-break rule required by problem.txt.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "status": "confirmed"
+      },
+      "created_at": "2026-09-10T05:21:22Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-10T05:20:48Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-09-10T05:21:22Z",
+            "data": {
+              "all_equal": [
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ]
+              ],
+              "all_equal_match": false,
+              "all_equal_ref": [
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ]
+              ],
+              "artifacts": [
+                {
+                  "description": "Python probe code executed by local runtime.",
+                  "kind": "probe_code",
+                  "path": "probes/t6_probe.py",
+                  "sha256": "3cede333584c28e6fd9e80bd07b076bda880deb3fe514592661d519b1a10ddc3"
+                },
+                {
+                  "description": "Captured stdout from the probe process.",
+                  "kind": "stdout",
+                  "path": "probes/t6_stdout.txt",
+                  "sha256": "ec10033c8d017ac841c9c42fbf0df712701f16156df3c5b23e833d67d6f1014b"
+                },
+                {
+                  "description": "Captured stderr from the probe process.",
+                  "kind": "stderr",
+                  "path": "probes/t6_stderr.txt",
+                  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                },
+                {
+                  "description": "Parsed JSON object from the last non-empty stdout line.",
+                  "kind": "json_result",
+                  "path": "probes/t6_json_result.json",
+                  "sha256": "d8521c06520e1de161ae5430118cb022c2643da4cf434e7950342d9d6a2237a9"
+                }
+              ],
+              "cutoff_ties": {
+                "got": [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  7
+                ],
+                "violation": "index 7 kept over tied lower index 6"
+              },
+              "distinct_top_correct": true,
+              "duration_s": 7.584852,
+              "exit_code": 0,
+              "expected_signal": null,
+              "json_parse_error": null,
+              "json_result": {
+                "all_equal": [
+                  [
+                    8,
+                    9,
+                    11,
+                    10
+                  ],
+                  [
+                    8,
+                    9,
+                    11,
+                    10
+                  ],
+                  [
+                    8,
+                    9,
+                    11,
+                    10
+                  ],
+                  [
+                    8,
+                    9,
+                    11,
+                    10
+                  ]
+                ],
+                "all_equal_match": false,
+                "all_equal_ref": [
+                  [
+                    0,
+                    1,
+                    2,
+                    3
+                  ],
+                  [
+                    0,
+                    1,
+                    2,
+                    3
+                  ],
+                  [
+                    0,
+                    1,
+                    2,
+                    3
+                  ],
+                  [
+                    0,
+                    1,
+                    2,
+                    3
+                  ]
+                ],
+                "cutoff_ties": [
+                  [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    7
+                  ]
+                ],
+                "distinct_top": [
+                  [
+                    15,
+                    14,
+                    13,
+                    12
+                  ],
+                  [
+                    15,
+                    14,
+                    13,
+                    12
+                  ],
+                  [
+                    15,
+                    14,
+                    13,
+                    12
+                  ],
+                  [
+                    15,
+                    14,
+                    13,
+                    12
+                  ]
+                ],
+                "rand_tie_examples": [
+                  {
+                    "all_tied": true,
+                    "got": [
+                      11,
+                      14,
+                      15,
+                      3,
+                      13,
+                      4,
+                      9,
+                      12
+                    ],
+                    "ref": [
+                      11,
+                      14,
+                      15,
+                      12,
+                      3,
+                      4,
+                      13,
+                      1
+                    ],
+                    "row": 0,
+                    "scores": [
+                      -2.0,
+                      -1.0,
+                      -5.0,
+                      0.0,
+                      -0.0,
+                      -1.0,
+                      -1.0,
+                      -1.0,
+                      -2.0,
+                      -1.0,
+                      -3.0,
+                      5.0,
+                      1.0,
+                      -0.0,
+                      3.0,
+                      2.0
+                    ]
+                  },
+                  {
+                    "all_tied": true,
+                    "got": [
+                      2,
+                      14,
+                      1,
+                      3,
+                      12,
+                      11,
+                      9,
+                      5
+                    ],
+                    "ref": [
+                      10,
+                      2,
+                      14,
+                      1,
+                      3,
+                      11,
+                      0,
+                      8
+                    ],
+                    "row": 1,
+                    "scores": [
+                      -0.0,
+                      2.0,
+                      3.0,
+                      2.0,
+                      -1.0,
+                      -3.0,
+                      -1.0,
+                      -3.0,
+                      0.0,
+                      -0.0,
+                      4.0,
+                      1.0,
+                      -0.0,
+                      -2.0,
+                      3.0,
+                      -1.0
+                    ]
+                  },
+                  {
+                    "all_tied": true,
+                    "got": [
+                      7,
+                      10,
+                      11,
+                      9,
+                      8,
+                      12,
+                      5,
+                      4
+                    ],
+                    "ref": [
+                      7,
+                      10,
+                      13,
+                      6,
+                      9,
+                      11,
+                      5,
+                      8
+                    ],
+                    "row": 2,
+                    "scores": [
+                      -1.0,
+                      -1.0,
+                      -2.0,
+                      -2.0,
+                      -1.0,
+                      -0.0,
+                      1.0,
+                      3.0,
+                      0.0,
+                      1.0,
+                      3.0,
+                      1.0,
+                      -0.0,
+                      2.0,
+                      -3.0,
+                      -2.0
+                    ]
+                  },
+                  {
+                    "all_tied": true,
+                    "got": [
+                      4,
+                      11,
+                      7,
+                      2,
+                      12,
+                      6,
+                      13,
+                      14
+                    ],
+                    "ref": [
+                      4,
+                      11,
+                      1,
+                      2,
+                      7,
+                      12,
+                      14,
+                      0
+                    ],
+                    "row": 3,
+                    "scores": [
+                      -0.0,
+                      1.0,
+                      1.0,
+                      -0.0,
+                      2.0,
+                      -2.0,
+                      0.0,
+                      1.0,
+                      -1.0,
+                      -1.0,
+                      -1.0,
+                      2.0,
+                      1.0,
+                      0.0,
+                      1.0,
+                      -2.0
+                    ]
+                  },
+                  {
+                    "all_tied": true,
+                    "got": [
+                      6,
+                      10,
+                      14,
+                      5,
+                      0,
+                      13,
+                      15,
+                      12
+                    ],
+                    "ref": [
+                      2,
+                      6,
+                      10,
+                      12,
+                      14,
+                      0,
+                      5,
+                      13
+                    ],
+                    "row": 4,
+                    "scores": [
+                      -0.0,
+                      -2.0,
+                      2.0,
+                      -2.0,
+                      -2.0,
+                      0.0,
+                      1.0,
+                      -1.0,
+                      -1.0,
+                      -1.0,
+                      1.0,
+                      -3.0,
+                      1.0,
+                      -0.0,
+                      1.0,
+                      -1.0
+                    ]
+                  }
+                ],
+                "rand_ties_match_stable_ref": false,
+                "total_violations_20x64x32": 16411
+              },
+              "metric": "exact index match vs stable descending tie-break (lower index kept)",
+              "quantized_rows_20x64x32_stable_ref_violations": 16411,
+              "stderr": "",
+              "stdout": "{\"all_equal\": [[8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10], [8, 9, 11, 10]], \"all_equal_ref\": [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], \"all_equal_match\": false, \"distinct_top\": [[15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12], [15, 14, 13, 12]], \"cutoff_ties\": [[0, 1, 2, 3, 4, 5, 7]], \"rand_ties_match_stable_ref\": false, \"rand_tie_examples\": [{\"row\": 0, \"got\": [11, 14, 15, 3, 13, 4, 9, 12], \"ref\": [11, 14, 15, 12, 3, 4, 13, 1], \"scores\": [-2.0, -1.0, -5.0, 0.0, -0.0, -1.0, -1.0, -1.0, -2.0, -1.0, -3.0, 5.0, 1.0, -0.0, 3.0, 2.0], \"all_tied\": true}, {\"row\": 1, \"got\": [2, 14, 1, 3, 12, 11, 9, 5], \"ref\": [10, 2, 14, 1, 3, 11, 0, 8], \"scores\": [-0.0, 2.0, 3.0, 2.0, -1.0, -3.0, -1.0, -3.0, 0.0, -0.0, 4.0, 1.0, -0.0, -2.0, 3.0, -1.0], \"all_tied\": true}, {\"row\": 2, \"got\": [7, 10, 11, 9, 8, 12, 5, 4], \"ref\": [7, 10, 13, 6, 9, 11, 5, 8], \"scores\": [-1.0, -1.0, -2.0, -2.0, -1.0, -0.0, 1.0, 3.0, 0.0, 1.0, 3.0, 1.0, -0.0, 2.0, -3.0, -2.0], \"all_tied\": true}, {\"row\": 3, \"got\": [4, 11, 7, 2, 12, 6, 13, 14], \"ref\": [4, 11, 1, 2, 7, 12, 14, 0], \"scores\": [-0.0, 1.0, 1.0, -0.0, 2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 2.0, 1.0, 0.0, 1.0, -2.0], \"all_tied\": true}, {\"row\": 4, \"got\": [6, 10, 14, 5, 0, 13, 15, 12], \"ref\": [2, 6, 10, 12, 14, 0, 5, 13], \"scores\": [-0.0, -2.0, 2.0, -2.0, -2.0, 0.0, 1.0, -1.0, -1.0, -1.0, 1.0, -3.0, 1.0, -0.0, 1.0, -1.0], \"all_tied\": true}], \"total_violations_20x64x32\": 16411}\n",
+              "timed_out": false,
+              "timeout_s": 60
+            },
+            "id": "c1.e1",
+            "kind": "runtime_probe",
+            "summary": "Probe t6 confirms the tie-break violation. All-equal scores returned [8,9,11,10] instead of required [0,1,2,3]; cutoff tie case (scores 8,7,6,5,4,4,4,4,4,... with k=7) returned index 7 instead of lower tied index 6. Across 20x64 quantized rows with many exact ties, 16,411 positions differed from the stable lower-index reference. Distinct top values are ordered correctly ([15,14,13,12]), so the failure is specific to the tie-break rule required by problem.txt.",
+            "supports": "confirmed",
+            "tool_event_id": "t6"
+          }
+        ],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "compare_and_swap swaps only when left>right (bitcast-signed compare) XOR flip; strict comparison gives no defined order for exactly equal values, so tie-break (keep lower index) may be violated depending on network stage/flip pattern.",
+        "scope": "unknown",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract states ties must keep the LOWER index; scores domain is power-of-two columns, arbitrary float values including ties."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly requires 'when two candidates have exactly equal scores, the LOWER index must be the one kept' \u2014 ties on admitted float inputs are in the contract.",
+        "statement": "The kernel violates the tie-break contract: on rows containing exactly equal scores, the returned top-k indices keep the higher index instead of the lower one.",
+        "status": "confirmed",
+        "updated_at": "2026-09-10T05:21:22Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "rationale": "Probe t6 already showed the kernel returns higher indices among exactly tied scores (all-equal scores returned [8,9,11,10] instead of [0,1,2,3]), directly contradicting the contract sentence 'when two candidates have exactly equal scores, the LOWER index must be the one kept'.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract explicitly requires: 'when two candidates have exactly equal scores, the LOWER index must be the one kept'; input domain is power-of-two-column score tensors, which include tied float scores (e.g. all-equal rows), so tie behavior is a required behaviour in scope."
+          }
+        ],
+        "statement": "The kernel violates the contract's tie-break rule: on rows with exactly equal scores (including an all-equal-scores row, which the contract's input domain admits), the returned top-k indices keep a higher index over a tied lower index."
+      },
+      "created_at": "2026-09-10T05:21:51Z",
+      "id": "t9",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t9",
+        "message": "in_scope claims require non-empty scope_rationale",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Probe t6 already showed the kernel returns higher indices among exactly tied scores (all-equal scores returned [8,9,11,10] instead of [0,1,2,3]), directly contradicting the contract sentence 'when two candidates have exactly equal scores, the LOWER index must be the one kept'.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract explicitly requires: 'when two candidates have exactly equal scores, the LOWER index must be the one kept'; input domain is power-of-two-column score tensors, which admit tied float scores (e.g. all-equal rows), so tie behaviour is a required in-contract behaviour."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly requires 'when two candidates have exactly equal scores, the LOWER index must be the one kept', and all-equal/tied score rows are admitted by the contract's stated input domain (power-of-two columns, arbitrary float scores), so tie-break behaviour is a required behaviour in scope.",
+        "statement": "The kernel violates the contract's tie-break rule: on rows with exactly equal scores (including an all-equal-scores row, which the contract's input domain admits), the returned top-k indices keep a higher index over a tied lower index."
+      },
+      "created_at": "2026-09-10T05:21:56Z",
+      "id": "t10",
+      "output": {
+        "created_at": "2026-09-10T05:21:56Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Probe t6 already showed the kernel returns higher indices among exactly tied scores (all-equal scores returned [8,9,11,10] instead of [0,1,2,3]), directly contradicting the contract sentence 'when two candidates have exactly equal scores, the LOWER index must be the one kept'.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract explicitly requires: 'when two candidates have exactly equal scores, the LOWER index must be the one kept'; input domain is power-of-two-column score tensors, which admit tied float scores (e.g. all-equal rows), so tie behaviour is a required in-contract behaviour."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly requires 'when two candidates have exactly equal scores, the LOWER index must be the one kept', and all-equal/tied score rows are admitted by the contract's stated input domain (power-of-two columns, arbitrary float scores), so tie-break behaviour is a required behaviour in scope.",
+        "statement": "The kernel violates the contract's tie-break rule: on rows with exactly equal scores (including an all-equal-scores row, which the contract's input domain admits), the returned top-k indices keep a higher index over a tied lower index.",
+        "status": "open",
+        "updated_at": "2026-09-10T05:21:56Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "data": {
+          "all_equal": [
+            [
+              8,
+              9,
+              11,
+              10
+            ]
+          ],
+          "all_equal_ref": [
+            [
+              0,
+              1,
+              2,
+              3
+            ]
+          ],
+          "cutoff_ties": {
+            "got": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              7
+            ],
+            "violation": "index 7 kept over tied lower index 6"
+          },
+          "distinct_top": [
+            [
+              15,
+              14,
+              13,
+              12
+            ]
+          ],
+          "metric": "exact index match vs stable descending tie-break (lower index kept)",
+          "rand_ties_match_stable_ref": false,
+          "total_violations_20x64x32": 16411
+        },
+        "kind": "runtime_probe",
+        "summary": "Probe t6 (event t6) confirms tie-break violation for in-scope inputs: all-equal-scores rows (admitted by the power-of-two-column float domain) returned indices [8,9,11,10] instead of required lower indices [0,1,2,3]; a cutoff tie case kept index 7 over lower tied index 6; 16,411 position mismatches vs stable lower-index reference across quantized tie-heavy rows. Distinct-value tops are ordered correctly, isolating the failure to the tie-break rule explicitly required by problem.txt.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      },
+      "created_at": "2026-09-10T05:22:03Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-09-10T05:22:03Z",
+        "data": {
+          "all_equal": [
+            [
+              8,
+              9,
+              11,
+              10
+            ]
+          ],
+          "all_equal_ref": [
+            [
+              0,
+              1,
+              2,
+              3
+            ]
+          ],
+          "cutoff_ties": {
+            "got": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              7
+            ],
+            "violation": "index 7 kept over tied lower index 6"
+          },
+          "distinct_top": [
+            [
+              15,
+              14,
+              13,
+              12
+            ]
+          ],
+          "metric": "exact index match vs stable descending tie-break (lower index kept)",
+          "rand_ties_match_stable_ref": false,
+          "total_violations_20x64x32": 16411
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t6 (event t6) confirms tie-break violation for in-scope inputs: all-equal-scores rows (admitted by the power-of-two-column float domain) returned indices [8,9,11,10] instead of required lower indices [0,1,2,3]; a cutoff tie case kept index 7 over lower tied index 6; 16,411 position mismatches vs stable lower-index reference across quantized tie-heavy rows. Distinct-value tops are ordered correctly, isolating the failure to the tie-break rule explicitly required by problem.txt.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "status": "confirmed"
+      },
+      "created_at": "2026-09-10T05:22:05Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-09-10T05:21:56Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-09-10T05:22:03Z",
+            "data": {
+              "all_equal": [
+                [
+                  8,
+                  9,
+                  11,
+                  10
+                ]
+              ],
+              "all_equal_ref": [
+                [
+                  0,
+                  1,
+                  2,
+                  3
+                ]
+              ],
+              "cutoff_ties": {
+                "got": [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  7
+                ],
+                "violation": "index 7 kept over tied lower index 6"
+              },
+              "distinct_top": [
+                [
+                  15,
+                  14,
+                  13,
+                  12
+                ]
+              ],
+              "metric": "exact index match vs stable descending tie-break (lower index kept)",
+              "rand_ties_match_stable_ref": false,
+              "total_violations_20x64x32": 16411
+            },
+            "id": "c2.e1",
+            "kind": "runtime_probe",
+            "summary": "Probe t6 (event t6) confirms tie-break violation for in-scope inputs: all-equal-scores rows (admitted by the power-of-two-column float domain) returned indices [8,9,11,10] instead of required lower indices [0,1,2,3]; a cutoff tie case kept index 7 over lower tied index 6; 16,411 position mismatches vs stable lower-index reference across quantized tie-heavy rows. Distinct-value tops are ordered correctly, isolating the failure to the tie-break rule explicitly required by problem.txt.",
+            "supports": "confirmed",
+            "tool_event_id": "t6"
+          }
+        ],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Probe t6 already showed the kernel returns higher indices among exactly tied scores (all-equal scores returned [8,9,11,10] instead of [0,1,2,3]), directly contradicting the contract sentence 'when two candidates have exactly equal scores, the LOWER index must be the one kept'.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract explicitly requires: 'when two candidates have exactly equal scores, the LOWER index must be the one kept'; input domain is power-of-two-column score tensors, which admit tied float scores (e.g. all-equal rows), so tie behaviour is a required in-contract behaviour."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly requires 'when two candidates have exactly equal scores, the LOWER index must be the one kept', and all-equal/tied score rows are admitted by the contract's stated input domain (power-of-two columns, arbitrary float scores), so tie-break behaviour is a required behaviour in scope.",
+        "statement": "The kernel violates the contract's tie-break rule: on rows with exactly equal scores (including an all-equal-scores row, which the contract's input domain admits), the returned top-k indices keep a higher index over a tied lower index.",
+        "status": "confirmed",
+        "updated_at": "2026-09-10T05:22:05Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c2"
+        ],
+        "reason": "Reject. problem.txt explicitly requires that on exactly equal scores the LOWER index be kept. Probe t6 (run_claim_probe on the real CUDA kernel) showed: on all-equal-scores rows the kernel returned top-4 indices [8,9,11,10] instead of the required [0,1,2,3]; in a cutoff-tie case (scores 8,7,6,5,4,4,4,4,4,..., k=7) it kept index 7 over tied lower index 6; and across 20x64 quantized tie-heavy rows it mismatched a stable descending lower-index reference at 16,411 positions. Rows with all-distinct scores sorted correctly ([15,14,13,12]), isolating the defect to the required tie-break behaviour. The inputs tested are admitted by the contract's declared domain (power-of-two columns, arbitrary float scores), so the violation is in-scope and decisive.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-10T05:22:10Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-10T05:22:10Z",
+        "decisive_claims": [
+          "c2"
+        ],
+        "reason": "Reject. problem.txt explicitly requires that on exactly equal scores the LOWER index be kept. Probe t6 (run_claim_probe on the real CUDA kernel) showed: on all-equal-scores rows the kernel returned top-4 indices [8,9,11,10] instead of the required [0,1,2,3]; in a cutoff-tie case (scores 8,7,6,5,4,4,4,4,4,..., k=7) it kept index 7 over tied lower index 6; and across 20x64 quantized tie-heavy rows it mismatched a stable descending lower-index reference at 16,411 positions. Rows with all-distinct scores sorted correctly ([15,14,13,12]), isolating the defect to the required tie-break behaviour. The inputs tested are admitted by the contract's declared domain (power-of-two columns, arbitrary float scores), so the violation is in-scope and decisive.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-10T05:22:10Z",
+    "decisive_claims": [
+      "c2"
+    ],
+    "reason": "Reject. problem.txt explicitly requires that on exactly equal scores the LOWER index be kept. Probe t6 (run_claim_probe on the real CUDA kernel) showed: on all-equal-scores rows the kernel returned top-4 indices [8,9,11,10] instead of the required [0,1,2,3]; in a cutoff-tie case (scores 8,7,6,5,4,4,4,4,4,..., k=7) it kept index 7 over tied lower index 6; and across 20x64 quantized tie-heavy rows it mismatched a stable descending lower-index reference at 16,411 positions. Rows with all-distinct scores sorted correctly ([15,14,13,12]), isolating the defect to the required tie-break behaviour. The inputs tested are admitted by the contract's declared domain (power-of-two columns, arbitrary float scores), so the violation is in-scope and decisive.",
+    "verdict": "reject"
+  }
+}

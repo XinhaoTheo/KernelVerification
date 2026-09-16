@@ -1,0 +1,85 @@
+[
+  {
+    "created_at": "2026-09-08T23:50:06Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T23:52:29Z",
+        "data": {
+          "K100": {
+            "max_abs_err": 48.29465866088867,
+            "num_groups": 4,
+            "predicted_clamped_err": 33.2981071472168,
+            "rel": 0.3795543870193749
+          },
+          "K64": {
+            "max_abs_err": 3.0517578125e-05,
+            "num_groups": 2,
+            "predicted_clamped_err": 0.0,
+            "rel": 2.384557889256124e-07
+          },
+          "K80": {
+            "max_abs_err": 60.05613327026367,
+            "num_groups": 3,
+            "predicted_clamped_err": 60.0561408996582,
+            "rel": 0.45972211953194725
+          },
+          "K96": {
+            "max_abs_err": 3.814697265625e-05,
+            "num_groups": 3,
+            "predicted_clamped_err": 0.0,
+            "rel": 3.2019147962788115e-07
+          },
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "66e8373fd6addbedef51bc5a8bad41275fc1750dba92d523fb80854c0f0c78cf"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "abea0182ed3d00469a36e13081f2473cdfc5039d67783960403506558e01e4f5"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 5.83531,
+          "exit_code": 0,
+          "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96",
+          "json_parse_error": "last stdout JSON value is not an object",
+          "json_result": null,
+          "stderr": "",
+          "stdout": "[{\"K\": 80, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 60.05613327026367, \"rel\": 0.45972211953194725, \"predicted_clamped_err\": 60.0561408996582}, {\"K\": 64, \"group_size\": 32, \"num_groups\": 2, \"max_abs_err\": 3.0517578125e-05, \"rel\": 2.384557889256124e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 96, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 3.814697265625e-05, \"rel\": 3.2019147962788115e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 100, \"group_size\": 32, \"num_groups\": 4, \"max_abs_err\": 48.29465866088867, \"rel\": 0.3795543870193749, \"predicted_clamped_err\": 33.2981071472168}]\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t11 ran gptq_matmul against a contract reference (ceil(K/group_size) group rows, trailing partial group uses its own row). K=80: max_abs_err=60.06, rel=0.460, matching predicted clamped-grouping error 60.06. K=100: max_abs_err=48.29, rel=0.380. Divisible controls K=64 and K=96: err ~3e-5 (rel ~2-3e-7, fp32 noise). Confirms kernel assigns trailing partial group to group K//group_size-1 instead of its own ceil row.",
+        "supports": "confirmed",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "kernel.py lines 69-73 compute num_groups = K // group_size (floor) and clamp the per-column group index to num_groups - 1; for K % group_size != 0 the clamp provably remaps the trailing columns away from the final group row the contract requires, and a runtime probe can directly compare C against A @ dequant_ref using ceil(K/group_size) group rows.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt (tool event t2)",
+        "summary": "Contract: every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including a K that is not an exact multiple of group_size; the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros, and scales/zeros are supplied with ceil(K/group_size) rows."
+      }
+    ],
+    "scope_rationale": "The contract text in problem.txt explicitly requires correct trailing-group dequantization for any K including K % group_size != 0, with ceil(K/group_size) rows in scales/zeros; testing K=96, group_size=32 would not expose this, so K=80, group_size=32 (a representative input the contract admits) is used.",
+    "statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T23:52:29Z"
+  }
+]

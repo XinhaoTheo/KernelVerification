@@ -1,0 +1,137 @@
+[
+  {
+    "created_at": "2026-09-10T05:20:03Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-10T05:20:35Z",
+        "data": {},
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Rebutted via probe t7: adversarial case with 800 negative-residual tokens given inv_q=1e6 never returned an over-proposed token; kernel output exactly matched the clamped reference argmax. Analytically, negative residual * positive inv_q yields a negative score, strictly below any positive-residual token's nonnegative score, so an over-proposed token can win only if no positive residual exists anywhere (degenerate, contract-undefined case).",
+        "supports": "rebutted",
+        "tool_event_id": null
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The kernel computes (target_prob - draft_prob) * inv_q without the max(...,0) clamp the contract implies; if this can ever win the argmax over a positive-residual token, the kernel violates the contract's \"must never be returned\" requirement.",
+    "scope": "unknown",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0); a token with target_prob < draft_prob must never be returned as the recovered token."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly requires that tokens with target_prob < draft_prob (zero residual probability) are never returned; the kernel lacks the max(...,0) clamp.",
+    "statement": "Kernel can return a token with target_prob < draft_prob (negative residual) because it uses score = (target-draft)*inv_q without clamping to 0.",
+    "status": "rebutted",
+    "updated_at": "2026-09-10T05:20:38Z"
+  },
+  {
+    "created_at": "2026-09-10T05:20:03Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-10T05:20:32Z",
+        "data": {
+          "adversarial_negative_residual_tokens": 800,
+          "adversarial_overproposed_case_match": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "7368a4b3ec7b4f1173e9a4c273859ba1c20b5e4be58307b9670b2da39b00a095"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "ddf4db8a94dfdbb0f633a551e62e80ea2f6cddbfb74677824de16e93a1ae4212"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t7_json_result.json",
+              "sha256": "11d0d0584c13c6d1a1aca4da822798e9a621e4c7705aea6e84d67a4e02d77d42"
+            }
+          ],
+          "duration_s": 9.898816,
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": null,
+          "json_result": {
+            "adversarial_negative_residual_tokens": 800,
+            "adversarial_overproposed_case_match": true,
+            "fail_examples": [],
+            "metric": "exact argmax match vs clamp(target-draft,0)*inv_q",
+            "out_adversarial": [
+              264,
+              360,
+              417,
+              375,
+              863,
+              544,
+              760,
+              207
+            ],
+            "random_trials_failed": 0,
+            "ref_adversarial": [
+              264,
+              360,
+              417,
+              375,
+              863,
+              544,
+              760,
+              207
+            ]
+          },
+          "metric": "exact argmax match vs clamp(target-draft,0)*inv_q",
+          "random_trials_failed": 0,
+          "stderr": "",
+          "stdout": "{\"metric\": \"exact argmax match vs clamp(target-draft,0)*inv_q\", \"random_trials_failed\": 0, \"fail_examples\": [], \"adversarial_overproposed_case_match\": true, \"adversarial_negative_residual_tokens\": 800, \"out_adversarial\": [264, 360, 417, 375, 863, 544, 760, 207], \"ref_adversarial\": [264, 360, 417, 375, 863, 544, 760, 207]}\n",
+          "timed_out": false,
+          "timeout_s": 300,
+          "trials": 50
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "50 random benchmark-like trials (B=8, V=1024, softmax inputs, inv_q=1/Exp(1)): kernel output exactly matched argmax of clamp(target-draft,0)*inv_q in all trials (0 failures). Adversarial case with 800 negative-residual tokens weighted inv_q=1e6: kernel never returned an over-proposed token and matched the clamped reference exactly.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      },
+      {
+        "artifacts": [],
+        "created_at": "2026-09-10T05:20:35Z",
+        "data": {},
+        "id": "c2.e2",
+        "kind": "source_inspection",
+        "summary": "Kernel source (kernel.py lines 16-32) implements the multi-block loop with masked loads, -inf masking of out-of-range lanes, running max, and index clamp; it matches the contract's argmax_v(p_residual(v)*inv_q[v]) semantics for all-positive-residual rows.",
+        "supports": "confirmed",
+        "tool_event_id": null
+      }
+    ],
+    "id": "c2",
+    "raised_by": "solo",
+    "rationale": "A simple argmax-equivalence probe on random inputs checks the core exponential-race semantics including the masked tail and multi-block loop.",
+    "scope": "unknown",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Kernel returns argmax_v(p_residual(v) * inv_q[v]) given inv_q = 1/q with q ~ Exponential(1)."
+      }
+    ],
+    "scope_rationale": "problem.txt defines the sampled output as argmax of the residual score, so the output must match that argmax for benchmark-admissible inputs.",
+    "statement": "Kernel's argmax output matches the reference argmax of max(target-draft, 0) * inv_q on benchmark-like random inputs.",
+    "status": "confirmed",
+    "updated_at": "2026-09-10T05:20:35Z"
+  }
+]

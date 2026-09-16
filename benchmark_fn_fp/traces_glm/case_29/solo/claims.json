@@ -1,0 +1,173 @@
+[
+  {
+    "created_at": "2026-09-10T05:20:06Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-10T05:20:50Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "4469df381f978443fe0720b3357c1e460425c6b28ad874a708f4d9c878d8feb1"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "bb3a2182c6420772cefa48670dbe632afa23080d519768900668c8d486d185cd"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "daa7e9e6d611f8ac2e3a097f711462c9c0df77bbd7896313187309d39a1c22be"
+            }
+          ],
+          "duration_s": 6.274829,
+          "exit_code": 0,
+          "expected_signal": "kernel outputs outside e4m3 grid for subnormal and >448 inputs",
+          "json_parse_error": null,
+          "json_result": {
+            "inputs": [
+              0.0010000000474974513,
+              0.0008999999845400453,
+              0.001953125,
+              0.0078125,
+              0.009999999776482582,
+              500.0,
+              449.5,
+              1024.0,
+              3.700000047683716,
+              -3.700000047683716,
+              7.599999904632568,
+              0.0
+            ],
+            "kernel_out": [
+              0.0009765625,
+              0.00091552734375,
+              0.001953125,
+              0.0078125,
+              0.009765625,
+              512.0,
+              448.0,
+              1024.0,
+              3.75,
+              -3.75,
+              7.5,
+              0.0
+            ],
+            "kernel_outputs_representable": [
+              false,
+              false,
+              true,
+              true,
+              true,
+              false,
+              true,
+              false,
+              true,
+              true,
+              true,
+              true
+            ],
+            "max_abs_err": 576.0,
+            "mismatch": [
+              true,
+              true,
+              false,
+              false,
+              false,
+              true,
+              false,
+              true,
+              false,
+              false,
+              false,
+              false
+            ],
+            "native_ref": [
+              0.001953125,
+              0.0,
+              0.001953125,
+              0.0078125,
+              0.009765625,
+              448.0,
+              448.0,
+              448.0,
+              3.75,
+              -3.75,
+              7.5,
+              0.0
+            ],
+            "sweep_max_abs_err": 9792.0,
+            "sweep_mismatch_vs_native_count": 234,
+            "sweep_not_representable_count": 230,
+            "sweep_rel_err_violations_gt_half_step": 229,
+            "sweep_size": 410
+          },
+          "stderr": "",
+          "stdout": "{\"inputs\": [0.0010000000474974513, 0.0008999999845400453, 0.001953125, 0.0078125, 0.009999999776482582, 500.0, 449.5, 1024.0, 3.700000047683716, -3.700000047683716, 7.599999904632568, 0.0], \"kernel_out\": [0.0009765625, 0.00091552734375, 0.001953125, 0.0078125, 0.009765625, 512.0, 448.0, 1024.0, 3.75, -3.75, 7.5, 0.0], \"native_ref\": [0.001953125, 0.0, 0.001953125, 0.0078125, 0.009765625, 448.0, 448.0, 448.0, 3.75, -3.75, 7.5, 0.0], \"kernel_outputs_representable\": [false, false, true, true, true, false, true, false, true, true, true, true], \"mismatch\": [true, true, false, false, false, true, false, true, false, false, false, false], \"max_abs_err\": 576.0, \"sweep_size\": 410, \"sweep_not_representable_count\": 230, \"sweep_mismatch_vs_native_count\": 234, \"sweep_max_abs_err\": 9792.0, \"sweep_rel_err_violations_gt_half_step\": 229}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Confirmed: kernel output 0.0009765625 and 0.00091552734375 for inputs 0.001/0.0009 are not e4m3-representable (smallest positive e4m3 is 2^-9=0.001953125); kernel outputs 512.0 and 1024.0 for inputs 500.0/1024.0 exceed the e4m3 max 448 where native cast saturates to 448. In a 410-point sweep across magnitudes 1e-5..1e4, 230 outputs were not representable in e4m3 (verified by round-trip through torch.float8_e4m3fn) and 229 relative errors exceeded half a mantissa step (up to 9792 abs error), violating the contract \"every value rounded to nearest representable e4m3 value with relative error bounded by ~6.25%\".",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The kernel uses a per-binade step 2^(floor(log2|x|)-3) with no clamping to e4m3's exponent range, so tiny values get a finer grid than e4m3 provides and large values exceed the 448 maximum; outputs would not be representable e4m3 values, violating \"every value is rounded to the nearest representable e4m3 value\".",
+    "scope": "unknown",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: every value rounded to nearest representable e4m3 value; relative error bounded by half mantissa step (~6.25%), implying subnormal/small-value range is covered, not excluded."
+      }
+    ],
+    "scope_rationale": "problem.txt states the contract is that EVERY value is rounded to the nearest representable e4m3 value; subnormal-range and saturating-range inputs are ordinary float32 values the contract admits (no input domain restriction is stated anywhere in the artifact).",
+    "statement": "fp8_roundtrip produces values not representable in e4m3 for inputs in the subnormal range (|x| < 2^-6) and for inputs above the e4m3 max normal 448, because the kernel's step 2^(floor(log2|x|)-3) is not the actual e4m3 grid there.",
+    "status": "confirmed",
+    "updated_at": "2026-09-10T05:20:50Z"
+  },
+  {
+    "created_at": "2026-09-10T05:20:56Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-10T05:21:00Z",
+        "data": {},
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t8 (tool event t8, artifacts probes/t8_*): kernel outputs 0.0009765625 and 0.00091552734375 for inputs 0.001/0.0009 are not e4m3-representable (smallest positive e4m3 is 2^-9=0.001953125, verified by round-trip through torch.float8_e4m3fn); inputs 500.0/1024.0 produce 512.0/1024.0 exceeding e4m3 max 448 where native cast saturates to 448. In a 410-point sweep across magnitudes 1e-5..1e4, 230 outputs were not representable and 229 relative errors exceeded half a mantissa step (max abs err 9792), violating the contract that every value is rounded to the nearest representable e4m3 value with relative error bounded by ~6.25%.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "solo",
+    "rationale": "Probe t8 already showed kernel outputs (e.g. 0.0009765625 for input 0.001, 512.0 for input 500.0, 1024.0 for input 1024.0) that are not values representable in e4m3, while the native cast rounds to the correct grid; re-recording with in_scope scope so it can support the verdict.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract is that every value is rounded to the nearest representable e4m3 value, with relative error bounded by half a mantissa step (~6.25%). No input-domain restriction is stated; small and large float32 values are ordinary inputs the contract admits."
+      }
+    ],
+    "scope_rationale": "problem.txt states the contract applies to EVERY value (\"every value is rounded to the nearest representable e4m3 value\") with relative error bounded by ~6.25%; subnormal-range and >448 inputs are ordinary float32 values covered by this contract, and no artifact restricts the input domain.",
+    "statement": "fp8_roundtrip violates the e4m3 contract: for subnormal-range inputs (|x| < 2^-6) it outputs values not representable in e4m3 (e.g. 0.0009765625 for input 0.001, where the smallest positive e4m3 is 2^-9=0.001953125), and for inputs above the e4m3 max 448 it outputs non-representable values (512.0, 1024.0) instead of saturating to 448; in a 410-point sweep, 230 outputs were not e4m3-representable and 229 relative errors exceeded half a mantissa step.",
+    "status": "confirmed",
+    "updated_at": "2026-09-10T05:21:12Z"
+  }
+]

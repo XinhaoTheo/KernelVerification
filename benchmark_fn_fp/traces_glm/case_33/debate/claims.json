@@ -1,0 +1,159 @@
+[
+  {
+    "created_at": "2026-09-09T00:14:37Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-09T00:19:17Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t14_probe.py",
+              "sha256": "bcc946e53ac42c34a2573314f93e34ab045a214d6265ce279d986a2231d75ed4"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t14_stdout.txt",
+              "sha256": "a5b3d32e93bb143b6118674ca5e76a551dcf795e899a3d4f64090542edd97faf"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t14_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t14_json_result.json",
+              "sha256": "fc162dba9a6028d2d9021799f5e62f0f413833004fde2d4caed1538afad1e94e"
+            }
+          ],
+          "c1_case": {
+            "K": 64,
+            "gs": 48,
+            "max_err_vs_clamped_ref": 6.103515625e-05,
+            "max_err_vs_contract_ref": 142.8673858642578,
+            "ngroups_contract": 2
+          },
+          "control": {
+            "K": 64,
+            "gs": 32,
+            "max_err_vs_clamped_ref": 214.8192138671875,
+            "max_err_vs_contract_ref": 4.57763671875e-05
+          },
+          "duration_s": 4.930575,
+          "exit_code": 0,
+          "expected_signal": "control near-zero error; c1_case large error vs contract ref, near-zero vs clamped ref",
+          "json_parse_error": null,
+          "json_result": {
+            "c1_case": {
+              "K": 64,
+              "gs": 48,
+              "max_err_vs_clamped_ref": 6.103515625e-05,
+              "max_err_vs_contract_ref": 142.8673858642578,
+              "ngroups_contract": 2,
+              "ref_scale": 249.18719482421875
+            },
+            "control": {
+              "K": 64,
+              "gs": 32,
+              "max_err_vs_clamped_ref": 214.8192138671875,
+              "max_err_vs_contract_ref": 4.57763671875e-05,
+              "ngroups_contract": 2,
+              "ref_scale": 213.27139282226562
+            }
+          },
+          "stderr": "",
+          "stdout": "{\"control\": {\"max_err_vs_contract_ref\": 4.57763671875e-05, \"max_err_vs_clamped_ref\": 214.8192138671875, \"ref_scale\": 213.27139282226562, \"K\": 64, \"gs\": 32, \"ngroups_contract\": 2}, \"c1_case\": {\"max_err_vs_contract_ref\": 142.8673858642578, \"max_err_vs_clamped_ref\": 6.103515625e-05, \"ref_scale\": 249.18719482421875, \"K\": 64, \"gs\": 48, \"ngroups_contract\": 2}}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t14 isolates the group-table bug with K=64, group_size=48 (K%16==0 to exclude the tail-masking issue). Control case (gs=32, K%gs==0) matches the contract reference (max_abs_err 4.58e-5). c1 case (gs=48, contract has 2 groups) matches the wrapper's clamped (floor-group) reference with max_abs_err 6.1e-5 but deviates from the contract reference by max_abs_err 142.87: the trailing 16 columns (k=48..63) use group 0's scale/zero instead of their own group-1 row. Confirms the wrapper's num_groups=K//group_size + clamp violates the ceil(K/group_size)-row contract.",
+        "supports": "confirmed",
+        "tool_event_id": "t14"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "Host wrapper computes num_groups = K // group_size (floor) and clamps g_idx to max=num_groups-1, so trailing columns in a partial final group get index num_groups-1 instead of ceil(K/group_size)-1; if scales/zeros have ceil rows, the last row is unused and trailing columns reuse the second-to-last group's scale/zero, directly contradicting the contract's \"own row\" rule.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract states trailing columns form a shorter final group with its own row in scales/zeros, supplied with ceil(K/group_size) rows, for any K."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly requires correct dequantization for K not an exact multiple of group_size, with ceil(K/group_size) scale/zero rows; this is a stated contract behavior, not a generalization stress case.",
+    "statement": "For K % group_size != 0, the kernel uses the wrong scale/zero group for the trailing columns: gptq_matmul builds g_idx = clamp(arange(K)//group_size, max=K//group_size - 1) with num_groups = K // group_size (floor), so the final partial group is collapsed into the previous group, violating the ceil(K/group_size)-row contract.",
+    "status": "confirmed",
+    "updated_at": "2026-09-09T00:19:17Z"
+  },
+  {
+    "created_at": "2026-09-09T00:14:37Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-09T00:19:17Z",
+        "data": {
+          "K": 72,
+          "Kmod16": 8,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t15_probe.py",
+              "sha256": "ed5445cfb967afe655785ff8b7227c59886726cdcaccd1e0e4d5d5201d7c160f"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t15_stdout.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t15_stderr.txt",
+              "sha256": "30014f30cb465a6221743611758e123c8392c1e97328e698445f590dc8d141de"
+            }
+          ],
+          "duration_s": 5.528713,
+          "exit_code": 1,
+          "expected_signal": "large max_abs_err vs contract reference when K % 16 != 0 due to unmasked tail k-block",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "result": "CUDA illegal memory access on kernel launch/readback",
+          "stderr": "Traceback (most recent call last):\n  File \"/root/cases/case_33/agentic_runs/describer+skeptic+experimenter+judge/probes/t15_probe.py\", line 28, in <module>\n    err=(c-ref).abs().max().item()\n        ^^^^^^^^^^^^^\ntorch.AcceleratorError: CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\n\n",
+          "stdout": "",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t15 ran a single-group case with K=72 (K%BLOCK_SIZE_K=8), correctly packed inputs. The kernel launch produced 'CUDA error: an illegal memory access was encountered' when reading the output, confirming the kernel has no K-dimension masking: with K % 16 != 0 the final k-block reads a/g_idx/packed b out of bounds, corrupting memory. Confirms claim c2.",
+        "supports": "confirmed",
+        "tool_event_id": "t15"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "BLOCK_SIZE_K=16 and the kernel loads a, b, and g_idx with no k-boundary masks; if K % 16 != 0 the last k-iteration reads past the end of a/g_idx (and shifts b_ptrs past b_packed), producing wrong or garbage contributions to C, whereas the contract requires correct results for any K.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract requires correct grouped dequant matmul 'for any K', which includes K not a multiple of BLOCK_SIZE_K=16."
+      }
+    ],
+    "scope_rationale": "problem.txt declares the kernel must be correct for any K; K values not divisible by 16 are admitted inputs under that contract, not unusual shapes outside it.",
+    "statement": "The Triton kernel has no K-dimension masking: when K % BLOCK_SIZE_K (16) != 0, the final k-block reads a, g_idx, and packed b out of bounds / computes garbage, corrupting C.",
+    "status": "confirmed",
+    "updated_at": "2026-09-09T00:19:17Z"
+  }
+]

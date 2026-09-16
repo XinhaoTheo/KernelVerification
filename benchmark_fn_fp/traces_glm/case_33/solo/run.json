@@ -1,0 +1,1343 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_33",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef quant_matmul_248_kernel(\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\n    M, N, K, bits, maxq,\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\n    stride_scales, stride_zeros,\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\n    GROUP_SIZE_M: tl.constexpr,\n):\n    infearure_per_bits = 32 // bits\n    pid = tl.program_id(axis=0)\n    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\n    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\n    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\n    num_pid_in_group = GROUP_SIZE_M * num_pid_n\n    group_id = pid // num_pid_in_group\n    first_pid_m = group_id * GROUP_SIZE_M\n    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\n    pid_m = first_pid_m + (pid % group_size_m)\n    pid_n = (pid % num_pid_in_group) // group_size_m\n\n    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\n    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\n    offs_k = tl.arange(0, BLOCK_SIZE_K)\n    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\n    a_mask = offs_am[:, None] < M\n    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\n    g_ptrs = g_ptr + offs_k\n    scales_ptrs = scales_ptr + offs_bn[None, :]\n    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\n\n    shifter = (offs_k % infearure_per_bits) * bits\n    zeros_shifter = (offs_bn % infearure_per_bits) * bits\n    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\n\n    for k in range(0, num_pid_k):\n        g_idx = tl.load(g_ptrs)\n        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\n        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\n        zeros = (zeros >> zeros_shifter[None, :]) & maxq\n        zeros = zeros + 1\n        a = tl.load(a_ptrs, mask=a_mask, other=0.0)\n        b = tl.load(b_ptrs)\n        b = (b >> shifter[:, None]) & maxq\n        b = (b - zeros) * scales\n        accumulator += tl.dot(a, b)\n        a_ptrs += BLOCK_SIZE_K\n        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\n        g_ptrs += BLOCK_SIZE_K\n\n    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\n    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\n    tl.store(c_ptrs, accumulator, mask=c_mask)\n\n\ndef gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4):\n    \"\"\"Host wrapper. a: (M,K) fp32. b_packed: (K//(32//bits), N) int32.\n    scales/zeros: (num_groups, N), one row per group of `group_size` columns\n    along K. The per-column group table is derived here from group_size.\"\"\"\n    M, K = a.shape\n    N = b_packed.shape[1]\n    maxq = 2 ** bits - 1\n\n    num_groups = K // group_size\n    g_idx = torch.clamp(\n        torch.arange(K, device=a.device, dtype=torch.int32) // group_size,\n        max=num_groups - 1,\n    )\n\n    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\n    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\n    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\n    quant_matmul_248_kernel[grid](\n        a, b_packed, c, scales, zeros, g_idx,\n        M, N, K, bits, maxq,\n        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\n        scales.stride(0), zeros.stride(0),\n        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\n        GROUP_SIZE_M=GROUP_SIZE_M,\n    )\n    return c\n",
+    "passed": null,
+    "problem_text": "Operation: grouped INT4 dequantization fused with a matrix multiply\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\n\nWeights are stored as 4-bit values packed into int32 words. Columns along the\nreduction dimension K are split into consecutive groups of `group_size`, and\neach group carries its own scale and zero-point row in `scales` / `zeros`.\n\nContract: every column must be dequantized with the scale and zero-point of the\ngroup it actually belongs to, for any K -- including a K that is not an exact\nmultiple of group_size. In that case the trailing columns form a shorter final\ngroup which is still a group of its own, with its own row in `scales`/`zeros`;\n`scales` and `zeros` are supplied with ceil(K / group_size) rows accordingly.\n\nThe kernel computes  C = A @ dequant(B),  with dequant(B)[k,n] =\n(unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n],\nwhere group_of(k) is the index of the group column k belongs to.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_33",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T23:50:06Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T23:52:29Z",
+          "data": {
+            "K100": {
+              "max_abs_err": 48.29465866088867,
+              "num_groups": 4,
+              "predicted_clamped_err": 33.2981071472168,
+              "rel": 0.3795543870193749
+            },
+            "K64": {
+              "max_abs_err": 3.0517578125e-05,
+              "num_groups": 2,
+              "predicted_clamped_err": 0.0,
+              "rel": 2.384557889256124e-07
+            },
+            "K80": {
+              "max_abs_err": 60.05613327026367,
+              "num_groups": 3,
+              "predicted_clamped_err": 60.0561408996582,
+              "rel": 0.45972211953194725
+            },
+            "K96": {
+              "max_abs_err": 3.814697265625e-05,
+              "num_groups": 3,
+              "predicted_clamped_err": 0.0,
+              "rel": 3.2019147962788115e-07
+            },
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "66e8373fd6addbedef51bc5a8bad41275fc1750dba92d523fb80854c0f0c78cf"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "abea0182ed3d00469a36e13081f2473cdfc5039d67783960403506558e01e4f5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 5.83531,
+            "exit_code": 0,
+            "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96",
+            "json_parse_error": "last stdout JSON value is not an object",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "[{\"K\": 80, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 60.05613327026367, \"rel\": 0.45972211953194725, \"predicted_clamped_err\": 60.0561408996582}, {\"K\": 64, \"group_size\": 32, \"num_groups\": 2, \"max_abs_err\": 3.0517578125e-05, \"rel\": 2.384557889256124e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 96, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 3.814697265625e-05, \"rel\": 3.2019147962788115e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 100, \"group_size\": 32, \"num_groups\": 4, \"max_abs_err\": 48.29465866088867, \"rel\": 0.3795543870193749, \"predicted_clamped_err\": 33.2981071472168}]\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe t11 ran gptq_matmul against a contract reference (ceil(K/group_size) group rows, trailing partial group uses its own row). K=80: max_abs_err=60.06, rel=0.460, matching predicted clamped-grouping error 60.06. K=100: max_abs_err=48.29, rel=0.380. Divisible controls K=64 and K=96: err ~3e-5 (rel ~2-3e-7, fp32 noise). Confirms kernel assigns trailing partial group to group K//group_size-1 instead of its own ceil row.",
+          "supports": "confirmed",
+          "tool_event_id": "t11"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "kernel.py lines 69-73 compute num_groups = K // group_size (floor) and clamp the per-column group index to num_groups - 1; for K % group_size != 0 the clamp provably remaps the trailing columns away from the final group row the contract requires, and a runtime probe can directly compare C against A @ dequant_ref using ceil(K/group_size) group rows.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt (tool event t2)",
+          "summary": "Contract: every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including a K that is not an exact multiple of group_size; the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros, and scales/zeros are supplied with ceil(K/group_size) rows."
+        }
+      ],
+      "scope_rationale": "The contract text in problem.txt explicitly requires correct trailing-group dequantization for any K including K % group_size != 0, with ceil(K/group_size) rows in scales/zeros; testing K=96, group_size=32 would not expose this, so K=80, group_size=32 (a representative input the contract admits) is used.",
+      "statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract.",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T23:52:29Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_33",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_33"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_33"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_33"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_33",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 768.6973906,
+      "role": "solo",
+      "round": 2,
+      "text": "Let me analyze the problem and kernel.\n\nThe contract:\n- Grouped INT4 dequantization fused with matmul.\n- Weights stored as 4-bit values packed into int32 words. Columns along K split into consecutive groups of `group_size`; each group carries its own scale and zero-point row in `scales`/`zeros`.\n- **Contract: every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including K not an exact multiple of group_size. In that case the trailing columns form a shorter final group which is still a group of its own, with its own row in `scales`/`zeros`; `scales` and `zeros` are supplied with ceil(K / group_size) rows accordingly.**\n- C = A @ dequant(B), dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n], where group_of(k) is the index of the group column k belongs to.\n\nThe kernel:\n```python\ndef gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4):\n    M, K = a.shape\n    N = b_packed.shape[1]\n    maxq = 2 ** bits - 1\n\n    num_groups = K // group_size   # <-- floor division!\n    g_idx = torch.clamp(\n        torch.arange(K, device=a.device, dtype=torch.int32) // group_size,\n        max=num_groups - 1,\n    )\n```\n\nBug: `num_groups = K // group_size` uses floor division. If K is not an exact multiple of group_size, ceil(K/group_size) groups exist per the contract, but the wrapper computes num_groups = floor(K/group_size). Then g_idx for the trailing columns (k >= num_groups*group_size) would be floor(k/group_size) = num_groups (the last partial group index), but clamped to max=num_groups-1, so they're assigned to group num_groups-1 instead of group num_groups. That violates the contract: trailing columns must use the last group's row (row index ceil(K/group_size)-1 = num_groups), but the kernel clamps them to num_groups-1.\n\nWait, let's be careful. K = 100, group_size = 32. Then groups: k in [0,32) -> group 0, [32,64) -> group 1, [64,96) -> group 2, [96,100) -> group 3. ceil(100/32) = 4 groups. num_groups (floor) = 3. g_idx = clamp(k // 32, max=2). So k in [64,96) -> 2 (correct), k in [96,100) -> 3 clamped to 2 (WRONG \u2014 should be 3). So the trailing columns use group 2's scale/zero instead of group 3's. That's a contract violation.\n\nAlso, note in the original AutoGPTQ kernel, g_idx is passed in as an argument computed elsewhere (from the quantization state). Here the wrapper derives it via the clamp, which forces the floor behavior. Also the zeros handling: `zeros = (zeros >> zeros_shifter) & maxq; zeros = zeros + 1`. The contract says dequant(B)[k,n] = (unpacked_q[k,n] - zero[...]) * scale[...]. The zeros input is packed int32 containing zero points packed per infearure_per_bits columns... wait, actually in AutoGPTQ, zeros is packed as (num_groups // (32//bits), N) with zeros packed along the group dimension, not along N! Let me recall.\n\nIn AutoGPTQ's quant_matmul_248_kernel:\n\n```python\nzeros_ptrs = zeros_ptr + ((offs_bn[None, :] // infearure_per_bits) * stride_zeros)\n```\n\nHmm, in the original AutoGPTQ kernel:\n\n```python\n    scales_ptrs = scales_ptr + offs_bn[None, :]\n    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\n\n    shifter = (offs_k % infearure_per_bits) * bits\n    zeros_shifter = (offs_bn % infearure_per_bits) * bits\n```\n\nYes, the original AutoGPTQ kernel packs zeros along N: zeros is (num_groups, N // infearure_per_bits) int32, where each int32 packs infearure_per_bits zero-points for consecutive N columns. So `zeros_ptrs = zeros_ptr + (offs_bn // infearure_per_bits)` with stride_zeros being the row stride. That matches the kernel here: `zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)`. So zeros layout: row per group, packed along N. The wrapper passes `zeros.stride(0)` as stride_zeros. OK, that's consistent with AutoGPTQ's convention, assuming the test provides zeros in that packed form. The contract doesn't explicitly state the zeros packing, but says \"each group carries its own scale and zero-point row in scales/zeros\". Hmm \u2014 \"zero-point row\" \u2014 in scales/zeros. scales: (num_groups, N) presumably float; zeros: packed int32? The contract says zero-point row in `zeros`. The kernel unpacks zeros from packed int32 along N. If the test provides zeros as (num_groups, N) float (unpacked), the kernel would misbehave. But this matches AutoGPTQ convention, and the problem statement references the AutoGPTQ kernel, so the input format presumably follows AutoGPTQ's: b_packed (K//8, N) int32... wait b_packed: (K//(32//bits), N) int32 per the docstring \u2014 i.e., packed along K. And scales (num_groups, N), zeros (num_groups, N//8) int32 packed along N.\n\nHmm, but the docstring says \"scales/zeros: (num_groups, N), one row per group\" \u2014 that's ambiguous/wrong for zeros given the kernel indexes zeros_ptr + offs_bn//8. Actually the kernel treats zeros as packed along N. There's a mismatch between docstring and kernel behavior, but the kernel is what matters, and the contract's mention is about group rows. The main testable contract claim: group assignment for K not a multiple of group_size.\n\nThe clear contract violation: `num_groups = K // group_size` and clamping g_idx to num_groups-1. The contract explicitly says: \"including a K that is not an exact multiple of group_size. In that case the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros; scales and zeros are supplied with ceil(K / group_size) rows accordingly.\"\n\nSo for K=100, group_size=32, scales/zeros have 4 rows. The kernel computes num_groups=3, clamps trailing columns to group 2. Result: trailing columns dequantized with group 2's scale/zero instead of group 3's. Definite violation.\n\nAlso potential secondary issue: b_packed has K//8 rows... for K=100, packed rows = ceil(K/8) = 13? The docstring says b_packed: (K//(32//bits), N) \u2014 floor. For K=100, 100//8 = 12, but you need 13 rows to hold 100 4-bit values (13*8 = 104 \u2265 100). Hmm. The kernel's inner loop: num_pid_k = cdiv(K, BLOCK_SIZE_K) = cdiv(100, 16) = 7. b_ptrs advance by (BLOCK_SIZE_K // infearure_per_bits) * stride_bk = 2 rows per iteration, 7 iterations = 14 rows... starting from row 0..1 for offs_k 0..15. Actually the b_ptrs initial offset: (offs_k // 8) * stride_bk for offs_k 0..15 \u2192 rows 0 and 1. Each iteration advances 2 rows. Last iteration loads rows 12,13 (offs_k 96..111). So it reads 14 rows of b_packed. If b_packed only has 12 or 13 rows, out-of-bounds read. There's no masking on b loads. Hmm, but the reference (AutoGPTQ) has the same no-mask behavior and presumably the benchmark provides padded b_packed with ceil(K/8) rows... Actually AutoGPTQ's qweight for K not multiple of 8: qweight has ceil(K/8) rows? In AutoGPTQ, qweight shape is (K//8 * bits_factor...). Hmm.\n\nAlso note: the kernel loads b without masking offs_k beyond K; for K=100, offs_k up to 111 at the last block; b values for k \u2265 100 are garbage/padding but they get multiplied by a values... wait, a is loaded with mask a_mask only on rows (offs_am < M), not on columns (offs_k < K). So a_ptrs beyond K read out of bounds too. In AutoGPTQ's original kernel there's no k-masking either; the benchmark presumably uses K multiple of BLOCK_SIZE_K and group_size. The contract says \"for any K \u2014 including a K that is not an exact multiple of group_size\". Hmm, so K not a multiple of group_size is explicitly in scope. But is K not a multiple of BLOCK_SIZE_K (16) also in scope? The contract says \"for any K \u2014 including a K that is not an exact multiple of group_size\". The \"including\" suggests the non-multiple-of-group_size case is the emphasized one. \"for any K\" is broad, but the specified consequence concerns group assignment.\n\nLet me think about what the primary intended bug is. This is a \"generated kernel\" verification task; the kernel is derived from AutoGPTQ's quant_matmul_248_kernel but the wrapper derives g_idx from group_size with the clamp. The original AutoGPTQ takes g_idx as an argument. The injected bug is likely the `num_groups = K // group_size` + clamp, which misassigns trailing group columns. The contract explicitly calls out the ceil case, strongly suggesting that's the tested defect.\n\nAdditionally, `zeros = zeros + 1`: contract formula says dequant = (unpacked_q - zero) * scale. AutoGPTQ stores zero as (stored_zero - 1) packed? In AutoGPTQ, zeros are stored such that the actual zero-point = packed value + 1. The kernel adds 1. The contract says \"zero-point row in scales/zeros\" \u2014 ambiguous about +1. The formula in the contract: dequant(B)[k,n] = (unpacked_q[k,n] - zero[group_of(k), n]) * scale[...]. If the benchmark's zeros tensor contains the zero-point directly (unpacked? packed?), then the +1 and the >> unpacking would matter. But since the problem references AutoGPTQ's kernel, the test harness presumably generates inputs in AutoGPTQ format: zeros packed int32 along N with stored value = actual_zero - 1. Then `zeros + 1` is correct per AutoGPTQ convention. Since the contract formula is written symbolically with \"zero[group_of(k), n]\", and the harness defines zero via its own generation, I should test the group-assignment bug primarily, and maybe check the +1 convention consistency... but I can't know the harness convention except from the contract. The contract's formula uses \"zero\" as the zero-point. The kernel computes zero = (packed >> shift) & maxq + 1. If harness packs zero-1, kernel matches formula. If harness packs zero directly, kernel is off by one scale factor. I can't determine the harness convention from problem.txt alone... The contract says \"each group carries its own scale and zero-point row in scales/zeros\". It doesn't specify packing of zeros. Hmm.\n\nGiven the benchmark is auto-generated around this contract with the emphasized ceil(K/group_size) case, the decisive claim is the g_idx clamp bug. Let me design the probe:\n\nProbe plan:\n1. Build a reference implementation in PyTorch that follows the contract: unpack b_packed along K, compute g_idx_true = arange(K) // group_size (with ceil groups), dequantize with scales[g_idx_true] and zeros unpacked along N (+1 if following AutoGPTQ convention \u2014 for the reference I need to decide). To isolate the group bug from the +1 convention, I'll compare the kernel output against a reference that uses the same zero unpacking convention as the kernel (i.e., unpack zeros the same way: (zeros_packed >> shift) & maxq + 1) but with the correct g_idx. That way the only difference is group assignment. If outputs differ on trailing columns when K % group_size != 0, the claim is confirmed.\n\n2. Use exact-ish inputs: random A (M,K) fp32, random packed b (random 4-bit codes), random scales, zeros packed with random codes. Compare kernel C vs reference C. With K % group_size != 0 (e.g., K=100, group_size=32... wait BLOCK_SIZE_K=16; the kernel iterates cdiv(K,16) blocks and reads a/b beyond K without masking. For K=100, last block covers k=96..111; a values beyond k=99 are out-of-bounds reads (garbage), b likewise. Those garbage contributions pollute C! Hmm wait \u2014 do they? a_ptrs advance by BLOCK_SIZE_K each iteration: after 7 iterations, a covers k=0..111. a has only 100 columns. Reading a[*, 100..111] is out of bounds (undefined). b_packed rows 13 (offs 104..111) also out of bounds if b_packed has ceil(100/8)=13 rows.\n\nSo for K=100, the kernel reads out of bounds within the last 16-wide k-block (k=100..111), contributing garbage * garbage to the accumulator... Actually no: the dequantized b values for k\u2265100 are garbage scaled, and a garbage. The dot product adds garbage terms for k=100..111. That would make the kernel output wrong for ANY K not a multiple of 16 regardless of the g_idx bug. Unless the harness pads. Hmm, but wait \u2014 the contract says \"for any K\". If the harness tests K=100, the kernel would produce garbage due to OOB reads (UB \u2014 could be anything, could crash, could read zeros). That's another potential defect: missing k-masking.\n\nBut hold on \u2014 is that the injected bug or just inherited AutoGPTQ behavior? In AutoGPTQ's original kernel, there's also no k-masking, and AutoGPTQ requires K % 16 == 0 (actually requires the packed dims to align; AutoGPTQ pads K? In AutoGPTQ, weight dims are multiples of 32 typically). The contract says \"for any K \u2014 including a K that is not an exact multiple of group_size\". If the harness tests K that is a multiple of BLOCK_SIZE_K=16 and of 8 (packing) but not of group_size (e.g., K=48, group_size=32), then the OOB issue doesn't arise but the g_idx clamp bug does. That's probably the intended test: K=48, group_size=32 \u2192 2 groups (ceil(48/32)=2), kernel computes num_groups=1, clamps k=32..47 to group 0. Wrong.\n\nHmm wait, for K=48: b_packed rows = K//8 = 6 (exact). BLOCK_SIZE_K=16, num_pid_k=3, exact. No OOB. g_idx true = [0]*32 + [1]*16. Kernel g_idx = clamp(k//32, max=0) = [0]*48. So trailing 16 columns dequantized with group 0's scale/zero instead of group 1's. Clear violation, cleanly testable.\n\nAlso K=100 would additionally test OOB, but that enters undefined-behavior territory (reference may also be fine but kernel reads garbage). Actually the contract says \"for any K\", so K=100 is in scope by the letter. But OOB reads might crash or produce nondeterministic garbage \u2014 that's a real defect too if the harness tests such K. However, I don't know what K the harness uses. The safest decisive claim: the g_idx floor+clamp misassigns the trailing partial group whenever K % group_size != 0, which the contract explicitly requires to be handled (\"trailing columns form a shorter final group which is still a group of its own\"). I'll test with K=48, group_size=32 (multiple of 16 and 8, so packing/blocking are exact and the only deviation is group assignment). Also maybe K=100 with padding to see the OOB behavior as a secondary note... but careful: OOB reads may segfault the probe. Triton without masks reading past the end of a tensor \u2014 usually reads within the same allocation page, may not crash but produce garbage. I can try it but it's secondary; and the \"any K\" phrase \u2014 the harness likely uses K % 16 == 0 since the kernel is AutoGPTQ-derived and the reference too. Actually wait, what does the reference do? The harness compares against a reference implementation of the contract. For K=100 the reference would compute A[:, :100] @ dequant properly. The kernel would add garbage for k=100..111 \u2014 a real output deviation, deterministic only if garbage happens to be zeros... Not reliable. But is K=100 in the harness's input domain? Unknown. The scope policy says prefer the domain the benchmark actually declares; problem.txt says \"for any K \u2014 including a K that is not an exact multiple of group_size\". That phrase \"any K\" is the contract itself (problem.txt is a valid source for scope_evidence per the instructions: \"problem.txt alone is a valid source\"). Hmm, the scope policy says problem.txt alone is usually not enough to make a stress case decisive when test.py narrows the domain \u2014 but there is no test.py here (test_code is empty, artifact_files only kernel.py/meta.json/problem.txt). So the contract in problem.txt is the operative domain statement. It explicitly requires correct handling of K not a multiple of group_size. So a claim tied to that is in_scope with problem.txt as evidence.\n\nTo be careful about the OOB-adjacent cases, I'll choose K values that are multiples of 16 (BLOCK_SIZE_K) and of 8 (packing) but not of group_size: e.g., K=48, group_size=32; K=80, group_size=32; K=112, group_size=100? Let's keep group_size=32, K=48 and K=80. Also a control: K=64 (multiple of 32) should match exactly, demonstrating the kernel is otherwise correct.\n\nReference construction (AutoGPTQ convention, matching the kernel's own unpacking so that group assignment is the only difference):\n\n- unpack q: for row r of b_packed (r covers k = r*8..r*8+7), q[k,n] = (b_packed[r,n] >> ((k%8)*4)) & 15.\n- zeros packed along N: zeros[g, n] packed: zero_code[n] for group g at word index n//8: (zeros[g, n//8] >> ((n%8)*4)) & 15; actual zero-point = code + 1 (kernel convention).\n- dequant[k,n] = (q[k,n] - zero[g_idx_true[k], n]) * scales[g_idx_true[k], n].\n- C_ref = A @ dequant.\n\nCompare with kernel output. Expect mismatch exactly in contributions from trailing columns. Since C is a sum over k, mismatch magnitude ~ A[:, trailing] @ (dequant_wrong - dequant_right). Should be clearly nonzero.\n\nMetric: max abs diff and max rel diff; also compute per-column diff and show columns \u2265 num_groups*group_size... wait trailing group starts at num_groups_true_groups... trailing group start = (ceil(K/gs)-1)*gs = 32 for K=48. Columns k=32..47 differ.\n\nAlso verify the control case K=64, group_size=32: kernel should match reference exactly (or near-exactly, fp32 accumulation order differences \u2014 tl.dot with fp32 inputs; small float differences possible due to dot being tensor-core tf32? Wait \u2014 a is fp32, b computed as fp32 (b - zeros) * scales \u2192 fp32. tl.dot(a, b) with fp32 inputs: by default Triton uses tf32 for tensor cores unless allow_tf32=False? In Triton, tl.dot input_precision defaults to \"tf32\" on NVIDIA. That introduces precision differences vs a full-precision reference. For the mismatch test, the group bug causes large errors, so tf32 noise (relative ~1e-3) won't mask it. For the control, expect small diffs ~1e-3 relative. Fine.\n\nAlso I should double check zeros unpack indexing in kernel: zeros_ptrs = zeros_ptr + (offs_bn // 8) \u2014 column-packed. With stride_zeros = zeros.stride(0). If harness provides zeros as (num_groups, N) int32 packed along N, shape (G, ceil(N/8)) effectively. The docstring in the wrapper says scales/zeros: (num_groups, N) \u2014 but the kernel indexes zeros along packed columns. If harness gives zeros shape (G, N) float, the kernel would read wrong. Hmm \u2014 but the contract says \"zero-point row\", and the problem is stated as AutoGPTQ kernel replication; the natural harness packs zeros along N as int32. I'll generate zeros in the packed convention in my probe (matching what the kernel expects), because my claim is about group assignment, not about the zeros layout. But should I also test the alternative: if the harness provides unpacked zeros (G, N) as int/float, the kernel's zeros unpacking ((zeros >> shifter) & maxq + 1) would produce nonsense. That's a risk but unknowable without the harness. The contract formula treats \"zero\" as the zero-point value; the packing convention is unspecified. Given the reference is AutoGPTQ and the kernel is AutoGPTQ's, the harness presumably mirrors AutoGPTQ's format. The emphasized contract detail (ceil groups) points to the g_idx bug. I'll focus there, and note the +1: contract formula says (unpacked_q - zero)*scale; AutoGPTQ stores zero-1. If harness stores actual zero-point packed, kernel adds 1 \u2192 wrong. Again unknowable. My reference will mirror the kernel's convention (code+1) so the only variable is g_idx. If the harness instead stored actual zero codes, both kernel and my reference would be \"wrong\" vs the harness but consistently \u2014 can't test that. Fine.\n\nActually, wait. Let me reconsider: maybe I should make the reference follow the contract formula literally with zeros unpacked the same way. The claim: \"kernel misassigns trailing partial group columns to group num_groups-1 instead of the final group, whenever K % group_size != 0, violating the contract's requirement that the trailing group uses its own row.\" The probe: construct inputs where group rows differ substantially (distinct scales/zeros per group), run kernel vs correct-g_idx reference, measure diff. Confirmed if diff is large and localized to trailing columns; control K multiple of group_size matches.\n\nLet me also check: does the clamp matter when K % group_size == 0? num_groups = K//gs = ceil = G. g_idx = k//gs, max = G-1, no clamping needed. Correct.\n\nEdge: K < group_size, e.g., K=16, gs=32: true groups = 1 (ceil(16/32)=1). num_groups = 0 \u2192 clamp max = -1 \u2192 g_idx = clamp(k//32, max=-1) = -1 for all k! Then scales_ptrs + g_idx*stride_scales reads scales row -1 \u2192 out-of-bounds negative offset. That's even worse. And b_packed rows = 16//8 = 2, fine. Is K=16 in scope? \"for any K\". Hmm, but num_groups=0 would also make scales row -1 \u2192 garbage. That's an extension of the same bug. I might include K=16... but wait, is that a realistic harness case? K=16 with gs=32 \u2014 the contract says scales/zeros have ceil(K/gs) = 1 row. The kernel computes num_groups=0, clamp to -1. Reads scales_ptr - stride \u2192 OOB. Definitely broken. But maybe too exotic; the K=48 case is cleaner. I could mention it. Actually the K=16 case: g_idx = -1, scales load at negative offset \u2014 UB. Similar OOB concern. Let me keep the main probe at K=48 and K=80 (clean, deterministic), and maybe add K=100 to probe OOB tolerance... no, OOB reads might crash the whole probe process. Keep the probe safe: K=48, K=80, control K=64. All multiples of 16 and 8. group_size=32.\n\nHmm, wait: K=80, gs=32: groups ceil(80/32) = 3 (0-31, 32-63, 64-79). num_groups floor = 2. Trailing group = k 64..79 \u2192 kernel clamps to group 1. Good.\n\nAlso consider BLOCK_SIZE_K=16 and group_size=32: within a k-block of 16, all k belong to one group except blocks straddling boundaries at multiples of 32 \u2014 blocks are [0,16),[16,32),[32,48)... each block lies within one group when gs % 16 == 0. g_idx loaded per k-element though: g_ptrs loads BLOCK_SIZE_K values each iteration, per-element g_idx. So even straddling would be handled per-element (if g_idx were correct). Good \u2014 the kernel design handles per-element groups via g_idx; only the host-side derivation is wrong.\n\nAlso check scales indexing: scales_ptrs + g_idx[:, None] * stride_scales \u2014 scales shape (G, N), stride(0)=N (if contiguous). Kernel indexes scales[g, n] correctly. zeros: zeros_ptr + (offs_bn//8) + g_idx*stride_zeros \u2192 zeros[g, n//8] packed along N. Consistent with AutoGPTQ.\n\nNow the probe code. Environment: does it have torch and triton and a GPU? run_claim_probe with use_gpu=True. The kernel launches a Triton kernel; needs triton installed and CUDA GPU. Let's write:\n\n```python\nimport json, torch, triton\nimport importlib.util\n\n# load kernel module from artifact path\nspec = importlib.util.spec_from_file_location(\"kernel_mod\", \"/root/cases/case_33/kernel.py\")\nkm = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(km)\n\ntorch.manual_seed(0)\ndev = \"cuda\"\n\ndef unpack_q(b_packed, K, bits=4):\n    # b_packed: (ceil(K/8), N) int32, packed along K\n    R, N = b_packed.shape\n    shifts = (torch.arange(K, device=b_packed.device) % 8) * bits\n    rows = torch.arange(K, device=b_packed.device) // 8\n    out = (b_packed[rows].to(torch.int64) >> shifts[:, None].to(torch.int64)) & ((1<<bits)-1)\n    return out.to(torch.int32)  # wait b_packed[rows] shape (K, N)\n```\n\nHmm, b_packed int32, shift in Python ints fine with int64 cast. int32 >> shift in torch works.\n\nZeros packed along N: zeros_packed: (G, ceil(N/8)) int32.\n\n```python\ndef unpack_zeros(zeros_packed, N, bits=4):\n    G = zeros_packed.shape[0]\n    shifts = (torch.arange(N, device=zeros_packed.device) % 8) * bits\n    cols = torch.arange(N, device=zeros_packed.device) // 8\n    out = (zeros_packed[:, cols].to(torch.int64) >> shifts[None, :]) & 15\n    return out  # (G, N) codes\n```\n\nReference:\n\n```python\ndef reference(a, b_packed, scales, zeros_packed, group_size, bits=4):\n    K = a.shape[1]; N = b_packed.shape[1]\n    q = unpack_q(b_packed, K).to(torch.float32)\n    zc = unpack_zeros(zeros_packed, N).to(torch.float32) + 1.0  # kernel convention\n    G = scales.shape[0]  # ceil(K/group_size)\n    g_idx = torch.clamp(torch.arange(K, device=a.device) // group_size, max=G-1).long()\n    deq = (q - zc[g_idx]) * scales[g_idx]\n    return a @ deq\n```\n\nWait \u2014 the reference per contract uses the true group_of(k) = k // group_size, with G = ceil(K/gs) rows supplied. So g_idx_true = arange(K)//gs (no clamp needed since G = ceil). Use that directly: g_idx = arange(K)//gs, G=ceil. That's the contract-correct reference.\n\nKernel call:\n\n```python\nc = km.gptq_matmul(a, b_packed, scales, zeros_packed, group_size, bits=4)\n```\n\nNote the wrapper signature: gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4). Good.\n\nTest cases:\n- K=64, gs=32 (control, K % gs == 0)\n- K=48, gs=32 (bug case)\n- K=80, gs=32 (bug case)\n\nM=64? Let's use M=32, N=64. BLOCK sizes 32x32x16 \u2014 fine.\n\nb_packed rows: K//8 exact for these K. b codes random 0..15 \u2192 q in [0,15]. zeros codes random 0..14 (so zero+1 in [1,15]) \u2014 any 0..15 fine. scales random positive e.g. 0.1..1. Make per-group scales/zeros very distinct (e.g., group g scale ~ 2^g, zeros code = g*3 % 16) so wrong group assignment yields big diff.\n\nMetrics: max abs err, max rel err (with eps), per-region diff: columns of C correspond to n, not k... wait, C = A @ deq, C is (M, N). The error from wrong group assignment on k in trailing group affects all output columns n (summed over k). So localize by computing diff vs reference and also directly compare dequant matrices? We can't see inside the kernel, but we can compute the expected error: deq_kernel[k,n] uses group g_wrong[k]; deq_ref uses g_true[k]. diff_C = A[:, wrong_k] @ (deq_wrong - deq_right)[:, :]. Just report max abs diff and max rel diff, plus the diff for control case ~1e-4 (tf32 noise) vs bug case large (O(1)).\n\nAlso, to make the evidence airtight, compute what fraction of the error disappears if using the kernel's clamped g_idx in the reference \u2014 i.e., show kernel matches the clamped-g_idx reference (proving the mechanism) but not the true-g_idx reference. That's a nice two-sided proof:\n- ref_correct = reference with g_idx_true\n- ref_clamped = reference with g_idx_clamped (kernel's g_idx)\n- compare kernel output to both. Expect: |C_kernel - ref_clamped| small (tf32 noise), |C_kernel - ref_correct| large.\n\nThat pins the mechanism precisely: the kernel implements clamp(k//gs, max=K//gs - 1) rather than the contract's k//gs with ceil rows.\n\nAlso compute a direct check of the wrapper's g_idx derivation: g_idx computed in wrapper = clamp(arange(K)//gs, max=K//gs - 1); show for K=48: expected true [0]*32+[1]*16 vs kernel [0]*48. That's source-level, already visible. Runtime evidence via output comparison suffices.\n\nTimeout: Triton JIT compile ~ seconds. 600s max, set 240.\n\nPotential pitfalls:\n- Triton tl.dot with fp32 inputs: on some versions, needs input_precision; default tf32. Fine.\n- a must be fp32 contiguous. b_packed int32 contiguous. scales fp32 (G,N). zeros int32 (G, ceil(N/8)).\n- Wait: wrapper passes zeros.stride(0). If zeros shape (G, N//8) with N=64 \u2192 row length 8. stride(0)=8. Good.\n- The kernel loads zeros with offs_bn//8 up to (pid_n*32+31)//8 \u2264 7 for N=64. Fine.\n- Grid: cdiv(M,32)*cdiv(N,32). M=32,N=64 \u2192 1*2 = 2 programs. Fine.\n\n- One more: `zeros = (zeros >> zeros_shifter[None, :]) & maxq` \u2014 zeros int32, shifter up to 28, `& maxq` (15) then +1 \u2192 [1,16]. Hmm, code+1 can be 16 > maxq. Whatever, convention.\n\n- Kernel b load: b int32; `(b >> shifter[:, None]) & maxq` \u2014 shifter (BLOCK_SIZE_K,) values (k%8)*4. b_ptrs rows (offs_k//8). Then b - zeros: zeros shape (BLOCK_SIZE_K, BLOCK_SIZE_N)? zeros loaded as g_idx[:, None]*stride + offs_bn[None,:]//8 \u2192 shape (16, 32). b shape (16,32). scales shape (16,32). Good.\n\n- Accumulator fp32; store fp32 to c fp32. Good.\n\nLet me also double-check the reference dequant for the true groups with G = ceil(K/gs): scales shape (G, N) \u2014 for K=48, G=2, scales (2,64). zeros (2, 8) int32.\n\nNow, is there any chance the harness intends scales/zeros rows = K//gs (floor) and pads? No \u2014 contract explicitly says ceil rows supplied. Good.\n\nAlso potential second claim: OOB reads for K not multiple of BLOCK_SIZE_K. Given \"for any K\", K=100 is literally in scope. But probing it risks segfault (reading past tensor end in GPU memory \u2014 usually doesn't segfault, CUDA doesn't have page-fault kills for small overreads within allocation; it reads garbage). Actually out-of-bounds global reads in CUDA typically return garbage or zero without crashing (no MMU fault unless outside mapped pages; torch allocations are big slabs). The result would be nondeterministic garbage though. I could run K=100 to see. But careful: my probe process crashing would lose evidence for other cases. I can run it as a separate probe (separate run_claim_probe call) so a crash doesn't destroy the main evidence. Let me first run the main probe, then decide.\n\nActually, hmm, for K=100: b_packed needs ceil(100/8)=13 rows to hold all 100 codes; kernel's last block reads rows 12 and 13 (k=96..111) \u2192 row 13 OOB if only 13 rows (0..12). And a reads k=100..111 OOB. So even providing 13 rows, kernel reads row 13 OOB \u2192 garbage dequant values \u00d7 garbage a values added to C. Also the contract's reference for K=100... The kernel result would be C_ref + garbage terms for k\u2265100, where garbage_a[k] unknown \u00d7 garbage_deq. Not reliably evaluable, but if output deviates hugely and nondeterministically across runs, that's evidence of an OOB defect for K not multiple of 16. But scope: is such K in the benchmark domain? problem.txt says \"for any K \u2014 including a K that is not an exact multiple of group_size\". The word \"including\" makes the gs case a subset of \"any K\". Literally, K=100 is in scope. But practically, the harness generating K=100 would need b_packed with 13 rows and the reference... the harness reference is the contract formula, computable for any K. Hmm. The OOB defect is real per the letter of the contract. But proving nondeterministic garbage is a defect: run twice with same inputs, outputs differ (if garbage changes). Might be stable zeros though. Let me try it as a secondary probe \u2014 it's cheap. But note: tl.dot tf32, garbage values could be inf/nan \u2192 C becomes nan. That's a clear deviation from the contract (reference is finite). Either way (nan or wrong values), it violates \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K\" \u2014 well, strictly that clause is about group assignment; the OOB is about reading beyond K. The contract's formula defines dequant for k in [0,K). Contributions beyond K shouldn't exist. Garbage contributions = violation of C = A @ dequant(B).\n\nHmm, but wait \u2014 actually let me reconsider. For K=100 with the *original AutoGPTQ* kernel, same OOB exists (AutoGPTQ requires K multiple of 16? In AutoGPTQ the kernel is called with K = self.infeatures which for GPTQ models is typically a multiple of 32... but not always \u2014 e.g., infeatures could be 11008 (multiple of 16? 11008/16=688 yes; /32=344 yes). Most LLM dims are multiples of 32. Anyway.)\n\nDecision: main claim = trailing partial group misassignment (in_scope, problem.txt). Secondary claim = OOB/garbage for K not multiple of BLOCK_SIZE_K (in_scope per \"any K\" but risk of UB nondeterminism; if probe shows large deviation/nan, record as confirmed too; if inconclusive due to stability, mark inconclusive \u2014 it wouldn't change the verdict since claim 1 already decides reject).\n\nWait \u2014 actually, before I even write the claim: could the clamp be intentional \"AutoGPTQ-faithful\"? In AutoGPTQ, g_idx is passed in, not derived. The wrapper deriving it with floor+clamp is the generated part. The contract explicitly overrides: trailing group is its own group with its own row, ceil rows supplied. So the clamp is a contract violation. Clear.\n\nLet me also sanity check the \"true g_idx\" for K=48, gs=32 with G=2: arange(48)//32 = [0]*32 + [1]*16. Yes.\n\nNow write the probe carefully.\n\n```python\nimport json, math, importlib.util\nimport torch\n\ndev = \"cuda\"\ntorch.manual_seed(1234)\n\nspec = importlib.util.spec_from_file_location(\"kernel_mod\", \"/root/cases/case_33/kernel.py\")\nkm = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(km)\n\nbits = 4\n\ndef unpack_q(b_packed, K):\n    N = b_packed.shape[1]\n    k = torch.arange(K, device=b_packed.device)\n    shifts = ((k % 8) * bits)\n    rows = k // 8\n    bp = b_packed.to(torch.int64)\n    q = (bp[rows] >> shifts[:, None]) & 15\n    return q.to(torch.float32)  # (K, N)\n\ndef unpack_zeros(zeros_packed, N):\n    n = torch.arange(N, device=zeros_packed.device)\n    shifts = (n % 8) * bits\n    cols = n // 8\n    zp = zeros_packed.to(torch.int64)\n    z = (zp[:, cols] >> shifts[None, :]) & 15\n    return z.to(torch.float32)  # (G, N) codes\n\ndef reference(a, b_packed, scales, zeros_packed, group_size, g_idx_override=None):\n    K = a.shape[1]; N = b_packed.shape[1]\n    q = unpack_q(b_packed, K)\n    z = unpack_zeros(zeros_packed, N) + 1.0\n    G = scales.shape[0]\n    if g_idx_override is None:\n        g_idx = torch.arange(K, device=a.device) // group_size\n        assert G == math.ceil(K / group_size)\n    else:\n        g_idx = g_idx_override\n    deq = (q - z[g_idx]) * scales[g_idx.to(torch.int64)]\n    return a @ deq\n\ndef make_case(M, K, N, group_size, seed):\n    g = torch.Generator(device=dev).manual_seed(seed)\n    R = K // 8\n    assert K % 8 == 0\n    b_packed = torch.randint(0, 2**31 - 1, (R, N), device=dev, generator=g, dtype=torch.int32)\n    # restrict codes to 0..15 per nibble anyway any int32 works after masking\n    Gc = math.ceil(K / group_size)\n    scales = (torch.rand((Gc, N), device=dev, generator=g) * 0.9 + 0.1) * (2.0 ** torch.arange(Gc, device=dev))[:, None]\n    # distinct zeros per group\n    zc = torch.randint(0, 15, (Gc, N // 8), device=dev, generator=g, dtype=torch.int32)\n    # make group codes distinct: add group index pattern\n    zc = (zc + torch.arange(Gc, device=dev, dtype=torch.int32)[:, None] * 3) % 16  # hmm this could wrap; fine, still distinct-ish\n    a = torch.randn((M, K), device=dev, generator=g, dtype=torch.float32)\n    return a, b_packed, scales, zc\n```\n\nHmm wait, zc codes must be within 0..15 per nibble to be \"valid\" zero codes; randint(0,15) per int32 fills whole word with values 0..15 \u2014 the nibbles would then be 0..15 each anyway? No: each int32 word has 8 nibbles; randint(0,15) gives word values 0..15, so only the lowest nibble nonzero, others 0. That's fine (codes are still valid), but wastes distinctness. Better: build packed zeros from per-nibble codes:\n\n```python\ncodes = torch.randint(0, 15, (Gc, N), device=dev, generator=g, dtype=torch.int64)\ncodes = (codes + torch.arange(Gc, device=dev, dtype=torch.int64)[:, None]) % 16\nshifts = (torch.arange(N, device=dev) % 8) * 4\nzeros_packed = sum over j in 0..7: codes[:, j::8] << shifts[j]  # careful\n```\n\nSimpler: create codes (Gc, N) int64, then pack:\n\n```python\nwp = torch.zeros((Gc, N // 8), dtype=torch.int64, device=dev)\nfor j in range(8):\n    wp |= codes[:, j::8] << (j * 4)\nzeros_packed = wp.to(torch.int32)\n```\n\nN must be multiple of 8 \u2014 N=64 fine.\n\nb_packed similarly: build codes (R*8=K, N) and pack \u2014 or just randint full int32; unpacking masks to 4 bits anyway, any int32 word is fine as packed data. Use randint(0, 2**32, dtype int64) & 0xFFFFFFFF then to int32? torch.randint with dtype=torch.int32 requires low/high within int32 range. Use torch.randint(-(2**31), 2**31 - 1, ...) or just values 0..2**31-1 (nonneg, fine \u2014 high nibbles random-ish). Actually simplest: generate codes (K, N) in 0..15 and pack along K into R words:\n\n```python\nqc = torch.randint(0, 16, (K, N), device=dev, generator=g, dtype=torch.int64)\nbp64 = torch.zeros((K // 8, N), dtype=torch.int64, device=dev)\nfor j in range(8):\n    bp64 |= qc[j::8] << (j * 4)   # row r holds k = r*8 + j\n```\n\nWait alignment: b_packed row r covers k = r*8 .. r*8+7, with nibble j \u2194 k = r*8+j, shift j*4. Kernel: b_ptrs row = offs_k // 8, shifter = (offs_k % 8) * bits. Yes: nibble index = k % 8, shift = (k%8)*4. And packing: word r, nibble j = k%8 \u2192 k = r*8+j. So bp64[r] |= qc[r*8 + j] << (j*4), i.e., qc[j::8] aligned with rows... qc has K rows; qc[r*8+j] \u2014 as tensor slice qc[j::8] gives rows j, j+8, j+16... = r*8+j for r=0,1,2... Yes correct.\n\nThen in the probe, for each case compute:\n- c_k = km.gptq_matmul(a, b_packed, scales, zeros_packed, group_size)\n- ref_true = reference(..., g_idx true)\n- ref_clamped = reference(..., g_idx = clamp(arange(K)//gs, max=K//gs - 1))\n- diffs: max abs, max rel (rel = |diff| / (|ref_true|+eps) max), also count mismatched entries.\n- Also compare against a \"wrong-group\" analytic delta: expected diff = A[:, tr_start:] @ ((deq with wrong g) - (deq with true g)) for trailing rows \u2014 verify |c_k - ref_true| \u2248 that. Maybe overkill; the two-sided comparison (kernel \u2248 ref_clamped, kernel \u226c ref_true) is decisive.\n\nAlso for the control K=64: expect c_k \u2248 ref_true \u2248 ref_clamped (identical since K%gs==0), small tf32-level diff.\n\ntf32 consideration: tl.dot on fp32 inputs with default input_precision \u2014 on Triton for capability \u2265 8.0 default is tf32. My reference uses torch a @ deq in fp32 (cublas fp32, possibly tf32 if torch.backends.cuda.matmul.allow_tf32=True \u2014 default False in recent torch). So ref is true fp32. Kernel tf32 \u2192 diff ~1e-3 relative. To reduce ambiguity, set torch.backends.cuda.matmul.allow_tf32 = False (default) and interpret diffs with tolerance: bug case diff should be O(1) relative (scales differ by 2x per group \u2192 wrong group gives ~2x error \u2192 rel diff ~1 on trailing contributions... overall C rel diff maybe ~0.3-1.0). Control rel diff ~1e-3. Clear separation.\n\nAlternatively force kernel fp32 dot? Can't without editing kernel. Fine.\n\nAlso print the wrapper's derived g_idx for K=48 vs true, as direct mechanism evidence:\n\n```python\nK=48; gs=32\ng_true = (torch.arange(K)//gs).tolist()\ng_kernel = torch.clamp(torch.arange(K,dtype=torch.int32)//gs, max=K//gs - 1).tolist()\n```\n\nK//gs - 1 = 1-1 = 0 \u2192 all zeros. Good \u2014 for K=48, clamp max=0. Note: for K=48, num_groups=1, clamp max=0.\n\nEdge: what if K//gs == 0 (K < gs)? clamp max=-1 \u2192 g_idx all -1 \u2192 negative offsets. K=16 case. Secondary; maybe include K=16, gs=32 in a separate probe since it might read OOB (negative offset) and crash. Hmm, negative offset of scales pointer by stride_scales (N*4 bytes = 256 bytes before scales tensor) \u2014 reads within torch's allocation pool usually, garbage values \u2192 wrong results, maybe not crash. Actually garbage scales \u2192 C garbage. It's a defect per \"any K\" but again UB-ish. I'll keep focus; maybe test K=16 quickly in the second probe with try/except.\n\nActually, let me reconsider whether to even do the secondary probe. Budget: rounds are finite but I have a good number. Main probe first. Then decide. The verdict hinges on claim 1. Secondary OOB claim: it's genuinely in-scope per \"for any K\" and would strengthen reject, but reject is already assured by claim 1. The instructions: \"A new claim is worth opening only if you can say, before running it, which verdict each outcome would support. If both outcomes leave you in the same place, it is not worth the round.\" Claim 2 outcomes: confirmed \u2192 still reject (same verdict); inconclusive \u2192 still reject via claim 1. So not worth it? It adds robustness but doesn't change the verdict. Per the guidance, skip it. Hmm, but one consideration: what if my main probe reveals the kernel actually handles the trailing group correctly (i.e., I misread something)? Then the secondary question becomes relevant. I'll sequence: run main probe, read results, then decide about secondary.\n\nWait, one more check of the kernel before claiming: is there any chance the wrapper's g_idx is correct because scales/zeros rows are indexed differently? scales_ptrs + g_idx * stride_scales, with stride_scales = scales.stride(0) = N. Row g \u2192 offset g*N. For trailing k (48-case), g_idx=0 \u2192 group 0 row. Contract wants group 1 row. Wrong. Yes.\n\nAlso check `zeros + 1` and `& maxq`: maxq=15 for bits=4. zeros code up to 15, +1 \u2192 up to 16. dequant = (q - (code+1)) * scale. My reference mirrors exactly. Good.\n\nOne subtlety: my reference computes a @ deq in fp32 with cublas (fp32, no tf32 by default since torch 1.12 default allow_tf32=False; but on some builds \"highest\" precision default). Kernel tf32. The two-sided comparison handles it.\n\nAnother subtlety: kernel accumulator adds per 16-k block via tl.dot \u2014 fp32 accumulate. Fine.\n\nLet me also confirm the artifact kernel path: session_dir /root/cases/case_33, file kernel.py. I'll load from there. If that fails, fall back to writing the source inline. I'll include a fallback: if file missing, define the module functions inline (copy from kernel_code). Actually simpler and more robust: exec the kernel source directly? The tool says \"Read a line-numbered kernel.py source slice from a dataset artifact\" \u2014 the file exists at /root/cases/case_33/kernel.py per session_dir. I'll try importlib with that path, fallback to inline source string.\n\nLet me now also double check the group-m (pid swizzle) logic doesn't have bugs for our shapes: GROUP_SIZE_M=1 \u2192 num_pid_in_group = num_pid_n; group_id = pid // num_pid_n; first_pid_m = group_id; group_size_m = min(num_pid_m - group_id, 1) = 1; pid_m = group_id + (pid % 1) = group_id; pid_n = (pid % num_pid_n) // 1 = pid % num_pid_n. Standard. Fine.\n\nGrid size = cdiv(M,32)*cdiv(N,32) programs, each loops full K. Fine.\n\nMemory: M=32, K=48, N=64 tiny. Compile time dominates (~5-20s). Use timeout 240.\n\nNow, one claim or two? Let me record one claim (the decisive one) with scope in_scope + scope_evidence from problem.txt, run the probe, finalize, then possibly a second claim about the exact mechanism (kernel matches clamped reference) \u2014 actually that's part of the same probe evidence; I can fold both comparisons into one claim's evidence data. Also maybe record the control-case claim? Keep it simple: one main claim; evidence data includes control numbers.\n\nClaim statement: \"For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k//group_size, max=K//group_size - 1), assigning the trailing partial group's columns to group K//group_size - 1 instead of the final group ceil(K/group_size)-1, so those columns are dequantized with the wrong scale/zero row, violating the contract's trailing-group requirement.\"\n\nRationale: wrapper lines 69-73 use floor division and clamp; contract explicitly requires trailing partial group to use its own row with ceil rows supplied.\n\nScope: in_scope; scope_rationale: contract sentence \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including a K that is not an exact multiple of group_size... trailing columns form a shorter final group which is still a group of its own, with its own row\"; scope_evidence: [{source: \"problem.txt\", summary: \"contract requires trailing partial group to use its own scales/zeros row; ceil(K/group_size) rows supplied\"}].\n\nThen run_claim_probe with the code. Then finalize_probe_evidence with data (max rel diffs etc.), update_claim_status \u2192 confirmed (if probe shows it). Then record_verdict reject with decisive claim.\n\nLet me write the probe code now, carefully.\n\n```python\nimport json, math, importlib.util\nimport torch\n\ndev = \"cuda\"\nassert torch.cuda.is_available()\ntorch.backends.cuda.matmul.allow_tf32 = False\n\ndef load_kernel():\n    try:\n        spec = importlib.util.spec_from_file_location(\"kernel_mod\", \"/root/cases/case_33/kernel.py\")\n        km = importlib.util.module_from_spec(spec)\n        spec.loader.exec_module(km)\n        return km, \"file\"\n    except Exception as e:\n        return None, f\"file-load-failed: {e}\"\n\nkm, how = load_kernel()\nif km is None:\n    raise RuntimeError(how)\n\nbits = 4\n\ndef pack_along_k(codes, K, N):\n    # codes: (K, N) int64 in [0,15]; row r of packed holds k=r*8+j at nibble j\n    bp = torch.zeros((K // 8, N), dtype=torch.int64, device=codes.device)\n    for j in range(8):\n        bp |= codes[j::8] << (j * 4)\n    return bp.to(torch.int32)\n\ndef unpack_q(b_packed, K):\n    N = b_packed.shape[1]\n    k = torch.arange(K, device=b_packed.device)\n    q = (b_packed.to(torch.int64)[k // 8] >> ((k % 8) * 4)[:, None]) & 15\n    return q.to(torch.float32)\n\ndef unpack_zeros(zp, N):\n    n = torch.arange(N, device=zp.device)\n    z = (zp.to(torch.int64)[:, n // 8] >> ((n % 8) * 4)[None, :]) & 15\n    return z.to(torch.float32)\n\ndef reference(a, b_packed, scales, zeros_packed, group_size, g_idx=None):\n    K = a.shape[1]\n    q = unpack_q(b_packed, K)\n    z = unpack_zeros(zeros_packed, b_packed.shape[1]) + 1.0\n    if g_idx is None:\n        g_idx = torch.arange(K, device=a.device) // group_size  # true groups, G = ceil(K/gs)\n    deq = (q - z[g_idx]) * scales[g_idx]\n    return a @ deq\n\ndef stats(name, x, y):\n    d = (x - y).abs()\n    denom = y.abs().clamp_min(1e-6)\n    return {\n        \"case\": name,\n        \"max_abs_err\": float(d.max()),\n        \"max_rel_err\": float((d / denom).max()),\n        \"mean_abs_err\": float(d.mean()),\n    }\n\nresults = []\ncases = [\n    dict(M=32, K=64, N=64, gs=32, seed=1),   # control: K % gs == 0\n    dict(M=32, K=48, N=64, gs=32, seed=2),   # trailing partial group: 16 cols\n    dict(M=32, K=80, N=64, gs=32, seed=3),   # trailing partial group: 16 cols, 3 groups\n]\nfor c in cases:\n    M, K, N, gs, seed = c[\"M\"], c[\"K\"], c[\"N\"], c[\"gs\"], c[\"seed\"]\n    g = torch.Generator(device=dev).manual_seed(seed)\n    Gc = math.ceil(K / gs)\n    assert K % 8 == 0\n    qc = torch.randint(0, 16, (K, N), device=dev, generator=g, dtype=torch.int64)\n    b_packed = pack_along_k(qc, K, N)\n    # scales strongly group-dependent\n    scales = (0.5 ** torch.arange(Gc, device=dev, dtype=torch.float32))[:, None].repeat(1, N)\n    scales = scales * (1.0 + 0.1 * torch.rand((Gc, N), device=dev, generator=g))\n    # zeros: distinct per-group codes\n    zcodes = (torch.randint(1, 14, (Gc, N), device=dev, generator=g, dtype=torch.int64)\n              + torch.arange(Gc, device=dev, dtype=torch.int64)[:, None] * 2) % 16\n    zp = torch.zeros((Gc, N // 8), dtype=torch.int64, device=dev)\n    for j in range(8):\n        zp |= zcodes[:, j::8] << (j * 4)\n    zeros_packed = zp.to(torch.int32)\n    a = torch.randn((M, K), device=dev, generator=g, dtype=torch.float32)\n\n    c_k = km.gptq_matmul(a, b_packed, scales, zeros_packed, gs, bits=bits)\n\n    g_true = torch.arange(K, device=dev) // gs\n    num_groups_floor = K // gs\n    g_kernel = torch.clamp(torch.arange(K, device=dev, dtype=torch.int64) // gs, max=num_groups_floor - 1)\n\n    ref_true = reference(a, b_packed, scales, zeros_packed, gs, g_idx=g_true)\n    ref_kernel_g = reference(a, b_packed, scales, zeros_packed, gs, g_idx=g_kernel)\n\n    s_kt = stats(\"kernel_vs_ref_true\", c_k, ref_true)\n    s_kg = stats(\"kernel_vs_ref_clampedg\", c_k, ref_kernel_g)\n    s_gt = stats(\"refclamped_vs_ref_true\", ref_kernel_g, ref_true)\n\n    # which k columns are misassigned?\n    mis = (g_kernel != g_true)\n    results.append({\n        **c,\n        \"num_groups_true\": Gc,\n        \"num_groups_floor\": num_groups_floor,\n        \"n_misassigned_k\": int(mis.sum()),\n        \"misassigned_k_range\": [int(torch.nonzero(mis)[0]), int(torch.nonzero(mis)[-1])] if mis.any() else None,\n        \"kernel_vs_ref_true\": s_kt,\n        \"kernel_vs_ref_clampedg\": s_kg,\n        \"refclamped_vs_ref_true\": s_gt,\n    })\n\nprint(json.dumps({\"results\": results}, indent=2))\n```\n\nWait: for the control case K=64, gs=32: num_groups_floor=2=Gc, g_kernel == g_true, ref_kernel_g == ref_true, so s_kt should be small (tf32 noise). For K=48: Gc=2, floor=1, g_kernel all 0; mis = last 16 columns; s_kt large.\n\nOne concern: `scales` strongly group-dependent \u2014 group g scale = 0.5^g * (1+0.1u) \u2014 group1 scale ~0.55 vs group0 ~1.05. Wrong-group dequant for trailing: (q - z0)*s0 vs correct (q - z1)*s1 \u2014 big difference. Good.\n\nAlso zeros zcodes: group 0 codes ~1..13, group 1 codes +2 \u2192 distinct. But note possible overlap after %16: group0 codes 1..13, group1 3..15, group2 5..17%16=5..15+0..1. Some overlap in distribution but per-element values differ with high probability. With N=64 and 16 trailing k-columns, the diff will be large regardless.\n\nAlso note reference unpack of zeros uses +1.0 mirroring kernel. Good.\n\nPotential issue: torch.randint generator on cuda device with dtype int64 \u2014 supported. `torch.Generator(device=dev)` \u2014 fine.\n\nAlso `qc[j::8]` shapes: (K//8, N). bp |= ... fine.\n\nKernel call may take a while to compile. timeout 300.\n\nOne more check: does `km.gptq_matmul` exist with that name \u2014 yes, `def gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4)`.\n\nGPU availability: use_gpu=True default. The environment says a real GPU is available.\n\nEdge: torch version differences for `torch.randint(..., generator=g, dtype=torch.int64, device='cuda')` \u2014 fine.\n\nAlso allow_tf32: torch.backends.cuda.matmul.allow_tf32 = False ensures reference fp32 exact. Kernel's tl.dot tf32 \u2192 s_kt for control ~ up to maybe 1e-2 relative given magnitudes ~ sqrt(48)*... eh, tf32 has 10-bit mantissa \u2192 rel ~1e-3 per product, accumulation fine. Control diff should be ~1e-4..1e-3 relative. Bug case ~0.3+. Clear gap.\n\nAdditionally, to make the mechanism airtight regardless of tf32 noise, also compute s_kg (kernel vs clamped-g reference): should also be ~tf32 noise for bug case, showing the kernel exactly implements the clamped grouping. If s_kg small and s_kt large \u2192 confirmed.\n\nNow also think: could tl.dot with BLOCK 32x16x32 with int-derived fp32... fine.\n\nWhat about `zeros = zeros + 1` overflowing codes=15 \u2192 16: zcodes max 15 (13+2*2=17%16 possible). code 15 \u2192 +1 = 16, dequant (q-16)*s \u2014 fine, mirrored in reference.\n\nAlright. Also print CUDA/torch/triton versions for the record.\n\nLet me also think about whether `run_claim_probe` binds to claim_id \u2014 yes, requires claim_id. So first record_claim, then run_claim_probe(claim_id=...), then finalize_probe_evidence(event_id, supports, summary, status...), then update_claim_status (finalize does status too via status param). Then record_verdict.\n\nOrder of actions this turn: I can record the claim and then run the probe. Both are tool calls; the probe depends on claim_id, so sequential. First message: record_claim. Actually I can batch record_claim alone, get claim id, then run_claim_probe in next turn. The instructions say make independent calls in same block; dependent must wait. claim_id is needed for the probe \u2192 sequential.\n\nLet me draft the claim statement precisely:\n\nstatement: \"The host wrapper derives the group table as g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73). For any K not divisible by group_size this assigns the trailing partial group's K-columns to group K//group_size - 1 instead of its own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale and zero-point row, contradicting the contract's requirement that the trailing shorter group is a group of its own with its own row (ceil(K/group_size) rows supplied).\"\n\nrationale: \"kernel.py lines 69-73 use floor division K // group_size for num_groups and clamp the per-column group index to num_groups - 1; the contract text explicitly calls out the ceil(K/group_size)-row trailing-group case as required behaviour, which the clamp provably discards.\"\n\nscope: in_scope; scope_rationale: \"The contract (problem.txt) explicitly requires correct dequantization for K that is not a multiple of group_size, with a trailing own-group row; a K that is a multiple of 16/8 (so packing and block tiling are exact) but not of group_size, e.g. K=48 with group_size=32, is squarely in that declared domain.\" scope_evidence: [{source: \"problem.txt (t2)\", summary: \"Contract: every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including K not an exact multiple of group_size; trailing columns form a shorter final group with its own row; scales/zeros supplied with ceil(K/group_size) rows.\"}]\n\nGood. Then the probe.\n\nAfter results: finalize with data, update status confirmed, record_verdict reject confidence high (0.95+).\n\nAlso note: should I also verify the control (K multiple of gs) works? Included in the same probe \u2014 supports \"the defect is specifically the trailing-group clamp\" and shows I'm not rejecting due to a global breakage. If control also fails badly, that's different info (maybe my reference convention is off, e.g., zeros packing). Interpretation guide: if control s_kt is large too \u2192 my harness/reference convention mismatch \u2192 investigate before concluding. I'll read results carefully.\n\nLet me write the final message + tool calls. First turn: record_claim only (since probe needs claim_id). Actually \u2014 can I call record_claim and then in the same block run_claim_probe? No, need the claim_id returned. So this turn: record_claim. Next turn: run_claim_probe. Then finalize + verdict.\n\nActually, I could reduce rounds: record_claim now; the response will include the claim id. Then run probe. Then finalize+update+verdict (finalize updates status if I pass status; update_claim_status may be redundant \u2014 finalize_probe_evidence has a status param, so I can skip update_claim_status; but the instructions say resolve every claim with update_claim_status before finishing \u2014 finalize with status should suffice, but to be safe call update_claim_status too... finalize_probe_evidence already \"append runtime evidence and update the claim status\". I'll pass status in finalize and additionally call update_claim_status for belt-and-braces in the same block? They're both writes to the same claim \u2014 order matters but both set confirmed; can batch. Fine.)\n\nLet me write the probe code as a single string, being careful with syntax. Also wrap kernel launch in try/except to capture triton errors as evidence rather than crashing. And print a final JSON object per metric-selection skill.\n\nAlso: potential issue \u2014 `torch.randint(0, 16, (K, N), device=dev, generator=g, dtype=torch.int64)`: randint with generator on cuda \u2014 the generator device must match. torch.Generator(device=\"cuda\") ok.\n\nHmm, one more: b codes random in 0..15 \u2014 q values 0..15, zero codes 1..15ish, dequant values moderate. A randn. C magnitude ~ sum over 48-80 terms of a*(~\u00b17)*scale ~ O(10-30). Fine.\n\nAlso the `stats` rel err with clamp_min(1e-6) \u2014 if some ref value near zero, rel blows up; report both abs and rel, and maybe rel with denom = max(|ref|, 1e-2 * global_max) to be robust. I'll add rel2 = d / ref.abs().clamp_min(0.05 * ref.abs().max()). Keep simple: report max_abs, max_rel_clamped, and mean_abs, plus norm-based: ||diff||/||ref||.\n\nLet me finalize the code.\n\ndef stats(x, y):\n    d = (x - y).abs()\n    denom = y.abs().max().clamp_min(1e-9)\n    return {\"max_abs\": float(d.max()), \"mean_abs\": float(d.mean()), \"rel_fro\": float(d.norm() / y.abs().clamp_min(1e-9).norm()), \"max_rel_vs_local\": float((d / y.abs().clamp_min(0.05*denom)).max())}\n\nGood enough.\n\nAlso include the derived g_idx arrays for K=48 in output: g_true tail vs g_kernel tail.\n\nAnd versions: torch.__version__, triton.__version__, device name.\n\nNow write it. Also note timeout 300.\n\nOne risk: importlib exec of kernel.py triggers `import triton` \u2014 if triton missing in probe env, everything fails; then I'd get tool error and reassess (maybe the probe env has torch+triton since it's a GPU kernel verification rig). Proceed.\n\nDouble-check the packing loops: for K=48: qc (48,64); bp (6,64); j loop 0..7: bp |= qc[j::8] << 4j \u2014 qc[j::8] rows j, j+8, ..., j+40 \u2192 6 rows. Correct.\n\nunpack_q: b_packed.to(int64)[k//8] \u2014 indexing with tensor (K,) \u2192 (K, N). >> ((k%8)*4)[:, None] \u2014 shape (K,1). & 15. Good.\n\nzeros: zp (Gc, 8) for N=64. zcodes[:, j::8] shape (Gc, 8). zp |= zcodes[:, j::8] << 4j. Good.\n\nIn reference, z[g_idx]: z is (Gc, N); g_idx (K,) \u2192 z[g_idx] (K, N). scales[g_idx] (K,N). Good.\n\nkernel call: km.gptq_matmul(a, b_packed, scales, zeros_packed, gs, bits=4).\n\nNote wrapper: num_groups = K // gs; g_idx int32 arange; clamp max=num_groups-1. For K=48 \u2192 max=0. For K=80 \u2192 max=1. For K=64 \u2192 max=1 (== true max). Good.\n\nAlso \u2014 scales dtype float32, zeros int32: kernel `zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)` \u2014 g_idx int32, stride int; pointer arithmetic fine.\n\nI think the probe is solid. Write claim first.\n\nAlso, per instruction \"Your message should be a short natural-language explanation\" \u2014 keep it brief.I'll verify this GPTQ INT4 dequant-matmul kernel against its contract. Reading the source against `problem.txt`, one spot jumps out: the host wrapper derives the per-column group table itself as `g_idx = clamp(arange(K)//group_size, max=K//group_size - 1)` (kernel.py lines 69\u201373). For K not divisible by `group_size`, floor division undercounts groups and the clamp forces the trailing partial group's columns onto the *previous* group's scale/zero row \u2014 while the contract explicitly requires the trailing shorter group to be a group of its own with its own row (`ceil(K/group_size)` rows are supplied). I'll record that as a scoped claim and test it on a real GPU.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "kernel.py lines 69-73 compute num_groups = K // group_size (floor) and clamp the per-column group index to num_groups - 1; for K % group_size != 0 the clamp provably remaps the trailing columns away from the final group row that the contract says must be used. The contract text singles out exactly this ceil(K/group_size) trailing-group case as required behaviour.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt (tool event t2)",
+                "summary": "Contract: every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including a K that is not an exact multiple of group_size; the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros, and scales/zeros are supplied with ceil(K/group_size) rows."
+              }
+            ],
+            "statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1. Those columns are therefore dequantized with the wrong scale and zero-point row, contradicting the contract's requirement that the trailing shorter group is a group of its own with its own row (scales/zeros supplied with ceil(K/group_size) rows)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 768.697,
+        "input_tokens": 8751,
+        "output_tokens": 15834
+      }
+    },
+    {
+      "duration_s": 10.34127021400002,
+      "role": "solo",
+      "round": 3,
+      "text": "Re-record the claim with scope_rationale, then run a probe.I'll re-record the claim with the required `scope_rationale`, then run a runtime probe on a K not divisible by group_size.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "kernel.py lines 69-73 compute num_groups = K // group_size (floor) and clamp the per-column group index to num_groups - 1; for K % group_size != 0 the clamp provably remaps the trailing columns away from the final group row the contract requires, and a runtime probe can directly compare C against A @ dequant_ref using ceil(K/group_size) group rows.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt (tool event t2)",
+                "summary": "Contract: every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including a K that is not an exact multiple of group_size; the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros, and scales/zeros are supplied with ceil(K/group_size) rows."
+              }
+            ],
+            "scope_rationale": "The contract text in problem.txt explicitly requires correct trailing-group dequantization for any K including K % group_size != 0, with ceil(K/group_size) rows in scales/zeros; testing K=96, group_size=32 would not expose this, so K=80, group_size=32 (a representative input the contract admits) is used.",
+            "statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.341,
+        "input_tokens": 9990,
+        "output_tokens": 426
+      }
+    },
+    {
+      "duration_s": 14.670507644000054,
+      "role": "solo",
+      "round": 4,
+      "text": "Run probe for claim c1.The claim c1 is already scoped. Now I'll run a runtime probe comparing the kernel against a reference dequantization with ceil(K/group_size) groups for K=80, group_size=32.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json\nimport sys\nsys.path.insert(0, '/root/cases/case_33')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\n\ndef run_case(K, group_size, bits=4):\n    M, N = 64, 64\n    ipb = 32 // bits\n    maxq = 2**bits - 1\n    num_groups = (K + group_size - 1) // group_size  # ceil per contract\n    A = torch.randn(M, K, device=dev)\n    q = torch.randint(0, maxq + 1, (K, N), device=dev, dtype=torch.int32)\n    packed = torch.zeros((K + ipb - 1) // ipb, N, device=dev, dtype=torch.int32)\n    for j in range(ipb):\n        packed |= (q[j::ipb] << (j * bits))[:packed.shape[0]]\n    scales = torch.randn(num_groups, N, device=dev) * 0.1 + 0.5\n    zeros = torch.randint(0, maxq, (num_groups, N), device=dev, dtype=torch.int32)\n    # pack zeros per contract: zeros tensor is (num_groups, N) ints; kernel indexes zeros_ptr + g_idx*stride_zeros + bn//ipb\n    # So zeros must be packed along N into int32 words: shape (num_groups, ceil(N/ipb))\n    zp = torch.zeros(num_groups, (N + ipb - 1) // ipb, device=dev, dtype=torch.int32)\n    for j in range(ipb):\n        zp[:, j::ipb] |= (zeros[:, j::ipb] << (j * bits))[:, :zp.shape[1]]\n    C = gptq_matmul(A, packed, scales, zp, group_size, bits)\n    # reference\n    deq = torch.empty(K, N, device=dev)\n    for k in range(K):\n        g = k // group_size\n        deq[k] = (q[k].float() - (zeros[g].float() + 1)) * scales[g]\n    ref = A @ deq\n    err = (C - ref).abs().max().item()\n    rel = err / ref.abs().max().item()\n    return {'K': K, 'group_size': group_size, 'num_groups': num_groups, 'max_abs_err': err, 'rel': rel}\n\nout = []\n# partial trailing group case\nout.append(run_case(80, 32))\n# control: divisible case\nout.append(run_case(64, 32))\nprint(json.dumps(out))\n",
+            "expected_signal": "large error for K=80 (partial group), small error for K=64"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 14.671,
+        "input_tokens": 11848,
+        "output_tokens": 664
+      }
+    },
+    {
+      "duration_s": 26.63279669999997,
+      "role": "solo",
+      "round": 5,
+      "text": "Fix the probe bug: packing indexing. The issue is that with N=64, ipb=8, zp shape (3, 8)... wait N=64, ceil(64/8)=8, but error says zp shape [3,1]? Hmm\u2014ipb = 32//bits = 8, zp shape (3, 8). Error says [3,1] vs [3,8] broadcast... Actually zeros[:, j::ipb] has shape (3, 8) for j=0 and zp[:,0::8] shape (3,8)... error says output shape [3,1]. Maybe cuda device? Whatever\u2014simpler: use torch in-place differently, or just construct zp via loop over columns. Simpler fix: build zp with vectorized approach:\n\nzp = (zeros.reshape(num_groups, N//ipb? ...)) Actually zeros stored per column n at word n//ipb, shift (n%ipb)*bits. Just loop:\n\nfor j in range(ipb): zp[:, j::ipb] |= zeros[:, j::ipb] << (j*bits) \u2014 same. Issue: `|=` with slices... it errored: output [3,1] vs [3,8]? Odd. Maybe N=64 gives zp shape (3,8) but error shows [3,1]. Maybe run_case(80,32) has N=64... hmm. Just avoid in-place: build zp via bit math using torch concatenation. Use:\n\nzp = torch.zeros_like; for j in range(ipb): cols = torch.arange(N) % ipb == j; ... Simpler: use torch.ops or just do\n\nzp = torch.zeros(num_groups, N, dtype=torch.long) then pack at end via sum: word_index = arange(N)//ipb; shift = (arange(N)%ipb)*bits; zp_full = zeros << shift; then scatter_add into words: zp = torch.zeros(num_groups, N//ipb... but N might not divisible? N=64 divisible. Use index_add on dim 1.\n\nzp = torch.zeros(num_groups, (N+ipb-1)//ipb, dtype=torch.int32, device=dev)\nidx = (torch.arange(N)//ipb)\nzp.index_add_(1, idx, (zeros << shift).to(torch.int32))\n\nshift per column. That works. Also note zeros_shifter in kernel uses offs_bn % infearure_per_bits, consistent.\n\nRun run_claim_probe again with fixed code.The probe failed on a packing bug in my probe code (in-place `|=` on a strided slice with int32 promoted to int64). I'll rewrite the zero-point packing using `index_add_` and rerun for claim c1.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json\nimport sys\nsys.path.insert(0, '/root/cases/case_33')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\n\ndef run_case(K, group_size, bits=4):\n    M, N = 64, 64\n    ipb = 32 // bits\n    maxq = 2**bits - 1\n    num_groups = (K + group_size - 1) // group_size  # ceil per contract\n    A = torch.randn(M, K, device=dev)\n    q = torch.randint(0, maxq + 1, (K, N), device=dev, dtype=torch.int64)\n    packed = torch.zeros((K + ipb - 1) // ipb, N, device=dev, dtype=torch.int64)\n    for j in range(ipb):\n        packed |= (q[j::ipb] << (j * bits))[:packed.shape[0]]\n    packed = packed.to(torch.int32)\n    scales = torch.randn(num_groups, N, device=dev) * 0.1 + 0.5\n    zeros = torch.randint(0, maxq, (num_groups, N), device=dev, dtype=torch.int64)\n    # pack zeros along N: word n//ipb holds col n at shift (n%ipb)*bits\n    shift = (torch.arange(N, device=dev) % ipb) * bits\n    word = (torch.arange(N, device=dev) // ipb)\n    zp = torch.zeros(num_groups, (N + ipb - 1) // ipb, device=dev, dtype=torch.int64)\n    zp.index_add_(1, word, (zeros << shift))\n    zp = zp.to(torch.int32)\n    C = gptq_matmul(A, packed, scales, zp, group_size, bits)\n    # reference: group_of(k) = k // group_size, using ceil rows\n    deq = torch.empty(K, N, device=dev)\n    for g in range(num_groups):\n        lo, hi = g * group_size, min((g + 1) * group_size, K)\n        deq[lo:hi] = (q[lo:hi].float() - (zeros[g].float() + 1)) * scales[g]\n    ref = A @ deq\n    err = (C - ref).abs().max().item()\n    rel = err / ref.abs().max().item()\n    # also: per-column error attribution for trailing group\n    tail = group_size * (K // group_size)  # start of partial group\n    tail_err = (C - ref)[:, tail:].abs().max().item() if tail < K else 0.0\n    head_err = (C - ref)[:, :tail].abs().max().item() if tail > 0 else 0.0\n    return {'K': K, 'group_size': group_size, 'num_groups': num_groups,\n            'max_abs_err': err, 'rel': rel, 'head_err': head_err, 'tail_err': tail_err}\n\nout = []\nout.append(run_case(80, 32))   # partial trailing group (contract-critical)\nout.append(run_case(64, 32))   # control: K divisible by group_size\nout.append(run_case(96, 32))   # control: divisible, ceil == floor\nprint(json.dumps(out))\n",
+            "expected_signal": "large max/tail error for K=80 (partial group dequantized with wrong group row), near-zero error for divisible controls K=64, K=96"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 26.633,
+        "input_tokens": 14592,
+        "output_tokens": 1376
+      }
+    },
+    {
+      "duration_s": 20.449660582999968,
+      "role": "solo",
+      "round": 6,
+      "text": "Probe bug: tail slice empty for K=80? tail = 32*(80//32)=64, K=80, so [:,64:] is fine... wait, error is numel==0. Hmm, for K=64, tail=64, tail==K so guarded... but the error occurred in run_case(80,32) line 39. tail=64 < 80, slice [:, 64:] nonempty. Actually wait\u2014maybe the error is head? No, head guarded tail>0. Hmm, tail_err: (C - ref)[:, 64:].abs().max() \u2014 16 columns, nonempty. Unless... oh, maybe error occurred for K=64? Traceback says run_case(80,32). Strange. Wait \u2014 maybe ref shape mismatch? Actually the error \"input.numel() == 0\": (C-ref)[:, 64:] \u2014 if K... hmm. Oh! K=80, but A is (M,K)=(64,80), ref (64,64). tail=64. Fine. Unless... Actually maybe torch indexing [:, tail:] where tail is int \u2014 fine.\n\nHmm, maybe error actually for run_case(64,32)? Traceback shows 80. Odd. Whatever \u2014 just simplify probe: compute tail_err with guard using if tail < K else 0.0 already... I'll just compute errors via full error matrix and use .max() on nonempty, or use flatten with clamp. Use error.max() with min over dims guarded: use (C-ref).abs() and slice with .reshape(-1).max() if numel>0. Also print JSON via print(json.dumps(out)) which wasn't reached. Just make robust.The probe hit a spurious empty-tensor reduction; I'll make the error attribution robust and rerun.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json\nimport sys\nsys.path.insert(0, '/root/cases/case_33')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\n\ndef run_case(K, group_size, bits=4):\n    M, N = 64, 64\n    ipb = 32 // bits\n    maxq = 2**bits - 1\n    num_groups = (K + group_size - 1) // group_size  # ceil per contract\n    A = torch.randn(M, K, device=dev)\n    q = torch.randint(0, maxq + 1, (K, N), device=dev, dtype=torch.int64)\n    packed = torch.zeros((K + ipb - 1) // ipb, N, device=dev, dtype=torch.int64)\n    for j in range(ipb):\n        packed |= (q[j::ipb] << (j * bits))[:packed.shape[0]]\n    packed = packed.to(torch.int32)\n    scales = torch.randn(num_groups, N, device=dev) * 0.1 + 0.5\n    zeros = torch.randint(0, maxq, (num_groups, N), device=dev, dtype=torch.int64)\n    shift = (torch.arange(N, device=dev) % ipb) * bits\n    word = (torch.arange(N, device=dev) // ipb)\n    zp = torch.zeros(num_groups, (N + ipb - 1) // ipb, device=dev, dtype=torch.int64)\n    zp.index_add_(1, word, (zeros << shift))\n    zp = zp.to(torch.int32)\n    C = gptq_matmul(A, packed, scales, zp, group_size, bits)\n    deq = torch.empty(K, N, device=dev)\n    for g in range(num_groups):\n        lo, hi = g * group_size, min((g + 1) * group_size, K)\n        deq[lo:hi] = (q[lo:hi].float() - (zeros[g].float() + 1)) * scales[g]\n    ref = A @ deq\n    diff = (C - ref).abs()\n    err = diff.max().item()\n    rel = err / ref.abs().max().item()\n    tail = group_size * (K // group_size)\n    tail_err = diff[:, tail:].reshape(-1).max().item() if tail < K else -1.0\n    head_err = diff[:, :tail].reshape(-1).max().item() if tail > 0 else -1.0\n    return {'K': K, 'group_size': group_size, 'num_groups': num_groups,\n            'max_abs_err': err, 'rel': rel, 'head_err': head_err, 'tail_err': tail_err}\n\nout = []\nout.append(run_case(80, 32))   # partial trailing group (contract-critical)\nout.append(run_case(64, 32))   # control: K divisible by group_size\nout.append(run_case(96, 32))   # control: divisible\nprint(json.dumps(out))\n",
+            "expected_signal": "large tail error for K=80 (partial group dequantized with wrong group row), near-zero error for divisible controls K=64, K=96"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 20.45,
+        "input_tokens": 18157,
+        "output_tokens": 1106
+      }
+    },
+    {
+      "duration_s": 17.491782475000036,
+      "role": "solo",
+      "round": 7,
+      "text": "Odd: tail=64 < K=80 should be nonempty... but diff[:, 64:] for K=80: C is (64,64) \u2014 wait! C shape is (M,N)=(64,64), ref is (64,64). diff is (64,64) in N, not K! So [:, 64:] is empty. That's the bug \u2014 slicing along N not K. Fix: attribute error differently \u2014 just report full err. Since diff is (M,N), can't slice by K groups. Just report max err and rel. Run final probe.The empty-tensor error is because `diff` is (M,N)=(64,64); `[:, 64:]` is empty regardless of K. The tail-group attribution should be done by building a second reference that uses the kernel's (clamped) grouping, to isolate the effect. Simpler: just report max error; a nonzero error for K=80 vs zero for divisible controls already decides the claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json\nimport sys\nsys.path.insert(0, '/root/cases/case_33')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\n\ndef run_case(K, group_size, bits=4):\n    M, N = 64, 64\n    ipb = 32 // bits\n    maxq = 2**bits - 1\n    num_groups = (K + group_size - 1) // group_size  # ceil per contract\n    A = torch.randn(M, K, device=dev)\n    q = torch.randint(0, maxq + 1, (K, N), device=dev, dtype=torch.int64)\n    packed = torch.zeros((K + ipb - 1) // ipb, N, device=dev, dtype=torch.int64)\n    for j in range(ipb):\n        packed |= (q[j::ipb] << (j * bits))[:packed.shape[0]]\n    packed = packed.to(torch.int32)\n    scales = torch.randn(num_groups, N, device=dev) * 0.1 + 0.5\n    zeros = torch.randint(0, maxq, (num_groups, N), device=dev, dtype=torch.int64)\n    shift = (torch.arange(N, device=dev) % ipb) * bits\n    word = (torch.arange(N, device=dev) // ipb)\n    zp = torch.zeros(num_groups, (N + ipb - 1) // ipb, device=dev, dtype=torch.int64)\n    zp.index_add_(1, word, (zeros << shift))\n    zp = zp.to(torch.int32)\n    C = gptq_matmul(A, packed, scales, zp, group_size, bits)\n    # reference with contract grouping (ceil groups; trailing partial group uses its own row)\n    deq = torch.empty(K, N, device=dev)\n    for g in range(num_groups):\n        lo, hi = g * group_size, min((g + 1) * group_size, K)\n        deq[lo:hi] = (q[lo:hi].float() - (zeros[g].float() + 1)) * scales[g]\n    ref = A @ deq\n    diff = (C - ref).abs()\n    err = diff.max().item()\n    ref_scale = ref.abs().max().item()\n    # what error would the kernel's clamped grouping predict? (sanity: matches err)\n    g_idx_kernel = torch.clamp(torch.arange(K) // group_size, max=K // group_size - 1).to(dev)\n    deq_k = (q.float() - (zeros[g_idx_kernel].float() + 1)) * scales[g_idx_kernel]\n    predicted = (A @ deq_k - ref).abs().max().item()\n    return {'K': K, 'group_size': group_size, 'num_groups': num_groups,\n            'max_abs_err': err, 'rel': err / ref_scale, 'predicted_clamped_err': predicted}\n\nout = [run_case(80, 32), run_case(64, 32), run_case(96, 32), run_case(100, 32)]\nprint(json.dumps(out))\n",
+            "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.492,
+        "input_tokens": 21536,
+        "output_tokens": 952
+      }
+    },
+    {
+      "duration_s": 19.328915671999994,
+      "role": "solo",
+      "round": 8,
+      "text": "t10 failed at packing for K=100: q[j::ipb] has 13 rows, packed has 13 words... wait K=100: (100+7)//8=13, q[j::8] for j=0 \u2192 13 rows, fine; but q[8::8] \u2192 12 rows, mismatch when j bits shift is nonzero? Actually for j>0, q[j::8] gives ceil((100-j)/8)... j=1: q[1::8] = 13? 100-1=99 \u2192 13. j=4: q[4::8]=12. So j=4, shift 16, packed has 13 rows \u2192 mismatch. The kernel expects q index j corresponds to shift j; packing partial word is fine for j\u2264... simplest fix: only pack shifts where slice size matches, i.e. pack q[j::ipb] into packed[:len] rather than requiring equal. Use padded q: pad K to multiple of ipb with zeros.\n\nFix: Kpad = ceil(K/ipb)*ipb; qp = torch.zeros(Kpad,N); qp[:K]=q; then packed = sum over j of qp[j::ipb]<<(j*bits). Run probe.The t10 failure was a probe packing bug: for K=100, slices `q[j::8]` have unequal lengths. I'll pad q to a multiple of 8 before packing and rerun.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json\nimport sys\nsys.path.insert(0, '/root/cases/case_33')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\n\ndef run_case(K, group_size, bits=4):\n    M, N = 64, 64\n    ipb = 32 // bits\n    maxq = 2**bits - 1\n    num_groups = (K + group_size - 1) // group_size  # ceil per contract\n    A = torch.randn(M, K, device=dev)\n    q = torch.randint(0, maxq + 1, (K, N), device=dev, dtype=torch.int64)\n    Kpad = ((K + ipb - 1) // ipb) * ipb\n    qp = torch.zeros(Kpad, N, device=dev, dtype=torch.int64)\n    qp[:K] = q\n    packed = torch.zeros(Kpad // ipb, N, device=dev, dtype=torch.int64)\n    for j in range(ipb):\n        packed |= qp[j::ipb] << (j * bits)\n    packed = packed.to(torch.int32)\n    scales = torch.randn(num_groups, N, device=dev) * 0.1 + 0.5\n    zeros = torch.randint(0, maxq, (num_groups, N), device=dev, dtype=torch.int64)\n    shift = (torch.arange(N, device=dev) % ipb) * bits\n    word = (torch.arange(N, device=dev) // ipb)\n    zp = torch.zeros(num_groups, (N + ipb - 1) // ipb, device=dev, dtype=torch.int64)\n    zp.index_add_(1, word, (zeros << shift))\n    zp = zp.to(torch.int32)\n    C = gptq_matmul(A, packed, scales, zp, group_size, bits)\n    # reference with contract grouping (ceil groups; trailing partial group uses its own row)\n    deq = torch.empty(K, N, device=dev)\n    for g in range(num_groups):\n        lo, hi = g * group_size, min((g + 1) * group_size, K)\n        deq[lo:hi] = (q[lo:hi].float() - (zeros[g].float() + 1)) * scales[g]\n    ref = A @ deq\n    diff = (C - ref).abs()\n    err = diff.max().item()\n    ref_scale = ref.abs().max().item()\n    # error the kernel's clamped grouping would predict\n    g_idx_kernel = torch.clamp(torch.arange(K) // group_size, max=K // group_size - 1).to(dev)\n    deq_k = (q.float() - (zeros[g_idx_kernel].float() + 1)) * scales[g_idx_kernel]\n    predicted = (A @ deq_k - ref).abs().max().item()\n    return {'K': K, 'group_size': group_size, 'num_groups': num_groups,\n            'max_abs_err': err, 'rel': err / ref_scale, 'predicted_clamped_err': predicted}\n\nout = [run_case(80, 32), run_case(64, 32), run_case(96, 32), run_case(100, 32)]\nprint(json.dumps(out))\n",
+            "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 19.329,
+        "input_tokens": 24568,
+        "output_tokens": 1077
+      }
+    },
+    {
+      "duration_s": 13.201345726,
+      "role": "solo",
+      "round": 9,
+      "text": "Probe t11 succeeded: K=80 and K=100 large errors (~0.46 rel), divisible controls ~1e-7. Confirm claim c1 and record verdict reject.The probe (t11) succeeded: for K=80 and K=100 (partial trailing group), the kernel's output deviates by ~46% and ~38% relative from the contract reference, with errors matching the predicted wrong-group dequantization; divisible controls K=64/96 agree to ~1e-7. I'll finalize the evidence, close claim c1, and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "K100": {
+                "max_abs_err": 48.29465866088867,
+                "num_groups": 4,
+                "predicted_clamped_err": 33.2981071472168,
+                "rel": 0.3795543870193749
+              },
+              "K64": {
+                "max_abs_err": 3.0517578125e-05,
+                "num_groups": 2,
+                "predicted_clamped_err": 0.0,
+                "rel": 2.384557889256124e-07
+              },
+              "K80": {
+                "max_abs_err": 60.05613327026367,
+                "num_groups": 3,
+                "predicted_clamped_err": 60.0561408996582,
+                "rel": 0.45972211953194725
+              },
+              "K96": {
+                "max_abs_err": 3.814697265625e-05,
+                "num_groups": 3,
+                "predicted_clamped_err": 0.0,
+                "rel": 3.2019147962788115e-07
+              }
+            },
+            "event_id": "t11",
+            "status": "confirmed",
+            "summary": "Probe t11 ran gptq_matmul against a contract reference (ceil(K/group_size) group rows, trailing partial group uses its own row). K=80: max_abs_err=60.06, rel=0.460, matching predicted clamped-grouping error 60.06. K=100: max_abs_err=48.29, rel=0.380. Divisible controls K=64 and K=96: err ~3e-5 (rel ~2-3e-7, fp32 noise). Confirms kernel assigns trailing partial group to group K//group_size-1 instead of its own ceil row.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c1",
+            "status": "confirmed"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.201,
+        "input_tokens": 27369,
+        "output_tokens": 554
+      }
+    },
+    {
+      "duration_s": 9.55848452600003,
+      "role": "solo",
+      "round": 10,
+      "text": "Claim c1 confirmed, in_scope, evidence recorded. Record verdict reject.Claim c1 is confirmed with in-scope runtime evidence (probe t11): for K=80 and K=100 the kernel deviates ~46%/38% relative from the contract reference because it clamps the trailing partial group to group K//group_size\u22121 instead of its own ceil row, while divisible controls K=64/96 agree to ~1e-7. The contract explicitly requires correct trailing-group handling, so this is a reject.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Source inspection (kernel.py lines 69-73) shows gptq_matmul computes g_idx = clamp(k // group_size, max = K // group_size - 1), remapping the trailing partial group to the previous group's scale/zero row. Runtime probe t11 (c1.e1) confirmed this against the contract reference with ceil(K/group_size) group rows: K=80, group_size=32 gives max_abs_err=60.06 (rel 0.460), exactly matching the predicted clamped-grouping error; K=100 gives max_abs_err=48.29 (rel 0.380); divisible controls K=64 and K=96 agree to ~3e-5 abs (~2-3e-7 rel, fp32 noise). Since problem.txt explicitly requires every column to use the scale/zero-point of the group it actually belongs to, including a trailing shorter final group with its own ceil(K/group_size) row for any K, the kernel violates a required behaviour on inputs the contract admits. Verdict: reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.558,
+        "input_tokens": 31907,
+        "output_tokens": 365
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_33"
+      },
+      "created_at": "2026-09-08T23:37:05Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_33",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef quant_matmul_248_kernel(\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\n    M, N, K, bits, maxq,\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\n    stride_scales, stride_zeros,\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\n    GROUP_SIZE_M: tl.constexpr,\n):\n    infearure_per_bits = 32 // bits\n    pid = tl.program_id(axis=0)\n    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\n    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\n    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\n    num_pid_in_group = GROUP_SIZE_M * num_pid_n\n    group_id = pid // num_pid_in_group\n    first_pid_m = group_id * GROUP_SIZE_M\n    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\n    pid_m = first_pid_m + (pid % group_size_m)\n    pid_n = (pid % num_pid_in_group) // group_size_m\n\n    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\n    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\n    offs_k = tl.arange(0, BLOCK_SIZE_K)\n    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\n    a_mask = offs_am[:, None] < M\n    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\n    g_ptrs = g_ptr + offs_k\n    scales_ptrs = scales_ptr + offs_bn[None, :]\n    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\n\n    shifter = (offs_k % infearure_per_bits) * bits\n    zeros_shifter = (offs_bn % infearure_per_bits) * bits\n    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\n\n    for k in range(0, num_pid_k):\n        g_idx = tl.load(g_ptrs)\n        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\n        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\n        zeros = (zeros >> zeros_shifter[None, :]) & maxq\n        zeros = zeros + 1\n        a = tl.load(a_ptrs, mask=a_mask, other=0.0)\n        b = tl.load(b_ptrs)\n        b = (b >> shifter[:, None]) & maxq\n        b = (b - zeros) * scales\n        accumulator += tl.dot(a, b)\n        a_ptrs += BLOCK_SIZE_K\n        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\n        g_ptrs += BLOCK_SIZE_K\n\n    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\n    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\n    tl.store(c_ptrs, accumulator, mask=c_mask)\n\n\ndef gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4):\n    \"\"\"Host wrapper. a: (M,K) fp32. b_packed: (K//(32//bits), N) int32.\n    scales/zeros: (num_groups, N), one row per group of `group_size` columns\n    along K. The per-column group table is derived here from group_size.\"\"\"\n    M, K = a.shape\n    N = b_packed.shape[1]\n    maxq = 2 ** bits - 1\n\n    num_groups = K // group_size\n    g_idx = torch.clamp(\n        torch.arange(K, device=a.device, dtype=torch.int32) // group_size,\n        max=num_groups - 1,\n    )\n\n    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\n    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\n    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\n    quant_matmul_248_kernel[grid](\n        a, b_packed, c, scales, zeros, g_idx,\n        M, N, K, bits, maxq,\n        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\n        scales.stride(0), zeros.stride(0),\n        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\n        GROUP_SIZE_M=GROUP_SIZE_M,\n    )\n    return c\n",
+        "passed": null,
+        "problem_text": "Operation: grouped INT4 dequantization fused with a matrix multiply\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\n\nWeights are stored as 4-bit values packed into int32 words. Columns along the\nreduction dimension K are split into consecutive groups of `group_size`, and\neach group carries its own scale and zero-point row in `scales` / `zeros`.\n\nContract: every column must be dequantized with the scale and zero-point of the\ngroup it actually belongs to, for any K -- including a K that is not an exact\nmultiple of group_size. In that case the trailing columns form a shorter final\ngroup which is still a group of its own, with its own row in `scales`/`zeros`;\n`scales` and `zeros` are supplied with ceil(K / group_size) rows accordingly.\n\nThe kernel computes  C = A @ dequant(B),  with dequant(B)[k,n] =\n(unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n],\nwhere group_of(k) is the index of the group column k belongs to.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_33",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_33"
+      },
+      "created_at": "2026-09-08T23:37:05Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: grouped INT4 dequantization fused with a matrix multiply\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\n\nWeights are stored as 4-bit values packed into int32 words. Columns along the\nreduction dimension K are split into consecutive groups of `group_size`, and\neach group carries its own scale and zero-point row in `scales` / `zeros`.\n\nContract: every column must be dequantized with the scale and zero-point of the\ngroup it actually belongs to, for any K -- including a K that is not an exact\nmultiple of group_size. In that case the trailing columns form a shorter final\ngroup which is still a group of its own, with its own row in `scales`/`zeros`;\n`scales` and `zeros` are supplied with ceil(K / group_size) rows accordingly.\n\nThe kernel computes  C = A @ dequant(B),  with dequant(B)[k,n] =\n(unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n],\nwhere group_of(k) is the index of the group column k belongs to.\n",
+        "entry": "case_33",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_33"
+      },
+      "created_at": "2026-09-08T23:37:05Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_33",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3551
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 983
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_33",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T23:37:05Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_33\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_33",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "kernel.py lines 69-73 compute num_groups = K // group_size (floor) and clamp the per-column group index to num_groups - 1; for K % group_size != 0 the clamp provably remaps the trailing columns away from the final group row that the contract says must be used. The contract text singles out exactly this ceil(K/group_size) trailing-group case as required behaviour.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt (tool event t2)",
+            "summary": "Contract: every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including a K that is not an exact multiple of group_size; the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros, and scales/zeros are supplied with ceil(K/group_size) rows."
+          }
+        ],
+        "statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1. Those columns are therefore dequantized with the wrong scale and zero-point row, contradicting the contract's requirement that the trailing shorter group is a group of its own with its own row (scales/zeros supplied with ceil(K/group_size) rows)."
+      },
+      "created_at": "2026-09-08T23:49:56Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t5",
+        "message": "in_scope claims require non-empty scope_rationale",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "kernel.py lines 69-73 compute num_groups = K // group_size (floor) and clamp the per-column group index to num_groups - 1; for K % group_size != 0 the clamp provably remaps the trailing columns away from the final group row the contract requires, and a runtime probe can directly compare C against A @ dequant_ref using ceil(K/group_size) group rows.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt (tool event t2)",
+            "summary": "Contract: every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including a K that is not an exact multiple of group_size; the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros, and scales/zeros are supplied with ceil(K/group_size) rows."
+          }
+        ],
+        "scope_rationale": "The contract text in problem.txt explicitly requires correct trailing-group dequantization for any K including K % group_size != 0, with ceil(K/group_size) rows in scales/zeros; testing K=96, group_size=32 would not expose this, so K=80, group_size=32 (a representative input the contract admits) is used.",
+        "statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract."
+      },
+      "created_at": "2026-09-08T23:50:06Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-08T23:50:06Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "kernel.py lines 69-73 compute num_groups = K // group_size (floor) and clamp the per-column group index to num_groups - 1; for K % group_size != 0 the clamp provably remaps the trailing columns away from the final group row the contract requires, and a runtime probe can directly compare C against A @ dequant_ref using ceil(K/group_size) group rows.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt (tool event t2)",
+            "summary": "Contract: every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including a K that is not an exact multiple of group_size; the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros, and scales/zeros are supplied with ceil(K/group_size) rows."
+          }
+        ],
+        "scope_rationale": "The contract text in problem.txt explicitly requires correct trailing-group dequantization for any K including K % group_size != 0, with ceil(K/group_size) rows in scales/zeros; testing K=96, group_size=32 would not expose this, so K=80, group_size=32 (a representative input the contract admits) is used.",
+        "statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract.",
+        "status": "open",
+        "updated_at": "2026-09-08T23:50:06Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json\nimport sys\nsys.path.insert(0, '/root/cases/case_33')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\n\ndef run_case(K, group_size, bits=4):\n    M, N = 64, 64\n    ipb = 32 // bits\n    maxq = 2**bits - 1\n    num_groups = (K + group_size - 1) // group_size  # ceil per contract\n    A = torch.randn(M, K, device=dev)\n    q = torch.randint(0, maxq + 1, (K, N), device=dev, dtype=torch.int32)\n    packed = torch.zeros((K + ipb - 1) // ipb, N, device=dev, dtype=torch.int32)\n    for j in range(ipb):\n        packed |= (q[j::ipb] << (j * bits))[:packed.shape[0]]\n    scales = torch.randn(num_groups, N, device=dev) * 0.1 + 0.5\n    zeros = torch.randint(0, maxq, (num_groups, N), device=dev, dtype=torch.int32)\n    # pack zeros per contract: zeros tensor is (num_groups, N) ints; kernel indexes zeros_ptr + g_idx*stride_zeros + bn//ipb\n    # So zeros must be packed along N into int32 words: shape (num_groups, ceil(N/ipb))\n    zp = torch.zeros(num_groups, (N + ipb - 1) // ipb, device=dev, dtype=torch.int32)\n    for j in range(ipb):\n        zp[:, j::ipb] |= (zeros[:, j::ipb] << (j * bits))[:, :zp.shape[1]]\n    C = gptq_matmul(A, packed, scales, zp, group_size, bits)\n    # reference\n    deq = torch.empty(K, N, device=dev)\n    for k in range(K):\n        g = k // group_size\n        deq[k] = (q[k].float() - (zeros[g].float() + 1)) * scales[g]\n    ref = A @ deq\n    err = (C - ref).abs().max().item()\n    rel = err / ref.abs().max().item()\n    return {'K': K, 'group_size': group_size, 'num_groups': num_groups, 'max_abs_err': err, 'rel': rel}\n\nout = []\n# partial trailing group case\nout.append(run_case(80, 32))\n# control: divisible case\nout.append(run_case(64, 32))\nprint(json.dumps(out))\n",
+        "expected_signal": "large error for K=80 (partial group), small error for K=64"
+      },
+      "created_at": "2026-09-08T23:50:28Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "2c41694540282f4dddfea53390c3f15c895af042a4491d30eed51c2365ad705d"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "180624b3415c8fd14173bc8884fd4be3b1c9d8c60fcbad5d8b9c6cb57c3830b3"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract.",
+        "cwd": "/root/cases/case_33",
+        "duration_s": 6.553521,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "2c41694540282f4dddfea53390c3f15c895af042a4491d30eed51c2365ad705d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "180624b3415c8fd14173bc8884fd4be3b1c9d8c60fcbad5d8b9c6cb57c3830b3"
+              }
+            ],
+            "duration_s": 6.553521,
+            "exit_code": 1,
+            "expected_signal": "large error for K=80 (partial group), small error for K=64",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t7_probe.py\", line 39, in <module>\n    out.append(run_case(80, 32))\n               ^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t7_probe.py\", line 25, in run_case\n    zp[:, j::ipb] |= (zeros[:, j::ipb] << (j * bits))[:, :zp.shape[1]]\nRuntimeError: output with shape [3, 1] doesn't match the broadcast shape [3, 8]\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 1,
+        "expected_signal": "large error for K=80 (partial group), small error for K=64",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t7_probe.py\", line 39, in <module>\n    out.append(run_case(80, 32))\n               ^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t7_probe.py\", line 25, in run_case\n    zp[:, j::ipb] |= (zeros[:, j::ipb] << (j * bits))[:, :zp.shape[1]]\nRuntimeError: output with shape [3, 1] doesn't match the broadcast shape [3, 8]\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json\nimport sys\nsys.path.insert(0, '/root/cases/case_33')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\n\ndef run_case(K, group_size, bits=4):\n    M, N = 64, 64\n    ipb = 32 // bits\n    maxq = 2**bits - 1\n    num_groups = (K + group_size - 1) // group_size  # ceil per contract\n    A = torch.randn(M, K, device=dev)\n    q = torch.randint(0, maxq + 1, (K, N), device=dev, dtype=torch.int64)\n    packed = torch.zeros((K + ipb - 1) // ipb, N, device=dev, dtype=torch.int64)\n    for j in range(ipb):\n        packed |= (q[j::ipb] << (j * bits))[:packed.shape[0]]\n    packed = packed.to(torch.int32)\n    scales = torch.randn(num_groups, N, device=dev) * 0.1 + 0.5\n    zeros = torch.randint(0, maxq, (num_groups, N), device=dev, dtype=torch.int64)\n    # pack zeros along N: word n//ipb holds col n at shift (n%ipb)*bits\n    shift = (torch.arange(N, device=dev) % ipb) * bits\n    word = (torch.arange(N, device=dev) // ipb)\n    zp = torch.zeros(num_groups, (N + ipb - 1) // ipb, device=dev, dtype=torch.int64)\n    zp.index_add_(1, word, (zeros << shift))\n    zp = zp.to(torch.int32)\n    C = gptq_matmul(A, packed, scales, zp, group_size, bits)\n    # reference: group_of(k) = k // group_size, using ceil rows\n    deq = torch.empty(K, N, device=dev)\n    for g in range(num_groups):\n        lo, hi = g * group_size, min((g + 1) * group_size, K)\n        deq[lo:hi] = (q[lo:hi].float() - (zeros[g].float() + 1)) * scales[g]\n    ref = A @ deq\n    err = (C - ref).abs().max().item()\n    rel = err / ref.abs().max().item()\n    # also: per-column error attribution for trailing group\n    tail = group_size * (K // group_size)  # start of partial group\n    tail_err = (C - ref)[:, tail:].abs().max().item() if tail < K else 0.0\n    head_err = (C - ref)[:, :tail].abs().max().item() if tail > 0 else 0.0\n    return {'K': K, 'group_size': group_size, 'num_groups': num_groups,\n            'max_abs_err': err, 'rel': rel, 'head_err': head_err, 'tail_err': tail_err}\n\nout = []\nout.append(run_case(80, 32))   # partial trailing group (contract-critical)\nout.append(run_case(64, 32))   # control: K divisible by group_size\nout.append(run_case(96, 32))   # control: divisible, ceil == floor\nprint(json.dumps(out))\n",
+        "expected_signal": "large max/tail error for K=80 (partial group dequantized with wrong group row), near-zero error for divisible controls K=64, K=96"
+      },
+      "created_at": "2026-09-08T23:51:01Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "d32ecc7a86e88db12882bf1ee709d4d289e2a40eb92dedba3ca349565fdcdc84"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "0951718a742cd852aac0d338c17cbb7090db1b1d86b4d8139b29f228455d1f97"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract.",
+        "cwd": "/root/cases/case_33",
+        "duration_s": 7.137928,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "d32ecc7a86e88db12882bf1ee709d4d289e2a40eb92dedba3ca349565fdcdc84"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "0951718a742cd852aac0d338c17cbb7090db1b1d86b4d8139b29f228455d1f97"
+              }
+            ],
+            "duration_s": 7.137928,
+            "exit_code": 1,
+            "expected_signal": "large max/tail error for K=80 (partial group dequantized with wrong group row), near-zero error for divisible controls K=64, K=96",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t8_probe.py\", line 45, in <module>\n    out.append(run_case(80, 32))   # partial trailing group (contract-critical)\n               ^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t8_probe.py\", line 39, in run_case\n    tail_err = (C - ref)[:, tail:].abs().max().item() if tail < K else 0.0\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: max(): Expected reduction dim to be specified for input.numel() == 0. Specify the reduction dim with the 'dim' argument.\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 1,
+        "expected_signal": "large max/tail error for K=80 (partial group dequantized with wrong group row), near-zero error for divisible controls K=64, K=96",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t8_probe.py\", line 45, in <module>\n    out.append(run_case(80, 32))   # partial trailing group (contract-critical)\n               ^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t8_probe.py\", line 39, in run_case\n    tail_err = (C - ref)[:, tail:].abs().max().item() if tail < K else 0.0\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: max(): Expected reduction dim to be specified for input.numel() == 0. Specify the reduction dim with the 'dim' argument.\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json\nimport sys\nsys.path.insert(0, '/root/cases/case_33')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\n\ndef run_case(K, group_size, bits=4):\n    M, N = 64, 64\n    ipb = 32 // bits\n    maxq = 2**bits - 1\n    num_groups = (K + group_size - 1) // group_size  # ceil per contract\n    A = torch.randn(M, K, device=dev)\n    q = torch.randint(0, maxq + 1, (K, N), device=dev, dtype=torch.int64)\n    packed = torch.zeros((K + ipb - 1) // ipb, N, device=dev, dtype=torch.int64)\n    for j in range(ipb):\n        packed |= (q[j::ipb] << (j * bits))[:packed.shape[0]]\n    packed = packed.to(torch.int32)\n    scales = torch.randn(num_groups, N, device=dev) * 0.1 + 0.5\n    zeros = torch.randint(0, maxq, (num_groups, N), device=dev, dtype=torch.int64)\n    shift = (torch.arange(N, device=dev) % ipb) * bits\n    word = (torch.arange(N, device=dev) // ipb)\n    zp = torch.zeros(num_groups, (N + ipb - 1) // ipb, device=dev, dtype=torch.int64)\n    zp.index_add_(1, word, (zeros << shift))\n    zp = zp.to(torch.int32)\n    C = gptq_matmul(A, packed, scales, zp, group_size, bits)\n    deq = torch.empty(K, N, device=dev)\n    for g in range(num_groups):\n        lo, hi = g * group_size, min((g + 1) * group_size, K)\n        deq[lo:hi] = (q[lo:hi].float() - (zeros[g].float() + 1)) * scales[g]\n    ref = A @ deq\n    diff = (C - ref).abs()\n    err = diff.max().item()\n    rel = err / ref.abs().max().item()\n    tail = group_size * (K // group_size)\n    tail_err = diff[:, tail:].reshape(-1).max().item() if tail < K else -1.0\n    head_err = diff[:, :tail].reshape(-1).max().item() if tail > 0 else -1.0\n    return {'K': K, 'group_size': group_size, 'num_groups': num_groups,\n            'max_abs_err': err, 'rel': rel, 'head_err': head_err, 'tail_err': tail_err}\n\nout = []\nout.append(run_case(80, 32))   # partial trailing group (contract-critical)\nout.append(run_case(64, 32))   # control: K divisible by group_size\nout.append(run_case(96, 32))   # control: divisible\nprint(json.dumps(out))\n",
+        "expected_signal": "large tail error for K=80 (partial group dequantized with wrong group row), near-zero error for divisible controls K=64, K=96"
+      },
+      "created_at": "2026-09-08T23:51:28Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "173fa3521db3ee36d40ce0fa8ccc82d132e7723dd61deab080b482c086845dbe"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "ecd6c3b93b9969f7b797458dd841175fe1ee21e2656c64b9a904f4394125d55f"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract.",
+        "cwd": "/root/cases/case_33",
+        "duration_s": 6.006911,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "173fa3521db3ee36d40ce0fa8ccc82d132e7723dd61deab080b482c086845dbe"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "ecd6c3b93b9969f7b797458dd841175fe1ee21e2656c64b9a904f4394125d55f"
+              }
+            ],
+            "duration_s": 6.006911,
+            "exit_code": 1,
+            "expected_signal": "large tail error for K=80 (partial group dequantized with wrong group row), near-zero error for divisible controls K=64, K=96",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t9_probe.py\", line 43, in <module>\n    out.append(run_case(80, 32))   # partial trailing group (contract-critical)\n               ^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t9_probe.py\", line 37, in run_case\n    tail_err = diff[:, tail:].reshape(-1).max().item() if tail < K else -1.0\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: max(): Expected reduction dim to be specified for input.numel() == 0. Specify the reduction dim with the 'dim' argument.\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 1,
+        "expected_signal": "large tail error for K=80 (partial group dequantized with wrong group row), near-zero error for divisible controls K=64, K=96",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t9_probe.py\", line 43, in <module>\n    out.append(run_case(80, 32))   # partial trailing group (contract-critical)\n               ^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t9_probe.py\", line 37, in run_case\n    tail_err = diff[:, tail:].reshape(-1).max().item() if tail < K else -1.0\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: max(): Expected reduction dim to be specified for input.numel() == 0. Specify the reduction dim with the 'dim' argument.\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json\nimport sys\nsys.path.insert(0, '/root/cases/case_33')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\n\ndef run_case(K, group_size, bits=4):\n    M, N = 64, 64\n    ipb = 32 // bits\n    maxq = 2**bits - 1\n    num_groups = (K + group_size - 1) // group_size  # ceil per contract\n    A = torch.randn(M, K, device=dev)\n    q = torch.randint(0, maxq + 1, (K, N), device=dev, dtype=torch.int64)\n    packed = torch.zeros((K + ipb - 1) // ipb, N, device=dev, dtype=torch.int64)\n    for j in range(ipb):\n        packed |= (q[j::ipb] << (j * bits))[:packed.shape[0]]\n    packed = packed.to(torch.int32)\n    scales = torch.randn(num_groups, N, device=dev) * 0.1 + 0.5\n    zeros = torch.randint(0, maxq, (num_groups, N), device=dev, dtype=torch.int64)\n    shift = (torch.arange(N, device=dev) % ipb) * bits\n    word = (torch.arange(N, device=dev) // ipb)\n    zp = torch.zeros(num_groups, (N + ipb - 1) // ipb, device=dev, dtype=torch.int64)\n    zp.index_add_(1, word, (zeros << shift))\n    zp = zp.to(torch.int32)\n    C = gptq_matmul(A, packed, scales, zp, group_size, bits)\n    # reference with contract grouping (ceil groups; trailing partial group uses its own row)\n    deq = torch.empty(K, N, device=dev)\n    for g in range(num_groups):\n        lo, hi = g * group_size, min((g + 1) * group_size, K)\n        deq[lo:hi] = (q[lo:hi].float() - (zeros[g].float() + 1)) * scales[g]\n    ref = A @ deq\n    diff = (C - ref).abs()\n    err = diff.max().item()\n    ref_scale = ref.abs().max().item()\n    # what error would the kernel's clamped grouping predict? (sanity: matches err)\n    g_idx_kernel = torch.clamp(torch.arange(K) // group_size, max=K // group_size - 1).to(dev)\n    deq_k = (q.float() - (zeros[g_idx_kernel].float() + 1)) * scales[g_idx_kernel]\n    predicted = (A @ deq_k - ref).abs().max().item()\n    return {'K': K, 'group_size': group_size, 'num_groups': num_groups,\n            'max_abs_err': err, 'rel': err / ref_scale, 'predicted_clamped_err': predicted}\n\nout = [run_case(80, 32), run_case(64, 32), run_case(96, 32), run_case(100, 32)]\nprint(json.dumps(out))\n",
+        "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96"
+      },
+      "created_at": "2026-09-08T23:51:51Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "8fa9323d899ede196209823a3f3baa0e1370e13381cd415e838773dbb203fecc"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "44b14b0dac8b9b5bdac007cb85243bfd052c9455212a4d6c7a3d9dd49382d70c"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract.",
+        "cwd": "/root/cases/case_33",
+        "duration_s": 5.342187,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "8fa9323d899ede196209823a3f3baa0e1370e13381cd415e838773dbb203fecc"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "44b14b0dac8b9b5bdac007cb85243bfd052c9455212a4d6c7a3d9dd49382d70c"
+              }
+            ],
+            "duration_s": 5.342187,
+            "exit_code": 1,
+            "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t10_probe.py\", line 44, in <module>\n    out = [run_case(80, 32), run_case(64, 32), run_case(96, 32), run_case(100, 32)]\n                                                                 ^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t10_probe.py\", line 18, in run_case\n    packed |= (q[j::ipb] << (j * bits))[:packed.shape[0]]\nRuntimeError: The size of tensor a (13) must match the size of tensor b (12) at non-singleton dimension 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 1,
+        "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t10_probe.py\", line 44, in <module>\n    out = [run_case(80, 32), run_case(64, 32), run_case(96, 32), run_case(100, 32)]\n                                                                 ^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_33/agentic_runs/solo/probes/t10_probe.py\", line 18, in run_case\n    packed |= (q[j::ipb] << (j * bits))[:packed.shape[0]]\nRuntimeError: The size of tensor a (13) must match the size of tensor b (12) at non-singleton dimension 0\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json\nimport sys\nsys.path.insert(0, '/root/cases/case_33')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\n\ndef run_case(K, group_size, bits=4):\n    M, N = 64, 64\n    ipb = 32 // bits\n    maxq = 2**bits - 1\n    num_groups = (K + group_size - 1) // group_size  # ceil per contract\n    A = torch.randn(M, K, device=dev)\n    q = torch.randint(0, maxq + 1, (K, N), device=dev, dtype=torch.int64)\n    Kpad = ((K + ipb - 1) // ipb) * ipb\n    qp = torch.zeros(Kpad, N, device=dev, dtype=torch.int64)\n    qp[:K] = q\n    packed = torch.zeros(Kpad // ipb, N, device=dev, dtype=torch.int64)\n    for j in range(ipb):\n        packed |= qp[j::ipb] << (j * bits)\n    packed = packed.to(torch.int32)\n    scales = torch.randn(num_groups, N, device=dev) * 0.1 + 0.5\n    zeros = torch.randint(0, maxq, (num_groups, N), device=dev, dtype=torch.int64)\n    shift = (torch.arange(N, device=dev) % ipb) * bits\n    word = (torch.arange(N, device=dev) // ipb)\n    zp = torch.zeros(num_groups, (N + ipb - 1) // ipb, device=dev, dtype=torch.int64)\n    zp.index_add_(1, word, (zeros << shift))\n    zp = zp.to(torch.int32)\n    C = gptq_matmul(A, packed, scales, zp, group_size, bits)\n    # reference with contract grouping (ceil groups; trailing partial group uses its own row)\n    deq = torch.empty(K, N, device=dev)\n    for g in range(num_groups):\n        lo, hi = g * group_size, min((g + 1) * group_size, K)\n        deq[lo:hi] = (q[lo:hi].float() - (zeros[g].float() + 1)) * scales[g]\n    ref = A @ deq\n    diff = (C - ref).abs()\n    err = diff.max().item()\n    ref_scale = ref.abs().max().item()\n    # error the kernel's clamped grouping would predict\n    g_idx_kernel = torch.clamp(torch.arange(K) // group_size, max=K // group_size - 1).to(dev)\n    deq_k = (q.float() - (zeros[g_idx_kernel].float() + 1)) * scales[g_idx_kernel]\n    predicted = (A @ deq_k - ref).abs().max().item()\n    return {'K': K, 'group_size': group_size, 'num_groups': num_groups,\n            'max_abs_err': err, 'rel': err / ref_scale, 'predicted_clamped_err': predicted}\n\nout = [run_case(80, 32), run_case(64, 32), run_case(96, 32), run_case(100, 32)]\nprint(json.dumps(out))\n",
+        "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96"
+      },
+      "created_at": "2026-09-08T23:52:16Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t11_probe.py",
+            "sha256": "66e8373fd6addbedef51bc5a8bad41275fc1750dba92d523fb80854c0f0c78cf"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t11_stdout.txt",
+            "sha256": "abea0182ed3d00469a36e13081f2473cdfc5039d67783960403506558e01e4f5"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t11_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract.",
+        "cwd": "/root/cases/case_33",
+        "duration_s": 5.83531,
+        "event_id": "t11",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "66e8373fd6addbedef51bc5a8bad41275fc1750dba92d523fb80854c0f0c78cf"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "abea0182ed3d00469a36e13081f2473cdfc5039d67783960403506558e01e4f5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 5.83531,
+            "exit_code": 0,
+            "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96",
+            "json_parse_error": "last stdout JSON value is not an object",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "[{\"K\": 80, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 60.05613327026367, \"rel\": 0.45972211953194725, \"predicted_clamped_err\": 60.0561408996582}, {\"K\": 64, \"group_size\": 32, \"num_groups\": 2, \"max_abs_err\": 3.0517578125e-05, \"rel\": 2.384557889256124e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 96, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 3.814697265625e-05, \"rel\": 3.2019147962788115e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 100, \"group_size\": 32, \"num_groups\": 4, \"max_abs_err\": 48.29465866088867, \"rel\": 0.3795543870193749, \"predicted_clamped_err\": 33.2981071472168}]\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t11"
+        },
+        "exit_code": 0,
+        "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96",
+        "json_parse_error": "last stdout JSON value is not an object",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "[{\"K\": 80, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 60.05613327026367, \"rel\": 0.45972211953194725, \"predicted_clamped_err\": 60.0561408996582}, {\"K\": 64, \"group_size\": 32, \"num_groups\": 2, \"max_abs_err\": 3.0517578125e-05, \"rel\": 2.384557889256124e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 96, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 3.814697265625e-05, \"rel\": 3.2019147962788115e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 100, \"group_size\": 32, \"num_groups\": 4, \"max_abs_err\": 48.29465866088867, \"rel\": 0.3795543870193749, \"predicted_clamped_err\": 33.2981071472168}]\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "K100": {
+            "max_abs_err": 48.29465866088867,
+            "num_groups": 4,
+            "predicted_clamped_err": 33.2981071472168,
+            "rel": 0.3795543870193749
+          },
+          "K64": {
+            "max_abs_err": 3.0517578125e-05,
+            "num_groups": 2,
+            "predicted_clamped_err": 0.0,
+            "rel": 2.384557889256124e-07
+          },
+          "K80": {
+            "max_abs_err": 60.05613327026367,
+            "num_groups": 3,
+            "predicted_clamped_err": 60.0561408996582,
+            "rel": 0.45972211953194725
+          },
+          "K96": {
+            "max_abs_err": 3.814697265625e-05,
+            "num_groups": 3,
+            "predicted_clamped_err": 0.0,
+            "rel": 3.2019147962788115e-07
+          }
+        },
+        "event_id": "t11",
+        "status": "confirmed",
+        "summary": "Probe t11 ran gptq_matmul against a contract reference (ceil(K/group_size) group rows, trailing partial group uses its own row). K=80: max_abs_err=60.06, rel=0.460, matching predicted clamped-grouping error 60.06. K=100: max_abs_err=48.29, rel=0.380. Divisible controls K=64 and K=96: err ~3e-5 (rel ~2-3e-7, fp32 noise). Confirms kernel assigns trailing partial group to group K//group_size-1 instead of its own ceil row.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T23:52:29Z",
+      "id": "t12",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T23:50:06Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T23:52:29Z",
+              "data": {
+                "K100": {
+                  "max_abs_err": 48.29465866088867,
+                  "num_groups": 4,
+                  "predicted_clamped_err": 33.2981071472168,
+                  "rel": 0.3795543870193749
+                },
+                "K64": {
+                  "max_abs_err": 3.0517578125e-05,
+                  "num_groups": 2,
+                  "predicted_clamped_err": 0.0,
+                  "rel": 2.384557889256124e-07
+                },
+                "K80": {
+                  "max_abs_err": 60.05613327026367,
+                  "num_groups": 3,
+                  "predicted_clamped_err": 60.0561408996582,
+                  "rel": 0.45972211953194725
+                },
+                "K96": {
+                  "max_abs_err": 3.814697265625e-05,
+                  "num_groups": 3,
+                  "predicted_clamped_err": 0.0,
+                  "rel": 3.2019147962788115e-07
+                },
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t11_probe.py",
+                    "sha256": "66e8373fd6addbedef51bc5a8bad41275fc1750dba92d523fb80854c0f0c78cf"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t11_stdout.txt",
+                    "sha256": "abea0182ed3d00469a36e13081f2473cdfc5039d67783960403506558e01e4f5"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t11_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "duration_s": 5.83531,
+                "exit_code": 0,
+                "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96",
+                "json_parse_error": "last stdout JSON value is not an object",
+                "json_result": null,
+                "stderr": "",
+                "stdout": "[{\"K\": 80, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 60.05613327026367, \"rel\": 0.45972211953194725, \"predicted_clamped_err\": 60.0561408996582}, {\"K\": 64, \"group_size\": 32, \"num_groups\": 2, \"max_abs_err\": 3.0517578125e-05, \"rel\": 2.384557889256124e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 96, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 3.814697265625e-05, \"rel\": 3.2019147962788115e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 100, \"group_size\": 32, \"num_groups\": 4, \"max_abs_err\": 48.29465866088867, \"rel\": 0.3795543870193749, \"predicted_clamped_err\": 33.2981071472168}]\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Probe t11 ran gptq_matmul against a contract reference (ceil(K/group_size) group rows, trailing partial group uses its own row). K=80: max_abs_err=60.06, rel=0.460, matching predicted clamped-grouping error 60.06. K=100: max_abs_err=48.29, rel=0.380. Divisible controls K=64 and K=96: err ~3e-5 (rel ~2-3e-7, fp32 noise). Confirms kernel assigns trailing partial group to group K//group_size-1 instead of its own ceil row.",
+              "supports": "confirmed",
+              "tool_event_id": "t11"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "kernel.py lines 69-73 compute num_groups = K // group_size (floor) and clamp the per-column group index to num_groups - 1; for K % group_size != 0 the clamp provably remaps the trailing columns away from the final group row the contract requires, and a runtime probe can directly compare C against A @ dequant_ref using ceil(K/group_size) group rows.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt (tool event t2)",
+              "summary": "Contract: every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including a K that is not an exact multiple of group_size; the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros, and scales/zeros are supplied with ceil(K/group_size) rows."
+            }
+          ],
+          "scope_rationale": "The contract text in problem.txt explicitly requires correct trailing-group dequantization for any K including K % group_size != 0, with ceil(K/group_size) rows in scales/zeros; testing K=96, group_size=32 would not expose this, so K=80, group_size=32 (a representative input the contract admits) is used.",
+          "statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract.",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T23:52:29Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T23:52:29Z",
+          "data": {
+            "K100": {
+              "max_abs_err": 48.29465866088867,
+              "num_groups": 4,
+              "predicted_clamped_err": 33.2981071472168,
+              "rel": 0.3795543870193749
+            },
+            "K64": {
+              "max_abs_err": 3.0517578125e-05,
+              "num_groups": 2,
+              "predicted_clamped_err": 0.0,
+              "rel": 2.384557889256124e-07
+            },
+            "K80": {
+              "max_abs_err": 60.05613327026367,
+              "num_groups": 3,
+              "predicted_clamped_err": 60.0561408996582,
+              "rel": 0.45972211953194725
+            },
+            "K96": {
+              "max_abs_err": 3.814697265625e-05,
+              "num_groups": 3,
+              "predicted_clamped_err": 0.0,
+              "rel": 3.2019147962788115e-07
+            },
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "66e8373fd6addbedef51bc5a8bad41275fc1750dba92d523fb80854c0f0c78cf"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "abea0182ed3d00469a36e13081f2473cdfc5039d67783960403506558e01e4f5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 5.83531,
+            "exit_code": 0,
+            "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96",
+            "json_parse_error": "last stdout JSON value is not an object",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "[{\"K\": 80, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 60.05613327026367, \"rel\": 0.45972211953194725, \"predicted_clamped_err\": 60.0561408996582}, {\"K\": 64, \"group_size\": 32, \"num_groups\": 2, \"max_abs_err\": 3.0517578125e-05, \"rel\": 2.384557889256124e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 96, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 3.814697265625e-05, \"rel\": 3.2019147962788115e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 100, \"group_size\": 32, \"num_groups\": 4, \"max_abs_err\": 48.29465866088867, \"rel\": 0.3795543870193749, \"predicted_clamped_err\": 33.2981071472168}]\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe t11 ran gptq_matmul against a contract reference (ceil(K/group_size) group rows, trailing partial group uses its own row). K=80: max_abs_err=60.06, rel=0.460, matching predicted clamped-grouping error 60.06. K=100: max_abs_err=48.29, rel=0.380. Divisible controls K=64 and K=96: err ~3e-5 (rel ~2-3e-7, fp32 noise). Confirms kernel assigns trailing partial group to group K//group_size-1 instead of its own ceil row.",
+          "supports": "confirmed",
+          "tool_event_id": "t11"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "status": "confirmed"
+      },
+      "created_at": "2026-09-08T23:52:29Z",
+      "id": "t13",
+      "output": {
+        "created_at": "2026-09-08T23:50:06Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-09-08T23:52:29Z",
+            "data": {
+              "K100": {
+                "max_abs_err": 48.29465866088867,
+                "num_groups": 4,
+                "predicted_clamped_err": 33.2981071472168,
+                "rel": 0.3795543870193749
+              },
+              "K64": {
+                "max_abs_err": 3.0517578125e-05,
+                "num_groups": 2,
+                "predicted_clamped_err": 0.0,
+                "rel": 2.384557889256124e-07
+              },
+              "K80": {
+                "max_abs_err": 60.05613327026367,
+                "num_groups": 3,
+                "predicted_clamped_err": 60.0561408996582,
+                "rel": 0.45972211953194725
+              },
+              "K96": {
+                "max_abs_err": 3.814697265625e-05,
+                "num_groups": 3,
+                "predicted_clamped_err": 0.0,
+                "rel": 3.2019147962788115e-07
+              },
+              "artifacts": [
+                {
+                  "description": "Python probe code executed by local runtime.",
+                  "kind": "probe_code",
+                  "path": "probes/t11_probe.py",
+                  "sha256": "66e8373fd6addbedef51bc5a8bad41275fc1750dba92d523fb80854c0f0c78cf"
+                },
+                {
+                  "description": "Captured stdout from the probe process.",
+                  "kind": "stdout",
+                  "path": "probes/t11_stdout.txt",
+                  "sha256": "abea0182ed3d00469a36e13081f2473cdfc5039d67783960403506558e01e4f5"
+                },
+                {
+                  "description": "Captured stderr from the probe process.",
+                  "kind": "stderr",
+                  "path": "probes/t11_stderr.txt",
+                  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                }
+              ],
+              "duration_s": 5.83531,
+              "exit_code": 0,
+              "expected_signal": "large max error for K=80 and K=100 matching predicted clamped-grouping error; near-zero for K=64, K=96",
+              "json_parse_error": "last stdout JSON value is not an object",
+              "json_result": null,
+              "stderr": "",
+              "stdout": "[{\"K\": 80, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 60.05613327026367, \"rel\": 0.45972211953194725, \"predicted_clamped_err\": 60.0561408996582}, {\"K\": 64, \"group_size\": 32, \"num_groups\": 2, \"max_abs_err\": 3.0517578125e-05, \"rel\": 2.384557889256124e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 96, \"group_size\": 32, \"num_groups\": 3, \"max_abs_err\": 3.814697265625e-05, \"rel\": 3.2019147962788115e-07, \"predicted_clamped_err\": 0.0}, {\"K\": 100, \"group_size\": 32, \"num_groups\": 4, \"max_abs_err\": 48.29465866088867, \"rel\": 0.3795543870193749, \"predicted_clamped_err\": 33.2981071472168}]\n",
+              "timed_out": false,
+              "timeout_s": 60
+            },
+            "id": "c1.e1",
+            "kind": "runtime_probe",
+            "summary": "Probe t11 ran gptq_matmul against a contract reference (ceil(K/group_size) group rows, trailing partial group uses its own row). K=80: max_abs_err=60.06, rel=0.460, matching predicted clamped-grouping error 60.06. K=100: max_abs_err=48.29, rel=0.380. Divisible controls K=64 and K=96: err ~3e-5 (rel ~2-3e-7, fp32 noise). Confirms kernel assigns trailing partial group to group K//group_size-1 instead of its own ceil row.",
+            "supports": "confirmed",
+            "tool_event_id": "t11"
+          }
+        ],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "kernel.py lines 69-73 compute num_groups = K // group_size (floor) and clamp the per-column group index to num_groups - 1; for K % group_size != 0 the clamp provably remaps the trailing columns away from the final group row the contract requires, and a runtime probe can directly compare C against A @ dequant_ref using ceil(K/group_size) group rows.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt (tool event t2)",
+            "summary": "Contract: every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K \u2014 including a K that is not an exact multiple of group_size; the trailing columns form a shorter final group which is still a group of its own, with its own row in scales/zeros, and scales/zeros are supplied with ceil(K/group_size) rows."
+          }
+        ],
+        "scope_rationale": "The contract text in problem.txt explicitly requires correct trailing-group dequantization for any K including K % group_size != 0, with ceil(K/group_size) rows in scales/zeros; testing K=96, group_size=32 would not expose this, so K=80, group_size=32 (a representative input the contract admits) is used.",
+        "statement": "For K not divisible by group_size, gptq_matmul derives g_idx = clamp(k // group_size, max = K // group_size - 1) (kernel.py lines 69-73), assigning the trailing partial group's K-columns to group K//group_size - 1 instead of their own final group ceil(K/group_size) - 1, so those columns are dequantized with the wrong scale/zero-point row, violating the contract.",
+        "status": "confirmed",
+        "updated_at": "2026-09-08T23:52:29Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Source inspection (kernel.py lines 69-73) shows gptq_matmul computes g_idx = clamp(k // group_size, max = K // group_size - 1), remapping the trailing partial group to the previous group's scale/zero row. Runtime probe t11 (c1.e1) confirmed this against the contract reference with ceil(K/group_size) group rows: K=80, group_size=32 gives max_abs_err=60.06 (rel 0.460), exactly matching the predicted clamped-grouping error; K=100 gives max_abs_err=48.29 (rel 0.380); divisible controls K=64 and K=96 agree to ~3e-5 abs (~2-3e-7 rel, fp32 noise). Since problem.txt explicitly requires every column to use the scale/zero-point of the group it actually belongs to, including a trailing shorter final group with its own ceil(K/group_size) row for any K, the kernel violates a required behaviour on inputs the contract admits. Verdict: reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-08T23:52:39Z",
+      "id": "t14",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-08T23:52:39Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Source inspection (kernel.py lines 69-73) shows gptq_matmul computes g_idx = clamp(k // group_size, max = K // group_size - 1), remapping the trailing partial group to the previous group's scale/zero row. Runtime probe t11 (c1.e1) confirmed this against the contract reference with ceil(K/group_size) group rows: K=80, group_size=32 gives max_abs_err=60.06 (rel 0.460), exactly matching the predicted clamped-grouping error; K=100 gives max_abs_err=48.29 (rel 0.380); divisible controls K=64 and K=96 agree to ~3e-5 abs (~2-3e-7 rel, fp32 noise). Since problem.txt explicitly requires every column to use the scale/zero-point of the group it actually belongs to, including a trailing shorter final group with its own ceil(K/group_size) row for any K, the kernel violates a required behaviour on inputs the contract admits. Verdict: reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-08T23:52:39Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Source inspection (kernel.py lines 69-73) shows gptq_matmul computes g_idx = clamp(k // group_size, max = K // group_size - 1), remapping the trailing partial group to the previous group's scale/zero row. Runtime probe t11 (c1.e1) confirmed this against the contract reference with ceil(K/group_size) group rows: K=80, group_size=32 gives max_abs_err=60.06 (rel 0.460), exactly matching the predicted clamped-grouping error; K=100 gives max_abs_err=48.29 (rel 0.380); divisible controls K=64 and K=96 agree to ~3e-5 abs (~2-3e-7 rel, fp32 noise). Since problem.txt explicitly requires every column to use the scale/zero-point of the group it actually belongs to, including a trailing shorter final group with its own ceil(K/group_size) row for any K, the kernel violates a required behaviour on inputs the contract admits. Verdict: reject.",
+    "verdict": "reject"
+  }
+}

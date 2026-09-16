@@ -1,0 +1,1037 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_30",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):\n    tok = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < E\n    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float(\"inf\"))\n\n    best = -float(\"inf\")\n    best_i = 0\n    for e in range(E):\n        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)\n        take = v >= best\n        best = tl.where(take, v, best)\n        best_i = tl.where(take, e, best_i)\n    tl.store(Idx + tok, best_i)\n\n\ndef route_top1(logits):\n    # Pick one expert per token from the router logits.\n    n_tokens, n_experts = logits.shape\n    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)\n    _route_kernel[(n_tokens,)](logits, idx, logits.stride(0), E=n_experts,\n                               BLOCK=triton.next_power_of_2(n_experts))\n    return idx\n",
+    "passed": null,
+    "problem_text": "Operation: top-1 expert routing for a Mixture-of-Experts layer. For each token,\nselect the expert with the largest router logit.\n\n    expert[t] = argmax over e of logits[t, e]\n\nTie rule: router logits are computed in reduced precision and distinct logits\nroutinely round to the same representable value, so ties are a normal\noccurrence rather than a curiosity. When several experts share the largest\nlogit, the contract requires the LOWEST expert index to win, so that routing is\nreproducible across runs and across replicas holding the experts in the same\norder.\n\nThe selected expert's output is what the layer returns, and different experts\nare independently trained, so which one wins a tie changes the continuous\noutput substantially.\n\nDoes route_top1() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_30",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-10T05:21:31Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-10T05:22:15Z",
+          "data": {
+            "expected_lowest_index_rule": true,
+            "kernel_argmax": [
+              2,
+              2,
+              3
+            ],
+            "probe_event": "t6",
+            "row0_kernel_pick": 2,
+            "row0_tied_max_indices": [
+              0,
+              1,
+              2
+            ],
+            "row1_kernel_pick": 2,
+            "row1_tied_max_indices": [
+              1,
+              2
+            ],
+            "row2_kernel_pick": 3,
+            "row2_tied_max_indices": [
+              0,
+              3
+            ]
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the highest tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c1.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.",
+      "scope": "unknown",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win."
+        }
+      ],
+      "scope_rationale": "problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.",
+      "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
+      "status": "confirmed",
+      "updated_at": "2026-09-10T05:22:23Z"
+    },
+    {
+      "created_at": "2026-09-10T05:22:41Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-10T05:22:54Z",
+          "data": {
+            "expected_lowest_index_rule": true,
+            "kernel_argmax": [
+              2,
+              2,
+              3
+            ],
+            "probe_event": "t6",
+            "row0_kernel_pick": 2,
+            "row0_tied_max_indices": [
+              0,
+              1,
+              2
+            ],
+            "row1_kernel_pick": 2,
+            "row1_tied_max_indices": [
+              1,
+              2
+            ],
+            "row2_kernel_pick": 3,
+            "row2_tied_max_indices": [
+              0,
+              3
+            ]
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c2.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence."
+        }
+      ],
+      "scope_rationale": "problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.",
+      "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
+      "status": "confirmed",
+      "updated_at": "2026-09-10T05:22:59Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_30",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_30"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_30"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_30"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_30",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 13.701652715000009,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel uses `v >= best` with strict take \u2014 tie: later equal value takes (take = v >= best, so a later e with v == best takes, replacing earlier). That means the HIGHEST index wins ties, violating lowest-index rule. Confirm with probe.\n\nRecord claim with scope (in_scope: tie rule in problem.txt), then run probe.The kernel uses `take = v >= best`, so a later expert with a logit equal to the current best replaces it \u2014 that picks the *highest* tied index, contradicting the contract's lowest-index tie rule. Recording that claim and probingit.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win."
+              }
+            ],
+            "scope_rationale": "problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.",
+            "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.702,
+        "input_tokens": 6586,
+        "output_tokens": 336
+      }
+    },
+    {
+      "duration_s": 7.379372528000005,
+      "role": "solo",
+      "round": 3,
+      "text": "",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_30\")\nfrom kernel import route_top1\n\nlogits = torch.tensor([[3.0, 3.0, 3.0, 1.0],\n                       [1.0, 3.0, 3.0, 0.0],\n                       [2.0, 1.0, 0.5, 2.0]], device=\"cuda\")\nout = route_top1(logits)\nprint(\"kernel :\", out.tolist())\nprint(\"expected (lowest tied index): [0, 1, 0]\")\n",
+            "expected_signal": "kernel returns highest tied index (2) where contract requires lowest (0)"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.379,
+        "input_tokens": 7811,
+        "output_tokens": 170
+      }
+    },
+    {
+      "duration_s": 17.868629992999985,
+      "role": "solo",
+      "round": 4,
+      "text": "Probe returned [2, 2, 3] \u2014 wait, row 2: [2.0,1.0,0.5,2.0] has tie between index 0 and 3 at 2.0; kernel returned 3 (highest). Row 0 tie 0,1,2 \u2192 2 (highest). Row 1 tie 1,2 \u2192 2 (highest). Confirmed. Finalize evidence, update claim, record verdict.The probe result (t6) is decisive: on rows with tied maxima the kernel returned the *highest* tied index (row 0: tie {0,1,2} \u2192 2; row 1: tie {1,2} \u2192 2; row 2: tie {0,3} \u2192 3), while the contract requires the lowest. Finalizing the evidence and recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). This confirms c1.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.869,
+        "input_tokens": 9271,
+        "output_tokens": 303
+      }
+    },
+    {
+      "duration_s": 13.196290040000008,
+      "role": "solo",
+      "round": 5,
+      "text": "Need to re-finalize with data key/values. Use append_evidence then update_claim_status, then record_verdict.The finalize failed only because it needs decisive measurements in `data`. I'll attach the evidence with explicit key/value measurements, then close the claim and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "data": {
+              "expected_lowest_index_rule": true,
+              "kernel_argmax": [
+                2,
+                2,
+                3
+              ],
+              "probe_event": "t6",
+              "row0_kernel_pick": 2,
+              "row0_tied_max_indices": [
+                0,
+                1,
+                2
+              ],
+              "row1_kernel_pick": 2,
+              "row1_tied_max_indices": [
+                1,
+                2
+              ],
+              "row2_kernel_pick": 3,
+              "row2_tied_max_indices": [
+                0,
+                3
+              ]
+            },
+            "kind": "runtime_probe",
+            "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the highest tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c1.",
+            "supports": "confirmed",
+            "tool_event_id": "t6"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.196,
+        "input_tokens": 9967,
+        "output_tokens": 289
+      }
+    },
+    {
+      "duration_s": 8.608783232999997,
+      "role": "solo",
+      "round": 6,
+      "text": "Claim c1 still open, scope unknown. Update claim status to confirmed, set scope... record_claim already had scope evidence but stored as unknown. Update status; scope field may need setting \u2014 update_claim_status only takes status. The scope info is in scope_rationale/scope_evidence already. Proceed: update_claim_status confirmed, then record_verdict reject.The evidence is in place: probe t6 showed the kernel picks the highest tied index on all three tie rows, confirming claim c1 against the contract's lowest-index rule. I'll close the claim and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "status": "confirmed"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.609,
+        "input_tokens": 11263,
+        "output_tokens": 138
+      }
+    },
+    {
+      "duration_s": 17.627244606999994,
+      "role": "solo",
+      "round": 7,
+      "text": "Claim c1 confirmed but scope \"unknown\". record_verdict reject requires decisive claims scoped. Need to set scope to in_scope \u2014 record_claim had scope_evidence but scope stayed unknown. I could re-record a claim with scope=\"in_scope\", or try update... only status. Maybe re-record a narrower claim with scope in_scope and attach evidence via append_evidence, then update status confirmed, then verdict.The claim is confirmed but its scope is still `unknown`, which blocks it from supporting a reject. I'll record the same claim properly scoped as `in_scope`, attach the existing probe evidence, close it, and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence."
+              }
+            ],
+            "scope_rationale": "problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.",
+            "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.627,
+        "input_tokens": 12046,
+        "output_tokens": 328
+      }
+    },
+    {
+      "duration_s": 12.77791706100001,
+      "role": "solo",
+      "round": 8,
+      "text": "Attach c1's evidence to c2 (or just run a probe for c2? The evidence exists; attach via append_evidence to c2 referencing t6), update c2 confirmed, then verdict.The claim c2 is identical to c1 but properly scoped as in_scope. I'll attach the existing probe t6 evidence (with decisive key/value data) to c2, close it, then record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "data": {
+              "expected_lowest_index_rule": true,
+              "kernel_argmax": [
+                2,
+                2,
+                3
+              ],
+              "probe_event": "t6",
+              "row0_kernel_pick": 2,
+              "row0_tied_max_indices": [
+                0,
+                1,
+                2
+              ],
+              "row1_kernel_pick": 2,
+              "row1_tied_max_indices": [
+                1,
+                2
+              ],
+              "row2_kernel_pick": 3,
+              "row2_tied_max_indices": [
+                0,
+                3
+              ]
+            },
+            "kind": "runtime_probe",
+            "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c2.",
+            "supports": "confirmed",
+            "tool_event_id": "t6"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.778,
+        "input_tokens": 13080,
+        "output_tokens": 320
+      }
+    },
+    {
+      "duration_s": 5.461138731999995,
+      "role": "solo",
+      "round": 9,
+      "text": "Claim c2 is now scoped in_scope with probe t6 evidence attached; I'll close it as confirmed and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "status": "confirmed"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.461,
+        "input_tokens": 14025,
+        "output_tokens": 47
+      }
+    },
+    {
+      "duration_s": 14.203401971000005,
+      "role": "solo",
+      "round": 10,
+      "text": "All claims resolved; record verdict.All claims are resolved: claim c2 (in_scope, confirmed) is backed by probe t6 showing the kernel picks the highest tied index on all three tie rows while the contract requires the lowest. Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c2"
+            ],
+            "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 14.203,
+        "input_tokens": 14481,
+        "output_tokens": 275
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_30"
+      },
+      "created_at": "2026-09-10T05:21:17Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_30",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):\n    tok = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < E\n    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float(\"inf\"))\n\n    best = -float(\"inf\")\n    best_i = 0\n    for e in range(E):\n        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)\n        take = v >= best\n        best = tl.where(take, v, best)\n        best_i = tl.where(take, e, best_i)\n    tl.store(Idx + tok, best_i)\n\n\ndef route_top1(logits):\n    # Pick one expert per token from the router logits.\n    n_tokens, n_experts = logits.shape\n    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)\n    _route_kernel[(n_tokens,)](logits, idx, logits.stride(0), E=n_experts,\n                               BLOCK=triton.next_power_of_2(n_experts))\n    return idx\n",
+        "passed": null,
+        "problem_text": "Operation: top-1 expert routing for a Mixture-of-Experts layer. For each token,\nselect the expert with the largest router logit.\n\n    expert[t] = argmax over e of logits[t, e]\n\nTie rule: router logits are computed in reduced precision and distinct logits\nroutinely round to the same representable value, so ties are a normal\noccurrence rather than a curiosity. When several experts share the largest\nlogit, the contract requires the LOWEST expert index to win, so that routing is\nreproducible across runs and across replicas holding the experts in the same\norder.\n\nThe selected expert's output is what the layer returns, and different experts\nare independently trained, so which one wins a tie changes the continuous\noutput substantially.\n\nDoes route_top1() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_30",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_30"
+      },
+      "created_at": "2026-09-10T05:21:17Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: top-1 expert routing for a Mixture-of-Experts layer. For each token,\nselect the expert with the largest router logit.\n\n    expert[t] = argmax over e of logits[t, e]\n\nTie rule: router logits are computed in reduced precision and distinct logits\nroutinely round to the same representable value, so ties are a normal\noccurrence rather than a curiosity. When several experts share the largest\nlogit, the contract requires the LOWEST expert index to win, so that routing is\nreproducible across runs and across replicas holding the experts in the same\norder.\n\nThe selected expert's output is what the layer returns, and different experts\nare independently trained, so which one wins a tie changes the continuous\noutput substantially.\n\nDoes route_top1() satisfy this contract?\n",
+        "entry": "case_30",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_30"
+      },
+      "created_at": "2026-09-10T05:21:17Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_30",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 921
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 781
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_30",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-10T05:21:17Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_30\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_30",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win."
+          }
+        ],
+        "scope_rationale": "problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.",
+        "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner)."
+      },
+      "created_at": "2026-09-10T05:21:31Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-10T05:21:31Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.",
+        "scope": "unknown",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win."
+          }
+        ],
+        "scope_rationale": "problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.",
+        "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
+        "status": "open",
+        "updated_at": "2026-09-10T05:21:31Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_30\")\nfrom kernel import route_top1\n\nlogits = torch.tensor([[3.0, 3.0, 3.0, 1.0],\n                       [1.0, 3.0, 3.0, 0.0],\n                       [2.0, 1.0, 0.5, 2.0]], device=\"cuda\")\nout = route_top1(logits)\nprint(\"kernel :\", out.tolist())\nprint(\"expected (lowest tied index): [0, 1, 0]\")\n",
+        "expected_signal": "kernel returns highest tied index (2) where contract requires lowest (0)"
+      },
+      "created_at": "2026-09-10T05:21:43Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "b5fb4cbfb54f518af44633d5ccac53962678448614c508f92c67591293113d33"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "4a7f9a22e61ca0c8b23de21d648b9b0a88913d933242be99fba9daeb8ec0e66e"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
+        "cwd": "/root/cases/case_30",
+        "duration_s": 5.043531,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "b5fb4cbfb54f518af44633d5ccac53962678448614c508f92c67591293113d33"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "4a7f9a22e61ca0c8b23de21d648b9b0a88913d933242be99fba9daeb8ec0e66e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 5.043531,
+            "exit_code": 0,
+            "expected_signal": "kernel returns highest tied index (2) where contract requires lowest (0)",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "kernel : [2, 2, 3]\nexpected (lowest tied index): [0, 1, 0]\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": "kernel returns highest tied index (2) where contract requires lowest (0)",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "kernel : [2, 2, 3]\nexpected (lowest tied index): [0, 1, 0]\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). This confirms c1.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-10T05:22:01Z",
+      "id": "t7",
+      "output": {
+        "error": {
+          "message": "this probe produced no json_result, so a confirmed verdict on it must name its decisive measurements in `data` as key/value pairs; raw stdout is trimmed and may not survive to the Judge",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t7",
+        "message": "this probe produced no json_result, so a confirmed verdict on it must name its decisive measurements in `data` as key/value pairs; raw stdout is trimmed and may not survive to the Judge",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "data": {
+          "expected_lowest_index_rule": true,
+          "kernel_argmax": [
+            2,
+            2,
+            3
+          ],
+          "probe_event": "t6",
+          "row0_kernel_pick": 2,
+          "row0_tied_max_indices": [
+            0,
+            1,
+            2
+          ],
+          "row1_kernel_pick": 2,
+          "row1_tied_max_indices": [
+            1,
+            2
+          ],
+          "row2_kernel_pick": 3,
+          "row2_tied_max_indices": [
+            0,
+            3
+          ]
+        },
+        "kind": "runtime_probe",
+        "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the highest tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c1.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      },
+      "created_at": "2026-09-10T05:22:15Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-09-10T05:22:15Z",
+        "data": {
+          "expected_lowest_index_rule": true,
+          "kernel_argmax": [
+            2,
+            2,
+            3
+          ],
+          "probe_event": "t6",
+          "row0_kernel_pick": 2,
+          "row0_tied_max_indices": [
+            0,
+            1,
+            2
+          ],
+          "row1_kernel_pick": 2,
+          "row1_tied_max_indices": [
+            1,
+            2
+          ],
+          "row2_kernel_pick": 3,
+          "row2_tied_max_indices": [
+            0,
+            3
+          ]
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the highest tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c1.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "status": "confirmed"
+      },
+      "created_at": "2026-09-10T05:22:23Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-10T05:21:31Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-09-10T05:22:15Z",
+            "data": {
+              "expected_lowest_index_rule": true,
+              "kernel_argmax": [
+                2,
+                2,
+                3
+              ],
+              "probe_event": "t6",
+              "row0_kernel_pick": 2,
+              "row0_tied_max_indices": [
+                0,
+                1,
+                2
+              ],
+              "row1_kernel_pick": 2,
+              "row1_tied_max_indices": [
+                1,
+                2
+              ],
+              "row2_kernel_pick": 3,
+              "row2_tied_max_indices": [
+                0,
+                3
+              ]
+            },
+            "id": "c1.e1",
+            "kind": "runtime_probe",
+            "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the highest tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c1.",
+            "supports": "confirmed",
+            "tool_event_id": "t6"
+          }
+        ],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.",
+        "scope": "unknown",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win."
+          }
+        ],
+        "scope_rationale": "problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.",
+        "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
+        "status": "confirmed",
+        "updated_at": "2026-09-10T05:22:23Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "rationale": "Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence."
+          }
+        ],
+        "scope_rationale": "problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.",
+        "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner)."
+      },
+      "created_at": "2026-09-10T05:22:41Z",
+      "id": "t10",
+      "output": {
+        "created_at": "2026-09-10T05:22:41Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence."
+          }
+        ],
+        "scope_rationale": "problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.",
+        "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
+        "status": "open",
+        "updated_at": "2026-09-10T05:22:41Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "data": {
+          "expected_lowest_index_rule": true,
+          "kernel_argmax": [
+            2,
+            2,
+            3
+          ],
+          "probe_event": "t6",
+          "row0_kernel_pick": 2,
+          "row0_tied_max_indices": [
+            0,
+            1,
+            2
+          ],
+          "row1_kernel_pick": 2,
+          "row1_tied_max_indices": [
+            1,
+            2
+          ],
+          "row2_kernel_pick": 3,
+          "row2_tied_max_indices": [
+            0,
+            3
+          ]
+        },
+        "kind": "runtime_probe",
+        "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c2.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      },
+      "created_at": "2026-09-10T05:22:54Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-09-10T05:22:54Z",
+        "data": {
+          "expected_lowest_index_rule": true,
+          "kernel_argmax": [
+            2,
+            2,
+            3
+          ],
+          "probe_event": "t6",
+          "row0_kernel_pick": 2,
+          "row0_tied_max_indices": [
+            0,
+            1,
+            2
+          ],
+          "row1_kernel_pick": 2,
+          "row1_tied_max_indices": [
+            1,
+            2
+          ],
+          "row2_kernel_pick": 3,
+          "row2_tied_max_indices": [
+            0,
+            3
+          ]
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c2.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "status": "confirmed"
+      },
+      "created_at": "2026-09-10T05:22:59Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-09-10T05:22:41Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-09-10T05:22:54Z",
+            "data": {
+              "expected_lowest_index_rule": true,
+              "kernel_argmax": [
+                2,
+                2,
+                3
+              ],
+              "probe_event": "t6",
+              "row0_kernel_pick": 2,
+              "row0_tied_max_indices": [
+                0,
+                1,
+                2
+              ],
+              "row1_kernel_pick": 2,
+              "row1_tied_max_indices": [
+                1,
+                2
+              ],
+              "row2_kernel_pick": 3,
+              "row2_tied_max_indices": [
+                0,
+                3
+              ]
+            },
+            "id": "c2.e1",
+            "kind": "runtime_probe",
+            "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c2.",
+            "supports": "confirmed",
+            "tool_event_id": "t6"
+          }
+        ],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence."
+          }
+        ],
+        "scope_rationale": "problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.",
+        "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
+        "status": "confirmed",
+        "updated_at": "2026-09-10T05:22:59Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c2"
+        ],
+        "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-10T05:23:13Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-10T05:23:13Z",
+        "decisive_claims": [
+          "c2"
+        ],
+        "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-10T05:23:13Z",
+    "decisive_claims": [
+      "c2"
+    ],
+    "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
+    "verdict": "reject"
+  }
+}
