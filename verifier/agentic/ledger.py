@@ -89,7 +89,11 @@ class ClaimLedger:
             _status_value(evidence.supports) == next_status.value for evidence in claim.evidence
         ):
             raise LedgerError(
-                f"claim {claim_id} needs evidence supporting {next_status.value} before status update"
+                f"claim {claim_id} needs evidence supporting {next_status.value} "
+                f"before status update: call append_evidence(claim_id={claim_id!r}, "
+                f"supports={next_status.value!r}, ...) first, then retry this call "
+                f"with the same status. Do not retry with a different status -- that "
+                f"changes the conclusion instead of supporting it."
             )
         claim.status = next_status
         claim.updated_at = utc_now_iso()
@@ -142,9 +146,17 @@ def _validate_scope_fields(scope: ClaimScope, scope_rationale: str, scope_eviden
     if scope != ClaimScope.IN_SCOPE:
         return
     if not scope_rationale:
-        raise LedgerError("in_scope claims require non-empty scope_rationale")
+        raise LedgerError(
+            "in_scope claims require non-empty scope_rationale: re-send this same "
+            "call with scope_rationale and scope_evidence filled in. Do not record "
+            "the claim a second time -- that leaves a duplicate in the ledger."
+        )
     if not scope_evidence:
-        raise LedgerError("in_scope claims require at least one scope_evidence item")
+        raise LedgerError(
+            "in_scope claims require at least one scope_evidence item "
+            "({source, summary} quoting the contract): re-send this same call with "
+            "it filled in, rather than recording the claim again."
+        )
 
 
 def _normalize_scope_evidence(items: list[dict]) -> list[dict]:

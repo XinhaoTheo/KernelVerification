@@ -43,6 +43,7 @@ _SENSITIVE_ENV_VARS = {
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
     "OPENAI_ORG_ID",
+    "OPENROUTER_API_KEY",
     "HF_TOKEN",
     "HUGGINGFACE_TOKEN",
     "GITHUB_TOKEN",
@@ -237,6 +238,7 @@ def run_claim_probe(context: ToolContext, args: dict) -> dict:
 
 def finalize_probe_evidence(context: ToolContext, args: dict) -> dict:
     event_id = str(args["event_id"])
+    _reject_claim_id_as_event_id(context, event_id)
     event = _tool_event_by_id(context, event_id)
     if event.tool != "run_claim_probe":
         raise LedgerError(f"tool event {event_id} is not a run_claim_probe event")
@@ -264,6 +266,24 @@ def finalize_probe_evidence(context: ToolContext, args: dict) -> dict:
             f"must name its decisive measurements in `data` as key/value pairs; "
             f"raw stdout is trimmed and may not survive to the Judge"
         )
+    # Checked before anything is written. `status` used to be applied after the
+    # evidence had already been appended, so a call naming supports=rebutted with
+    # status=confirmed failed on the status update and still left the evidence
+    # behind -- a rejected call with a side effect, which is the worst kind. One
+    # measured run hit exactly this.
+    status = str(args.get("status") or supports)
+    if status != supports:
+        claim_for_status = ClaimLedger(context.state).get_claim(claim_id)
+        if not any(_evidence_supports(e) == status for e in claim_for_status.evidence):
+            raise LedgerError(
+                f"`supports` and `status` disagree: this probe's evidence supports "
+                f"{supports!r}, but you asked to set claim {claim_id} to {status!r}, "
+                f"and no existing evidence on it supports {status!r}. Decide which the "
+                f"probe actually shows: pass status={supports!r} (or omit `status`), or "
+                f"if you believe the probe shows something else, set `supports` to that "
+                f"instead. Nothing was recorded."
+            )
+
     merged_data = _probe_evidence_data(output, _optional_str(output.get("expected_signal")))
     merged_data.update(data)
 
@@ -276,7 +296,6 @@ def finalize_probe_evidence(context: ToolContext, args: dict) -> dict:
         tool_event_id=event_id,
         data=merged_data,
     )
-    status = str(args.get("status") or supports)
     claim = ledger.update_claim_status(claim_id=claim_id, status=status)
     return {"claim": claim.to_dict(), "evidence": evidence.to_dict()}
 
@@ -471,6 +490,32 @@ def _probe_evidence_data(result: dict[str, Any], expected_signal: str | None) ->
         "json_parse_error": result.get("json_parse_error"),
         "artifacts": result.get("artifacts", []),
     }
+
+
+def _evidence_supports(evidence) -> str:
+    supports = getattr(evidence, "supports", None)
+    return getattr(supports, "value", supports)
+
+
+def _reject_claim_id_as_event_id(context: ToolContext, event_id: str) -> None:
+    """Name the mix-up instead of reporting an unknown id.
+
+    `event_id` here is the tool event that ran the probe (t7), not the claim it
+    was about (c2). Passing the claim id is an easy slip and the bare "unknown
+    tool event id" it produced said nothing about which id was wanted.
+    """
+    if not any(claim.id == event_id for claim in context.state.claims):
+        return
+    probes = [
+        e.id for e in context.state.tool_events
+        if e.tool == "run_claim_probe" and str((e.output or {}).get("claim_id") or "") == event_id
+    ]
+    hint = (f"its probe event(s): {', '.join(probes)}" if probes
+            else "no probe has been run for that claim yet")
+    raise LedgerError(
+        f"{event_id} is a claim id, not a tool event id. `event_id` must name the "
+        f"run_claim_probe event whose output you are interpreting -- {hint}."
+    )
 
 
 def _tool_event_by_id(context: ToolContext, event_id: str):

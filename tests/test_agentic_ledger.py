@@ -55,3 +55,66 @@ def test_rejects_direct_confirmed_to_rebutted_transition() -> None:
 
     with pytest.raises(LedgerError, match="invalid claim status transition"):
         ledger.update_claim_status(claim_id=claim.id, status=ClaimStatus.REBUTTED)
+
+
+def _ctx():
+    from verifier.agentic.state import RunState, Role
+    from verifier.agentic.tools.registry import ToolContext, build_core_registry
+
+    state = RunState()
+    return build_core_registry(), ToolContext(
+        state=state, current_role=Role.SKEPTIC.value, current_turn=1
+    ), state
+
+
+_LONG = (
+    "route_top1() breaks ties in favour of the highest expert index instead of the "
+    "lowest index the contract requires, so a row whose top two logits are exactly "
+    "equal is routed to the wrong expert."
+)
+
+
+def test_record_claim_refuses_a_restatement_of_an_existing_claim() -> None:
+    """A rejected record_claim must not be recoverable by recording it twice.
+
+    The usual rejection is an in_scope claim missing its scope_rationale, and
+    the tempting fix is to send the claim again with the field filled in --
+    which leaves the first copy in the ledger. Measured runs did this four
+    times in eighteen claims, twice word for word, and every duplicate had to
+    be probed and resolved again before a verdict was allowed, out of the same
+    turn budget the run needs for real work.
+    """
+    registry, context, state = _ctx()
+    first = registry.call("record_claim", {"statement": _LONG, "rationale": "r"}, context=context)
+    assert first.get("error") is None
+
+    again = registry.call("record_claim", {"statement": _LONG, "rationale": "r"}, context=context)
+    assert again["error"]["type"] == "LedgerError"
+    assert "restates claim c1" in again["error"]["message"]
+    assert len(state.claims) == 1
+
+    other = registry.call(
+        "record_claim",
+        {"statement": "The kernel omits the K-dimension mask on its final block, so loads "
+                      "run past the end of the packed weight tensor whenever K is not a "
+                      "multiple of BLOCK_SIZE_K.",
+         "rationale": "r"},
+        context=context,
+    )
+    assert other.get("error") is None, "a genuinely different claim must still be accepted"
+    assert len(state.claims) == 2
+
+
+def test_short_statements_are_not_treated_as_duplicates() -> None:
+    """The duplicate check must not fire on short strings.
+
+    "claim 0" and "claim 1" are a 90% textual match and share no meaning; only
+    full propositions are compared.
+    """
+    registry, context, state = _ctx()
+    for i in range(3):
+        result = registry.call(
+            "record_claim", {"statement": f"claim {i}", "rationale": "r"}, context=context
+        )
+        assert result.get("error") is None
+    assert len(state.claims) == 3
