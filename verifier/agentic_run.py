@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="comma-separated real LLM agent roles to run in order, e.g. describer,skeptic,experimenter,judge",
     )
-    parser.add_argument("--provider", choices=["anthropic", "openai", "chatgpt"], default=None, help="LLM provider")
+    parser.add_argument("--provider", choices=["anthropic", "openai", "chatgpt", "openrouter"], default=None, help="LLM provider")
     parser.add_argument(
         "--max-debate-rounds",
         "--max-rounds",

@@ -14,6 +14,8 @@ load_dotenv()
 
 _DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 _DEFAULT_OPENAI_MODEL = "gpt-5"
+_DEFAULT_OPENROUTER_MODEL = "z-ai/glm-5.3-flash"
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 _DEFAULT_PROVIDER = "anthropic"
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _DEFAULT_OPENAI_REASONING_EFFORT = "minimal"
@@ -120,13 +122,27 @@ class AnthropicLLMClient:
 @dataclass(slots=True)
 class OpenAILLMClient:
     model: str | None = None
+    # OpenRouter speaks the OpenAI chat-completions protocol, so it reuses this
+    # client entirely; only the endpoint and the key differ.
+    base_url: str | None = None
+    api_key_env: str = "OPENAI_API_KEY"
     last_metrics: CallMetrics | None = field(default=None, init=False)
     _client: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         from openai import OpenAI
 
-        self._client = OpenAI(timeout=default_timeout_seconds())
+        kwargs: dict[str, Any] = {"timeout": default_timeout_seconds()}
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+        key = os.getenv(self.api_key_env)
+        if key:
+            kwargs["api_key"] = key
+        elif self.api_key_env != "OPENAI_API_KEY":
+            raise RuntimeError(
+                f"{self.api_key_env} is not set; put it in .env, which is gitignored"
+            )
+        self._client = OpenAI(**kwargs)
 
     def call(
         self,
@@ -215,6 +231,15 @@ def build_llm_client(*, provider: str | None = None, model: str | None = None) -
         return AnthropicLLMClient(model=model)
     if selected in {"openai", "chatgpt"}:
         return OpenAILLMClient(model=model)
+    if selected == "openrouter":
+        # One gateway, many open-weight models. Opus ran the 32-case benchmark
+        # for $88 across both arms; the same token volume on an open model
+        # priced at $0.075/$0.25 per M is about $1.22, which is why this exists.
+        return OpenAILLMClient(
+            model=model,
+            base_url=_OPENROUTER_BASE_URL,
+            api_key_env="OPENROUTER_API_KEY",
+        )
     raise ValueError(f"unsupported LLM provider: {provider}")
 
 
@@ -255,6 +280,8 @@ def default_model(provider: str | None = None) -> str:
     if explicit:
         return explicit
     selected = (provider or default_provider()).lower()
+    if selected == "openrouter":
+        return os.getenv("AGENTIC_OPENROUTER_MODEL") or _DEFAULT_OPENROUTER_MODEL
     if selected in {"openai", "chatgpt"}:
         return os.getenv("AGENTIC_OPENAI_MODEL") or _DEFAULT_OPENAI_MODEL
     return os.getenv("AGENTIC_ANTHROPIC_MODEL") or _DEFAULT_ANTHROPIC_MODEL
