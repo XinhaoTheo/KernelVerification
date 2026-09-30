@@ -1,0 +1,211 @@
+[
+  {
+    "created_at": "2026-09-30T08:16:01Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:17:31Z",
+        "data": {
+          "allclose_rtol_1e-5": true,
+          "allclose_rtol_1e-6": true,
+          "allclose_rtol_1e-7": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "5c3c6b64a7e9ec31fa4208b7f3c9e77c65b0d6b5e78777d15f4d21666d8ab9ad"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "844c7022335902b33f9a6b04558a9e2d64de73fa63355cae9bae4fb49b4ae6d7"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "d84941dfa4e46d6fe15c210583c164b28f76d93cad1f0b2dbeba990d791ddf83"
+            }
+          ],
+          "duration_s": 7.270481,
+          "eps": 1e-06,
+          "exit_code": 0,
+          "expected_signal": "max ulp difference of kernel rstd vs torch 1/sqrt on near-zero rows, and whether tight-tolerance allclose fails",
+          "json_parse_error": null,
+          "json_result": {
+            "allclose_rtol_1e-5": true,
+            "allclose_rtol_1e-6": true,
+            "allclose_rtol_1e-7": false,
+            "device": "cuda",
+            "eps": 1e-06,
+            "max_abs_err": 2.384185791015625e-07,
+            "max_rel_err": 1.688105584207733e-07,
+            "max_rstd_ulp_diff": 536870912.0,
+            "n_cols": 4096,
+            "per_row_rstd_ulp_diff": [
+              536870912.0,
+              0.0,
+              0.0,
+              536870912.0,
+              536870912.0,
+              536870912.0,
+              536870912.0
+            ]
+          },
+          "max_abs_err": 2.384185791015625e-07,
+          "max_rel_err": 1.688105584207733e-07,
+          "row_scales": [
+            0.001,
+            0.0001,
+            1e-06,
+            1e-08,
+            1e-12,
+            1e-16,
+            1e-18
+          ],
+          "stderr": "",
+          "stdout": "{\"max_abs_err\": 2.384185791015625e-07, \"max_rel_err\": 1.688105584207733e-07, \"per_row_rstd_ulp_diff\": [536870912.0, 0.0, 0.0, 536870912.0, 536870912.0, 536870912.0, 536870912.0], \"max_rstd_ulp_diff\": 536870912.0, \"allclose_rtol_1e-5\": true, \"allclose_rtol_1e-6\": true, \"allclose_rtol_1e-7\": false, \"eps\": 1e-06, \"n_cols\": 4096, \"device\": \"cuda\"}\n",
+          "timed_out": false,
+          "timeout_s": 180
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On near-zero rows (scales 1e-3..1e-18, mean_square+eps from ~1e-6 down to eps), the kernel's libdevice rsqrt deviates from a torch fp32 1/sqrt reference by at most max_rel_err 1.69e-7 (~1.4 fp32 ulps) on y. Allclose passes at rtol 1e-5 and 1e-6 (true), failing only at rtol 1e-7, which is tighter than fp32's own ~1.2e-7 eps and not a contractually required tolerance. The probe's raw \"rstd ulp diff\" numbers are an artifact of dividing by a double-precision ulp of the ~1000-valued rstd; the authoritative metric is the relative error on y. The claimed tolerance-threatening deviation does not occur at any reasonable tolerance.",
+        "supports": "rebutted",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "libdevice rsqrt is a fast approximate intrinsic; its relative error (~1-2 ulp, potentially larger for subnormal/small arguments) can differ from a torch reference computed as 1/torch.sqrt, and near-zero rows make mean_square+eps small, exactly the regime where relative error in rstd propagates directly to every element of y.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The kernel is expected to be run on rows whose magnitude is close to zero, so rstd precision in the mean_square+eps ~ eps regime is contractually relevant."
+      },
+      {
+        "source": "kernel.py line 22",
+        "summary": "rstd = rsqrt(mean_square + eps) uses the libdevice approximate rsqrt rather than exact reciprocal sqrt."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly includes rows whose magnitude is close to zero and requires the stated formula rstd = 1/sqrt(mean_square + eps) with float32 accumulation, so a probe with near-zero rows against an fp32 1/sqrt reference is admitted by the contract.",
+    "statement": "On rows whose magnitude is close to zero (mean_square + eps near eps), the libdevice rsqrt used in kernel.py line 22 may deviate from a torch reference's 1/sqrt by enough ulps to fail a tight elementwise tolerance on y = x * rstd.",
+    "status": "rebutted",
+    "updated_at": "2026-09-30T08:17:31Z"
+  },
+  {
+    "created_at": "2026-09-30T08:16:01Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:17:05Z",
+        "data": {
+          "allclose_vs_fp32_ref": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "f17cb3d0a80b10ad2c38d0a1e259256788920289a54cfc9947c1bb7b2b4561db"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "be9a9ba3fd180fccb51fa63d9e626af7efcb79f1ce9d024550e6880659484f4e"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "48f0651fb6bf9b012fe12995108e103d0236be2b9be60d7798695b092070abdf"
+            }
+          ],
+          "duration_s": 6.114651,
+          "exit_code": 0,
+          "expected_signal": "kernel output on extreme-tiny bf16 round-trip rows: whether it matches fp32-accumulated reference (both underflow) and how far it deviates from fp64 reference",
+          "json_parse_error": null,
+          "json_result": {
+            "allclose_vs_fp32_ref": true,
+            "device": "cuda",
+            "eps": 1e-06,
+            "kernel_ms_underflowed_rows": 1,
+            "max_abs_err_vs_fp32_ref": 2.6469779601696886e-23,
+            "max_abs_err_vs_fp64_ref": 0.0,
+            "max_rel_err_vs_fp64_ref": 0.0,
+            "mean_square_fp32": [
+              8.77592730681014e-39,
+              9.622576424672086e-41,
+              1.1210387714598537e-44,
+              0.0
+            ],
+            "mean_square_fp64": [
+              8.775927383106881e-39,
+              9.62264796496351e-41,
+              1.1102955977677284e-44,
+              1.1465969203642686e-48
+            ],
+            "scales": [
+              1e-19,
+              1e-20,
+              1e-22,
+              1e-24
+            ]
+          },
+          "kernel_ms_underflowed_rows": 1,
+          "max_abs_err_vs_fp32_ref": 2.65e-23,
+          "max_abs_err_vs_fp64_ref": 0.0,
+          "max_rel_err_vs_fp64_ref": 0.0,
+          "scales": [
+            1e-19,
+            1e-20,
+            1e-22,
+            1e-24
+          ],
+          "stderr": "",
+          "stdout": "{\"scales\": [1e-19, 1e-20, 1e-22, 1e-24], \"mean_square_fp32\": [8.77592730681014e-39, 9.622576424672086e-41, 1.1210387714598537e-44, 0.0], \"mean_square_fp64\": [8.775927383106881e-39, 9.62264796496351e-41, 1.1102955977677284e-44, 1.1465969203642686e-48], \"kernel_ms_underflowed_rows\": 1, \"eps\": 1e-06, \"max_abs_err_vs_fp32_ref\": 2.6469779601696886e-23, \"max_abs_err_vs_fp64_ref\": 0.0, \"max_rel_err_vs_fp64_ref\": 0.0, \"allclose_vs_fp32_ref\": true, \"device\": \"cuda\"}\n",
+          "timed_out": false,
+          "timeout_s": 180
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "On extreme-tiny rows (1e-19..1e-24 after bf16 round-trip), kernel output matches the fp32-accumulated torch reference (allclose rtol=1e-5 true, max abs err 2.6e-23) and also matches the fp64 higher-precision reference exactly (max abs and rel err 0.0). One row's fp32 mean_square underflows to 0, but because rstd = rsqrt(eps) dominates in every accumulation regime tested, the output is identical to the mathematically normalized fp64 result \u2014 the claimed divergence does not occur.",
+        "supports": "rebutted",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "x is cast to fp32 before squaring; for row magnitudes below ~1e-19 the squares underflow to exactly 0 in fp32, making rstd = rsqrt(eps) and y = x * rsqrt(eps) instead of the true normalized values. Whether this counts as a failure depends on how the harness reference computes the same quantity, so the claim needs a probe deciding equivalence with an fp32-accumulated torch reference.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Inputs may arrive at different storage precisions (fp32 or bf16 round-trip) and rows whose magnitude is close to zero are explicitly in scope, with float32 accumulation required."
+      },
+      {
+        "source": "kernel.py lines 20-22",
+        "summary": "The row is cast to fp32, squared, and reduced, so extreme-tiny rows can underflow the sum of squares to zero in fp32."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly requires fp32 accumulation and includes both bf16 round-trip inputs and near-zero-magnitude rows in the tested domain, so extreme-tiny rows under a bf16 round-trip are contract-admitted inputs.",
+    "statement": "For extremely tiny rows (e.g. all elements ~1e-20 after a bf16 round-trip, where x*x underflows fp32 to 0), the kernel computes mean_square = 0 and y = x * rsqrt(eps), while the mathematically normalized result differs; if the harness reference computes in higher precision or uses a different accumulation, y could be wrong by a large relative factor.",
+    "status": "rebutted",
+    "updated_at": "2026-09-30T08:17:05Z"
+  }
+]

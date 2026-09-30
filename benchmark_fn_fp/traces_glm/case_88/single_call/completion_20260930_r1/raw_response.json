@@ -1,0 +1,50 @@
+{
+  "id": "chatcmpl-b876b95917314edeac47699f17ebb50f",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.7, \"reason\": \"The fp16 round-trip of the softmax weights adds only ~1e-4-scale relative noise to p, and with the error denominator floored at 0.001*sqrt(32)\u22480.0057, the resulting output perturbation (~1e-4 range) is comfortably within the 0.001 relative budget for this workload. The kernel otherwise computes softmax(Kq/sqrt(D))V correctly.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "fp16 rounding of p introduces error ~1e-3 relative per element? p values rounded to fp16 have relative error ~2^-11 \u2248 5e-4. Output y = p\u00b7V sums; error relative ~5e-4, likely within 1e-3 budget? Error in y: sum of \u03b4p_i v_i, |\u03b4p_i| \u2264 5e-4 p_i, so |\u03b4y| \u2264 5e-4 sum p_i |v_i| \u2248 5e-4\u00b7E[|v|]. ||y|| may be smaller due to cancellation (center subtracts 0.9 of p@v). If y \u2248 0.1\u00b7(p@v), relative error could be ~5e-3 \u2192 violation. But hard to be sure. Hmm.\n\nActually V was constructed so that y_ref \u2248 0.1 \u00d7 p@v roughly (only partially, center 0.9 applied). Then fp16 p error gives \u03b4y ~ 5e-4\u00b7||p@v|| which is ~5e-3 of y_ref... but errors are random and partially cancel: \u03b4y = sum \u03b5_i p_i v_i with \u03b5 random \u00b15e-4. Magnitude ~5e-4\u00b7sqrt(sum(p_i v_i)^2)... roughly 5e-4\u00b7||p@v||. So relative error ~5e-4/0.1 = 5e-3 > 1e-3? But \u03b5 mean is ~0 with std ~2.4e-4 (half ulp relative ~2^-12? fp16 has 10 mantissa bits, rounding relative error up to 2^-11\u22484.9e-4, std ~ 1.4e-4). \u03b4y \u2248 std\u00b7sqrt(sum p_i\u00b2 ||v_i||\u00b2)... with p spread over 64 tokens, sum p_i\u00b2 small. Hmm, hard.\n\nActually the denominator: E = ||out - ref|| / max(||ref||, 0.001*sqrt(numel)). numel = 32, so floor = 0.001\u00b75.66 = 0.00566. If ||ref|| is small (cancellation), the floor kicks in at 0.00566. \u03b4y magnitude ~ 1.4e-4\u00b7sqrt(sum p_i\u00b2 ||v_i||\u00b2). With p after softmax over 64 tokens with z = k\u00b7q/sqrt(32), k entries N(0,0.49), q N(0,1). z std: sum of 32 products each std 0.7 \u2192 std 0.7\u00b7sqrt(32)/sqrt(32)=0.7... wait z = k\u00b7q/sqrt(d): std of dot = 0.7\u00b7sqrt(32)=3.96, /sqrt(32)=0.7. So scores ~N(0,0.7). p fairly spread, sum p\u00b2 maybe ~1/40 per... roughly p_max ~ few p. sqrt(sum p_i\u00b2)||v|| \u2248 0.2\u00b7(sqrt(32)\u00b7?)... v_i norm ~ sqrt(32)\u22485.7. \u03b4y ~1.4e-4\u00b70.2\u00b75.7 \u2248 1.6e-4. Well under floor 0.00566. So fine.\n\nAlso the fp16 round-to-nearest is symmetric; errors unlikely to blow budget. Verdict: trust.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756242,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 854,
+    "prompt_tokens": 1337,
+    "total_tokens": 2191,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 745,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 263,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 745
+    }
+  }
+}

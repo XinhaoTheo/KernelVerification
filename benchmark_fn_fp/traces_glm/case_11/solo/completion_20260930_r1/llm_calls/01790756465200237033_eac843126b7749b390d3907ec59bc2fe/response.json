@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-f0b40f87373642e39adc1dc5f138fddc",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The previous probe failed due to a bug in my reference (cos/sin needed a head-dim broadcast), not the kernel. Rerunning with a fixed reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bf153a26f6a3c184",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_11/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndef ref(x, cos, sin, interleaved):\\n    S,H,D = x.shape\\n    c = cos.float().unsqueeze(1); s = sin.float().unsqueeze(1)  # (S,1,D/2)\\n    x0, x1 = x[..., :D//2].float(), x[..., D//2:].float()\\n    o0 = x0*c - x1*s\\n    o1 = x0*s + x1*c\\n    if not interleaved:\\n        return torch.cat([o0,o1], dim=-1).to(x.dtype)\\n    return torch.stack([o0,o1], dim=-1).flatten(-2).to(x.dtype)\\n\\ndef mk(S,D):\\n    pos = torch.arange(S, device=\\\"cuda\\\", dtype=torch.float32)\\n    freqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\\\"cuda\\\",dtype=torch.float32)/(D//2)))\\n    ang = torch.outer(pos, freqs)\\n    return torch.cos(ang).contiguous(), torch.sin(ang).contiguous()\\n\\nresults = []\\ntorch.manual_seed(0)\\nfor S,H,D in [(1,2,64),(128,8,128),(7,3,96),(33,5,32),(256,16,256)]:\\n    x = torch.randn(S,H,D, device=\\\"cuda\\\")\\n    cos, sin = mk(S,D)\\n    for il in [False, True]:\\n        out = k.apply_rotary(x, cos, sin, il)\\n        r = ref(x, cos, sin, il)\\n        err = (out.float()-r.float()).abs().max().item()\\n        results.append({\\\"S\\\":S,\\\"H\\\":H,\\\"D\\\":D,\\\"interleaved\\\":il,\\\"max_abs_err\\\":err})\\n\\nfor dtype in [torch.float16, torch.bfloat16]:\\n    x = torch.randn(64,4,128, device=\\\"cuda\\\", dtype=dtype)\\n    cos, sin = mk(64,128)\\n    for il in [False, True]:\\n        out = k.apply_rotary(x, cos, sin, il)\\n        r = ref(x.float(), cos, sin, il).to(dtype)\\n        err = (out.float()-r.float()).abs().max().item()\\n        results.append({\\\"dtype\\\":str(dtype),\\\"interleaved\\\":il,\\\"max_abs_err\\\":err})\\n\\n# relative-position invariance: dot depends only on m-n\\nS,H,D = 64,2,64\\nx = torch.randn(S,H,D, device=\\\"cuda\\\")\\ncos, sin = mk(S,D)\\ninv = {}\\nfor il in [False, True]:\\n    xr = ref(x, cos, sin, il)\\n    dots = torch.einsum(\\\"shd,thd->st\\\", xr[:,0], xr[:,0])\\n    # check dots[s,t] depends only on s-t\\n    diffs = []\\n    for s in range(1, S):\\n        d = torch.diag(dots, s)\\n        ref_d = dots[0, s].expand(len(d)).clone()\\n        diffs.append((d - dots[0, s]).abs().max().item())\\n    inv[\\\"interleaved\\\" if il else \\\"split\\\"] = max(diffs)\\n\\nprint(json.dumps({\\\"results\\\":results, \\\"invariance_max_dev\\\":inv}))\\n\", \"expected_signal\": \"small max_abs_err and small invariance deviation\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "My probe had a bug: cos shape is (S, D/2) but x is (S,H,D); need unsqueeze. Fix and rerun. Also note probe failure was in my reference, not the kernel. Rerun corrected probe.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756466,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 862,
+    "prompt_tokens": 13271,
+    "total_tokens": 14133,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 52,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4608,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 52
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-ca8ef8f9b6de48ef9d4b76a885cdc479",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The t13 probe shows violations, but my reference computation had a bug (the `lo[lo==0]=N` trick also zeroes a legitimately-tied index 0, so the shown examples are unreliable). The all-equal-rows signal (100/100 rows returning nonzero) is suspicious but I need a clean reference. I'll rerun with `argmax` (which returns the first/lowest tied index) as reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b1968ce6095c4eaf",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_09/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\nres = {}\\nfor N in [2,4,8,16,32,64]:\\n    B = 2000\\n    torch.manual_seed(0)\\n    scores = torch.randn(B, N, device=dev)\\n    for b in range(B):\\n        p = torch.randperm(N)[:2].to(dev)\\n        scores[b, p] = 5.0\\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\\n    ref = scores.argmax(dim=1)  # torch argmax returns the FIRST (lowest) max index\\n    bad = int((out != ref).sum().item())\\n    ex = None\\n    if bad:\\n        m = (out != ref).nonzero()[0]; b = int(m[0])\\n        ex = {\\\"b\\\": b, \\\"scores\\\": scores[b].tolist(), \\\"kernel\\\": int(out[b]), \\\"ref\\\": int(ref[b])}\\n    # all-equal rows: contract requires index 0\\n    scores_eq = torch.zeros(100, N, device=dev)\\n    out_eq = k.sorted_topk_indices(scores_eq, 1).squeeze(-1)\\n    eq_bad = int((out_eq != 0).sum().item())\\n    eq_ex = int(out_eq[0]) if eq_bad else None\\n    res[f\\\"N{N}\\\"] = {\\\"tied_rows_bad\\\": bad, \\\"total\\\": B, \\\"example\\\": ex,\\n                    \\\"all_equal_bad_nonzero\\\": eq_bad, \\\"all_equal_example_index\\\": eq_ex}\\nprint(json.dumps(res))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "t13 confirms tie-break violation decisively (e.g. N4 scores [5.0,...,5.0,...], kernel returns 0, ref 2 — wait, ref is 2? scores[0]=5.0 and scores[2]=5.0; lower index is 0. But my reference computation `lo = (scores==max)*ar; lo[lo==0]=N` is buggy: it zeroes index 0 too! So when the tie includes index 0, reference incorrectly says index 2. So the reference is wrong in examples where index 0 is tied. Hmm — that undermines the evidence.\n\nCheck example N4: tied at 0 and 2, kernel=0 (correct lower index!), ref=2 (wrong reference). N8 example: tied at 0 and 4, kernel=0, ref=4 — kernel correct. All examples where kernel != ref might be cases where index 0 is tied and my reference broke. Need to fix reference: use argmax (torch argmax returns first occurrence) — `scores.argmax(dim=1)` gives lowest tied index. Also all_equal_bad_nonzero=100: all-zero rows kernel returned nonzero? With all equal, ref should be 0; kernel returned nonzero in all 100 rows — that's a real signal. But wait, zeros tie everywhere; if the network wiring picks arbitrary index, that's a genuine violation of the lower-index rule. So all-equal rows show violation: kernel returns e.g. index != 0 on 100/100 rows.\n\nBut I should rerun a clean probe with a correct reference to get decisive numbers. Yes — rerun with ref = scores.argmax(dim=1) (first max), counting mismatches.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756384,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 846,
+    "prompt_tokens": 28700,
+    "total_tokens": 29546,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 362,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 362
+    }
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "id": "chatcmpl-09820587c2a244bab108ac26c9deebca",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run runtime probes for all three open claims in parallel: c1 (zero-point +1 bias vs the stated contract formula), c2 (K not a multiple of BLOCK_SIZE_K=16 → unmasked out-of-bounds tail loads), and c3 (N not a multiple of BLOCK_SIZE_N=32 → unmasked N loads). Each probe builds a quantized-reference comparison per the contract.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9d42c1fc121ef469",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, sys\\n\\nsys.path.insert(0, '/root/cases/case_07')\\ntry:\\n    from kernel import gptq_matmul\\nexcept Exception as e:\\n    try:\\n        import importlib.util\\n        spec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_07/kernel.py\\\")\\n        m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\\n        gptq_matmul = m.gptq_matmul\\n    except Exception as e2:\\n        print(json.dumps({\\\"error\\\": str(e2)})); sys.exit(0)\\n\\ntorch.manual_seed(0)\\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\\nM, K, N = 16, 64, 64\\nnum_groups = 4\\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\\n\\n# random scales and nonzero zero-points\\nscales = (torch.rand(num_groups, N, device=dev) * 0.1 + 0.01).float()\\nz_vals = torch.randint(1, 16, (num_groups, N), device=dev, dtype=torch.int32)  # nonzero zeros\\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\\n\\ndef pack(x, bits=4):\\n    vals_per_word = 32 // bits\\n    Kd, Nd = x.shape\\n    packed = torch.zeros((Kd // vals_per_word, Nd), device=x.device, dtype=torch.int32)\\n    for i in range(Kd):\\n        packed[i // vals_per_word, :] |= (x[i, :] & 15) << ((i % vals_per_word) * bits)\\n    return packed\\n\\nb_packed = pack(q_vals)\\nzeros_packed = pack(z_vals)\\n\\na = torch.randn(M, K, device=dev).half() if dev=='cuda' else torch.randn(M, K).float()\\n\\n# reference per contract formula: (q - zero) * scale, zero unpacked raw (NO +1)\\nref = torch.zeros(M, N, device=dev)\\nfor k in range(K):\\n    g = int(g_idx[k]); z = int(z_vals[g])  # z_vals indexed [group, n]\\n    # unpack zero word\\n    zero_word = zeros_packed[g, :].long()\\n    zrow = (zero_word >> ((torch.arange(N, device=dev) % 8) * 4)) & 15\\n    dq = (q_vals[k, :].float() - zrow.float()) * scales[g]\\n    ref[:, :] += a[:, k:k+1].float() * dq[None, :]\\n\\ntry:\\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\\n    max_abs = (c - ref).abs().max().item()\\n    # also compare against GPTQ +1 convention\\n    ref_plus1 = torch.zeros(M, N, device=dev)\\n    for k in range(K):\\n        g = int(g_idx[k])\\n        zero_word = zeros_packed[g, :].long()\\n        zrow = (zero_word >> ((torch.arange(N, device=dev) % 8) * 4)) & 15\\n        dq = (q_vals[k, :].float() - (zrow.float() + 1)) * scales[g]\\n        ref_plus1[:, :] += a[:, k:k+1].float() * dq[None, :]\\n    max_abs_plus1 = (c - ref_plus1).abs().max().item()\\n    print(json.dumps({\\\"metric\\\": \\\"max_abs_err vs contract (q-zero)*scale and vs (q-zero-1)*scale\\\",\\n                      \\\"max_abs_err_contract\\\": max_abs,\\n                      \\\"max_abs_err_plus1_convention\\\": max_abs_plus1,\\n                      \\\"M\\\": M, \\\"K\\\": K, \\\"N\\\": N, \\\"bits\\\": 4,\\n                      \\\"note\\\": \\\"if kernel matches +1 convention but not contract formula, +1 offset confirmed\\\"}))\\nexcept Exception as e:\\n    print(json.dumps({\\\"error\\\": repr(e)}))\\n\", \"expected_signal\": \"kernel output matches (q - zero - 1)*scale but deviates from contract formula (q - zero)*scale, confirming the +1 zero-point offset\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-805b211d6cc4e898",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport torch, json, sys, importlib.util\\n\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_07/kernel.py\\\")\\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\\ngptq_matmul = m.gptq_matmul\\n\\ntorch.manual_seed(1)\\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\\nif dev != 'cuda':\\n    print(json.dumps({\\\"error\\\": \\\"no CUDA, cannot run triton kernel\\\"})); sys.exit(0)\\n\\nM, K, N = 16, 56, 64   # K = 56 = 3*16 + 8, multiple of 8 (packing OK) but not of 16\\nnum_groups = 4\\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\\nscales = (torch.rand(num_groups, N, device=dev) * 0.1 + 0.01).float()\\nz_vals = torch.randint(0, 16, (num_groups, N), device=dev, dtype=torch.int32)\\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\\n\\ndef pack(x, bits=4):\\n    vpw = 32 // bits\\n    Kd, Nd = x.shape\\n    packed = torch.zeros((Kd // vpw, Nd), device=x.device, dtype=torch.int32)\\n    for i in range(Kd):\\n        packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\\n    return packed\\n\\nb_packed = pack(q_vals)\\nzeros_packed = pack(z_vals)\\na = torch.randn(M, K, device=dev).half()\\n\\ndef reference(use_plus1):\\n    ref = torch.zeros(M, N, device=dev)\\n    ar = torch.arange(N, device=dev)\\n    for k in range(K):\\n        g = int(g_idx[k])\\n        zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float()\\n        if use_plus1: zrow = zrow + 1\\n        dq = (q_vals[k, :].float() - zrow) * scales[g]\\n        ref += a[:, k:k+1].float() * dq[None, :]\\n    return ref\\n\\nref0, ref1 = reference(False), reference(True)\\ntry:\\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\\n    torch.cuda.synchronize()\\n    err0 = (c - ref0).abs().max().item()\\n    err1 = (c - ref1).abs().max().item()\\n    print(json.dumps({\\\"metric\\\": \\\"max_abs_err for K=56 (K%16=8) vs both zero conventions\\\",\\n                      \\\"K\\\": K, \\\"M\\\": M, \\\"N\\\": N,\\n                      \\\"max_abs_err_contract\\\": err0,\\n                      \\\"max_abs_err_plus1\\\": err1,\\n                      \\\"note\\\": \\\"large error vs both conventions implies out-of-bounds/garbage tail accumulation (c2 confirmed); match implies tail handled or OOB read benign\\\"}))\\nexcept Exception as e:\\n    torch.cuda.synchronize()\\n    print(json.dumps({\\\"metric\\\": \\\"kernel_exception\\\", \\\"K\\\": K, \\\"error\\\": repr(e),\\n                      \\\"note\\\": \\\"crash on K%16!=0 supports c2 out-of-bounds\\\"}))\\n\", \"expected_signal\": \"K=56 (K%16!=0) produces wrong C or a crash due to unmasked out-of-bounds tail loads\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-b6175ffae929c0d4",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"\\nimport torch, json, sys, importlib.util\\n\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_07/kernel.py\\\")\\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\\ngptq_matmul = m.gptq_matmul\\n\\ntorch.manual_seed(2)\\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\\nif dev != 'cuda':\\n    print(json.dumps({\\\"error\\\": \\\"no CUDA, cannot run triton kernel\\\"})); sys.exit(0)\\n\\nM, K, N = 16, 64, 40   # N = 40: multiple of 8 (zeros word n//8=5 valid up to 39) but not multiple of 32\\nnum_groups = 4\\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\\nscales = (torch.rand(num_groups, N, device=dev) * 0.1 + 0.01).float()\\nz_vals = torch.randint(0, 16, (num_groups, N), device=dev, dtype=torch.int32)\\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\\n\\ndef pack(x, bits=4):\\n    vpw = 32 // bits\\n    Kd, Nd = x.shape\\n    packed = torch.zeros((Kd // vpw, Nd), device=x.device, dtype=torch.int32)\\n    for i in range(Kd):\\n        packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\\n    return packed\\n\\nb_packed = pack(q_vals)\\nzeros_packed = pack(z_vals)\\na = torch.randn(M, K, device=dev).half()\\n\\ndef reference(use_plus1):\\n    ref = torch.zeros(M, N, device=dev)\\n    ar = torch.arange(N, device=dev)\\n    for k in range(K):\\n        g = int(g_idx[k])\\n        zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float()\\n        if use_plus1: zrow = zrow + 1\\n        dq = (q_vals[k, :].float() - zrow) * scales[g]\\n        ref += a[:, k:k+1].float() * dq[None, :]\\n    return ref\\n\\nref1 = reference(True)  # kernel convention (zeros+1)\\ntry:\\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\\n    torch.cuda.synchronize()\\n    err1 = (c - ref1).abs().max().item()\\n    print(json.dumps({\\\"metric\\\": \\\"max_abs_err for N=40 (N%32=8) vs kernel-convention reference\\\",\\n                      \\\"M\\\": M, \\\"K\\\": K, \\\"N\\\": N,\\n                      \\\"max_abs_err\\\": err1,\\n                      \\\"note\\\": \\\"error or crash implies unmasked N-dim loads corrupt valid outputs (c3 confirmed); ~0 implies OOB reads happen but do not affect stored lanes\\\"}))\\nexcept Exception as e:\\n    print(json.dumps({\\\"metric\\\": \\\"kernel_exception\\\", \\\"N\\\": N, \\\"error\\\": repr(e),\\n                      \\\"note\\\": \\\"crash on N%32!=0 supports c3 out-of-bounds load\\\"}))\\n\", \"expected_signal\": \"N=40 (N%32!=0) produces wrong C or a crash due to unmasked N-dimension loads\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2,
+            "name": null
+          }
+        ],
+        "reasoning_content": "I need to probe all three claims. c1: +1 zero offset vs contract formula. c2: K not multiple of 16. c3: N not multiple of 32. But there's no test harness; the reference dequant convention... c1 contract states formula without +1 — probe: run kernel vs reference dequant using contract formula with nonzero zeros. Build b_packed (K/8, N) packed, scales (groups, N), zeros (groups, N/8) packed, g_idx.\n\nFor c2/c3 scope is unknown — probes on non-multiple shapes may go out of scope but evidence still useful. Launch all three probes in parallel.\n\nWrite probe code: need GPU/triton. Build inputs, run gptq_matmul, compute reference dequant manually.\n\nc1 probe: M=16,K=64,N=64, groups via g_idx random in range(num_groups). zeros values random 0..15 (nonzero). Reference uses formula (q - zero)*scale (no +1). Expect mismatch.\n\nc2: K=56 (multiple of 8? 56/8=7, not multiple of 16). But careful: K=56 → K%16=8; b_packed rows K/8=7; out-of-bounds read of b word index 56..63//8 = 7 (row 7 out of 7 rows). Test whether result matches reference truncated to 56 or differs/crashes.\n\nc3: N=40 (not multiple of 32; multiple of 8 so zeros packed word index n//8=5 exists for n up to 39; beyond 40 reads past). Watch crash or garbage.\n\nLaunch three run_claim_probes in one message.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756333,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2966,
+    "prompt_tokens": 20750,
+    "total_tokens": 23716,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 364,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 540,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 364
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are verifying whether a GPU (Triton) kernel implementation is correct.\n\nYou will be given:\n1. A problem statement describing the operation's contract and its reference behavior.\n2. The kernel implementation under test.\n\nDecide one of:\n- \"reject\": the implementation has a real defect / violates the stated contract.\n- \"trust\": the implementation is correct, or is an equally valid alternative implementation.\n- \"needs_more_evidence\": you genuinely cannot tell.\n\nAnswer with the JSON object required by the output schema.\nOutput schema:\n{\"type\": \"object\", \"required\": [\"verdict\", \"confidence\", \"reason\"], \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": [\"trust\", \"reject\", \"needs_more_evidence\"], \"description\": \"'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell.\"}, \"confidence\": {\"type\": \"number\", \"description\": \"0.0 to 1.0.\"}, \"reason\": {\"type\": \"string\", \"description\": \"One or two sentences.\"}}, \"additionalProperties\": false}"
+    },
+    {
+      "role": "user",
+      "content": "## Problem statement (contract + reference behavior)\n\nOperation: symmetric INT8 quantize-dequantize with one scale per group of\ncolumns, the per-group scaling used by INT8 inference kernels.\n\nFor each group of `group_size` consecutive columns of a row:\n\n    scale = max(|x|) / 127          over that group\n    q     = round(x / scale)        clamped into int8\n    y     = q * scale\n\nEvery column of the input must be quantized under the scale of the group it\nbelongs to.\n\nInput domain: `n_cols` may be any positive integer. It is NOT required to be a\nmultiple of `group_size`; when it is not, the trailing columns form a shorter\nfinal group, which is still a group with its own scale.\n\nDoes group_quant_dequant() satisfy this contract?\n\n\n## Kernel implementation under test (kernel.py)\n\n```python\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _group_quant_kernel(X, OUT, stride_xm, stride_om, n_cols, GROUP: tl.constexpr,\n                        BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    x_row = X + row * stride_xm\n    o_row = OUT + row * stride_om\n    n_groups = n_cols // GROUP\n\n    for g in range(n_groups):\n        cols = g * GROUP + tl.arange(0, BLOCK)\n        in_group = tl.arange(0, BLOCK) < GROUP\n        x = tl.load(x_row + cols, mask=in_group & (cols < n_cols), other=0.0)\n        absmax = tl.max(tl.abs(x), axis=0)\n        scale = tl.where(absmax == 0.0, 1.0, absmax / 127.0)\n        q = tl.floor(x / scale + 0.5).to(tl.int8)\n        deq = q.to(tl.float32) * scale\n        tl.store(o_row + cols, deq, mask=in_group & (cols < n_cols))\n\n\ndef group_quant_dequant(x: torch.Tensor, group_size: int = 64) -> torch.Tensor:\n    \"\"\"Symmetric INT8 quantize-dequantize with one scale per group of columns.\"\"\"\n    n_rows, n_cols = x.shape\n    out = torch.zeros_like(x)\n    _group_quant_kernel[(n_rows,)](x, out, x.stride(0), out.stride(0), n_cols,\n                                   GROUP=group_size, BLOCK=group_size)\n    return out\n\n```\n\nIs this implementation correct?"
+    }
+  ],
+  "response_format": {
+    "type": "json_object"
+  },
+  "reasoning_effort": "low"
+}

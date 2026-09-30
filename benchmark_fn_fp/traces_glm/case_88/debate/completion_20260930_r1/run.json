@@ -1,0 +1,1771 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "__pycache__/kernel.cpython-311.pyc",
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_88",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):\n    n = tl.arange(0, N)\n    d = tl.arange(0, D)\n    q = tl.load(Q + d)\n    k = tl.load(K + n[:, None] * D + d[None, :])\n    v = tl.load(V + n[:, None] * D + d[None, :])\n    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)\n    p = tl.exp(scores - tl.max(scores, 0))\n    p = p / tl.sum(p, 0)\n    p = p.to(tl.float16).to(tl.float32)\n    y = tl.sum(p[:, None] * v, 0)\n    tl.store(O + d, y)\n\ndef run(q, k, v):\n    n, d = k.shape\n    out = torch.empty(d, dtype=torch.float32, device=q.device)\n    _kernel[(1,)](q, k, v, out, n, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'attention', 'seed': 812, 'n': 64, 'd': 32, 'scale': 0.7, 'center': 0.9}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+    "passed": null,
+    "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = softmax(K @ q / sqrt(D)) @ V, softmax over the N tokens.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.001.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+    "rounds": null,
+    "session_dir": "/root/pilot_cases/case_88",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:58:48Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:00:16Z",
+          "data": {
+            "E_fp16_contribution": 0.0020605597283432113,
+            "E_kernel": 0.0020607774650464807,
+            "E_kernel_le_0.001": false,
+            "E_nofp16_variant": 1.0474177171206507e-06,
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "d2e8eb663d0951d1a4980ab72033bf645564cb5f898eaf01aa929b3902e8bbdd"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "d94085058b41e19393cc81d842959a9c505d0cb5725fcbf54ffe49b62bd16791"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "0a8b1938162b8d395a8e56526abe95153ea9329e5eae62b1e0a600bf07e50b86"
+              }
+            ],
+            "denom": 0.074169622268619,
+            "duration_s": 5.280985,
+            "exit_code": 0,
+            "expected_signal": "E_kernel and fp16-only contribution vs the 0.001 budget on the seed-812 workload",
+            "json_parse_error": null,
+            "json_result": {
+              "E_fp16_contribution": 0.0020605597283432113,
+              "E_kernel": 0.0020607774650464807,
+              "E_kernel_le_0.001": false,
+              "E_nofp16_variant": 1.0474177171206507e-06,
+              "all_finite": true,
+              "denom": 0.074169622268619,
+              "norm_ref": 0.074169622268619,
+              "sum_p2": 0.02465295057624201
+            },
+            "norm_ref": 0.074169622268619,
+            "stderr": "",
+            "stdout": "{\"E_kernel\": 0.0020607774650464807, \"E_kernel_le_0.001\": false, \"E_nofp16_variant\": 1.0474177171206507e-06, \"E_fp16_contribution\": 0.0020605597283432113, \"norm_ref\": 0.074169622268619, \"denom\": 0.074169622268619, \"sum_p2\": 0.02465295057624201, \"all_finite\": true}\n",
+            "sum_p2": 0.02465295057624201,
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact seed-812 workload (replicating make_inputs), the kernel's E = 0.00206 exceeds the 0.001 budget. Attribution: a variant kernel with the fp16 cast removed gives E = 1.05e-6, and the isolated fp16 contribution is 0.00206 \u2014 essentially the entire error. ||ref|| = 0.0742 (above the 0.00566 floor; sum p^2 \u2248 0.0247, so the cancellation shrinks output only ~2.4%, not 90%), yet fp16 rounding of p alone still breaches the budget. All outputs finite. Claim confirmed (E > 0.001 due to the fp16 round-trip), though the stated 90%-shrink mechanism is only ~2.4% in reality.",
+          "supports": "confirmed",
+          "tool_event_id": "t11"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "make_inputs deliberately subtracts 0.9*(p@v) from V, shrinking ||y|| to roughly 10% of its natural scale, so the ~2^-11 relative rounding of each softmax probability can accumulate to >1e-3 relative error in p@V relative to the shrunken output norm; this is the designed stress on the contract's error budget.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Reference is the operation in float64 on the same float32 inputs; compliance iff E = ||out-ref||_2/max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single fixed workload (make_inputs with seed 812, N=64, D=32, center=0.9)."
+        }
+      ],
+      "scope_rationale": "The claim tests whether the kernel violates the contract's stated compliance condition E <= 0.001 on the exact single workload specified by problem.txt (make_inputs with seed 812, N=64, D=32), which the contract declares as the only in-scope case.",
+      "statement": "The fp16 round-trip of softmax probabilities (kernel.py line 15) causes E = ||out - ref||_2 / max(||ref||_2, 0.00566) to exceed 0.001 on the fixed seed-812 workload, because make_inputs shrinks the expected output norm by 90% via v -= 0.9*(p@v), amplifying the relative effect of fp16 rounding error in p.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T09:00:16Z"
+    },
+    {
+      "created_at": "2026-09-30T08:58:48Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:00:16Z",
+          "data": {
+            "E_fp32_path_le_0.001": true,
+            "E_fp32_softmax_path_only": 1.0474177171206507e-06,
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "f11a939c3a01c7074c149a114b310c8f35cc23998e1d4d6b4e09cd084c9bf23d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "a663fb090a19754eed10d09d708b495344dc29a0a16eac1dd420de552b941bd9"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "55eef864770fa2df5f4e882fbf5441bfc7c62f116e34bd1728ac25bb8e95dc2e"
+              }
+            ],
+            "denom": 0.074169622268619,
+            "duration_s": 4.728006,
+            "exit_code": 0,
+            "expected_signal": "E of the no-fp16 fp32/tl.exp path vs the 0.001 budget on the seed-812 workload",
+            "json_parse_error": null,
+            "json_result": {
+              "E_fp32_path_le_0.001": true,
+              "E_fp32_softmax_path_only": 1.0474177171206507e-06,
+              "all_finite": true,
+              "denom": 0.074169622268619,
+              "norm_ref": 0.074169622268619,
+              "sum_p2": 0.02465295057624201
+            },
+            "norm_ref": 0.074169622268619,
+            "stderr": "",
+            "stdout": "{\"E_fp32_softmax_path_only\": 1.0474177171206507e-06, \"E_fp32_path_le_0.001\": true, \"norm_ref\": 0.074169622268619, \"denom\": 0.074169622268619, \"sum_p2\": 0.02465295057624201, \"all_finite\": true}\n",
+            "sum_p2": 0.02465295057624201,
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Removing only the fp16 downcast (same fp32 scores + tl.exp path), the kernel's E on the seed-812 workload is 1.05e-6, three orders of magnitude below the 0.001 budget. The fp32/tl.exp softmax path contributes negligible error; the entire budget breach is attributable to the fp16 round-trip (see c1 evidence).",
+          "supports": "rebutted",
+          "tool_event_id": "t12"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "Even ignoring the fp16 downcast, the kernel computes scores, exp, and normalization in fp32 with an approximate GPU exp, and the workload's output cancellation (v -= 0.9*(p@v)) amplifies small probability perturbations; combined fp32/tl.exp error alone might already consume the 1e-3 relative budget, making the fp16 claim redundant or misattributed.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Compliance is decided solely by E <= 0.001 with a float64 reference on the single fixed seed-812 workload; the contract permits reduced precision only if this budget is met, so any error source (fp32 scores, approximate tl.exp, or fp16 p) that breaches the budget is in scope."
+        }
+      ],
+      "scope_rationale": "This decomposes the same contract condition (E <= 0.001 on the fixed workload) by error source; if the fp16 effect is small but the fp32 softmax path alone breaches the budget, the kernel still violates the stated contract.",
+      "statement": "Independent of the fp16 round-trip, the fp32 computation of scores and tl.exp in the Triton kernel contributes enough error on the seed-812 workload that, combined with the deliberately canceled output (v -= 0.9*(p@v)), E may exceed 0.001 even if the fp16 downcast were removed.",
+      "status": "rebutted",
+      "updated_at": "2026-09-30T09:00:16Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Workload is fixed: attention family, seed 812, N=64 tokens, D=32, K scaled by 0.7, V centered with center=0.9; inputs generated by make_inputs() with NumPy PCG64 and rounded once to float32 before CUDA transfer.",
+      "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N token dimension; output shape (D,) = (32,).",
+      "Reference: same operation evaluated in float64 on the same float32 inputs; error metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)); compliance iff all outputs finite and E <= 0.001.",
+      "Reduced/approximate arithmetic is explicitly permitted; only the error budget on this single workload decides compliance.",
+      "Target environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+    ],
+    "kernel_model": [
+      "Triton JIT kernel _kernel launches a single program (grid (1,)) loading full Q (32), K (64x32), V (64x32) as 2D tiles; scores = sum(K*q, axis=1) * D**-0.5 in fp32.",
+      "Softmax computed with max-subtraction and full-vector sum normalization in fp32, then p is deliberately downcast to fp16 and back to fp32 before the weighted V sum (kernel.py line 15).",
+      "run() assumes contiguous row-major K and V with shape (n, d) and assumes q/k/v are fp32 on CUDA; allocates fp32 output of shape (d,).",
+      "enable_fp_fusion=False is passed to prevent FMA fusion in the Triton kernel.",
+      "The make_inputs() function intentionally constructs V so that v -= 0.9 * (p @ v), shrinking the expected output norm and creating a cancellation-sensitive workload against which fp16 rounding of p must stay within the 0.001 relative budget.",
+      "Correction to the earlier model of the cancellation: make_inputs computes p in float64 from the float32 q/k, then sets v := v - 0.9*(p@v). The kernel output becomes y = p@(v - 0.9*(p@v)) = p@v - 0.9*(p@(p@v)). Since p is not a one-hot delta, p@(p@v) != p@v in general; the shrink factor is roughly 0.9*sum(p^2), which for a spread softmax (sum p^2 ~ 1/N_eff) may be well below 0.9. The actual ||y|| reduction must be measured, not assumed to be 90%.",
+      "The centered V is re-rounded to float32 by tensor() (make_inputs line 32-33), so the reference itself uses these rounded V values; the fp64 reference and kernel share identical inputs."
+    ],
+    "open_questions": [
+      "What is the actual ||reference||_2 on the seed-812 workload after the v-centering? The E-metric denominator is max(||ref||, ~0.00566); if ||ref|| stays near natural scale (because sum(p^2) << 1), the budget floor could dominate and give the kernel more absolute headroom than the 10%-shrunken-output reasoning assumes.",
+      "What is sum(p^2) (softmax concentration) on the fixed workload? With N=64 and K scaled by 0.7, scores spread is modest, so p may be near-uniform (sum(p^2) ~ 1/30-1/64), making the cancellation 0.9*sum(p^2) ~ 0.014-0.03, i.e., only a ~2-3% output shrink, not 90%.",
+      "How large is the fp16 rounding contribution to E in isolation (e.g., comparing kernel output vs an fp32-softmax variant), and how large is the fp32/tl.exp contribution, to attribute between claims c1 and c2?"
+    ],
+    "risk_map": [
+      "fp16 rounding of softmax probabilities p (line 15): each p in [0,1] gets ~2^-11 relative error; the accumulated error in p @ V relative to ||y|| could exceed 1e-3 because the workload deliberately centers V to reduce ||y|| (make_inputs v -= 0.9*(p@v)), amplifying relative error of the E metric.",
+      "p.to(fp16) also flushes very small tail probabilities (below ~6e-5, and denormals) toward zero; with N=64 and moderate scores tail contributions are small but feed into the same error budget.",
+      "Scores/exp computed in fp32 with enable_fp_fusion=False; fp32 dot-product ordering differences vs the float64 reference are a smaller secondary error source.",
+      "Assumes K and V contiguous; non-contiguous inputs would be out of the fixed workload since make_inputs returns fresh contiguous tensors.",
+      "Triton 3.4 exp may use fast approximate exponential (tl.exp typically lowers to ex2); error is within fp32 ulps but contributes to the budget.",
+      "Grid of a single program with N*D up to 2048 elements is within shared memory/register limits for this fixed workload, so launch feasibility is unlikely to be a risk here.",
+      "fp16 rounding of softmax probabilities p (line 15): each p gets ~2^-11 relative rounding plus possible flush-to-zero for p below ~6e-5 (fp16 min normal); error in p@V scales as ~||V|| * 2^-11 * sqrt(sum p^2), which is bounded regardless of output cancellation; the decisive question is whether ||V||*2^-11*||p||_2 exceeds 0.001*max(||ref||, 0.00566).",
+      "The error contribution of the fp16 round-trip scales with ||p||_2*||V||, not with ||y||, so output cancellation amplifies the RELATIVE error only to the extent cancellation actually shrinks ||ref|| (which depends on sum(p^2), see open questions).",
+      "Scores and softmax are computed in fp32 with enable_fp_fusion=False and tl.exp (typically lowered to fast ex2 with ~few-ulp error); this path contributes a second independent error source that must be separated from the fp16 effect when attributing any E violation (claim c2).",
+      "Assumes K and V contiguous; out of scope for the fixed workload since make_inputs returns fresh contiguous fp32 CUDA tensors.",
+      "Single-program grid with N*D=2048 elements is well within limits; launch feasibility is not a meaningful risk for this workload."
+    ],
+    "scope_notes": [
+      "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.\", \"Reference is float64 math on the same float32 inputs, not a torch float32 pipeline; the comparator must replicate the exact make_inputs() generation to be valid.\", \"Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) \u2248 max(||ref||, 0.00566), so small reference norms get a floor that loosens the absolute tolerance.\", \"The verdict categories are trust / reject / needs_more_evidence about this finite workload only, not general correctness.\"]",
+      "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.",
+      "Reference is float64 math on the same float32 inputs (including the centered, re-rounded V); the comparator must replicate make_inputs() exactly to be valid.",
+      "Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) ~ max(||ref||, 0.00566); if ||ref|| is not actually shrunk much (because p@(p@v) << p@v for a spread softmax), the floor 0.00566 sets the absolute error allowance, potentially absolving the fp16 round-trip.",
+      "Verdict categories (trust / reject / needs_more_evidence) concern this finite workload only, not general correctness."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Workload is fixed: attention family, seed 812, N=64 tokens, D=32, K scaled by 0.7, V centered with center=0.9; inputs generated by make_inputs() with NumPy PCG64 and rounded once to float32 before CUDA transfer.",
+        "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N token dimension; output shape (D,) = (32,).",
+        "Reference: same operation evaluated in float64 on the same float32 inputs; error metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)); compliance iff all outputs finite and E <= 0.001.",
+        "Reduced/approximate arithmetic is explicitly permitted; only the error budget on this single workload decides compliance.",
+        "Target environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-09-30T08:58:25Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton JIT kernel _kernel launches a single program (grid (1,)) loading full Q (32), K (64x32), V (64x32) as 2D tiles; scores = sum(K*q, axis=1) * D**-0.5 in fp32.",
+        "Softmax computed with max-subtraction and full-vector sum normalization in fp32, then p is deliberately downcast to fp16 and back to fp32 before the weighted V sum (kernel.py line 15).",
+        "run() assumes contiguous row-major K and V with shape (n, d) and assumes q/k/v are fp32 on CUDA; allocates fp32 output of shape (d,).",
+        "enable_fp_fusion=False is passed to prevent FMA fusion in the Triton kernel.",
+        "The make_inputs() function intentionally constructs V so that v -= 0.9 * (p @ v), shrinking the expected output norm and creating a cancellation-sensitive workload against which fp16 rounding of p must stay within the 0.001 relative budget."
+      ],
+      "open_questions": [],
+      "risk_map": [
+        "fp16 rounding of softmax probabilities p (line 15): each p in [0,1] gets ~2^-11 relative error; the accumulated error in p @ V relative to ||y|| could exceed 1e-3 because the workload deliberately centers V to reduce ||y|| (make_inputs v -= 0.9*(p@v)), amplifying relative error of the E metric.",
+        "p.to(fp16) also flushes very small tail probabilities (below ~6e-5, and denormals) toward zero; with N=64 and moderate scores tail contributions are small but feed into the same error budget.",
+        "Scores/exp computed in fp32 with enable_fp_fusion=False; fp32 dot-product ordering differences vs the float64 reference are a smaller secondary error source.",
+        "Assumes K and V contiguous; non-contiguous inputs would be out of the fixed workload since make_inputs returns fresh contiguous tensors.",
+        "Triton 3.4 exp may use fast approximate exponential (tl.exp typically lowers to ex2); error is within fp32 ulps but contributes to the budget.",
+        "Grid of a single program with N*D up to 2048 elements is within shared memory/register limits for this fixed workload, so launch feasibility is unlikely to be a risk here."
+      ],
+      "scope_notes": [
+        "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.\", \"Reference is float64 math on the same float32 inputs, not a torch float32 pipeline; the comparator must replicate the exact make_inputs() generation to be valid.\", \"Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) \u2248 max(||ref||, 0.00566), so small reference norms get a floor that loosens the absolute tolerance.\", \"The verdict categories are trust / reject / needs_more_evidence about this finite workload only, not general correctness.\"]"
+      ],
+      "summary": "Case 88: single-workload softmax-attention compliance. Triton kernel computes y = softmax(K@q/sqrt(D))@V for N=64, D=32 with a deliberate fp16 round-trip of softmax probabilities (line 15) and an input generator that cancels the expected output (v -= 0.9*(p@v)), making the relative error metric sensitive to fp16 probability rounding.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [
+        "Workload is fixed: attention family, seed 812, N=64 tokens, D=32, K scaled by 0.7, V centered with center=0.9; inputs generated by make_inputs() with NumPy PCG64 and rounded once to float32 before CUDA transfer.",
+        "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N token dimension; output shape (D,) = (32,).",
+        "Reference: same operation evaluated in float64 on the same float32 inputs; error metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)); compliance iff all outputs finite and E <= 0.001.",
+        "Reduced/approximate arithmetic is explicitly permitted; only the error budget on this single workload decides compliance.",
+        "Target environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-09-30T08:59:17Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton JIT kernel _kernel launches a single program (grid (1,)) loading full Q (32), K (64x32), V (64x32) as 2D tiles; scores = sum(K*q, axis=1) * D**-0.5 in fp32.",
+        "Softmax computed with max-subtraction and full-vector sum normalization in fp32, then p is deliberately downcast to fp16 and back to fp32 before the weighted V sum (kernel.py line 15).",
+        "run() assumes contiguous row-major K and V with shape (n, d) and assumes q/k/v are fp32 on CUDA; allocates fp32 output of shape (d,).",
+        "enable_fp_fusion=False is passed to prevent FMA fusion in the Triton kernel.",
+        "Correction to the earlier model of the cancellation: make_inputs computes p in float64 from the float32 q/k, then sets v := v - 0.9*(p@v). The kernel output becomes y = p@(v - 0.9*(p@v)) = p@v - 0.9*(p@(p@v)). Since p is not a one-hot delta, p@(p@v) != p@v in general; the shrink factor is roughly 0.9*sum(p^2), which for a spread softmax (sum p^2 ~ 1/N_eff) may be well below 0.9. The actual ||y|| reduction must be measured, not assumed to be 90%.",
+        "The centered V is re-rounded to float32 by tensor() (make_inputs line 32-33), so the reference itself uses these rounded V values; the fp64 reference and kernel share identical inputs."
+      ],
+      "open_questions": [
+        "What is the actual ||reference||_2 on the seed-812 workload after the v-centering? The E-metric denominator is max(||ref||, ~0.00566); if ||ref|| stays near natural scale (because sum(p^2) << 1), the budget floor could dominate and give the kernel more absolute headroom than the 10%-shrunken-output reasoning assumes.",
+        "What is sum(p^2) (softmax concentration) on the fixed workload? With N=64 and K scaled by 0.7, scores spread is modest, so p may be near-uniform (sum(p^2) ~ 1/30-1/64), making the cancellation 0.9*sum(p^2) ~ 0.014-0.03, i.e., only a ~2-3% output shrink, not 90%.",
+        "How large is the fp16 rounding contribution to E in isolation (e.g., comparing kernel output vs an fp32-softmax variant), and how large is the fp32/tl.exp contribution, to attribute between claims c1 and c2?"
+      ],
+      "risk_map": [
+        "fp16 rounding of softmax probabilities p (line 15): each p gets ~2^-11 relative rounding plus possible flush-to-zero for p below ~6e-5 (fp16 min normal); error in p@V scales as ~||V|| * 2^-11 * sqrt(sum p^2), which is bounded regardless of output cancellation; the decisive question is whether ||V||*2^-11*||p||_2 exceeds 0.001*max(||ref||, 0.00566).",
+        "The error contribution of the fp16 round-trip scales with ||p||_2*||V||, not with ||y||, so output cancellation amplifies the RELATIVE error only to the extent cancellation actually shrinks ||ref|| (which depends on sum(p^2), see open questions).",
+        "Scores and softmax are computed in fp32 with enable_fp_fusion=False and tl.exp (typically lowered to fast ex2 with ~few-ulp error); this path contributes a second independent error source that must be separated from the fp16 effect when attributing any E violation (claim c2).",
+        "Assumes K and V contiguous; out of scope for the fixed workload since make_inputs returns fresh contiguous fp32 CUDA tensors.",
+        "Single-program grid with N*D=2048 elements is well within limits; launch feasibility is not a meaningful risk for this workload."
+      ],
+      "scope_notes": [
+        "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.",
+        "Reference is float64 math on the same float32 inputs (including the centered, re-rounded V); the comparator must replicate make_inputs() exactly to be valid.",
+        "Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) ~ max(||ref||, 0.00566); if ||ref|| is not actually shrunk much (because p@(p@v) << p@v for a spread softmax), the floor 0.00566 sets the absolute error allowance, potentially absolving the fp16 round-trip.",
+        "Verdict categories (trust / reject / needs_more_evidence) concern this finite workload only, not general correctness."
+      ],
+      "summary": "Refined description for case_88: the V-centering subtracts 0.9*(p@v) from each V row, but the resulting output is p@v - 0.9*(p@(p@v)), so the actual shrink factor is 0.9*sum(p^2), not 0.9; whether the workload truly amplifies relative error depends on softmax concentration (sum p^2) and on whether ||ref|| falls below the E-metric floor ~0.00566. Open claims c1 (fp16 p round-trip) and c2 (fp32/tl.exp path) need measured decomposition of ||ref||, sum(p^2), and per-source error contributions.",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_88",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_88"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_88"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_88"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_88",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 17.713039253999966,
+      "role": "describer",
+      "round": 2,
+      "text": "Record description update describing this case.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Workload is fixed: attention family, seed 812, N=64 tokens, D=32, K scaled by 0.7, V centered with center=0.9; inputs generated by make_inputs() with NumPy PCG64 and rounded once to float32 before CUDA transfer.",
+              "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N token dimension; output shape (D,) = (32,).",
+              "Reference: same operation evaluated in float64 on the same float32 inputs; error metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)); compliance iff all outputs finite and E <= 0.001.",
+              "Reduced/approximate arithmetic is explicitly permitted; only the error budget on this single workload decides compliance.",
+              "Target environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "Triton JIT kernel _kernel launches a single program (grid (1,)) loading full Q (32), K (64x32), V (64x32) as 2D tiles; scores = sum(K*q, axis=1) * D**-0.5 in fp32.",
+              "Softmax computed with max-subtraction and full-vector sum normalization in fp32, then p is deliberately downcast to fp16 and back to fp32 before the weighted V sum (kernel.py line 15).",
+              "run() assumes contiguous row-major K and V with shape (n, d) and assumes q/k/v are fp32 on CUDA; allocates fp32 output of shape (d,).",
+              "enable_fp_fusion=False is passed to prevent FMA fusion in the Triton kernel.",
+              "The make_inputs() function intentionally constructs V so that v -= 0.9 * (p @ v), shrinking the expected output norm and creating a cancellation-sensitive workload against which fp16 rounding of p must stay within the 0.001 relative budget."
+            ],
+            "risk_map": [
+              "fp16 rounding of softmax probabilities p (line 15): each p in [0,1] gets ~2^-11 relative error; the accumulated error in p @ V relative to ||y|| could exceed 1e-3 because the workload deliberately centers V to reduce ||y|| (make_inputs v -= 0.9*(p@v)), amplifying relative error of the E metric.",
+              "p.to(fp16) also flushes very small tail probabilities (below ~6e-5, and denormals) toward zero; with N=64 and moderate scores tail contributions are small but feed into the same error budget.",
+              "Scores/exp computed in fp32 with enable_fp_fusion=False; fp32 dot-product ordering differences vs the float64 reference are a smaller secondary error source.",
+              "Assumes K and V contiguous; non-contiguous inputs would be out of the fixed workload since make_inputs returns fresh contiguous tensors.",
+              "Triton 3.4 exp may use fast approximate exponential (tl.exp typically lowers to ex2); error is within fp32 ulps but contributes to the budget.",
+              "Grid of a single program with N*D up to 2048 elements is within shared memory/register limits for this fixed workload, so launch feasibility is unlikely to be a risk here."
+            ],
+            "scope_notes": "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.\", \"Reference is float64 math on the same float32 inputs, not a torch float32 pipeline; the comparator must replicate the exact make_inputs() generation to be valid.\", \"Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) \u2248 max(||ref||, 0.00566), so small reference norms get a floor that loosens the absolute tolerance.\", \"The verdict categories are trust / reject / needs_more_evidence about this finite workload only, not general correctness.\"]",
+            "summary": "Case 88: single-workload softmax-attention compliance. Triton kernel computes y = softmax(K@q/sqrt(D))@V for N=64, D=32 with a deliberate fp16 round-trip of softmax probabilities (line 15) and an input generator that cancels the expected output (v -= 0.9*(p@v)), making the relative error metric sensitive to fp16 probability rounding."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.713,
+        "input_tokens": 5773,
+        "output_tokens": 952
+      }
+    },
+    {
+      "duration_s": 6.492977161999988,
+      "role": "skeptic",
+      "round": 3,
+      "text": "I'll record the core testable hypotheses, focused on the highest-risk fp16 probability rounding path and the deliberate output cancellation in the fixed workload.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "make_inputs deliberately subtracts 0.9*(p@v) from V, shrinking ||y|| to roughly 10% of its natural scale, so the ~2^-11 relative rounding of each softmax probability can accumulate to >1e-3 relative error in p@V relative to the shrunken output norm; this is the designed stress on the contract's E <= 0.001 budget.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference is the operation in float64 on the same float32 inputs; compliance iff E = ||out-ref||/max(||ref||, 0.001*sqrt(32)) <= 0.001 on the single fixed workload (make_inputs with seed 812, N=64, D=32, center=0.9)."
+              }
+            ],
+            "statement": "The fp16 round-trip of softmax probabilities (kernel.py line 15) causes E = ||out - ref||_2 / max(||ref||_2, 0.00566) to exceed 0.001 on the fixed seed-812 workload, because make_inputs shrinks the expected output norm by 90% via v -= 0.9*(p@v), amplifying the relative effect of fp16 rounding error in p."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.493,
+        "input_tokens": 13358,
+        "output_tokens": 321
+      }
+    },
+    {
+      "duration_s": 16.05159710800001,
+      "role": "skeptic",
+      "round": 4,
+      "text": "My previous claim record was rejected for a missing `scope_rationale`; I'll re-record it correctly, plus a secondary in-scope hypothesis on the fp32 softmax computation contributing to the same budget.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "make_inputs deliberately subtracts 0.9*(p@v) from V, shrinking ||y|| to roughly 10% of its natural scale, so the ~2^-11 relative rounding of each softmax probability can accumulate to >1e-3 relative error in p@V relative to the shrunken output norm; this is the designed stress on the contract's error budget.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference is the operation in float64 on the same float32 inputs; compliance iff E = ||out-ref||_2/max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single fixed workload (make_inputs with seed 812, N=64, D=32, center=0.9)."
+              }
+            ],
+            "scope_rationale": "The claim tests whether the kernel violates the contract's stated compliance condition E <= 0.001 on the exact single workload specified by problem.txt (make_inputs with seed 812, N=64, D=32), which the contract declares as the only in-scope case.",
+            "statement": "The fp16 round-trip of softmax probabilities (kernel.py line 15) causes E = ||out - ref||_2 / max(||ref||_2, 0.00566) to exceed 0.001 on the fixed seed-812 workload, because make_inputs shrinks the expected output norm by 90% via v -= 0.9*(p@v), amplifying the relative effect of fp16 rounding error in p."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Even ignoring the fp16 downcast, the kernel computes scores, exp, and normalization in fp32 with an approximate GPU exp, and the workload's output cancellation (v -= 0.9*(p@v)) amplifies small probability perturbations; combined fp32/tl.exp error alone might already consume the 1e-3 relative budget, making the fp16 claim redundant or misattributed.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Compliance is decided solely by E <= 0.001 with a float64 reference on the single fixed seed-812 workload; the contract permits reduced precision only if this budget is met, so any error source (fp32 scores, approximate tl.exp, or fp16 p) that breaches the budget is in scope."
+              }
+            ],
+            "scope_rationale": "This decomposes the same contract condition (E <= 0.001 on the fixed workload) by error source; if the fp16 effect is small but the fp32 softmax path alone breaches the budget, the kernel still violates the stated contract.",
+            "statement": "Independent of the fp16 round-trip, the fp32 computation of scores and tl.exp in the Triton kernel contributes enough error on the seed-812 workload that, combined with the deliberately canceled output (v -= 0.9*(p@v)), E may exceed 0.001 even if the fp16 downcast were removed."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 16.052,
+        "input_tokens": 14229,
+        "output_tokens": 766
+      }
+    },
+    {
+      "duration_s": 28.746163981999985,
+      "role": "describer",
+      "round": 5,
+      "text": "I'll refine the description model with a subtle but important modeling point about how the V-centering actually affects the output norm (it shifts y by p@(p@v), not directly by p@v), and add open questions that the Experimenter should resolve for claims c1/c2.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Workload is fixed: attention family, seed 812, N=64 tokens, D=32, K scaled by 0.7, V centered with center=0.9; inputs generated by make_inputs() with NumPy PCG64 and rounded once to float32 before CUDA transfer.",
+              "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N token dimension; output shape (D,) = (32,).",
+              "Reference: same operation evaluated in float64 on the same float32 inputs; error metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)); compliance iff all outputs finite and E <= 0.001.",
+              "Reduced/approximate arithmetic is explicitly permitted; only the error budget on this single workload decides compliance.",
+              "Target environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "Triton JIT kernel _kernel launches a single program (grid (1,)) loading full Q (32), K (64x32), V (64x32) as 2D tiles; scores = sum(K*q, axis=1) * D**-0.5 in fp32.",
+              "Softmax computed with max-subtraction and full-vector sum normalization in fp32, then p is deliberately downcast to fp16 and back to fp32 before the weighted V sum (kernel.py line 15).",
+              "run() assumes contiguous row-major K and V with shape (n, d) and assumes q/k/v are fp32 on CUDA; allocates fp32 output of shape (d,).",
+              "enable_fp_fusion=False is passed to prevent FMA fusion in the Triton kernel.",
+              "Correction to the earlier model of the cancellation: make_inputs computes p in float64 from the float32 q/k, then sets v := v - 0.9*(p@v). The kernel output becomes y = p@(v - 0.9*(p@v)) = p@v - 0.9*(p@(p@v)). Since p is not a one-hot delta, p@(p@v) != p@v in general; the shrink factor is roughly 0.9*sum(p^2), which for a spread softmax (sum p^2 ~ 1/N_eff) may be well below 0.9. The actual ||y|| reduction must be measured, not assumed to be 90%.",
+              "The centered V is re-rounded to float32 by tensor() (make_inputs line 32-33), so the reference itself uses these rounded V values; the fp64 reference and kernel share identical inputs."
+            ],
+            "open_questions": [
+              "What is the actual ||reference||_2 on the seed-812 workload after the v-centering? The E-metric denominator is max(||ref||, ~0.00566); if ||ref|| stays near natural scale (because sum(p^2) << 1), the budget floor could dominate and give the kernel more absolute headroom than the 10%-shrunken-output reasoning assumes.",
+              "What is sum(p^2) (softmax concentration) on the fixed workload? With N=64 and K scaled by 0.7, scores spread is modest, so p may be near-uniform (sum(p^2) ~ 1/30-1/64), making the cancellation 0.9*sum(p^2) ~ 0.014-0.03, i.e., only a ~2-3% output shrink, not 90%.",
+              "How large is the fp16 rounding contribution to E in isolation (e.g., comparing kernel output vs an fp32-softmax variant), and how large is the fp32/tl.exp contribution, to attribute between claims c1 and c2?"
+            ],
+            "risk_map": [
+              "fp16 rounding of softmax probabilities p (line 15): each p gets ~2^-11 relative rounding plus possible flush-to-zero for p below ~6e-5 (fp16 min normal); error in p@V scales as ~||V|| * 2^-11 * sqrt(sum p^2), which is bounded regardless of output cancellation; the decisive question is whether ||V||*2^-11*||p||_2 exceeds 0.001*max(||ref||, 0.00566).",
+              "The error contribution of the fp16 round-trip scales with ||p||_2*||V||, not with ||y||, so output cancellation amplifies the RELATIVE error only to the extent cancellation actually shrinks ||ref|| (which depends on sum(p^2), see open questions).",
+              "Scores and softmax are computed in fp32 with enable_fp_fusion=False and tl.exp (typically lowered to fast ex2 with ~few-ulp error); this path contributes a second independent error source that must be separated from the fp16 effect when attributing any E violation (claim c2).",
+              "Assumes K and V contiguous; out of scope for the fixed workload since make_inputs returns fresh contiguous fp32 CUDA tensors.",
+              "Single-program grid with N*D=2048 elements is well within limits; launch feasibility is not a meaningful risk for this workload."
+            ],
+            "scope_notes": [
+              "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.",
+              "Reference is float64 math on the same float32 inputs (including the centered, re-rounded V); the comparator must replicate make_inputs() exactly to be valid.",
+              "Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) ~ max(||ref||, 0.00566); if ||ref|| is not actually shrunk much (because p@(p@v) << p@v for a spread softmax), the floor 0.00566 sets the absolute error allowance, potentially absolving the fp16 round-trip.",
+              "Verdict categories (trust / reject / needs_more_evidence) concern this finite workload only, not general correctness."
+            ],
+            "summary": "Refined description for case_88: the V-centering subtracts 0.9*(p@v) from each V row, but the resulting output is p@v - 0.9*(p@(p@v)), so the actual shrink factor is 0.9*sum(p^2), not 0.9; whether the workload truly amplifies relative error depends on softmax concentration (sum p^2) and on whether ||ref|| falls below the E-metric floor ~0.00566. Open claims c1 (fp16 p round-trip) and c2 (fp32/tl.exp path) need measured decomposition of ||ref||, sum(p^2), and per-source error contributions."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 28.746,
+        "input_tokens": 15777,
+        "output_tokens": 1701
+      }
+    },
+    {
+      "duration_s": 10.165918007000016,
+      "role": "skeptic",
+      "round": 6,
+      "text": "I've reviewed the refined description model (du2) and the two open claims. The claims c1 and c2 already cover the two decisive, in-scope hypotheses on the fixed workload: the fp16 probability round-trip breaching E \u2264 0.001 (c1), and the fp32/tl.exp softmax path alone breaching it (c2). The describer's correction \u2014 that the V-centering shrink factor is roughly 0.9\u00b7sum(p\u00b2) rather than 0.9 \u2014 doesn't expose a new failure mode; it only changes the expected magnitude of the amplifier both claims already measure, and probes to decompose per-source error are what's needed next, not new claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Reviewed description update du2 and existing open claims c1 (fp16 probability round-trip breaching E <= 0.001) and c2 (fp32/tl.exp softmax path alone breaching the budget). The refined model of the V-centering (shrink factor ~0.9*sum(p^2), not 0.9) only adjusts the amplification magnitude of the already-recorded hypotheses; it does not expose a new, separately testable in-scope failure mode on the fixed seed-812 workload. What remains needed is runtime evidence (measured ||ref||, sum(p^2), and per-source error decomposition) for the existing claims, not additional claims.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.166,
+        "input_tokens": 26410,
+        "output_tokens": 349
+      }
+    },
+    {
+      "duration_s": 28.063057998000033,
+      "role": "experimenter",
+      "round": 7,
+      "text": "I'll launch two independent probes: c1 measures the actual kernel's E and isolates the fp16 round-trip contribution (kernel vs. an fp32-softmax variant); c2 measures the fp32/tl.exp path alone (fp32 variant without the fp16 cast vs. the float64 reference). Neither depends on the other's result, so I'm batching them.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, torch, triton, triton.language as tl, numpy as np\n\n@triton.jit\ndef _kernel(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):\n    n = tl.arange(0, N); d = tl.arange(0, D)\n    q = tl.load(Q + d)\n    k = tl.load(K + n[:, None] * D + d[None, :])\n    v = tl.load(V + n[:, None] * D + d[None, :])\n    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)\n    p = tl.exp(scores - tl.max(scores, 0))\n    p = p / tl.sum(p, 0)\n    p = p.to(tl.float16).to(tl.float32)\n    y = tl.sum(p[:, None] * v, 0)\n    tl.store(O + d, y)\n\n@triton.jit\ndef _kernel_nofp16(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):\n    n = tl.arange(0, N); d = tl.arange(0, D)\n    q = tl.load(Q + d)\n    k = tl.load(K + n[:, None] * D + d[None, :])\n    v = tl.load(V + n[:, None] * D + d[None, :])\n    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)\n    p = tl.exp(scores - tl.max(scores, 0))\n    p = p / tl.sum(p, 0)\n    y = tl.sum(p[:, None] * v, 0)\n    tl.store(O + d, y)\n\ncfg = {'seed': 812, 'n': 64, 'd': 32, 'scale': 0.7, 'center': 0.9}\nrng = np.random.Generator(np.random.PCG64(cfg['seed']))\nn, d = cfg['n'], cfg['d']\nq = rng.standard_normal(d)\nk = rng.standard_normal((n, d)) * cfg['scale']\nv = rng.standard_normal((n, d))\nq32, k32 = q.astype(np.float32), k.astype(np.float32)\nz = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\np = np.exp(z - z.max()); p /= p.sum()\nv -= cfg['center'] * (p @ v)[None, :]\ndef tensor(x): return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).cuda()\nqt, kt, vt = tensor(q32), tensor(k32), tensor(v)\n\nout = torch.empty(d, dtype=torch.float32, device=qt.device)\n_kernel[(1,)](qt, kt, vt, out, n, d, enable_fp_fusion=False)\nout32 = torch.empty(d, dtype=torch.float32, device=qt.device)\n_kernel_nofp16[(1,)](qt, kt, vt, out32, n, d, enable_fp_fusion=False)\n\n# float64 reference on same float32 inputs\nqf, kf, vf = qt.cpu().numpy().astype(np.float64), kt.cpu().numpy().astype(np.float64), vt.cpu().numpy().astype(np.float64)\nzf = kf @ qf / np.sqrt(d)\npf = np.exp(zf - zf.max()); pf /= pf.sum()\nref = pf @ vf\n\nko, no = out.cpu().numpy(), out32.cpu().numpy()\ndenom = max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))\nE_kernel = np.linalg.norm(ko - ref)/denom\nE_nofp16 = np.linalg.norm(no - ref)/denom\nE_fp16_contrib = np.linalg.norm(ko - no)/denom\np2 = float((pf**2).sum())\nprint(json.dumps({\n  \"E_kernel\": E_kernel, \"E_kernel_le_0.001\": bool(E_kernel <= 0.001),\n  \"E_nofp16_variant\": E_nofp16, \"E_fp16_contribution\": E_fp16_contrib,\n  \"norm_ref\": float(np.linalg.norm(ref)), \"denom\": denom,\n  \"sum_p2\": p2, \"all_finite\": bool(np.isfinite(ko).all())\n}))",
+            "expected_signal": "E_kernel and fp16-only contribution vs the 0.001 budget on the seed-812 workload",
+            "timeout_s": 240
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import json, torch, triton, triton.language as tl, numpy as np\n\n@triton.jit\ndef _kernel_nofp16(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):\n    n = tl.arange(0, N); d = tl.arange(0, D)\n    q = tl.load(Q + d)\n    k = tl.load(K + n[:, None] * D + d[None, :])\n    v = tl.load(V + n[:, None] * D + d[None, :])\n    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)\n    p = tl.exp(scores - tl.max(scores, 0))\n    p = p / tl.sum(p, 0)\n    y = tl.sum(p[:, None] * v, 0)\n    tl.store(O + d, y)\n\ncfg = {'seed': 812, 'n': 64, 'd': 32, 'scale': 0.7, 'center': 0.9}\nrng = np.random.Generator(np.random.PCG64(cfg['seed']))\nn, d = cfg['n'], cfg['d']\nq = rng.standard_normal(d)\nk = rng.standard_normal((n, d)) * cfg['scale']\nv = rng.standard_normal((n, d))\nq32, k32 = q.astype(np.float32), k.astype(np.float32)\nz = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\np = np.exp(z - z.max()); p /= p.sum()\nv -= cfg['center'] * (p @ v)[None, :]\ndef tensor(x): return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).cuda()\nqt, kt, vt = tensor(q32), tensor(k32), tensor(v)\n\nout32 = torch.empty(d, dtype=torch.float32, device=qt.device)\n_kernel_nofp16[(1,)](qt, kt, vt, out32, n, d, enable_fp_fusion=False)\n\nqf, kf, vf = qt.cpu().numpy().astype(np.float64), kt.cpu().numpy().astype(np.float64), vt.cpu().numpy().astype(np.float64)\nzf = kf @ qf / np.sqrt(d)\npf = np.exp(zf - zf.max()); pf /= pf.sum()\nref = pf @ vf\n\no = out32.cpu().numpy()\ndenom = max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))\nE_fp32_path = np.linalg.norm(o - ref)/denom\nprint(json.dumps({\n  \"E_fp32_softmax_path_only\": E_fp32_path,\n  \"E_fp32_path_le_0.001\": bool(E_fp32_path <= 0.001),\n  \"norm_ref\": float(np.linalg.norm(ref)), \"denom\": denom,\n  \"sum_p2\": float((pf**2).sum()), \"all_finite\": bool(np.isfinite(o).all())\n}))",
+            "expected_signal": "E of the no-fp16 fp32/tl.exp path vs the 0.001 budget on the seed-812 workload",
+            "timeout_s": 240
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 28.063,
+        "input_tokens": 27739,
+        "output_tokens": 2008
+      }
+    },
+    {
+      "duration_s": 11.261511307000035,
+      "role": "experimenter",
+      "round": 8,
+      "text": "Both probes returned: the fp16 round-trip causes E \u2248 0.00206 (> 0.001 budget), while the fp32-only path gives E \u2248 1.05e-6 (well within budget). Finalizing both claims now.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "E_fp16_contribution": 0.0020605597283432113,
+              "E_kernel": 0.0020607774650464807,
+              "E_kernel_le_0.001": false,
+              "E_nofp16_variant": 1.0474177171206507e-06,
+              "all_finite": true,
+              "denom": 0.074169622268619,
+              "norm_ref": 0.074169622268619,
+              "sum_p2": 0.02465295057624201
+            },
+            "event_id": "t11",
+            "status": "confirmed",
+            "summary": "On the exact seed-812 workload (replicating make_inputs), the kernel's E = 0.00206 exceeds the 0.001 budget. Attribution: a variant kernel with the fp16 cast removed gives E = 1.05e-6, and the isolated fp16 contribution is 0.00206 \u2014 essentially the entire error. ||ref|| = 0.0742 (above the 0.00566 floor; sum p^2 \u2248 0.0247, so the cancellation shrinks output only ~2.4%, not 90%), yet fp16 rounding of p alone still breaches the budget. All outputs finite. Claim confirmed (E > 0.001 due to the fp16 round-trip), though the stated 90%-shrink mechanism is only ~2.4% in reality.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "E_fp32_path_le_0.001": true,
+              "E_fp32_softmax_path_only": 1.0474177171206507e-06,
+              "all_finite": true,
+              "denom": 0.074169622268619,
+              "norm_ref": 0.074169622268619,
+              "sum_p2": 0.02465295057624201
+            },
+            "event_id": "t12",
+            "status": "rebutted",
+            "summary": "Removing only the fp16 downcast (same fp32 scores + tl.exp path), the kernel's E on the seed-812 workload is 1.05e-6, three orders of magnitude below the 0.001 budget. The fp32/tl.exp softmax path contributes negligible error; the entire budget breach is attributable to the fp16 round-trip (see c1 evidence).",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.262,
+        "input_tokens": 34485,
+        "output_tokens": 623
+      }
+    },
+    {
+      "duration_s": 8.58001930200004,
+      "role": "skeptic",
+      "round": 9,
+      "text": "The probes decisively resolved both claims: the fp16 round-trip of softmax probabilities causes E \u2248 0.00206 (> 0.001 budget) on the exact in-scope seed-812 workload, while the fp32-only path gives E \u2248 1e-6. No new failure mode is exposed \u2014 the confirmed claim c1 fully covers the material, in-scope defect.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the evidence decisively resolves the ledger. Claim c1 (fp16 round-trip of softmax probabilities breaching E <= 0.001) is confirmed on the exact in-scope seed-812 workload: E_kernel = 0.00206 > 0.001, with attribution showing the fp16 cast is essentially the entire error (E_nofp16_variant = 1.05e-6), all outputs finite, denominator = ||ref|| = 0.0742. Claim c2 (fp32/tl.exp path alone breaching the budget) is rebutted. The new evidence exposes no additional material, testable, in-scope problem not already covered by c1.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.58,
+        "input_tokens": 39709,
+        "output_tokens": 273
+      }
+    },
+    {
+      "duration_s": 12.203491474999964,
+      "role": "judge",
+      "round": 10,
+      "text": "The ledger is fully resolved: claim c1 is confirmed with in-scope runtime evidence showing E \u2248 0.00206 > 0.001 on the exact seed-812 workload, attributable to the fp16 probability round-trip; c2 is rebutted. The contract explicitly permits reduced precision only if the budget is met, and it is not. Rejecting.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The operative contract (problem.txt) requires E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single fully specified make_inputs workload (seed 812, N=64, D=32). Probe t11, which exactly replicates make_inputs, measured E_kernel = 0.00206 with denominator ||ref|| = 0.0742 (above the 0.00566 floor) and all outputs finite \u2014 a clear budget violation. Attribution is clean: removing only the fp16 round-trip of softmax probabilities (kernel.py line 15) gives E = 1.05e-6 (claim c2, rebutted), so the entire breach is caused by the fp16 cast. While the contract permits reduced precision in principle, it requires the 0.001 budget to be met, and it is exceeded by ~2x. The claim is in_scope with scope evidence citing the stated workload domain; the mechanism detail (90% vs ~2.4% output shrink) in the claim statement is inaccurate but immaterial to the confirmed measured violation.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.203,
+        "input_tokens": 40038,
+        "output_tokens": 382
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-30T09:00:25Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the evidence decisively resolves the ledger. Claim c1 (fp16 round-trip of softmax probabilities breaching E <= 0.001) is confirmed on the exact in-scope seed-812 workload: E_kernel = 0.00206 > 0.001, with attribution showing the fp16 cast is essentially the entire error (E_nofp16_variant = 1.05e-6), all outputs finite, denominator = ||ref|| = 0.0742. Claim c2 (fp32/tl.exp path alone breaching the budget) is rebutted. The new evidence exposes no additional material, testable, in-scope problem not already covered by c1.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 14,
+    "tool_event_id": "t15",
+    "turn": 9
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_88"
+      },
+      "created_at": "2026-09-30T08:58:08Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "__pycache__/kernel.cpython-311.pyc",
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_88",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):\n    n = tl.arange(0, N)\n    d = tl.arange(0, D)\n    q = tl.load(Q + d)\n    k = tl.load(K + n[:, None] * D + d[None, :])\n    v = tl.load(V + n[:, None] * D + d[None, :])\n    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)\n    p = tl.exp(scores - tl.max(scores, 0))\n    p = p / tl.sum(p, 0)\n    p = p.to(tl.float16).to(tl.float32)\n    y = tl.sum(p[:, None] * v, 0)\n    tl.store(O + d, y)\n\ndef run(q, k, v):\n    n, d = k.shape\n    out = torch.empty(d, dtype=torch.float32, device=q.device)\n    _kernel[(1,)](q, k, v, out, n, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'attention', 'seed': 812, 'n': 64, 'd': 32, 'scale': 0.7, 'center': 0.9}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+        "passed": null,
+        "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = softmax(K @ q / sqrt(D)) @ V, softmax over the N tokens.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.001.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "rounds": null,
+        "session_dir": "/root/pilot_cases/case_88",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_88"
+      },
+      "created_at": "2026-09-30T08:58:08Z",
+      "id": "t2",
+      "output": {
+        "content": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = softmax(K @ q / sqrt(D)) @ V, softmax over the N tokens.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.001.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "entry": "case_88",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_88"
+      },
+      "created_at": "2026-09-30T08:58:08Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_88",
+        "files": [
+          {
+            "kind": "other",
+            "path": "__pycache__/kernel.cpython-311.pyc",
+            "size_bytes": 6192
+          },
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2572
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1054
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_88",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:58:08Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_88\",\n  \"status\": \"unverified\",\n  \"passed\": null\n}\n",
+        "entry": "case_88",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Workload is fixed: attention family, seed 812, N=64 tokens, D=32, K scaled by 0.7, V centered with center=0.9; inputs generated by make_inputs() with NumPy PCG64 and rounded once to float32 before CUDA transfer.",
+          "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N token dimension; output shape (D,) = (32,).",
+          "Reference: same operation evaluated in float64 on the same float32 inputs; error metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)); compliance iff all outputs finite and E <= 0.001.",
+          "Reduced/approximate arithmetic is explicitly permitted; only the error budget on this single workload decides compliance.",
+          "Target environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "Triton JIT kernel _kernel launches a single program (grid (1,)) loading full Q (32), K (64x32), V (64x32) as 2D tiles; scores = sum(K*q, axis=1) * D**-0.5 in fp32.",
+          "Softmax computed with max-subtraction and full-vector sum normalization in fp32, then p is deliberately downcast to fp16 and back to fp32 before the weighted V sum (kernel.py line 15).",
+          "run() assumes contiguous row-major K and V with shape (n, d) and assumes q/k/v are fp32 on CUDA; allocates fp32 output of shape (d,).",
+          "enable_fp_fusion=False is passed to prevent FMA fusion in the Triton kernel.",
+          "The make_inputs() function intentionally constructs V so that v -= 0.9 * (p @ v), shrinking the expected output norm and creating a cancellation-sensitive workload against which fp16 rounding of p must stay within the 0.001 relative budget."
+        ],
+        "risk_map": [
+          "fp16 rounding of softmax probabilities p (line 15): each p in [0,1] gets ~2^-11 relative error; the accumulated error in p @ V relative to ||y|| could exceed 1e-3 because the workload deliberately centers V to reduce ||y|| (make_inputs v -= 0.9*(p@v)), amplifying relative error of the E metric.",
+          "p.to(fp16) also flushes very small tail probabilities (below ~6e-5, and denormals) toward zero; with N=64 and moderate scores tail contributions are small but feed into the same error budget.",
+          "Scores/exp computed in fp32 with enable_fp_fusion=False; fp32 dot-product ordering differences vs the float64 reference are a smaller secondary error source.",
+          "Assumes K and V contiguous; non-contiguous inputs would be out of the fixed workload since make_inputs returns fresh contiguous tensors.",
+          "Triton 3.4 exp may use fast approximate exponential (tl.exp typically lowers to ex2); error is within fp32 ulps but contributes to the budget.",
+          "Grid of a single program with N*D up to 2048 elements is within shared memory/register limits for this fixed workload, so launch feasibility is unlikely to be a risk here."
+        ],
+        "scope_notes": "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.\", \"Reference is float64 math on the same float32 inputs, not a torch float32 pipeline; the comparator must replicate the exact make_inputs() generation to be valid.\", \"Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) \u2248 max(||ref||, 0.00566), so small reference norms get a floor that loosens the absolute tolerance.\", \"The verdict categories are trust / reject / needs_more_evidence about this finite workload only, not general correctness.\"]",
+        "summary": "Case 88: single-workload softmax-attention compliance. Triton kernel computes y = softmax(K@q/sqrt(D))@V for N=64, D=32 with a deliberate fp16 round-trip of softmax probabilities (line 15) and an input generator that cancels the expected output (v -= 0.9*(p@v)), making the relative error metric sensitive to fp16 probability rounding."
+      },
+      "created_at": "2026-09-30T08:58:25Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Workload is fixed: attention family, seed 812, N=64 tokens, D=32, K scaled by 0.7, V centered with center=0.9; inputs generated by make_inputs() with NumPy PCG64 and rounded once to float32 before CUDA transfer.",
+            "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N token dimension; output shape (D,) = (32,).",
+            "Reference: same operation evaluated in float64 on the same float32 inputs; error metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)); compliance iff all outputs finite and E <= 0.001.",
+            "Reduced/approximate arithmetic is explicitly permitted; only the error budget on this single workload decides compliance.",
+            "Target environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "kernel_model": [
+            "Triton JIT kernel _kernel launches a single program (grid (1,)) loading full Q (32), K (64x32), V (64x32) as 2D tiles; scores = sum(K*q, axis=1) * D**-0.5 in fp32.",
+            "Softmax computed with max-subtraction and full-vector sum normalization in fp32, then p is deliberately downcast to fp16 and back to fp32 before the weighted V sum (kernel.py line 15).",
+            "run() assumes contiguous row-major K and V with shape (n, d) and assumes q/k/v are fp32 on CUDA; allocates fp32 output of shape (d,).",
+            "enable_fp_fusion=False is passed to prevent FMA fusion in the Triton kernel.",
+            "The make_inputs() function intentionally constructs V so that v -= 0.9 * (p @ v), shrinking the expected output norm and creating a cancellation-sensitive workload against which fp16 rounding of p must stay within the 0.001 relative budget."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "fp16 rounding of softmax probabilities p (line 15): each p in [0,1] gets ~2^-11 relative error; the accumulated error in p @ V relative to ||y|| could exceed 1e-3 because the workload deliberately centers V to reduce ||y|| (make_inputs v -= 0.9*(p@v)), amplifying relative error of the E metric.",
+            "p.to(fp16) also flushes very small tail probabilities (below ~6e-5, and denormals) toward zero; with N=64 and moderate scores tail contributions are small but feed into the same error budget.",
+            "Scores/exp computed in fp32 with enable_fp_fusion=False; fp32 dot-product ordering differences vs the float64 reference are a smaller secondary error source.",
+            "Assumes K and V contiguous; non-contiguous inputs would be out of the fixed workload since make_inputs returns fresh contiguous tensors.",
+            "Triton 3.4 exp may use fast approximate exponential (tl.exp typically lowers to ex2); error is within fp32 ulps but contributes to the budget.",
+            "Grid of a single program with N*D up to 2048 elements is within shared memory/register limits for this fixed workload, so launch feasibility is unlikely to be a risk here."
+          ],
+          "scope_notes": [
+            "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.\", \"Reference is float64 math on the same float32 inputs, not a torch float32 pipeline; the comparator must replicate the exact make_inputs() generation to be valid.\", \"Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) \u2248 max(||ref||, 0.00566), so small reference norms get a floor that loosens the absolute tolerance.\", \"The verdict categories are trust / reject / needs_more_evidence about this finite workload only, not general correctness.\"]"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Workload is fixed: attention family, seed 812, N=64 tokens, D=32, K scaled by 0.7, V centered with center=0.9; inputs generated by make_inputs() with NumPy PCG64 and rounded once to float32 before CUDA transfer.",
+            "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N token dimension; output shape (D,) = (32,).",
+            "Reference: same operation evaluated in float64 on the same float32 inputs; error metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)); compliance iff all outputs finite and E <= 0.001.",
+            "Reduced/approximate arithmetic is explicitly permitted; only the error budget on this single workload decides compliance.",
+            "Target environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-09-30T08:58:25Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton JIT kernel _kernel launches a single program (grid (1,)) loading full Q (32), K (64x32), V (64x32) as 2D tiles; scores = sum(K*q, axis=1) * D**-0.5 in fp32.",
+            "Softmax computed with max-subtraction and full-vector sum normalization in fp32, then p is deliberately downcast to fp16 and back to fp32 before the weighted V sum (kernel.py line 15).",
+            "run() assumes contiguous row-major K and V with shape (n, d) and assumes q/k/v are fp32 on CUDA; allocates fp32 output of shape (d,).",
+            "enable_fp_fusion=False is passed to prevent FMA fusion in the Triton kernel.",
+            "The make_inputs() function intentionally constructs V so that v -= 0.9 * (p @ v), shrinking the expected output norm and creating a cancellation-sensitive workload against which fp16 rounding of p must stay within the 0.001 relative budget."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "fp16 rounding of softmax probabilities p (line 15): each p in [0,1] gets ~2^-11 relative error; the accumulated error in p @ V relative to ||y|| could exceed 1e-3 because the workload deliberately centers V to reduce ||y|| (make_inputs v -= 0.9*(p@v)), amplifying relative error of the E metric.",
+            "p.to(fp16) also flushes very small tail probabilities (below ~6e-5, and denormals) toward zero; with N=64 and moderate scores tail contributions are small but feed into the same error budget.",
+            "Scores/exp computed in fp32 with enable_fp_fusion=False; fp32 dot-product ordering differences vs the float64 reference are a smaller secondary error source.",
+            "Assumes K and V contiguous; non-contiguous inputs would be out of the fixed workload since make_inputs returns fresh contiguous tensors.",
+            "Triton 3.4 exp may use fast approximate exponential (tl.exp typically lowers to ex2); error is within fp32 ulps but contributes to the budget.",
+            "Grid of a single program with N*D up to 2048 elements is within shared memory/register limits for this fixed workload, so launch feasibility is unlikely to be a risk here."
+          ],
+          "scope_notes": [
+            "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.\", \"Reference is float64 math on the same float32 inputs, not a torch float32 pipeline; the comparator must replicate the exact make_inputs() generation to be valid.\", \"Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) \u2248 max(||ref||, 0.00566), so small reference norms get a floor that loosens the absolute tolerance.\", \"The verdict categories are trust / reject / needs_more_evidence about this finite workload only, not general correctness.\"]"
+          ],
+          "summary": "Case 88: single-workload softmax-attention compliance. Triton kernel computes y = softmax(K@q/sqrt(D))@V for N=64, D=32 with a deliberate fp16 round-trip of softmax probabilities (line 15) and an input generator that cancels the expected output (v -= 0.9*(p@v)), making the relative error metric sensitive to fp16 probability rounding.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "make_inputs deliberately subtracts 0.9*(p@v) from V, shrinking ||y|| to roughly 10% of its natural scale, so the ~2^-11 relative rounding of each softmax probability can accumulate to >1e-3 relative error in p@V relative to the shrunken output norm; this is the designed stress on the contract's E <= 0.001 budget.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is the operation in float64 on the same float32 inputs; compliance iff E = ||out-ref||/max(||ref||, 0.001*sqrt(32)) <= 0.001 on the single fixed workload (make_inputs with seed 812, N=64, D=32, center=0.9)."
+          }
+        ],
+        "statement": "The fp16 round-trip of softmax probabilities (kernel.py line 15) causes E = ||out - ref||_2 / max(||ref||_2, 0.00566) to exceed 0.001 on the fixed seed-812 workload, because make_inputs shrinks the expected output norm by 90% via v -= 0.9*(p@v), amplifying the relative effect of fp16 rounding error in p."
+      },
+      "created_at": "2026-09-30T08:58:32Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "make_inputs deliberately subtracts 0.9*(p@v) from V, shrinking ||y|| to roughly 10% of its natural scale, so the ~2^-11 relative rounding of each softmax probability can accumulate to >1e-3 relative error in p@V relative to the shrunken output norm; this is the designed stress on the contract's error budget.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is the operation in float64 on the same float32 inputs; compliance iff E = ||out-ref||_2/max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single fixed workload (make_inputs with seed 812, N=64, D=32, center=0.9)."
+          }
+        ],
+        "scope_rationale": "The claim tests whether the kernel violates the contract's stated compliance condition E <= 0.001 on the exact single workload specified by problem.txt (make_inputs with seed 812, N=64, D=32), which the contract declares as the only in-scope case.",
+        "statement": "The fp16 round-trip of softmax probabilities (kernel.py line 15) causes E = ||out - ref||_2 / max(||ref||_2, 0.00566) to exceed 0.001 on the fixed seed-812 workload, because make_inputs shrinks the expected output norm by 90% via v -= 0.9*(p@v), amplifying the relative effect of fp16 rounding error in p."
+      },
+      "created_at": "2026-09-30T08:58:48Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-30T08:58:48Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "make_inputs deliberately subtracts 0.9*(p@v) from V, shrinking ||y|| to roughly 10% of its natural scale, so the ~2^-11 relative rounding of each softmax probability can accumulate to >1e-3 relative error in p@V relative to the shrunken output norm; this is the designed stress on the contract's error budget.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is the operation in float64 on the same float32 inputs; compliance iff E = ||out-ref||_2/max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single fixed workload (make_inputs with seed 812, N=64, D=32, center=0.9)."
+          }
+        ],
+        "scope_rationale": "The claim tests whether the kernel violates the contract's stated compliance condition E <= 0.001 on the exact single workload specified by problem.txt (make_inputs with seed 812, N=64, D=32), which the contract declares as the only in-scope case.",
+        "statement": "The fp16 round-trip of softmax probabilities (kernel.py line 15) causes E = ||out - ref||_2 / max(||ref||_2, 0.00566) to exceed 0.001 on the fixed seed-812 workload, because make_inputs shrinks the expected output norm by 90% via v -= 0.9*(p@v), amplifying the relative effect of fp16 rounding error in p.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:58:48Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Even ignoring the fp16 downcast, the kernel computes scores, exp, and normalization in fp32 with an approximate GPU exp, and the workload's output cancellation (v -= 0.9*(p@v)) amplifies small probability perturbations; combined fp32/tl.exp error alone might already consume the 1e-3 relative budget, making the fp16 claim redundant or misattributed.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Compliance is decided solely by E <= 0.001 with a float64 reference on the single fixed seed-812 workload; the contract permits reduced precision only if this budget is met, so any error source (fp32 scores, approximate tl.exp, or fp16 p) that breaches the budget is in scope."
+          }
+        ],
+        "scope_rationale": "This decomposes the same contract condition (E <= 0.001 on the fixed workload) by error source; if the fp16 effect is small but the fp32 softmax path alone breaches the budget, the kernel still violates the stated contract.",
+        "statement": "Independent of the fp16 round-trip, the fp32 computation of scores and tl.exp in the Triton kernel contributes enough error on the seed-812 workload that, combined with the deliberately canceled output (v -= 0.9*(p@v)), E may exceed 0.001 even if the fp16 downcast were removed."
+      },
+      "created_at": "2026-09-30T08:58:48Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-30T08:58:48Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "Even ignoring the fp16 downcast, the kernel computes scores, exp, and normalization in fp32 with an approximate GPU exp, and the workload's output cancellation (v -= 0.9*(p@v)) amplifies small probability perturbations; combined fp32/tl.exp error alone might already consume the 1e-3 relative budget, making the fp16 claim redundant or misattributed.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Compliance is decided solely by E <= 0.001 with a float64 reference on the single fixed seed-812 workload; the contract permits reduced precision only if this budget is met, so any error source (fp32 scores, approximate tl.exp, or fp16 p) that breaches the budget is in scope."
+          }
+        ],
+        "scope_rationale": "This decomposes the same contract condition (E <= 0.001 on the fixed workload) by error source; if the fp16 effect is small but the fp32 softmax path alone breaches the budget, the kernel still violates the stated contract.",
+        "statement": "Independent of the fp16 round-trip, the fp32 computation of scores and tl.exp in the Triton kernel contributes enough error on the seed-812 workload that, combined with the deliberately canceled output (v -= 0.9*(p@v)), E may exceed 0.001 even if the fp16 downcast were removed.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:58:48Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Workload is fixed: attention family, seed 812, N=64 tokens, D=32, K scaled by 0.7, V centered with center=0.9; inputs generated by make_inputs() with NumPy PCG64 and rounded once to float32 before CUDA transfer.",
+          "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N token dimension; output shape (D,) = (32,).",
+          "Reference: same operation evaluated in float64 on the same float32 inputs; error metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)); compliance iff all outputs finite and E <= 0.001.",
+          "Reduced/approximate arithmetic is explicitly permitted; only the error budget on this single workload decides compliance.",
+          "Target environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "Triton JIT kernel _kernel launches a single program (grid (1,)) loading full Q (32), K (64x32), V (64x32) as 2D tiles; scores = sum(K*q, axis=1) * D**-0.5 in fp32.",
+          "Softmax computed with max-subtraction and full-vector sum normalization in fp32, then p is deliberately downcast to fp16 and back to fp32 before the weighted V sum (kernel.py line 15).",
+          "run() assumes contiguous row-major K and V with shape (n, d) and assumes q/k/v are fp32 on CUDA; allocates fp32 output of shape (d,).",
+          "enable_fp_fusion=False is passed to prevent FMA fusion in the Triton kernel.",
+          "Correction to the earlier model of the cancellation: make_inputs computes p in float64 from the float32 q/k, then sets v := v - 0.9*(p@v). The kernel output becomes y = p@(v - 0.9*(p@v)) = p@v - 0.9*(p@(p@v)). Since p is not a one-hot delta, p@(p@v) != p@v in general; the shrink factor is roughly 0.9*sum(p^2), which for a spread softmax (sum p^2 ~ 1/N_eff) may be well below 0.9. The actual ||y|| reduction must be measured, not assumed to be 90%.",
+          "The centered V is re-rounded to float32 by tensor() (make_inputs line 32-33), so the reference itself uses these rounded V values; the fp64 reference and kernel share identical inputs."
+        ],
+        "open_questions": [
+          "What is the actual ||reference||_2 on the seed-812 workload after the v-centering? The E-metric denominator is max(||ref||, ~0.00566); if ||ref|| stays near natural scale (because sum(p^2) << 1), the budget floor could dominate and give the kernel more absolute headroom than the 10%-shrunken-output reasoning assumes.",
+          "What is sum(p^2) (softmax concentration) on the fixed workload? With N=64 and K scaled by 0.7, scores spread is modest, so p may be near-uniform (sum(p^2) ~ 1/30-1/64), making the cancellation 0.9*sum(p^2) ~ 0.014-0.03, i.e., only a ~2-3% output shrink, not 90%.",
+          "How large is the fp16 rounding contribution to E in isolation (e.g., comparing kernel output vs an fp32-softmax variant), and how large is the fp32/tl.exp contribution, to attribute between claims c1 and c2?"
+        ],
+        "risk_map": [
+          "fp16 rounding of softmax probabilities p (line 15): each p gets ~2^-11 relative rounding plus possible flush-to-zero for p below ~6e-5 (fp16 min normal); error in p@V scales as ~||V|| * 2^-11 * sqrt(sum p^2), which is bounded regardless of output cancellation; the decisive question is whether ||V||*2^-11*||p||_2 exceeds 0.001*max(||ref||, 0.00566).",
+          "The error contribution of the fp16 round-trip scales with ||p||_2*||V||, not with ||y||, so output cancellation amplifies the RELATIVE error only to the extent cancellation actually shrinks ||ref|| (which depends on sum(p^2), see open questions).",
+          "Scores and softmax are computed in fp32 with enable_fp_fusion=False and tl.exp (typically lowered to fast ex2 with ~few-ulp error); this path contributes a second independent error source that must be separated from the fp16 effect when attributing any E violation (claim c2).",
+          "Assumes K and V contiguous; out of scope for the fixed workload since make_inputs returns fresh contiguous fp32 CUDA tensors.",
+          "Single-program grid with N*D=2048 elements is well within limits; launch feasibility is not a meaningful risk for this workload."
+        ],
+        "scope_notes": [
+          "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.",
+          "Reference is float64 math on the same float32 inputs (including the centered, re-rounded V); the comparator must replicate make_inputs() exactly to be valid.",
+          "Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) ~ max(||ref||, 0.00566); if ||ref|| is not actually shrunk much (because p@(p@v) << p@v for a spread softmax), the floor 0.00566 sets the absolute error allowance, potentially absolving the fp16 round-trip.",
+          "Verdict categories (trust / reject / needs_more_evidence) concern this finite workload only, not general correctness."
+        ],
+        "summary": "Refined description for case_88: the V-centering subtracts 0.9*(p@v) from each V row, but the resulting output is p@v - 0.9*(p@(p@v)), so the actual shrink factor is 0.9*sum(p^2), not 0.9; whether the workload truly amplifies relative error depends on softmax concentration (sum p^2) and on whether ||ref|| falls below the E-metric floor ~0.00566. Open claims c1 (fp16 p round-trip) and c2 (fp32/tl.exp path) need measured decomposition of ||ref||, sum(p^2), and per-source error contributions."
+      },
+      "created_at": "2026-09-30T08:59:17Z",
+      "id": "t9",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Workload is fixed: attention family, seed 812, N=64 tokens, D=32, K scaled by 0.7, V centered with center=0.9; inputs generated by make_inputs() with NumPy PCG64 and rounded once to float32 before CUDA transfer.",
+            "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N token dimension; output shape (D,) = (32,).",
+            "Reference: same operation evaluated in float64 on the same float32 inputs; error metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)); compliance iff all outputs finite and E <= 0.001.",
+            "Reduced/approximate arithmetic is explicitly permitted; only the error budget on this single workload decides compliance.",
+            "Target environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "kernel_model": [
+            "Triton JIT kernel _kernel launches a single program (grid (1,)) loading full Q (32), K (64x32), V (64x32) as 2D tiles; scores = sum(K*q, axis=1) * D**-0.5 in fp32.",
+            "Softmax computed with max-subtraction and full-vector sum normalization in fp32, then p is deliberately downcast to fp16 and back to fp32 before the weighted V sum (kernel.py line 15).",
+            "run() assumes contiguous row-major K and V with shape (n, d) and assumes q/k/v are fp32 on CUDA; allocates fp32 output of shape (d,).",
+            "enable_fp_fusion=False is passed to prevent FMA fusion in the Triton kernel.",
+            "The make_inputs() function intentionally constructs V so that v -= 0.9 * (p @ v), shrinking the expected output norm and creating a cancellation-sensitive workload against which fp16 rounding of p must stay within the 0.001 relative budget.",
+            "Correction to the earlier model of the cancellation: make_inputs computes p in float64 from the float32 q/k, then sets v := v - 0.9*(p@v). The kernel output becomes y = p@(v - 0.9*(p@v)) = p@v - 0.9*(p@(p@v)). Since p is not a one-hot delta, p@(p@v) != p@v in general; the shrink factor is roughly 0.9*sum(p^2), which for a spread softmax (sum p^2 ~ 1/N_eff) may be well below 0.9. The actual ||y|| reduction must be measured, not assumed to be 90%.",
+            "The centered V is re-rounded to float32 by tensor() (make_inputs line 32-33), so the reference itself uses these rounded V values; the fp64 reference and kernel share identical inputs."
+          ],
+          "open_questions": [
+            "What is the actual ||reference||_2 on the seed-812 workload after the v-centering? The E-metric denominator is max(||ref||, ~0.00566); if ||ref|| stays near natural scale (because sum(p^2) << 1), the budget floor could dominate and give the kernel more absolute headroom than the 10%-shrunken-output reasoning assumes.",
+            "What is sum(p^2) (softmax concentration) on the fixed workload? With N=64 and K scaled by 0.7, scores spread is modest, so p may be near-uniform (sum(p^2) ~ 1/30-1/64), making the cancellation 0.9*sum(p^2) ~ 0.014-0.03, i.e., only a ~2-3% output shrink, not 90%.",
+            "How large is the fp16 rounding contribution to E in isolation (e.g., comparing kernel output vs an fp32-softmax variant), and how large is the fp32/tl.exp contribution, to attribute between claims c1 and c2?"
+          ],
+          "risk_map": [
+            "fp16 rounding of softmax probabilities p (line 15): each p in [0,1] gets ~2^-11 relative error; the accumulated error in p @ V relative to ||y|| could exceed 1e-3 because the workload deliberately centers V to reduce ||y|| (make_inputs v -= 0.9*(p@v)), amplifying relative error of the E metric.",
+            "p.to(fp16) also flushes very small tail probabilities (below ~6e-5, and denormals) toward zero; with N=64 and moderate scores tail contributions are small but feed into the same error budget.",
+            "Scores/exp computed in fp32 with enable_fp_fusion=False; fp32 dot-product ordering differences vs the float64 reference are a smaller secondary error source.",
+            "Assumes K and V contiguous; non-contiguous inputs would be out of the fixed workload since make_inputs returns fresh contiguous tensors.",
+            "Triton 3.4 exp may use fast approximate exponential (tl.exp typically lowers to ex2); error is within fp32 ulps but contributes to the budget.",
+            "Grid of a single program with N*D up to 2048 elements is within shared memory/register limits for this fixed workload, so launch feasibility is unlikely to be a risk here.",
+            "fp16 rounding of softmax probabilities p (line 15): each p gets ~2^-11 relative rounding plus possible flush-to-zero for p below ~6e-5 (fp16 min normal); error in p@V scales as ~||V|| * 2^-11 * sqrt(sum p^2), which is bounded regardless of output cancellation; the decisive question is whether ||V||*2^-11*||p||_2 exceeds 0.001*max(||ref||, 0.00566).",
+            "The error contribution of the fp16 round-trip scales with ||p||_2*||V||, not with ||y||, so output cancellation amplifies the RELATIVE error only to the extent cancellation actually shrinks ||ref|| (which depends on sum(p^2), see open questions).",
+            "Scores and softmax are computed in fp32 with enable_fp_fusion=False and tl.exp (typically lowered to fast ex2 with ~few-ulp error); this path contributes a second independent error source that must be separated from the fp16 effect when attributing any E violation (claim c2).",
+            "Assumes K and V contiguous; out of scope for the fixed workload since make_inputs returns fresh contiguous fp32 CUDA tensors.",
+            "Single-program grid with N*D=2048 elements is well within limits; launch feasibility is not a meaningful risk for this workload."
+          ],
+          "scope_notes": [
+            "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.\", \"Reference is float64 math on the same float32 inputs, not a torch float32 pipeline; the comparator must replicate the exact make_inputs() generation to be valid.\", \"Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) \u2248 max(||ref||, 0.00566), so small reference norms get a floor that loosens the absolute tolerance.\", \"The verdict categories are trust / reject / needs_more_evidence about this finite workload only, not general correctness.\"]",
+            "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.",
+            "Reference is float64 math on the same float32 inputs (including the centered, re-rounded V); the comparator must replicate make_inputs() exactly to be valid.",
+            "Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) ~ max(||ref||, 0.00566); if ||ref|| is not actually shrunk much (because p@(p@v) << p@v for a spread softmax), the floor 0.00566 sets the absolute error allowance, potentially absolving the fp16 round-trip.",
+            "Verdict categories (trust / reject / needs_more_evidence) concern this finite workload only, not general correctness."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Workload is fixed: attention family, seed 812, N=64 tokens, D=32, K scaled by 0.7, V centered with center=0.9; inputs generated by make_inputs() with NumPy PCG64 and rounded once to float32 before CUDA transfer.",
+            "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N token dimension; output shape (D,) = (32,).",
+            "Reference: same operation evaluated in float64 on the same float32 inputs; error metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)); compliance iff all outputs finite and E <= 0.001.",
+            "Reduced/approximate arithmetic is explicitly permitted; only the error budget on this single workload decides compliance.",
+            "Target environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-09-30T08:59:17Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton JIT kernel _kernel launches a single program (grid (1,)) loading full Q (32), K (64x32), V (64x32) as 2D tiles; scores = sum(K*q, axis=1) * D**-0.5 in fp32.",
+            "Softmax computed with max-subtraction and full-vector sum normalization in fp32, then p is deliberately downcast to fp16 and back to fp32 before the weighted V sum (kernel.py line 15).",
+            "run() assumes contiguous row-major K and V with shape (n, d) and assumes q/k/v are fp32 on CUDA; allocates fp32 output of shape (d,).",
+            "enable_fp_fusion=False is passed to prevent FMA fusion in the Triton kernel.",
+            "Correction to the earlier model of the cancellation: make_inputs computes p in float64 from the float32 q/k, then sets v := v - 0.9*(p@v). The kernel output becomes y = p@(v - 0.9*(p@v)) = p@v - 0.9*(p@(p@v)). Since p is not a one-hot delta, p@(p@v) != p@v in general; the shrink factor is roughly 0.9*sum(p^2), which for a spread softmax (sum p^2 ~ 1/N_eff) may be well below 0.9. The actual ||y|| reduction must be measured, not assumed to be 90%.",
+            "The centered V is re-rounded to float32 by tensor() (make_inputs line 32-33), so the reference itself uses these rounded V values; the fp64 reference and kernel share identical inputs."
+          ],
+          "open_questions": [
+            "What is the actual ||reference||_2 on the seed-812 workload after the v-centering? The E-metric denominator is max(||ref||, ~0.00566); if ||ref|| stays near natural scale (because sum(p^2) << 1), the budget floor could dominate and give the kernel more absolute headroom than the 10%-shrunken-output reasoning assumes.",
+            "What is sum(p^2) (softmax concentration) on the fixed workload? With N=64 and K scaled by 0.7, scores spread is modest, so p may be near-uniform (sum(p^2) ~ 1/30-1/64), making the cancellation 0.9*sum(p^2) ~ 0.014-0.03, i.e., only a ~2-3% output shrink, not 90%.",
+            "How large is the fp16 rounding contribution to E in isolation (e.g., comparing kernel output vs an fp32-softmax variant), and how large is the fp32/tl.exp contribution, to attribute between claims c1 and c2?"
+          ],
+          "risk_map": [
+            "fp16 rounding of softmax probabilities p (line 15): each p gets ~2^-11 relative rounding plus possible flush-to-zero for p below ~6e-5 (fp16 min normal); error in p@V scales as ~||V|| * 2^-11 * sqrt(sum p^2), which is bounded regardless of output cancellation; the decisive question is whether ||V||*2^-11*||p||_2 exceeds 0.001*max(||ref||, 0.00566).",
+            "The error contribution of the fp16 round-trip scales with ||p||_2*||V||, not with ||y||, so output cancellation amplifies the RELATIVE error only to the extent cancellation actually shrinks ||ref|| (which depends on sum(p^2), see open questions).",
+            "Scores and softmax are computed in fp32 with enable_fp_fusion=False and tl.exp (typically lowered to fast ex2 with ~few-ulp error); this path contributes a second independent error source that must be separated from the fp16 effect when attributing any E violation (claim c2).",
+            "Assumes K and V contiguous; out of scope for the fixed workload since make_inputs returns fresh contiguous fp32 CUDA tensors.",
+            "Single-program grid with N*D=2048 elements is well within limits; launch feasibility is not a meaningful risk for this workload."
+          ],
+          "scope_notes": [
+            "Only the single fully specified workload (seed 812, N=64, D=32) is in scope; no other shapes, dtypes, or distributions matter.",
+            "Reference is float64 math on the same float32 inputs (including the centered, re-rounded V); the comparator must replicate make_inputs() exactly to be valid.",
+            "Error metric denominator uses max(||ref||_2, 0.001*sqrt(32)) ~ max(||ref||, 0.00566); if ||ref|| is not actually shrunk much (because p@(p@v) << p@v for a spread softmax), the floor 0.00566 sets the absolute error allowance, potentially absolving the fp16 round-trip.",
+            "Verdict categories (trust / reject / needs_more_evidence) concern this finite workload only, not general correctness."
+          ],
+          "summary": "Refined description for case_88: the V-centering subtracts 0.9*(p@v) from each V row, but the resulting output is p@v - 0.9*(p@(p@v)), so the actual shrink factor is 0.9*sum(p^2), not 0.9; whether the workload truly amplifies relative error depends on softmax concentration (sum p^2) and on whether ||ref|| falls below the E-metric floor ~0.00566. Open claims c1 (fp16 p round-trip) and c2 (fp32/tl.exp path) need measured decomposition of ||ref||, sum(p^2), and per-source error contributions.",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "Reviewed description update du2 and existing open claims c1 (fp16 probability round-trip breaching E <= 0.001) and c2 (fp32/tl.exp softmax path alone breaching the budget). The refined model of the V-centering (shrink factor ~0.9*sum(p^2), not 0.9) only adjusts the amplification magnitude of the already-recorded hypotheses; it does not expose a new, separately testable in-scope failure mode on the fixed seed-812 workload. What remains needed is runtime evidence (measured ||ref||, sum(p^2), and per-source error decomposition) for the existing claims, not additional claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-30T08:59:27Z",
+      "id": "t10",
+      "output": {
+        "created_at": "2026-09-30T08:59:27Z",
+        "decision": "no_new_claims",
+        "reason": "Reviewed description update du2 and existing open claims c1 (fp16 probability round-trip breaching E <= 0.001) and c2 (fp32/tl.exp softmax path alone breaching the budget). The refined model of the V-centering (shrink factor ~0.9*sum(p^2), not 0.9) only adjusts the amplification magnitude of the already-recorded hypotheses; it does not expose a new, separately testable in-scope failure mode on the fixed seed-812 workload. What remains needed is runtime evidence (measured ||ref||, sum(p^2), and per-source error decomposition) for the existing claims, not additional claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 9,
+        "tool_event_id": "t10",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, torch, triton, triton.language as tl, numpy as np\n\n@triton.jit\ndef _kernel(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):\n    n = tl.arange(0, N); d = tl.arange(0, D)\n    q = tl.load(Q + d)\n    k = tl.load(K + n[:, None] * D + d[None, :])\n    v = tl.load(V + n[:, None] * D + d[None, :])\n    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)\n    p = tl.exp(scores - tl.max(scores, 0))\n    p = p / tl.sum(p, 0)\n    p = p.to(tl.float16).to(tl.float32)\n    y = tl.sum(p[:, None] * v, 0)\n    tl.store(O + d, y)\n\n@triton.jit\ndef _kernel_nofp16(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):\n    n = tl.arange(0, N); d = tl.arange(0, D)\n    q = tl.load(Q + d)\n    k = tl.load(K + n[:, None] * D + d[None, :])\n    v = tl.load(V + n[:, None] * D + d[None, :])\n    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)\n    p = tl.exp(scores - tl.max(scores, 0))\n    p = p / tl.sum(p, 0)\n    y = tl.sum(p[:, None] * v, 0)\n    tl.store(O + d, y)\n\ncfg = {'seed': 812, 'n': 64, 'd': 32, 'scale': 0.7, 'center': 0.9}\nrng = np.random.Generator(np.random.PCG64(cfg['seed']))\nn, d = cfg['n'], cfg['d']\nq = rng.standard_normal(d)\nk = rng.standard_normal((n, d)) * cfg['scale']\nv = rng.standard_normal((n, d))\nq32, k32 = q.astype(np.float32), k.astype(np.float32)\nz = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\np = np.exp(z - z.max()); p /= p.sum()\nv -= cfg['center'] * (p @ v)[None, :]\ndef tensor(x): return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).cuda()\nqt, kt, vt = tensor(q32), tensor(k32), tensor(v)\n\nout = torch.empty(d, dtype=torch.float32, device=qt.device)\n_kernel[(1,)](qt, kt, vt, out, n, d, enable_fp_fusion=False)\nout32 = torch.empty(d, dtype=torch.float32, device=qt.device)\n_kernel_nofp16[(1,)](qt, kt, vt, out32, n, d, enable_fp_fusion=False)\n\n# float64 reference on same float32 inputs\nqf, kf, vf = qt.cpu().numpy().astype(np.float64), kt.cpu().numpy().astype(np.float64), vt.cpu().numpy().astype(np.float64)\nzf = kf @ qf / np.sqrt(d)\npf = np.exp(zf - zf.max()); pf /= pf.sum()\nref = pf @ vf\n\nko, no = out.cpu().numpy(), out32.cpu().numpy()\ndenom = max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))\nE_kernel = np.linalg.norm(ko - ref)/denom\nE_nofp16 = np.linalg.norm(no - ref)/denom\nE_fp16_contrib = np.linalg.norm(ko - no)/denom\np2 = float((pf**2).sum())\nprint(json.dumps({\n  \"E_kernel\": E_kernel, \"E_kernel_le_0.001\": bool(E_kernel <= 0.001),\n  \"E_nofp16_variant\": E_nofp16, \"E_fp16_contribution\": E_fp16_contrib,\n  \"norm_ref\": float(np.linalg.norm(ref)), \"denom\": denom,\n  \"sum_p2\": p2, \"all_finite\": bool(np.isfinite(ko).all())\n}))",
+        "expected_signal": "E_kernel and fp16-only contribution vs the 0.001 budget on the seed-812 workload",
+        "timeout_s": 240
+      },
+      "created_at": "2026-09-30T09:00:00Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t11_probe.py",
+            "sha256": "d2e8eb663d0951d1a4980ab72033bf645564cb5f898eaf01aa929b3902e8bbdd"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t11_stdout.txt",
+            "sha256": "d94085058b41e19393cc81d842959a9c505d0cb5725fcbf54ffe49b62bd16791"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t11_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t11_json_result.json",
+            "sha256": "0a8b1938162b8d395a8e56526abe95153ea9329e5eae62b1e0a600bf07e50b86"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The fp16 round-trip of softmax probabilities (kernel.py line 15) causes E = ||out - ref||_2 / max(||ref||_2, 0.00566) to exceed 0.001 on the fixed seed-812 workload, because make_inputs shrinks the expected output norm by 90% via v -= 0.9*(p@v), amplifying the relative effect of fp16 rounding error in p.",
+        "cwd": "/root/pilot_cases/case_88",
+        "duration_s": 5.280985,
+        "event_id": "t11",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "d2e8eb663d0951d1a4980ab72033bf645564cb5f898eaf01aa929b3902e8bbdd"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "d94085058b41e19393cc81d842959a9c505d0cb5725fcbf54ffe49b62bd16791"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "0a8b1938162b8d395a8e56526abe95153ea9329e5eae62b1e0a600bf07e50b86"
+              }
+            ],
+            "duration_s": 5.280985,
+            "exit_code": 0,
+            "expected_signal": "E_kernel and fp16-only contribution vs the 0.001 budget on the seed-812 workload",
+            "json_parse_error": null,
+            "json_result": {
+              "E_fp16_contribution": 0.0020605597283432113,
+              "E_kernel": 0.0020607774650464807,
+              "E_kernel_le_0.001": false,
+              "E_nofp16_variant": 1.0474177171206507e-06,
+              "all_finite": true,
+              "denom": 0.074169622268619,
+              "norm_ref": 0.074169622268619,
+              "sum_p2": 0.02465295057624201
+            },
+            "stderr": "",
+            "stdout": "{\"E_kernel\": 0.0020607774650464807, \"E_kernel_le_0.001\": false, \"E_nofp16_variant\": 1.0474177171206507e-06, \"E_fp16_contribution\": 0.0020605597283432113, \"norm_ref\": 0.074169622268619, \"denom\": 0.074169622268619, \"sum_p2\": 0.02465295057624201, \"all_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t11"
+        },
+        "exit_code": 0,
+        "expected_signal": "E_kernel and fp16-only contribution vs the 0.001 budget on the seed-812 workload",
+        "json_parse_error": null,
+        "json_result": {
+          "E_fp16_contribution": 0.0020605597283432113,
+          "E_kernel": 0.0020607774650464807,
+          "E_kernel_le_0.001": false,
+          "E_nofp16_variant": 1.0474177171206507e-06,
+          "all_finite": true,
+          "denom": 0.074169622268619,
+          "norm_ref": 0.074169622268619,
+          "sum_p2": 0.02465295057624201
+        },
+        "sandbox": {
+          "cpu_limit_s": 270,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"E_kernel\": 0.0020607774650464807, \"E_kernel_le_0.001\": false, \"E_nofp16_variant\": 1.0474177171206507e-06, \"E_fp16_contribution\": 0.0020605597283432113, \"norm_ref\": 0.074169622268619, \"denom\": 0.074169622268619, \"sum_p2\": 0.02465295057624201, \"all_finite\": true}\n",
+        "timed_out": false,
+        "timeout_s": 240,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import json, torch, triton, triton.language as tl, numpy as np\n\n@triton.jit\ndef _kernel_nofp16(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):\n    n = tl.arange(0, N); d = tl.arange(0, D)\n    q = tl.load(Q + d)\n    k = tl.load(K + n[:, None] * D + d[None, :])\n    v = tl.load(V + n[:, None] * D + d[None, :])\n    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)\n    p = tl.exp(scores - tl.max(scores, 0))\n    p = p / tl.sum(p, 0)\n    y = tl.sum(p[:, None] * v, 0)\n    tl.store(O + d, y)\n\ncfg = {'seed': 812, 'n': 64, 'd': 32, 'scale': 0.7, 'center': 0.9}\nrng = np.random.Generator(np.random.PCG64(cfg['seed']))\nn, d = cfg['n'], cfg['d']\nq = rng.standard_normal(d)\nk = rng.standard_normal((n, d)) * cfg['scale']\nv = rng.standard_normal((n, d))\nq32, k32 = q.astype(np.float32), k.astype(np.float32)\nz = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\np = np.exp(z - z.max()); p /= p.sum()\nv -= cfg['center'] * (p @ v)[None, :]\ndef tensor(x): return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).cuda()\nqt, kt, vt = tensor(q32), tensor(k32), tensor(v)\n\nout32 = torch.empty(d, dtype=torch.float32, device=qt.device)\n_kernel_nofp16[(1,)](qt, kt, vt, out32, n, d, enable_fp_fusion=False)\n\nqf, kf, vf = qt.cpu().numpy().astype(np.float64), kt.cpu().numpy().astype(np.float64), vt.cpu().numpy().astype(np.float64)\nzf = kf @ qf / np.sqrt(d)\npf = np.exp(zf - zf.max()); pf /= pf.sum()\nref = pf @ vf\n\no = out32.cpu().numpy()\ndenom = max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))\nE_fp32_path = np.linalg.norm(o - ref)/denom\nprint(json.dumps({\n  \"E_fp32_softmax_path_only\": E_fp32_path,\n  \"E_fp32_path_le_0.001\": bool(E_fp32_path <= 0.001),\n  \"norm_ref\": float(np.linalg.norm(ref)), \"denom\": denom,\n  \"sum_p2\": float((pf**2).sum()), \"all_finite\": bool(np.isfinite(o).all())\n}))",
+        "expected_signal": "E of the no-fp16 fp32/tl.exp path vs the 0.001 budget on the seed-812 workload",
+        "timeout_s": 240
+      },
+      "created_at": "2026-09-30T09:00:05Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "f11a939c3a01c7074c149a114b310c8f35cc23998e1d4d6b4e09cd084c9bf23d"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "a663fb090a19754eed10d09d708b495344dc29a0a16eac1dd420de552b941bd9"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "55eef864770fa2df5f4e882fbf5441bfc7c62f116e34bd1728ac25bb8e95dc2e"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "Independent of the fp16 round-trip, the fp32 computation of scores and tl.exp in the Triton kernel contributes enough error on the seed-812 workload that, combined with the deliberately canceled output (v -= 0.9*(p@v)), E may exceed 0.001 even if the fp16 downcast were removed.",
+        "cwd": "/root/pilot_cases/case_88",
+        "duration_s": 4.728006,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "f11a939c3a01c7074c149a114b310c8f35cc23998e1d4d6b4e09cd084c9bf23d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "a663fb090a19754eed10d09d708b495344dc29a0a16eac1dd420de552b941bd9"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "55eef864770fa2df5f4e882fbf5441bfc7c62f116e34bd1728ac25bb8e95dc2e"
+              }
+            ],
+            "duration_s": 4.728006,
+            "exit_code": 0,
+            "expected_signal": "E of the no-fp16 fp32/tl.exp path vs the 0.001 budget on the seed-812 workload",
+            "json_parse_error": null,
+            "json_result": {
+              "E_fp32_path_le_0.001": true,
+              "E_fp32_softmax_path_only": 1.0474177171206507e-06,
+              "all_finite": true,
+              "denom": 0.074169622268619,
+              "norm_ref": 0.074169622268619,
+              "sum_p2": 0.02465295057624201
+            },
+            "stderr": "",
+            "stdout": "{\"E_fp32_softmax_path_only\": 1.0474177171206507e-06, \"E_fp32_path_le_0.001\": true, \"norm_ref\": 0.074169622268619, \"denom\": 0.074169622268619, \"sum_p2\": 0.02465295057624201, \"all_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "E of the no-fp16 fp32/tl.exp path vs the 0.001 budget on the seed-812 workload",
+        "json_parse_error": null,
+        "json_result": {
+          "E_fp32_path_le_0.001": true,
+          "E_fp32_softmax_path_only": 1.0474177171206507e-06,
+          "all_finite": true,
+          "denom": 0.074169622268619,
+          "norm_ref": 0.074169622268619,
+          "sum_p2": 0.02465295057624201
+        },
+        "sandbox": {
+          "cpu_limit_s": 270,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"E_fp32_softmax_path_only\": 1.0474177171206507e-06, \"E_fp32_path_le_0.001\": true, \"norm_ref\": 0.074169622268619, \"denom\": 0.074169622268619, \"sum_p2\": 0.02465295057624201, \"all_finite\": true}\n",
+        "timed_out": false,
+        "timeout_s": 240,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "E_fp16_contribution": 0.0020605597283432113,
+          "E_kernel": 0.0020607774650464807,
+          "E_kernel_le_0.001": false,
+          "E_nofp16_variant": 1.0474177171206507e-06,
+          "all_finite": true,
+          "denom": 0.074169622268619,
+          "norm_ref": 0.074169622268619,
+          "sum_p2": 0.02465295057624201
+        },
+        "event_id": "t11",
+        "status": "confirmed",
+        "summary": "On the exact seed-812 workload (replicating make_inputs), the kernel's E = 0.00206 exceeds the 0.001 budget. Attribution: a variant kernel with the fp16 cast removed gives E = 1.05e-6, and the isolated fp16 contribution is 0.00206 \u2014 essentially the entire error. ||ref|| = 0.0742 (above the 0.00566 floor; sum p^2 \u2248 0.0247, so the cancellation shrinks output only ~2.4%, not 90%), yet fp16 rounding of p alone still breaches the budget. All outputs finite. Claim confirmed (E > 0.001 due to the fp16 round-trip), though the stated 90%-shrink mechanism is only ~2.4% in reality.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T09:00:16Z",
+      "id": "t13",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:58:48Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T09:00:16Z",
+              "data": {
+                "E_fp16_contribution": 0.0020605597283432113,
+                "E_kernel": 0.0020607774650464807,
+                "E_kernel_le_0.001": false,
+                "E_nofp16_variant": 1.0474177171206507e-06,
+                "all_finite": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t11_probe.py",
+                    "sha256": "d2e8eb663d0951d1a4980ab72033bf645564cb5f898eaf01aa929b3902e8bbdd"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t11_stdout.txt",
+                    "sha256": "d94085058b41e19393cc81d842959a9c505d0cb5725fcbf54ffe49b62bd16791"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t11_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t11_json_result.json",
+                    "sha256": "0a8b1938162b8d395a8e56526abe95153ea9329e5eae62b1e0a600bf07e50b86"
+                  }
+                ],
+                "denom": 0.074169622268619,
+                "duration_s": 5.280985,
+                "exit_code": 0,
+                "expected_signal": "E_kernel and fp16-only contribution vs the 0.001 budget on the seed-812 workload",
+                "json_parse_error": null,
+                "json_result": {
+                  "E_fp16_contribution": 0.0020605597283432113,
+                  "E_kernel": 0.0020607774650464807,
+                  "E_kernel_le_0.001": false,
+                  "E_nofp16_variant": 1.0474177171206507e-06,
+                  "all_finite": true,
+                  "denom": 0.074169622268619,
+                  "norm_ref": 0.074169622268619,
+                  "sum_p2": 0.02465295057624201
+                },
+                "norm_ref": 0.074169622268619,
+                "stderr": "",
+                "stdout": "{\"E_kernel\": 0.0020607774650464807, \"E_kernel_le_0.001\": false, \"E_nofp16_variant\": 1.0474177171206507e-06, \"E_fp16_contribution\": 0.0020605597283432113, \"norm_ref\": 0.074169622268619, \"denom\": 0.074169622268619, \"sum_p2\": 0.02465295057624201, \"all_finite\": true}\n",
+                "sum_p2": 0.02465295057624201,
+                "timed_out": false,
+                "timeout_s": 240
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the exact seed-812 workload (replicating make_inputs), the kernel's E = 0.00206 exceeds the 0.001 budget. Attribution: a variant kernel with the fp16 cast removed gives E = 1.05e-6, and the isolated fp16 contribution is 0.00206 \u2014 essentially the entire error. ||ref|| = 0.0742 (above the 0.00566 floor; sum p^2 \u2248 0.0247, so the cancellation shrinks output only ~2.4%, not 90%), yet fp16 rounding of p alone still breaches the budget. All outputs finite. Claim confirmed (E > 0.001 due to the fp16 round-trip), though the stated 90%-shrink mechanism is only ~2.4% in reality.",
+              "supports": "confirmed",
+              "tool_event_id": "t11"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "make_inputs deliberately subtracts 0.9*(p@v) from V, shrinking ||y|| to roughly 10% of its natural scale, so the ~2^-11 relative rounding of each softmax probability can accumulate to >1e-3 relative error in p@V relative to the shrunken output norm; this is the designed stress on the contract's error budget.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Reference is the operation in float64 on the same float32 inputs; compliance iff E = ||out-ref||_2/max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single fixed workload (make_inputs with seed 812, N=64, D=32, center=0.9)."
+            }
+          ],
+          "scope_rationale": "The claim tests whether the kernel violates the contract's stated compliance condition E <= 0.001 on the exact single workload specified by problem.txt (make_inputs with seed 812, N=64, D=32), which the contract declares as the only in-scope case.",
+          "statement": "The fp16 round-trip of softmax probabilities (kernel.py line 15) causes E = ||out - ref||_2 / max(||ref||_2, 0.00566) to exceed 0.001 on the fixed seed-812 workload, because make_inputs shrinks the expected output norm by 90% via v -= 0.9*(p@v), amplifying the relative effect of fp16 rounding error in p.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T09:00:16Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:00:16Z",
+          "data": {
+            "E_fp16_contribution": 0.0020605597283432113,
+            "E_kernel": 0.0020607774650464807,
+            "E_kernel_le_0.001": false,
+            "E_nofp16_variant": 1.0474177171206507e-06,
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "d2e8eb663d0951d1a4980ab72033bf645564cb5f898eaf01aa929b3902e8bbdd"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "d94085058b41e19393cc81d842959a9c505d0cb5725fcbf54ffe49b62bd16791"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "0a8b1938162b8d395a8e56526abe95153ea9329e5eae62b1e0a600bf07e50b86"
+              }
+            ],
+            "denom": 0.074169622268619,
+            "duration_s": 5.280985,
+            "exit_code": 0,
+            "expected_signal": "E_kernel and fp16-only contribution vs the 0.001 budget on the seed-812 workload",
+            "json_parse_error": null,
+            "json_result": {
+              "E_fp16_contribution": 0.0020605597283432113,
+              "E_kernel": 0.0020607774650464807,
+              "E_kernel_le_0.001": false,
+              "E_nofp16_variant": 1.0474177171206507e-06,
+              "all_finite": true,
+              "denom": 0.074169622268619,
+              "norm_ref": 0.074169622268619,
+              "sum_p2": 0.02465295057624201
+            },
+            "norm_ref": 0.074169622268619,
+            "stderr": "",
+            "stdout": "{\"E_kernel\": 0.0020607774650464807, \"E_kernel_le_0.001\": false, \"E_nofp16_variant\": 1.0474177171206507e-06, \"E_fp16_contribution\": 0.0020605597283432113, \"norm_ref\": 0.074169622268619, \"denom\": 0.074169622268619, \"sum_p2\": 0.02465295057624201, \"all_finite\": true}\n",
+            "sum_p2": 0.02465295057624201,
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact seed-812 workload (replicating make_inputs), the kernel's E = 0.00206 exceeds the 0.001 budget. Attribution: a variant kernel with the fp16 cast removed gives E = 1.05e-6, and the isolated fp16 contribution is 0.00206 \u2014 essentially the entire error. ||ref|| = 0.0742 (above the 0.00566 floor; sum p^2 \u2248 0.0247, so the cancellation shrinks output only ~2.4%, not 90%), yet fp16 rounding of p alone still breaches the budget. All outputs finite. Claim confirmed (E > 0.001 due to the fp16 round-trip), though the stated 90%-shrink mechanism is only ~2.4% in reality.",
+          "supports": "confirmed",
+          "tool_event_id": "t11"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "E_fp32_path_le_0.001": true,
+          "E_fp32_softmax_path_only": 1.0474177171206507e-06,
+          "all_finite": true,
+          "denom": 0.074169622268619,
+          "norm_ref": 0.074169622268619,
+          "sum_p2": 0.02465295057624201
+        },
+        "event_id": "t12",
+        "status": "rebutted",
+        "summary": "Removing only the fp16 downcast (same fp32 scores + tl.exp path), the kernel's E on the seed-812 workload is 1.05e-6, three orders of magnitude below the 0.001 budget. The fp32/tl.exp softmax path contributes negligible error; the entire budget breach is attributable to the fp16 round-trip (see c1 evidence).",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-30T09:00:16Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:58:48Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T09:00:16Z",
+              "data": {
+                "E_fp32_path_le_0.001": true,
+                "E_fp32_softmax_path_only": 1.0474177171206507e-06,
+                "all_finite": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "f11a939c3a01c7074c149a114b310c8f35cc23998e1d4d6b4e09cd084c9bf23d"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "a663fb090a19754eed10d09d708b495344dc29a0a16eac1dd420de552b941bd9"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "55eef864770fa2df5f4e882fbf5441bfc7c62f116e34bd1728ac25bb8e95dc2e"
+                  }
+                ],
+                "denom": 0.074169622268619,
+                "duration_s": 4.728006,
+                "exit_code": 0,
+                "expected_signal": "E of the no-fp16 fp32/tl.exp path vs the 0.001 budget on the seed-812 workload",
+                "json_parse_error": null,
+                "json_result": {
+                  "E_fp32_path_le_0.001": true,
+                  "E_fp32_softmax_path_only": 1.0474177171206507e-06,
+                  "all_finite": true,
+                  "denom": 0.074169622268619,
+                  "norm_ref": 0.074169622268619,
+                  "sum_p2": 0.02465295057624201
+                },
+                "norm_ref": 0.074169622268619,
+                "stderr": "",
+                "stdout": "{\"E_fp32_softmax_path_only\": 1.0474177171206507e-06, \"E_fp32_path_le_0.001\": true, \"norm_ref\": 0.074169622268619, \"denom\": 0.074169622268619, \"sum_p2\": 0.02465295057624201, \"all_finite\": true}\n",
+                "sum_p2": 0.02465295057624201,
+                "timed_out": false,
+                "timeout_s": 240
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Removing only the fp16 downcast (same fp32 scores + tl.exp path), the kernel's E on the seed-812 workload is 1.05e-6, three orders of magnitude below the 0.001 budget. The fp32/tl.exp softmax path contributes negligible error; the entire budget breach is attributable to the fp16 round-trip (see c1 evidence).",
+              "supports": "rebutted",
+              "tool_event_id": "t12"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "Even ignoring the fp16 downcast, the kernel computes scores, exp, and normalization in fp32 with an approximate GPU exp, and the workload's output cancellation (v -= 0.9*(p@v)) amplifies small probability perturbations; combined fp32/tl.exp error alone might already consume the 1e-3 relative budget, making the fp16 claim redundant or misattributed.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Compliance is decided solely by E <= 0.001 with a float64 reference on the single fixed seed-812 workload; the contract permits reduced precision only if this budget is met, so any error source (fp32 scores, approximate tl.exp, or fp16 p) that breaches the budget is in scope."
+            }
+          ],
+          "scope_rationale": "This decomposes the same contract condition (E <= 0.001 on the fixed workload) by error source; if the fp16 effect is small but the fp32 softmax path alone breaches the budget, the kernel still violates the stated contract.",
+          "statement": "Independent of the fp16 round-trip, the fp32 computation of scores and tl.exp in the Triton kernel contributes enough error on the seed-812 workload that, combined with the deliberately canceled output (v -= 0.9*(p@v)), E may exceed 0.001 even if the fp16 downcast were removed.",
+          "status": "rebutted",
+          "updated_at": "2026-09-30T09:00:16Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:00:16Z",
+          "data": {
+            "E_fp32_path_le_0.001": true,
+            "E_fp32_softmax_path_only": 1.0474177171206507e-06,
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "f11a939c3a01c7074c149a114b310c8f35cc23998e1d4d6b4e09cd084c9bf23d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "a663fb090a19754eed10d09d708b495344dc29a0a16eac1dd420de552b941bd9"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "55eef864770fa2df5f4e882fbf5441bfc7c62f116e34bd1728ac25bb8e95dc2e"
+              }
+            ],
+            "denom": 0.074169622268619,
+            "duration_s": 4.728006,
+            "exit_code": 0,
+            "expected_signal": "E of the no-fp16 fp32/tl.exp path vs the 0.001 budget on the seed-812 workload",
+            "json_parse_error": null,
+            "json_result": {
+              "E_fp32_path_le_0.001": true,
+              "E_fp32_softmax_path_only": 1.0474177171206507e-06,
+              "all_finite": true,
+              "denom": 0.074169622268619,
+              "norm_ref": 0.074169622268619,
+              "sum_p2": 0.02465295057624201
+            },
+            "norm_ref": 0.074169622268619,
+            "stderr": "",
+            "stdout": "{\"E_fp32_softmax_path_only\": 1.0474177171206507e-06, \"E_fp32_path_le_0.001\": true, \"norm_ref\": 0.074169622268619, \"denom\": 0.074169622268619, \"sum_p2\": 0.02465295057624201, \"all_finite\": true}\n",
+            "sum_p2": 0.02465295057624201,
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Removing only the fp16 downcast (same fp32 scores + tl.exp path), the kernel's E on the seed-812 workload is 1.05e-6, three orders of magnitude below the 0.001 budget. The fp32/tl.exp softmax path contributes negligible error; the entire budget breach is attributable to the fp16 round-trip (see c1 evidence).",
+          "supports": "rebutted",
+          "tool_event_id": "t12"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: the evidence decisively resolves the ledger. Claim c1 (fp16 round-trip of softmax probabilities breaching E <= 0.001) is confirmed on the exact in-scope seed-812 workload: E_kernel = 0.00206 > 0.001, with attribution showing the fp16 cast is essentially the entire error (E_nofp16_variant = 1.05e-6), all outputs finite, denominator = ||ref|| = 0.0742. Claim c2 (fp32/tl.exp path alone breaching the budget) is rebutted. The new evidence exposes no additional material, testable, in-scope problem not already covered by c1.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-30T09:00:25Z",
+      "id": "t15",
+      "output": {
+        "created_at": "2026-09-30T09:00:25Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the evidence decisively resolves the ledger. Claim c1 (fp16 round-trip of softmax probabilities breaching E <= 0.001) is confirmed on the exact in-scope seed-812 workload: E_kernel = 0.00206 > 0.001, with attribution showing the fp16 cast is essentially the entire error (E_nofp16_variant = 1.05e-6), all outputs finite, denominator = ||ref|| = 0.0742. Claim c2 (fp32/tl.exp path alone breaching the budget) is rebutted. The new evidence exposes no additional material, testable, in-scope problem not already covered by c1.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 14,
+        "tool_event_id": "t15",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The operative contract (problem.txt) requires E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single fully specified make_inputs workload (seed 812, N=64, D=32). Probe t11, which exactly replicates make_inputs, measured E_kernel = 0.00206 with denominator ||ref|| = 0.0742 (above the 0.00566 floor) and all outputs finite \u2014 a clear budget violation. Attribution is clean: removing only the fp16 round-trip of softmax probabilities (kernel.py line 15) gives E = 1.05e-6 (claim c2, rebutted), so the entire breach is caused by the fp16 cast. While the contract permits reduced precision in principle, it requires the 0.001 budget to be met, and it is exceeded by ~2x. The claim is in_scope with scope evidence citing the stated workload domain; the mechanism detail (90% vs ~2.4% output shrink) in the claim statement is inaccurate but immaterial to the confirmed measured violation.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T09:00:37Z",
+      "id": "t16",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-30T09:00:37Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The operative contract (problem.txt) requires E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single fully specified make_inputs workload (seed 812, N=64, D=32). Probe t11, which exactly replicates make_inputs, measured E_kernel = 0.00206 with denominator ||ref|| = 0.0742 (above the 0.00566 floor) and all outputs finite \u2014 a clear budget violation. Attribution is clean: removing only the fp16 round-trip of softmax probabilities (kernel.py line 15) gives E = 1.05e-6 (claim c2, rebutted), so the entire breach is caused by the fp16 cast. While the contract permits reduced precision in principle, it requires the 0.001 budget to be met, and it is exceeded by ~2x. The claim is in_scope with scope evidence citing the stated workload domain; the mechanism detail (90% vs ~2.4% output shrink) in the claim statement is inaccurate but immaterial to the confirmed measured violation.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-30T09:00:37Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The operative contract (problem.txt) requires E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single fully specified make_inputs workload (seed 812, N=64, D=32). Probe t11, which exactly replicates make_inputs, measured E_kernel = 0.00206 with denominator ||ref|| = 0.0742 (above the 0.00566 floor) and all outputs finite \u2014 a clear budget violation. Attribution is clean: removing only the fp16 round-trip of softmax probabilities (kernel.py line 15) gives E = 1.05e-6 (claim c2, rebutted), so the entire breach is caused by the fp16 cast. While the contract permits reduced precision in principle, it requires the 0.001 budget to be met, and it is exceeded by ~2x. The claim is in_scope with scope evidence citing the stated workload domain; the mechanism detail (90% vs ~2.4% output shrink) in the claim statement is inaccurate but immaterial to the confirmed measured violation.",
+    "verdict": "reject"
+  }
+}

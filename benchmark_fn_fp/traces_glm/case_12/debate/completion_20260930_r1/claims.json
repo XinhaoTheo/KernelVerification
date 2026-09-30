@@ -1,0 +1,88 @@
+[
+  {
+    "created_at": "2026-09-30T08:23:04Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:23:48Z",
+        "data": {
+          "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+          "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "5d85735124ecdd284ea7949f4801afe6ed1bc5a144d1f1338419ee764ed66569"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "5df8dd8b394f02f46942b20a2fb6a9ca47f546235e28d3cb8142477309376467"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "aa46b381445e41536d0401933bf78d95ab3a18e407ec3a8f4578ac93cdf81a1e"
+            }
+          ],
+          "duration_s": 5.561635,
+          "eps": 1e-06,
+          "exit_code": 0,
+          "expected_signal": "zero/tiny-row rstd off by ~1/sqrt(eps) factor vs contract",
+          "json_parse_error": null,
+          "json_result": {
+            "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+            "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+            "Y_zero_row_max_abs": 0.0,
+            "eps": 1e-06,
+            "kernel_impl": "1/(sqrt(ms)+eps)",
+            "kernel_rstd_zero_row": 1000000.0,
+            "max_abs_err_normal_rows": 1.430511474609375e-06,
+            "max_rel_err_all_rows": 989.0990600585938,
+            "ref_rstd_zero_row": 1000.0,
+            "rstd_ratio_zero_row": 1000.0,
+            "tiny_row_out_ratio": 990.0989990234375
+          },
+          "kernel_impl": "1/(sqrt(ms)+eps)",
+          "max_abs_err_normal_rows": 1.430511474609375e-06,
+          "max_rel_err_all_rows": 989.0990600585938,
+          "ref_rstd_zero_row": 1000.0,
+          "rstd_ratio_zero_row": 1000.0,
+          "stderr": "",
+          "stdout": "{\"kernel_impl\": \"1/(sqrt(ms)+eps)\", \"eps\": 1e-06, \"max_abs_err_normal_rows\": 1.430511474609375e-06, \"kernel_rstd_zero_row\": 1000000.0, \"ref_rstd_zero_row\": 1000.0, \"rstd_ratio_zero_row\": 1000.0, \"Y_zero_row_max_abs\": 0.0, \"Y_tiny_row_max_abs_kernel\": 0.009900989942252636, \"Y_tiny_row_max_abs_ref\": 9.999999747378752e-06, \"tiny_row_out_ratio\": 990.0989990234375, \"max_rel_err_all_rows\": 989.0990600585938}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tiny_row_out_ratio": 990.0989990234375
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Runtime probe confirms eps-placement defect (claim c1). Kernel output on a tiny row (all 1e-8) with eps=1e-6 is 990.1x the contract reference (0.00990 vs 1.0e-5), matching the predicted ~1/sqrt(eps) blowup; implied kernel rstd on a zero row is 1e6 vs contract 1e3 (ratio 1000). Normal randn rows show only 1.43e-6 max abs error, consistent with rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps). Contract explicitly requires near-zero-row stability, so this is an in-scope correctness violation.",
+        "supports": "confirmed",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps) instead of 1.0/_sqrt(mean_square + eps). For an all-zero row with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 ~316x divergence exactly where the contract demands stability; this may also fail tolerances on typical rows for larger eps.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract formula: 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly: 'it must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up.'"
+      }
+    ],
+    "scope_rationale": "The contract in problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that a near-zero row does not blow up; the kernel's eps-outside-sqrt variant violates both the stated formula and the near-zero-row stability requirement, so near-zero rows are in-scope conditions.",
+    "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving rstd and outputs off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:23:48Z"
+  }
+]

@@ -1,0 +1,60 @@
+## Problem statement (contract + reference behavior)
+
+Operation: gather cached key/value tokens for a batch of sequences out of a
+paged KV cache, the block-table indirection used by paged-attention inference
+engines.
+
+    kv_cache     : [num_pages, page_size, head_dim]
+    block_table  : [num_seqs, max_blocks], int32
+                   block_table[s, b] is the PHYSICAL page holding logical block b
+                   of sequence s
+    result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]
+
+Pages are allocated on demand, so the physical pages of one sequence are not
+contiguous and are generally interleaved with those of other sequences.
+
+Input domain: `seq_len` may be any length that fits within `max_blocks` pages,
+and the block table may map any sequence to any physical page.
+
+Does paged_gather() satisfy this contract?
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _paged_gather_kernel(KV, BlockTable, Out, max_blocks, page_size,
+                         stride_kv_page, stride_out_seq,
+                         HEAD_DIM: tl.constexpr):
+    seq = tl.program_id(0)
+    slot = tl.program_id(1)
+    logical_block = slot // page_size
+    within = slot % page_size
+
+    physical = seq * max_blocks + logical_block
+    offs = tl.arange(0, HEAD_DIM)
+    src = KV + physical * stride_kv_page + within * HEAD_DIM + offs
+    dst = Out + seq * stride_out_seq + slot * HEAD_DIM + offs
+    tl.store(dst, tl.load(src))
+
+
+def paged_gather(kv_cache: torch.Tensor, block_table: torch.Tensor,
+                 seq_len: int) -> torch.Tensor:
+    """Gather `seq_len` cached tokens for each sequence through its block table."""
+    num_pages, page_size, head_dim = kv_cache.shape
+    num_seqs, max_blocks = block_table.shape
+    out = torch.empty((num_seqs, seq_len, head_dim), device=kv_cache.device,
+                      dtype=kv_cache.dtype)
+    _paged_gather_kernel[(num_seqs, seq_len)](
+        kv_cache, block_table, out, max_blocks, page_size,
+        kv_cache.stride(0), out.stride(0), HEAD_DIM=head_dim)
+    return out
+
+```
+
+Is this implementation correct?

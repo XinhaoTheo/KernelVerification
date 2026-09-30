@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-f9b159ffab2140eb947ae91c5325b528",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll probe claim c1 by running the kernel on an input where a query block has no selected key blocks, comparing against a natural masked-softmax reference, to document both behaviors.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9e99543fcf6fe47b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, math\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_31/kernel.py\\\")\\n# fall back: load via sys.path\\nimport sys\\nsys.path.insert(0, \\\"/root/cases/case_31\\\")\\nimport kernel as K\\n\\ntorch.manual_seed(0)\\ndev = 'cuda'\\nBS = 2\\nseqlens_q = [40, 40]\\nseqlens_k = [64, 64]\\ncu_q = torch.tensor([0]+list(torch.cumsum(torch.tensor(seqlens_q),0)), device=dev, dtype=torch.int32)\\ncu_k = torch.tensor([0]+list(torch.cumsum(torch.tensor(seqlens_k),0)), device=dev, dtype=torch.int32)\\nnq, nk, hd = 1, 1, 64\\nq = torch.randn(cu_q[-1].item(), nq, hd, device=dev)\\nk = torch.randn(cu_k[-1].item(), nk, hd, device=dev)\\nv = torch.randn_like(k)\\nqb, kb = 32, 32\\n# compute block counts\\ndef blocks(cu, bs):\\n    sizes = (cu[1:]-cu[:-1])\\n    nb = (sizes + bs - 1)//bs\\n    return int(nb.sum().item())\\nnqb = blocks(cu_q, qb)\\nnkb = blocks(cu_k, kb)\\n# block_mask: all True EXCEPT query block 0 of batch 0 has no selected k block\\nbm = torch.ones(nk, nqb, nkb, dtype=torch.bool, device=dev)\\n# q blocks per batch: batch0 -> blocks 0,1 ; batch1 -> blocks 2,3\\nbm[0, 0, :] = False\\n\\nout = K.block_sparse_attention(q, k, v, cu_q, cu_k, bm, qb, kb, causal=False)\\n\\n# reference: per-row masked softmax over in-scope keys\\nscale = hd ** -0.5\\nref = torch.full_like(q, float('nan'))\\nrows = cu_q[0].item()  # first 32 rows are the empty rows\\nfor t in range(q.shape[0]):\\n    b = int((cu_q <= t).sum().item()) - 1\\n    qstart, qend = cu_q[b].item(), cu_q[b+1].item()\\n    kstart, kend = cu_k[b].item(), cu_k[b+1].item()\\n    # which q block / k blocks selected\\n    qbi = (t - qstart)//qb\\n    valid_js = [j for j in range((kend-kstart+kb-1)//kb) if bm[0, int(((cu_q[1:]-cu_q[:-1])[:b].sum().item())) + qbi, j]]\\n    if not valid_js:\\n        continue  # leave NaN (undefined)\\n    cols = []\\n    for j in valid_js:\\n        ks = kstart + j*kb\\n        cols += list(range(ks, min(ks+kb, kend)))\\n    cols = torch.tensor(cols, device=dev)\\n    scores = (q[t,0].float() @ k[cols,0].float().T) * scale\\n    p = torch.softmax(scores, -1)\\n    ref[t,0] = (p @ v[cols,0].float()).to(q.dtype)\\n\\nempty_rows = torch.arange(0, 32, device=dev)\\nother_rows = torch.arange(32, 80, device=dev)\\nres = {\\n  \\\"kernel_out_abs_max_empty_rows\\\": float(out[empty_rows].abs().max().item()),\\n  \\\"kernel_out_all_finite\\\": bool(torch.isfinite(out.float()).all().item()),\\n  \\\"ref_empty_rows\\\": \\\"NaN (undefined: empty key set)\\\",\\n  \\\"max_abs_err_nonempty_rows\\\": float((out[other_rows]-ref[other_rows]).abs().max().item()),\\n  \\\"note\\\": \\\"kernel produces exact zeros on empty rows; reference softmax over empty set is mathematically undefined (0/0); natural torch masked-softmax gives NaN. No reference implementation for empty rows in artifact, so match is undecidable from this probe.\\\"\\n}\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"kernel outputs zeros for empty-key rows; reference behavior undefined/NaN — mismatch magnitude recorded\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "The ledger has only c1 open (the empty-key-set claim). Claims about EVEN_SEQ_KBLOCK and causal were rejected at recording (LedgerError) so they're not in ledger — but coverage says open claims: c1 only. I should probe c1. But wait — those two important claims failed to record; I can only work with c1. Probe c1: construct a case with a query row whose selected-key set is empty, run kernel vs a reference. But the reference behavior is unstated — so the probe will show kernel gives zeros; whether reference matches is unknown. Still, I can run the probe to document kernel behavior and compare against the natural reference (per-row masked softmax with -inf → softmax gives NaN). Actually the reference in the original repo — but we don't have it. I'll run a probe documenting the kernel's output for empty rows and comparing against a torch masked-softmax reference, and mark likely inconclusive for reference-match but confirm kernel yields zeros.\n\nAlso I should raise the two failed claims? Only Experimenter — I can't record claims (no record_claim tool available to me). My tools don't include record_claim. So just handle c1.\n\nDesign probe: batch with one sequence, block_mask all False for some q block → kernel outputs zeros. Compare with reference computed as masked softmax (exp(-inf)/0 → NaN). Report both.\n\nUse run_claim_probe for c1.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757454,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1274,
+    "prompt_tokens": 23382,
+    "total_tokens": 24656,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 292,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 540,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 292
+    }
+  }
+}

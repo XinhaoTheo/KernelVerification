@@ -1,0 +1,1871 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_94",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):\n    n = tl.arange(0, N)\n    d = tl.arange(0, D)\n    q = tl.load(Q + d)\n    k = tl.load(K + n[:, None] * D + d[None, :])\n    v = tl.load(V + n[:, None] * D + d[None, :])\n    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)\n    p = tl.exp(scores - tl.max(scores, 0))\n    p = p / tl.sum(p, 0)\n    p = p.to(tl.float16).to(tl.float32)\n    y = tl.sum(p[:, None] * v, 0)\n    tl.store(O + d, y)\n\ndef run(q, k, v):\n    n, d = k.shape\n    out = torch.empty(d, dtype=torch.float32, device=q.device)\n    _kernel[(1,)](q, k, v, out, n, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'attention', 'seed': 813, 'n': 128, 'd': 32, 'scale': 1.1, 'center': 0.9}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+    "passed": null,
+    "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = softmax(K @ q / sqrt(D)) @ V, softmax over the N tokens.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.001.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+    "rounds": null,
+    "session_dir": "/root/pilot_cases/case_94",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T09:03:10Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:04:08Z",
+          "data": {
+            "E": 0.0019032712117112664,
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "202e2ba71f215bd57f414c54af80113306658b5f4615395bcf317c4d7a6fff8f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "47ad17f932dbc31f730de6d2af6606c4a16aaba7ef9bb91e81e9386c47d88770"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "fd06ba7746005970ad595a2603404d1317966881b9e005da9ec07043ed7f5e93"
+              }
+            ],
+            "budget": 0.001,
+            "duration_s": 5.169844,
+            "exit_code": 0,
+            "expected_signal": "E vs 0.001 budget on exact workload",
+            "floor": 0.005656854249492381,
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.0019032712117112664,
+              "all_finite": true,
+              "budget": 0.001,
+              "floor": 0.005656854249492381,
+              "meets_budget": false,
+              "ref_norm": 0.0645028609656322
+            },
+            "meets_budget": false,
+            "ref_norm": 0.0645028609656322,
+            "stderr": "",
+            "stdout": "{\"E\": 0.0019032712117112664, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"all_finite\": true, \"budget\": 0.001, \"meets_budget\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact make_inputs() workload (N=128, D=32, seed 813), the Triton kernel output has E = 0.001903 > 0.001 against the float64 reference (ref_norm = 0.0645, floor 0.00566, so denominator = ref_norm), violating the compliance budget; all outputs finite. Claim c1's predicted budget violation is confirmed.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "fp16 has ~11-bit mantissa (~4.9e-4 relative rounding on p~1/128), and make_inputs' v -= 0.9*(p@v) strips the dominant softmax-weighted component of V, shrinking ||reference|| and the E denominator toward the 0.001*sqrt(32)~0.00566 floor; the amplified per-probability relative errors plausibly push ||out-ref||/max(||ref||, 0.00566) above 0.001. A probe should run make_inputs() on CUDA, compute the kernel output, the float64 reference on the same float32 inputs, and report E, ||ref||, and the floor.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "The workload is exactly make_inputs() in kernel.py; E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite."
+        },
+        {
+          "source": "kernel.py make_inputs",
+          "summary": "v -= 0.9*(p@v) removes the softmax-weighted component from V, adversarially reducing the reference output norm."
+        },
+        {
+          "source": "kernel.py line 15",
+          "summary": "p = p.to(tl.float16).to(tl.float32) explicitly rounds probabilities to fp16 before the weighted sum."
+        }
+      ],
+      "scope_rationale": "The contract requires E <= 0.001 on exactly the make_inputs() workload (N=128, D=32, seed 813), and this claim tests a budget violation on that workload caused by the kernel's fp16 probability rounding interacting with the workload's own value-centering cancellation.",
+      "statement": "On the exact make_inputs() workload (N=128, D=32, seed 813), the kernel's fp16 rounding of softmax probabilities (p.to(tl.float16) at line 15), amplified by the value-centering cancellation (v -= 0.9*(p@v)), yields E = ||out - float64_ref||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the compliance budget.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T09:04:08Z"
+    },
+    {
+      "created_at": "2026-09-30T09:03:10Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:04:08Z",
+          "data": {
+            "E_fp16_probs": 0.0019034597012761458,
+            "E_fp32_only": 1.3360530731152125e-06,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "975e1bbee3fb4aff87e927a477bccd0d8260540fe405db7d59ed5f1bc72097a2"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "83abda19decdd1ba99cbf400a9d1f4a1a8747e620009db8f3b0a45046207d87c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "64ed02037a7d7d369f666b03752f716860de3bd4ade3f405e243d8111527f52f"
+              }
+            ],
+            "budget": 0.001,
+            "duration_s": 3.80428,
+            "exit_code": 0,
+            "expected_signal": "fp32-only pipeline E vs budget; fp16-probability pipeline E for attribution",
+            "fp32_only_meets_budget": true,
+            "json_parse_error": null,
+            "json_result": {
+              "E_fp16_probs": 0.0019034597012761458,
+              "E_fp32_only": 1.3360530731152125e-06,
+              "budget": 0.001,
+              "floor": 0.005656854249492381,
+              "fp32_only_meets_budget": true,
+              "ref_norm": 0.0645028609656322
+            },
+            "ref_norm": 0.0645028609656322,
+            "stderr": "",
+            "stdout": "{\"E_fp32_only\": 1.3360530731152125e-06, \"E_fp16_probs\": 0.0019034597012761458, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"budget\": 0.001, \"fp32_only_meets_budget\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Decomposition: an fp32-only pipeline (scores, softmax, weighted sum in fp32, no fp16 round) gives E = 1.34e-6, far within the 0.001 budget, while the same pipeline with fp16-rounded probabilities gives E = 1.90e-3, matching the kernel's measured violation. Any budget violation is attributable to the fp16 probability cast, not fp32 arithmetic. Claim c2 confirmed.",
+          "supports": "confirmed",
+          "tool_event_id": "t13"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "Decomposition evidence: replacing the fp16 round with a pure-fp32 softmax (or computing the same p-rounding error term on CPU) tells the Judge whether any observed failure is attributable to the lossy probability cast rather than fp32 exp/score arithmetic, per the adversarial-precision guidance on separating lossy-step error from benign reduced precision.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Reduced precision arithmetic is explicitly permitted if the E <= 0.001 budget is met, so the decisive question is which reduced-precision step causes any observed budget violation."
+        }
+      ],
+      "scope_rationale": "The contract explicitly permits reduced-precision arithmetic as long as E <= 0.001 on the single make_inputs() workload, so isolating which step (fp32 arithmetic vs fp16 probability cast) drives any measured E is decisive for attributing a violation.",
+      "statement": "A float32 pipeline without the fp16 probability rounding (scores, exp/sum, and weighted sum all in fp32) satisfies E <= 0.001 on this workload, so any observed violation is attributable to the fp16 probability cast rather than fp32 score/accumulation arithmetic.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T09:04:08Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32 (single attention row, output shape [32]).",
+      "Reference is float64 math on the SAME float32 input values; compliance metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+      "Single fixed workload from make_inputs() (PCG64 seed 813, N=128, D=32, k scale 1.1, value centering offset 0.9); no other inputs/shapes in scope.",
+      "Reduced precision arithmetic is explicitly permitted if the relative-error budget is met.",
+      "Verdict scope is finite-workload numerical compliance, not general correctness.",
+      "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32, single attention row, output shape [32].",
+      "Reference is the mathematical operation in float64 on the SAME float32 input values; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+      "Single fixed workload: make_inputs() in kernel.py (PCG64 seed 813, N=128, D=32, k scale 1.1, center 0.9); no other inputs or shapes in scope.",
+      "Reduced precision and approximate arithmetic are explicitly permitted if the budget is met; their presence alone is neither defect nor proof.",
+      "Verdict scope is finite-workload numerical compliance (trust / reject / needs_more_evidence), not general correctness."
+    ],
+    "kernel_model": [
+      "Triton single-block kernel: loads q (1x32), K (128x32), V (128x32); scores = row-wise dot of k with q times D**-0.5 in fp32.",
+      "Softmax: p = exp(scores - max(scores)); p /= sum(p); then explicitly rounds probabilities to float16 and back to float32 (line 15).",
+      "Output y = sum over N of p[:,None]*v, accumulated in fp32, stored to a torch.float32 tensor of length d.",
+      "run() derives N,D from k.shape and launches one CTA with enable_fp_fusion=False; no scaling or softmax mistakes visible in indexing.",
+      "make_inputs constructs adversarial values: v -= 0.9*(p@v), removing the dominant softmax-weighted component from V to amplify relative error in the output norm.",
+      "q and k are rounded to float32 before the structured v adjustment; reference uses these exact float32 inputs.",
+      "Triton single-CTA kernel (lines 6-17): loads q [32], K [128,32], V [128,32]; scores = tl.sum(k*q,1) * D**-0.5 in fp32.",
+      "Softmax: p = exp(scores - max(scores)); p /= sum(p); line 15 explicitly rounds p to float16 then back to float32 before the weighted sum.",
+      "Output y = tl.sum(p[:,None]*v, 0) accumulated in fp32 and stored to a float32 tensor of length d; run() launches one block with enable_fp_fusion=False.",
+      "make_inputs (lines 27-44): q, k sampled as standard normal (k scaled 1.1), rounded to float32; then v -= 0.9*(p@v) using a float64-computed softmax p, which removes the dominant softmax-weighted component of V and shrinks the reference output norm.",
+      "No indexing, scaling, or softmax-order bugs are visible in the kernel source; the only deliberately lossy step is the fp16 probability round at line 15."
+    ],
+    "open_questions": [
+      "What is the actual float64 reference output norm for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor -- does the denominator use the reference norm or the floor?",
+      "What is the realized relative error of the fp16-rounded softmax probabilities after the p@V cancellation; an Experimenter probe computing E directly is needed.",
+      "Does tl.sum accumulation order or exp accuracy contribute measurably compared to the fp16 rounding step?",
+      "What is the measured ||float64 ref|| for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor, and hence which term dominates the E denominator?",
+      "What is the measured E for the kernel vs. the float64 reference (claim c1), and does the fp32-only pipeline (no fp16 round) stay within budget (claim c2)?",
+      "How much of any observed error comes from fp16 probability rounding versus fp32 score/exp/accumulation arithmetic and tl.sum reduction order?"
+    ],
+    "risk_map": [
+      "fp16 rounding of softmax probabilities (line 15): with N=128 probabilities summing to 1, typical p ~ 1/128 ~ 0.0078 has fp16 relative error ~ 2^-11 ~ 4.9e-4; combined with the value-centering cancellation (center=0.9 strips the dominant direction), relative output error may exceed the 0.001 budget -- this is the primary suspect.",
+      "Cancellation amplification: the reference output norm is reduced by the v -= 0.9*(p@v) construction, shrinking the denominator of E and magnifying the effect of probability quantization error.",
+      "tl.exp in fp32 vs float64 reference: minor, likely within budget by itself.",
+      "fp16 cast of p could also underflow very small tail probabilities to zero (harmless for this metric) or round the max probability; direction of error needs runtime evidence.",
+      "Potential mismatch between kernel's fp32 score computation and make_inputs' float64-computed p used for value centering -- kernel is not the source of that, but it affects how adversarial the case is.",
+      "fp16 rounding of softmax probabilities (line 15): p ~ 1/128 ~ 0.0078 has fp16 relative error ~2^-11 ~ 4.9e-4; combined with the center=0.9 value cancellation, this may push relative output error above the 0.001 budget (claim c1's core suspect).",
+      "Cancellation amplification in make_inputs: v -= 0.9*(p@v) shrinks the reference output norm, shrinking the E denominator toward the 0.00566 floor and magnifying probability quantization error.",
+      "fp32 tl.exp and score accumulation vs float64 reference: expected minor, likely within budget alone (claim c2 tests this attribution).",
+      "fp16 underflow of small tail probabilities to zero: likely harmless for this metric but direction of error needs runtime evidence."
+    ],
+    "scope_notes": [
+      "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.\", \"Target stack: NVIDIA T4 (no tf32/fp8 features assumed relevant), PyTorch 2.8.0, Triton 3.4.0.\", \"Inputs are float32 on device; output tensor is float32; kernel arithmetic mixes fp32 accumulation with an explicit fp16 round of probabilities.\", \"E threshold 0.001 with the 0.001*sqrt(32) floor term means tiny-norm outputs get a floor; the value-centering construction is designed to push the case near this boundary.\"]",
+      "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.",
+      "Target stack: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; inputs float32 on device, output float32.",
+      "E threshold 0.001 with floor term 0.001*sqrt(32); the value-centering construction (center=0.9) is designed to push the case near this boundary.",
+      "Decisive experiments are the direct E measurement on the exact workload (c1) and a decomposition comparing against an fp32-only pipeline (c2); both claims currently lack evidence."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32 (single attention row, output shape [32]).",
+        "Reference is float64 math on the SAME float32 input values; compliance metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+        "Single fixed workload from make_inputs() (PCG64 seed 813, N=128, D=32, k scale 1.1, value centering offset 0.9); no other inputs/shapes in scope.",
+        "Reduced precision arithmetic is explicitly permitted if the relative-error budget is met.",
+        "Verdict scope is finite-workload numerical compliance, not general correctness."
+      ],
+      "created_at": "2026-09-30T09:02:39Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton single-block kernel: loads q (1x32), K (128x32), V (128x32); scores = row-wise dot of k with q times D**-0.5 in fp32.",
+        "Softmax: p = exp(scores - max(scores)); p /= sum(p); then explicitly rounds probabilities to float16 and back to float32 (line 15).",
+        "Output y = sum over N of p[:,None]*v, accumulated in fp32, stored to a torch.float32 tensor of length d.",
+        "run() derives N,D from k.shape and launches one CTA with enable_fp_fusion=False; no scaling or softmax mistakes visible in indexing.",
+        "make_inputs constructs adversarial values: v -= 0.9*(p@v), removing the dominant softmax-weighted component from V to amplify relative error in the output norm.",
+        "q and k are rounded to float32 before the structured v adjustment; reference uses these exact float32 inputs."
+      ],
+      "open_questions": [
+        "What is the actual float64 reference output norm for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor -- does the denominator use the reference norm or the floor?",
+        "What is the realized relative error of the fp16-rounded softmax probabilities after the p@V cancellation; an Experimenter probe computing E directly is needed.",
+        "Does tl.sum accumulation order or exp accuracy contribute measurably compared to the fp16 rounding step?"
+      ],
+      "risk_map": [
+        "fp16 rounding of softmax probabilities (line 15): with N=128 probabilities summing to 1, typical p ~ 1/128 ~ 0.0078 has fp16 relative error ~ 2^-11 ~ 4.9e-4; combined with the value-centering cancellation (center=0.9 strips the dominant direction), relative output error may exceed the 0.001 budget -- this is the primary suspect.",
+        "Cancellation amplification: the reference output norm is reduced by the v -= 0.9*(p@v) construction, shrinking the denominator of E and magnifying the effect of probability quantization error.",
+        "tl.exp in fp32 vs float64 reference: minor, likely within budget by itself.",
+        "fp16 cast of p could also underflow very small tail probabilities to zero (harmless for this metric) or round the max probability; direction of error needs runtime evidence.",
+        "Potential mismatch between kernel's fp32 score computation and make_inputs' float64-computed p used for value centering -- kernel is not the source of that, but it affects how adversarial the case is."
+      ],
+      "scope_notes": [
+        "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.\", \"Target stack: NVIDIA T4 (no tf32/fp8 features assumed relevant), PyTorch 2.8.0, Triton 3.4.0.\", \"Inputs are float32 on device; output tensor is float32; kernel arithmetic mixes fp32 accumulation with an explicit fp16 round of probabilities.\", \"E threshold 0.001 with the 0.001*sqrt(32) floor term means tiny-norm outputs get a floor; the value-centering construction is designed to push the case near this boundary.\"]"
+      ],
+      "summary": "Case_94: single-head attention row (N=128, D=32) computed by a one-CTA Triton kernel with fp16-rounded softmax probabilities, against a float64 reference with an adversarially centered value matrix. Key suspect: fp16 rounding of probabilities combined with cancellation in V may violate the E <= 0.001 relative-error budget.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [
+        "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32, single attention row, output shape [32].",
+        "Reference is the mathematical operation in float64 on the SAME float32 input values; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+        "Single fixed workload: make_inputs() in kernel.py (PCG64 seed 813, N=128, D=32, k scale 1.1, center 0.9); no other inputs or shapes in scope.",
+        "Reduced precision and approximate arithmetic are explicitly permitted if the budget is met; their presence alone is neither defect nor proof.",
+        "Verdict scope is finite-workload numerical compliance (trust / reject / needs_more_evidence), not general correctness."
+      ],
+      "created_at": "2026-09-30T09:03:29Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton single-CTA kernel (lines 6-17): loads q [32], K [128,32], V [128,32]; scores = tl.sum(k*q,1) * D**-0.5 in fp32.",
+        "Softmax: p = exp(scores - max(scores)); p /= sum(p); line 15 explicitly rounds p to float16 then back to float32 before the weighted sum.",
+        "Output y = tl.sum(p[:,None]*v, 0) accumulated in fp32 and stored to a float32 tensor of length d; run() launches one block with enable_fp_fusion=False.",
+        "make_inputs (lines 27-44): q, k sampled as standard normal (k scaled 1.1), rounded to float32; then v -= 0.9*(p@v) using a float64-computed softmax p, which removes the dominant softmax-weighted component of V and shrinks the reference output norm.",
+        "No indexing, scaling, or softmax-order bugs are visible in the kernel source; the only deliberately lossy step is the fp16 probability round at line 15."
+      ],
+      "open_questions": [
+        "What is the measured ||float64 ref|| for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor, and hence which term dominates the E denominator?",
+        "What is the measured E for the kernel vs. the float64 reference (claim c1), and does the fp32-only pipeline (no fp16 round) stay within budget (claim c2)?",
+        "How much of any observed error comes from fp16 probability rounding versus fp32 score/exp/accumulation arithmetic and tl.sum reduction order?"
+      ],
+      "risk_map": [
+        "fp16 rounding of softmax probabilities (line 15): p ~ 1/128 ~ 0.0078 has fp16 relative error ~2^-11 ~ 4.9e-4; combined with the center=0.9 value cancellation, this may push relative output error above the 0.001 budget (claim c1's core suspect).",
+        "Cancellation amplification in make_inputs: v -= 0.9*(p@v) shrinks the reference output norm, shrinking the E denominator toward the 0.00566 floor and magnifying probability quantization error.",
+        "fp32 tl.exp and score accumulation vs float64 reference: expected minor, likely within budget alone (claim c2 tests this attribution).",
+        "fp16 underflow of small tail probabilities to zero: likely harmless for this metric but direction of error needs runtime evidence."
+      ],
+      "scope_notes": [
+        "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.",
+        "Target stack: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; inputs float32 on device, output float32.",
+        "E threshold 0.001 with floor term 0.001*sqrt(32); the value-centering construction (center=0.9) is designed to push the case near this boundary.",
+        "Decisive experiments are the direct E measurement on the exact workload (c1) and a decomposition comparing against an fp32-only pipeline (c2); both claims currently lack evidence."
+      ],
+      "summary": "Cleanup re-issue of case_94 description with properly separated scope notes; no new source facts beyond the previous update (du1). The kernel computes a single attention row with an explicit fp16 round of softmax probabilities (line 15); the adversarial workload centers V against the softmax weights, making the E<=0.001 budget the decisive question, currently pending runtime evidence for claims c1/c2.",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_94",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_94"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_94"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_94"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_94",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 19.607084218999944,
+      "role": "describer",
+      "round": 2,
+      "text": "Record description update with structured entries.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32 (single attention row, output shape [32]).",
+              "Reference is float64 math on the SAME float32 input values; compliance metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+              "Single fixed workload from make_inputs() (PCG64 seed 813, N=128, D=32, k scale 1.1, value centering offset 0.9); no other inputs/shapes in scope.",
+              "Reduced precision arithmetic is explicitly permitted if the relative-error budget is met.",
+              "Verdict scope is finite-workload numerical compliance, not general correctness."
+            ],
+            "kernel_model": [
+              "Triton single-block kernel: loads q (1x32), K (128x32), V (128x32); scores = row-wise dot of k with q times D**-0.5 in fp32.",
+              "Softmax: p = exp(scores - max(scores)); p /= sum(p); then explicitly rounds probabilities to float16 and back to float32 (line 15).",
+              "Output y = sum over N of p[:,None]*v, accumulated in fp32, stored to a torch.float32 tensor of length d.",
+              "run() derives N,D from k.shape and launches one CTA with enable_fp_fusion=False; no scaling or softmax mistakes visible in indexing.",
+              "make_inputs constructs adversarial values: v -= 0.9*(p@v), removing the dominant softmax-weighted component from V to amplify relative error in the output norm.",
+              "q and k are rounded to float32 before the structured v adjustment; reference uses these exact float32 inputs."
+            ],
+            "open_questions": [
+              "What is the actual float64 reference output norm for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor -- does the denominator use the reference norm or the floor?",
+              "What is the realized relative error of the fp16-rounded softmax probabilities after the p@V cancellation; an Experimenter probe computing E directly is needed.",
+              "Does tl.sum accumulation order or exp accuracy contribute measurably compared to the fp16 rounding step?"
+            ],
+            "risk_map": [
+              "fp16 rounding of softmax probabilities (line 15): with N=128 probabilities summing to 1, typical p ~ 1/128 ~ 0.0078 has fp16 relative error ~ 2^-11 ~ 4.9e-4; combined with the value-centering cancellation (center=0.9 strips the dominant direction), relative output error may exceed the 0.001 budget -- this is the primary suspect.",
+              "Cancellation amplification: the reference output norm is reduced by the v -= 0.9*(p@v) construction, shrinking the denominator of E and magnifying the effect of probability quantization error.",
+              "tl.exp in fp32 vs float64 reference: minor, likely within budget by itself.",
+              "fp16 cast of p could also underflow very small tail probabilities to zero (harmless for this metric) or round the max probability; direction of error needs runtime evidence.",
+              "Potential mismatch between kernel's fp32 score computation and make_inputs' float64-computed p used for value centering -- kernel is not the source of that, but it affects how adversarial the case is."
+            ],
+            "scope_notes": "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.\", \"Target stack: NVIDIA T4 (no tf32/fp8 features assumed relevant), PyTorch 2.8.0, Triton 3.4.0.\", \"Inputs are float32 on device; output tensor is float32; kernel arithmetic mixes fp32 accumulation with an explicit fp16 round of probabilities.\", \"E threshold 0.001 with the 0.001*sqrt(32) floor term means tiny-norm outputs get a floor; the value-centering construction is designed to push the case near this boundary.\"]",
+            "summary": "Case_94: single-head attention row (N=128, D=32) computed by a one-CTA Triton kernel with fp16-rounded softmax probabilities, against a float64 reference with an adversarially centered value matrix. Key suspect: fp16 rounding of probabilities combined with cancellation in V may violate the E <= 0.001 relative-error budget."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 19.607,
+        "input_tokens": 5707,
+        "output_tokens": 970
+      }
+    },
+    {
+      "duration_s": 18.741073742000026,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The description is complete and points to one dominant, testable suspect: the fp16 rounding of softmax probabilities (kernel line 15) combined with the adversarial value-centering in make_inputs (v -= 0.9\u00b7(p@v)), which is specifically constructed to shrink the reference output norm and amplify any probability quantization error against the E \u2264 0.001 budget. I'll record that as the primary in-scope claim, plus a secondary decomposition claim to help the Experimenter isolate the error source.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "fp16 has ~11-bit mantissa (~4.9e-4 relative rounding on p~1/128), and make_inputs' v -= 0.9*(p@v) strips the dominant softmax-weighted component of V, shrinking ||reference|| and the E denominator toward the 0.001*sqrt(32)~0.00566 floor; the amplified per-probability relative errors plausibly push ||out-ref||/max(||ref||, 0.00566) above 0.001. A probe should run make_inputs() on CUDA, compute the kernel output, the float64 reference on the same float32 inputs, and report E, ||ref||, and the floor.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The workload is exactly make_inputs() in kernel.py; E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite."
+              },
+              {
+                "source": "kernel.py make_inputs",
+                "summary": "v -= 0.9*(p@v) removes the softmax-weighted component from V, adversarially reducing the reference output norm."
+              },
+              {
+                "source": "kernel.py line 15",
+                "summary": "p = p.to(tl.float16).to(tl.float32) explicitly rounds probabilities to fp16 before the weighted sum."
+              }
+            ],
+            "statement": "On the exact make_inputs() workload (N=128, D=32, seed 813), the kernel's fp16 rounding of softmax probabilities (p.to(tl.float16) at line 15), amplified by the value-centering cancellation (v -= 0.9*(p@v)), yields E = ||out - float64_ref||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the compliance budget."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Decomposition evidence: replacing the fp16 round with a pure-fp32 softmax (or computing the same p-rounding error term on CPU) tells the Judge whether the failure, if observed, is attributable to the lossy probability cast rather than fp32 exp/score arithmetic, per the adversarial-precision guidance on separating lossy-step error from benign reduced precision.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reduced precision arithmetic is explicitly permitted if the E <= 0.001 budget is met, so the decisive question is which reduced-precision step causes any observed budget violation."
+              }
+            ],
+            "statement": "A float32 pipeline without the fp16 probability rounding (scores in fp32, exp/sum in fp32, weighted sum in fp32) would satisfy E <= 0.001 on this workload, so any observed violation is attributable to the fp16 probability cast rather than fp32 score/accumulation arithmetic."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.741,
+        "input_tokens": 13406,
+        "output_tokens": 1013
+      }
+    },
+    {
+      "duration_s": 12.204464002000009,
+      "role": "skeptic",
+      "round": 4,
+      "text": "The two prior claim attempts failed for a missing `scope_rationale` field; I'm re-sending them with that field filled in.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "fp16 has ~11-bit mantissa (~4.9e-4 relative rounding on p~1/128), and make_inputs' v -= 0.9*(p@v) strips the dominant softmax-weighted component of V, shrinking ||reference|| and the E denominator toward the 0.001*sqrt(32)~0.00566 floor; the amplified per-probability relative errors plausibly push ||out-ref||/max(||ref||, 0.00566) above 0.001. A probe should run make_inputs() on CUDA, compute the kernel output, the float64 reference on the same float32 inputs, and report E, ||ref||, and the floor.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The workload is exactly make_inputs() in kernel.py; E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite."
+              },
+              {
+                "source": "kernel.py make_inputs",
+                "summary": "v -= 0.9*(p@v) removes the softmax-weighted component from V, adversarially reducing the reference output norm."
+              },
+              {
+                "source": "kernel.py line 15",
+                "summary": "p = p.to(tl.float16).to(tl.float32) explicitly rounds probabilities to fp16 before the weighted sum."
+              }
+            ],
+            "scope_rationale": "The contract requires E <= 0.001 on exactly the make_inputs() workload (N=128, D=32, seed 813), and this claim tests a budget violation on that workload caused by the kernel's fp16 probability rounding interacting with the workload's own value-centering cancellation.",
+            "statement": "On the exact make_inputs() workload (N=128, D=32, seed 813), the kernel's fp16 rounding of softmax probabilities (p.to(tl.float16) at line 15), amplified by the value-centering cancellation (v -= 0.9*(p@v)), yields E = ||out - float64_ref||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the compliance budget."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Decomposition evidence: replacing the fp16 round with a pure-fp32 softmax (or computing the same p-rounding error term on CPU) tells the Judge whether any observed failure is attributable to the lossy probability cast rather than fp32 exp/score arithmetic, per the adversarial-precision guidance on separating lossy-step error from benign reduced precision.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reduced precision arithmetic is explicitly permitted if the E <= 0.001 budget is met, so the decisive question is which reduced-precision step causes any observed budget violation."
+              }
+            ],
+            "scope_rationale": "The contract explicitly permits reduced-precision arithmetic as long as E <= 0.001 on the single make_inputs() workload, so isolating which step (fp32 arithmetic vs fp16 probability cast) drives any measured E is decisive for attributing a violation.",
+            "statement": "A float32 pipeline without the fp16 probability rounding (scores, exp/sum, and weighted sum all in fp32) satisfies E <= 0.001 on this workload, so any observed violation is attributable to the fp16 probability cast rather than fp32 score/accumulation arithmetic."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.204,
+        "input_tokens": 15310,
+        "output_tokens": 808
+      }
+    },
+    {
+      "duration_s": 18.941939100000013,
+      "role": "describer",
+      "round": 5,
+      "text": "The description model is already largely complete and accurate; the only issue is that my earlier scope_notes entry was recorded as a single concatenated string. I'll record a cleanup update with properly separated scope notes and open questions tied to the open claims c1/c2.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32, single attention row, output shape [32].",
+              "Reference is the mathematical operation in float64 on the SAME float32 input values; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+              "Single fixed workload: make_inputs() in kernel.py (PCG64 seed 813, N=128, D=32, k scale 1.1, center 0.9); no other inputs or shapes in scope.",
+              "Reduced precision and approximate arithmetic are explicitly permitted if the budget is met; their presence alone is neither defect nor proof.",
+              "Verdict scope is finite-workload numerical compliance (trust / reject / needs_more_evidence), not general correctness."
+            ],
+            "kernel_model": [
+              "Triton single-CTA kernel (lines 6-17): loads q [32], K [128,32], V [128,32]; scores = tl.sum(k*q,1) * D**-0.5 in fp32.",
+              "Softmax: p = exp(scores - max(scores)); p /= sum(p); line 15 explicitly rounds p to float16 then back to float32 before the weighted sum.",
+              "Output y = tl.sum(p[:,None]*v, 0) accumulated in fp32 and stored to a float32 tensor of length d; run() launches one block with enable_fp_fusion=False.",
+              "make_inputs (lines 27-44): q, k sampled as standard normal (k scaled 1.1), rounded to float32; then v -= 0.9*(p@v) using a float64-computed softmax p, which removes the dominant softmax-weighted component of V and shrinks the reference output norm.",
+              "No indexing, scaling, or softmax-order bugs are visible in the kernel source; the only deliberately lossy step is the fp16 probability round at line 15."
+            ],
+            "open_questions": [
+              "What is the measured ||float64 ref|| for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor, and hence which term dominates the E denominator?",
+              "What is the measured E for the kernel vs. the float64 reference (claim c1), and does the fp32-only pipeline (no fp16 round) stay within budget (claim c2)?",
+              "How much of any observed error comes from fp16 probability rounding versus fp32 score/exp/accumulation arithmetic and tl.sum reduction order?"
+            ],
+            "risk_map": [
+              "fp16 rounding of softmax probabilities (line 15): p ~ 1/128 ~ 0.0078 has fp16 relative error ~2^-11 ~ 4.9e-4; combined with the center=0.9 value cancellation, this may push relative output error above the 0.001 budget (claim c1's core suspect).",
+              "Cancellation amplification in make_inputs: v -= 0.9*(p@v) shrinks the reference output norm, shrinking the E denominator toward the 0.00566 floor and magnifying probability quantization error.",
+              "fp32 tl.exp and score accumulation vs float64 reference: expected minor, likely within budget alone (claim c2 tests this attribution).",
+              "fp16 underflow of small tail probabilities to zero: likely harmless for this metric but direction of error needs runtime evidence."
+            ],
+            "scope_notes": [
+              "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.",
+              "Target stack: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; inputs float32 on device, output float32.",
+              "E threshold 0.001 with floor term 0.001*sqrt(32); the value-centering construction (center=0.9) is designed to push the case near this boundary.",
+              "Decisive experiments are the direct E measurement on the exact workload (c1) and a decomposition comparing against an fp32-only pipeline (c2); both claims currently lack evidence."
+            ],
+            "summary": "Cleanup re-issue of case_94 description with properly separated scope notes; no new source facts beyond the previous update (du1). The kernel computes a single attention row with an explicit fp16 round of softmax probabilities (line 15); the adversarial workload centers V against the softmax weights, making the E<=0.001 budget the decisive question, currently pending runtime evidence for claims c1/c2."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.942,
+        "input_tokens": 17246,
+        "output_tokens": 1083
+      }
+    },
+    {
+      "duration_s": 7.401468962000081,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The two decisive in-scope claims (c1: fp16 probability rounding violating the E budget on the exact workload; c2: fp32-only attribution) are already recorded and pending runtime evidence. No further high-quality claims are available; I'll record no new claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The ledger already covers the primary in-scope suspect (fp16 probability rounding vs. the E<=0.001 budget on the exact make_inputs() workload, claim c1) and the decomposition claim isolating the fp16 cast from fp32 arithmetic (claim c2). The kernel source shows no other bug surface (indexing, scaling, softmax order all correct), and only the single fixed workload is in scope, so no additional testable in-scope hypotheses remain.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.401,
+        "input_tokens": 25958,
+        "output_tokens": 209
+      }
+    },
+    {
+      "duration_s": 12.836595143999944,
+      "role": "experimenter",
+      "round": 7,
+      "text": "I'm launching two independent runtime probes on the exact make_inputs() workload: c1 measures the kernel's E against the float64 reference, and c2 measures the same pipeline without the fp16 probability round (fp32-only) to attribute any error.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, importlib.util, torch, numpy as np\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/pilot_cases/case_94/kernel.py\")\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\nq, k, v = km.make_inputs(\"cuda\")\nout = km.run(q, k, v)\nqd = q.cpu().numpy().astype(np.float64); kd = k.cpu().numpy().astype(np.float64); vd = v.cpu().numpy().astype(np.float64)\nz = kd @ qd / np.sqrt(32)\np = np.exp(z - z.max()); p /= p.sum()\nref = p @ vd\nE = np.linalg.norm(out.cpu().numpy() - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\nprint(json.dumps({\"E\": float(E), \"ref_norm\": float(np.linalg.norm(ref)),\n \"floor\": 0.001*np.sqrt(32), \"all_finite\": bool(np.isfinite(out.cpu().numpy()).all()),\n \"budget\": 0.001, \"meets_budget\": bool(E <= 0.001)}))",
+            "expected_signal": "E vs 0.001 budget on exact workload"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import json, importlib.util, torch, numpy as np\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/pilot_cases/case_94/kernel.py\")\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\nq, k, v = km.make_inputs(\"cuda\")\n# fp32-only pipeline emulating the kernel without the fp16 round\nqf, kf, vf = q.float(), k.float(), v.float()\nscores = (kf @ qf) * (32 ** -0.5)\np32 = torch.softmax(scores.float(), dim=0)\nout_fp32 = (p32[:, None] * vf).sum(0)\nqd = q.cpu().numpy().astype(np.float64); kd = k.cpu().numpy().astype(np.float64); vd = v.cpu().numpy().astype(np.float64)\nz = kd @ qd / np.sqrt(32)\np = np.exp(z - z.max()); p /= p.sum()\nref = p @ vd\nE32 = np.linalg.norm(out_fp32.cpu().numpy() - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\n# also fp16-rounded probability pipeline on CPU for attribution\np16 = p32.cpu().numpy().astype(np.float16).astype(np.float32)\nout16 = p16 @ vf.cpu().numpy()\nE16 = np.linalg.norm(out16 - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\nprint(json.dumps({\"E_fp32_only\": float(E32), \"E_fp16_probs\": float(E16),\n \"ref_norm\": float(np.linalg.norm(ref)), \"floor\": 0.001*np.sqrt(32),\n \"budget\": 0.001, \"fp32_only_meets_budget\": bool(E32 <= 0.001)}))",
+            "expected_signal": "fp32-only pipeline E vs budget; fp16-probability pipeline E for attribution"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.837,
+        "input_tokens": 26992,
+        "output_tokens": 774
+      }
+    },
+    {
+      "duration_s": 9.259477302999926,
+      "role": "experimenter",
+      "round": 8,
+      "text": "Both probes returned clean results: the kernel's E \u2248 1.90e-3 exceeds the 0.001 budget (c1 confirmed), while the fp32-only pipeline E \u2248 1.34e-6 stays within budget, attributing the violation to the fp16 probability round (c2 confirmed). I'll finalize both evidence entries now.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "E": 0.0019032712117112664,
+              "all_finite": true,
+              "budget": 0.001,
+              "floor": 0.005656854249492381,
+              "meets_budget": false,
+              "ref_norm": 0.0645028609656322
+            },
+            "event_id": "t12",
+            "status": "confirmed",
+            "summary": "On the exact make_inputs() workload (N=128, D=32, seed 813), the Triton kernel output has E = 0.001903 > 0.001 against the float64 reference (ref_norm = 0.0645, floor 0.00566, so denominator = ref_norm), violating the compliance budget; all outputs finite. Claim c1's predicted budget violation is confirmed.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "E_fp16_probs": 0.0019034597012761458,
+              "E_fp32_only": 1.3360530731152125e-06,
+              "budget": 0.001,
+              "fp32_only_meets_budget": true,
+              "ref_norm": 0.0645028609656322
+            },
+            "event_id": "t13",
+            "status": "confirmed",
+            "summary": "Decomposition: an fp32-only pipeline (scores, softmax, weighted sum in fp32, no fp16 round) gives E = 1.34e-6, far within the 0.001 budget, while the same pipeline with fp16-rounded probabilities gives E = 1.90e-3, matching the kernel's measured violation. Any budget violation is attributable to the fp16 probability cast, not fp32 arithmetic. Claim c2 confirmed.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.259,
+        "input_tokens": 30197,
+        "output_tokens": 494
+      }
+    },
+    {
+      "duration_s": 7.115982963999954,
+      "role": "skeptic",
+      "round": 9,
+      "text": "Both decisive in-scope claims are confirmed with clean probe evidence: c1 shows E \u2248 1.90e-3 > 0.001 on the exact make_inputs() workload, and c2 attributes the violation solely to the fp16 probability cast (fp32-only pipeline E \u2248 1.3e-6). The kernel source has no other bug surface, and only this single workload is in scope. No new claims are warranted.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the new probe evidence fully resolves both open in-scope claims. c1 is confirmed \u2014 on the exact make_inputs() workload the kernel's E = 0.001903 > 0.001 budget (all outputs finite, ref_norm 0.0645 dominating the floor), and c2 is confirmed \u2014 the fp32-only pipeline yields E = 1.34e-6 while the fp16-probability pipeline yields 1.90e-3, attributing the violation entirely to the fp16 probability cast at kernel line 15. No additional material, testable, in-scope problem remains uncovered; only the single fixed workload is in scope and the kernel source shows no other bug surface.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.116,
+        "input_tokens": 35520,
+        "output_tokens": 283
+      }
+    },
+    {
+      "duration_s": 8.490382221999994,
+      "role": "judge",
+      "round": 10,
+      "text": "Both decisive in-scope claims are confirmed by clean GPU probes on the exact workload: E = 0.001903 > 0.001 budget (c1), and attribution shows the fp32-only pipeline is well within budget while the fp16 probability cast reproduces the violation (c2). No open claims remain, and the Skeptic signed off with no new claims. The contract explicitly makes E \u2264 0.001 the decisive criterion, so this is a reject.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "On the exact make_inputs() workload (N=128, D=32, seed 813) \u2014 the single workload the contract specifies \u2014 the kernel output is finite but has E = 0.001903 > 0.001 against the float64 reference on the same float32 inputs (ref_norm 0.0645 dominates the floor, so the denominator is the reference norm itself). The contract explicitly requires E <= 0.001 for compliance, so this is a budget violation, not an acceptable reduced-precision deviation. Decomposition probe (c2) confirms attribution: an fp32-only pipeline (no fp16 probability round) yields E = 1.34e-6, well within budget, while the fp16-rounded probability pipeline reproduces E = 1.90e-3 \u2014 the violation is caused solely by the explicit fp16 cast of softmax probabilities at kernel.py line 15, amplified by the workload's value-centering cancellation. Both claims are in_scope with scope evidence tied to the stated workload, and the Skeptic reviewed the latest evidence and recorded no new claims. Reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.49,
+        "input_tokens": 35439,
+        "output_tokens": 368
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-30T09:04:15Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the new probe evidence fully resolves both open in-scope claims. c1 is confirmed \u2014 on the exact make_inputs() workload the kernel's E = 0.001903 > 0.001 budget (all outputs finite, ref_norm 0.0645 dominating the floor), and c2 is confirmed \u2014 the fp32-only pipeline yields E = 1.34e-6 while the fp16-probability pipeline yields 1.90e-3, attributing the violation entirely to the fp16 probability cast at kernel line 15. No additional material, testable, in-scope problem remains uncovered; only the single fixed workload is in scope and the kernel source shows no other bug surface.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 15,
+    "tool_event_id": "t16",
+    "turn": 9
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_94"
+      },
+      "created_at": "2026-09-30T09:02:20Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_94",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):\n    n = tl.arange(0, N)\n    d = tl.arange(0, D)\n    q = tl.load(Q + d)\n    k = tl.load(K + n[:, None] * D + d[None, :])\n    v = tl.load(V + n[:, None] * D + d[None, :])\n    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)\n    p = tl.exp(scores - tl.max(scores, 0))\n    p = p / tl.sum(p, 0)\n    p = p.to(tl.float16).to(tl.float32)\n    y = tl.sum(p[:, None] * v, 0)\n    tl.store(O + d, y)\n\ndef run(q, k, v):\n    n, d = k.shape\n    out = torch.empty(d, dtype=torch.float32, device=q.device)\n    _kernel[(1,)](q, k, v, out, n, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'attention', 'seed': 813, 'n': 128, 'd': 32, 'scale': 1.1, 'center': 0.9}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+        "passed": null,
+        "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = softmax(K @ q / sqrt(D)) @ V, softmax over the N tokens.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.001.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "rounds": null,
+        "session_dir": "/root/pilot_cases/case_94",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_94"
+      },
+      "created_at": "2026-09-30T09:02:20Z",
+      "id": "t2",
+      "output": {
+        "content": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = softmax(K @ q / sqrt(D)) @ V, softmax over the N tokens.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.001.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "entry": "case_94",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_94"
+      },
+      "created_at": "2026-09-30T09:02:20Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_94",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2573
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1054
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_94",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T09:02:20Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_94\",\n  \"status\": \"unverified\",\n  \"passed\": null\n}\n",
+        "entry": "case_94",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32 (single attention row, output shape [32]).",
+          "Reference is float64 math on the SAME float32 input values; compliance metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+          "Single fixed workload from make_inputs() (PCG64 seed 813, N=128, D=32, k scale 1.1, value centering offset 0.9); no other inputs/shapes in scope.",
+          "Reduced precision arithmetic is explicitly permitted if the relative-error budget is met.",
+          "Verdict scope is finite-workload numerical compliance, not general correctness."
+        ],
+        "kernel_model": [
+          "Triton single-block kernel: loads q (1x32), K (128x32), V (128x32); scores = row-wise dot of k with q times D**-0.5 in fp32.",
+          "Softmax: p = exp(scores - max(scores)); p /= sum(p); then explicitly rounds probabilities to float16 and back to float32 (line 15).",
+          "Output y = sum over N of p[:,None]*v, accumulated in fp32, stored to a torch.float32 tensor of length d.",
+          "run() derives N,D from k.shape and launches one CTA with enable_fp_fusion=False; no scaling or softmax mistakes visible in indexing.",
+          "make_inputs constructs adversarial values: v -= 0.9*(p@v), removing the dominant softmax-weighted component from V to amplify relative error in the output norm.",
+          "q and k are rounded to float32 before the structured v adjustment; reference uses these exact float32 inputs."
+        ],
+        "open_questions": [
+          "What is the actual float64 reference output norm for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor -- does the denominator use the reference norm or the floor?",
+          "What is the realized relative error of the fp16-rounded softmax probabilities after the p@V cancellation; an Experimenter probe computing E directly is needed.",
+          "Does tl.sum accumulation order or exp accuracy contribute measurably compared to the fp16 rounding step?"
+        ],
+        "risk_map": [
+          "fp16 rounding of softmax probabilities (line 15): with N=128 probabilities summing to 1, typical p ~ 1/128 ~ 0.0078 has fp16 relative error ~ 2^-11 ~ 4.9e-4; combined with the value-centering cancellation (center=0.9 strips the dominant direction), relative output error may exceed the 0.001 budget -- this is the primary suspect.",
+          "Cancellation amplification: the reference output norm is reduced by the v -= 0.9*(p@v) construction, shrinking the denominator of E and magnifying the effect of probability quantization error.",
+          "tl.exp in fp32 vs float64 reference: minor, likely within budget by itself.",
+          "fp16 cast of p could also underflow very small tail probabilities to zero (harmless for this metric) or round the max probability; direction of error needs runtime evidence.",
+          "Potential mismatch between kernel's fp32 score computation and make_inputs' float64-computed p used for value centering -- kernel is not the source of that, but it affects how adversarial the case is."
+        ],
+        "scope_notes": "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.\", \"Target stack: NVIDIA T4 (no tf32/fp8 features assumed relevant), PyTorch 2.8.0, Triton 3.4.0.\", \"Inputs are float32 on device; output tensor is float32; kernel arithmetic mixes fp32 accumulation with an explicit fp16 round of probabilities.\", \"E threshold 0.001 with the 0.001*sqrt(32) floor term means tiny-norm outputs get a floor; the value-centering construction is designed to push the case near this boundary.\"]",
+        "summary": "Case_94: single-head attention row (N=128, D=32) computed by a one-CTA Triton kernel with fp16-rounded softmax probabilities, against a float64 reference with an adversarially centered value matrix. Key suspect: fp16 rounding of probabilities combined with cancellation in V may violate the E <= 0.001 relative-error budget."
+      },
+      "created_at": "2026-09-30T09:02:39Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32 (single attention row, output shape [32]).",
+            "Reference is float64 math on the SAME float32 input values; compliance metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+            "Single fixed workload from make_inputs() (PCG64 seed 813, N=128, D=32, k scale 1.1, value centering offset 0.9); no other inputs/shapes in scope.",
+            "Reduced precision arithmetic is explicitly permitted if the relative-error budget is met.",
+            "Verdict scope is finite-workload numerical compliance, not general correctness."
+          ],
+          "kernel_model": [
+            "Triton single-block kernel: loads q (1x32), K (128x32), V (128x32); scores = row-wise dot of k with q times D**-0.5 in fp32.",
+            "Softmax: p = exp(scores - max(scores)); p /= sum(p); then explicitly rounds probabilities to float16 and back to float32 (line 15).",
+            "Output y = sum over N of p[:,None]*v, accumulated in fp32, stored to a torch.float32 tensor of length d.",
+            "run() derives N,D from k.shape and launches one CTA with enable_fp_fusion=False; no scaling or softmax mistakes visible in indexing.",
+            "make_inputs constructs adversarial values: v -= 0.9*(p@v), removing the dominant softmax-weighted component from V to amplify relative error in the output norm.",
+            "q and k are rounded to float32 before the structured v adjustment; reference uses these exact float32 inputs."
+          ],
+          "open_questions": [
+            "What is the actual float64 reference output norm for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor -- does the denominator use the reference norm or the floor?",
+            "What is the realized relative error of the fp16-rounded softmax probabilities after the p@V cancellation; an Experimenter probe computing E directly is needed.",
+            "Does tl.sum accumulation order or exp accuracy contribute measurably compared to the fp16 rounding step?"
+          ],
+          "risk_map": [
+            "fp16 rounding of softmax probabilities (line 15): with N=128 probabilities summing to 1, typical p ~ 1/128 ~ 0.0078 has fp16 relative error ~ 2^-11 ~ 4.9e-4; combined with the value-centering cancellation (center=0.9 strips the dominant direction), relative output error may exceed the 0.001 budget -- this is the primary suspect.",
+            "Cancellation amplification: the reference output norm is reduced by the v -= 0.9*(p@v) construction, shrinking the denominator of E and magnifying the effect of probability quantization error.",
+            "tl.exp in fp32 vs float64 reference: minor, likely within budget by itself.",
+            "fp16 cast of p could also underflow very small tail probabilities to zero (harmless for this metric) or round the max probability; direction of error needs runtime evidence.",
+            "Potential mismatch between kernel's fp32 score computation and make_inputs' float64-computed p used for value centering -- kernel is not the source of that, but it affects how adversarial the case is."
+          ],
+          "scope_notes": [
+            "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.\", \"Target stack: NVIDIA T4 (no tf32/fp8 features assumed relevant), PyTorch 2.8.0, Triton 3.4.0.\", \"Inputs are float32 on device; output tensor is float32; kernel arithmetic mixes fp32 accumulation with an explicit fp16 round of probabilities.\", \"E threshold 0.001 with the 0.001*sqrt(32) floor term means tiny-norm outputs get a floor; the value-centering construction is designed to push the case near this boundary.\"]"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32 (single attention row, output shape [32]).",
+            "Reference is float64 math on the SAME float32 input values; compliance metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+            "Single fixed workload from make_inputs() (PCG64 seed 813, N=128, D=32, k scale 1.1, value centering offset 0.9); no other inputs/shapes in scope.",
+            "Reduced precision arithmetic is explicitly permitted if the relative-error budget is met.",
+            "Verdict scope is finite-workload numerical compliance, not general correctness."
+          ],
+          "created_at": "2026-09-30T09:02:39Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton single-block kernel: loads q (1x32), K (128x32), V (128x32); scores = row-wise dot of k with q times D**-0.5 in fp32.",
+            "Softmax: p = exp(scores - max(scores)); p /= sum(p); then explicitly rounds probabilities to float16 and back to float32 (line 15).",
+            "Output y = sum over N of p[:,None]*v, accumulated in fp32, stored to a torch.float32 tensor of length d.",
+            "run() derives N,D from k.shape and launches one CTA with enable_fp_fusion=False; no scaling or softmax mistakes visible in indexing.",
+            "make_inputs constructs adversarial values: v -= 0.9*(p@v), removing the dominant softmax-weighted component from V to amplify relative error in the output norm.",
+            "q and k are rounded to float32 before the structured v adjustment; reference uses these exact float32 inputs."
+          ],
+          "open_questions": [
+            "What is the actual float64 reference output norm for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor -- does the denominator use the reference norm or the floor?",
+            "What is the realized relative error of the fp16-rounded softmax probabilities after the p@V cancellation; an Experimenter probe computing E directly is needed.",
+            "Does tl.sum accumulation order or exp accuracy contribute measurably compared to the fp16 rounding step?"
+          ],
+          "risk_map": [
+            "fp16 rounding of softmax probabilities (line 15): with N=128 probabilities summing to 1, typical p ~ 1/128 ~ 0.0078 has fp16 relative error ~ 2^-11 ~ 4.9e-4; combined with the value-centering cancellation (center=0.9 strips the dominant direction), relative output error may exceed the 0.001 budget -- this is the primary suspect.",
+            "Cancellation amplification: the reference output norm is reduced by the v -= 0.9*(p@v) construction, shrinking the denominator of E and magnifying the effect of probability quantization error.",
+            "tl.exp in fp32 vs float64 reference: minor, likely within budget by itself.",
+            "fp16 cast of p could also underflow very small tail probabilities to zero (harmless for this metric) or round the max probability; direction of error needs runtime evidence.",
+            "Potential mismatch between kernel's fp32 score computation and make_inputs' float64-computed p used for value centering -- kernel is not the source of that, but it affects how adversarial the case is."
+          ],
+          "scope_notes": [
+            "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.\", \"Target stack: NVIDIA T4 (no tf32/fp8 features assumed relevant), PyTorch 2.8.0, Triton 3.4.0.\", \"Inputs are float32 on device; output tensor is float32; kernel arithmetic mixes fp32 accumulation with an explicit fp16 round of probabilities.\", \"E threshold 0.001 with the 0.001*sqrt(32) floor term means tiny-norm outputs get a floor; the value-centering construction is designed to push the case near this boundary.\"]"
+          ],
+          "summary": "Case_94: single-head attention row (N=128, D=32) computed by a one-CTA Triton kernel with fp16-rounded softmax probabilities, against a float64 reference with an adversarially centered value matrix. Key suspect: fp16 rounding of probabilities combined with cancellation in V may violate the E <= 0.001 relative-error budget.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "fp16 has ~11-bit mantissa (~4.9e-4 relative rounding on p~1/128), and make_inputs' v -= 0.9*(p@v) strips the dominant softmax-weighted component of V, shrinking ||reference|| and the E denominator toward the 0.001*sqrt(32)~0.00566 floor; the amplified per-probability relative errors plausibly push ||out-ref||/max(||ref||, 0.00566) above 0.001. A probe should run make_inputs() on CUDA, compute the kernel output, the float64 reference on the same float32 inputs, and report E, ||ref||, and the floor.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The workload is exactly make_inputs() in kernel.py; E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite."
+          },
+          {
+            "source": "kernel.py make_inputs",
+            "summary": "v -= 0.9*(p@v) removes the softmax-weighted component from V, adversarially reducing the reference output norm."
+          },
+          {
+            "source": "kernel.py line 15",
+            "summary": "p = p.to(tl.float16).to(tl.float32) explicitly rounds probabilities to fp16 before the weighted sum."
+          }
+        ],
+        "statement": "On the exact make_inputs() workload (N=128, D=32, seed 813), the kernel's fp16 rounding of softmax probabilities (p.to(tl.float16) at line 15), amplified by the value-centering cancellation (v -= 0.9*(p@v)), yields E = ||out - float64_ref||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the compliance budget."
+      },
+      "created_at": "2026-09-30T09:02:58Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Decomposition evidence: replacing the fp16 round with a pure-fp32 softmax (or computing the same p-rounding error term on CPU) tells the Judge whether the failure, if observed, is attributable to the lossy probability cast rather than fp32 exp/score arithmetic, per the adversarial-precision guidance on separating lossy-step error from benign reduced precision.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reduced precision arithmetic is explicitly permitted if the E <= 0.001 budget is met, so the decisive question is which reduced-precision step causes any observed budget violation."
+          }
+        ],
+        "statement": "A float32 pipeline without the fp16 probability rounding (scores in fp32, exp/sum in fp32, weighted sum in fp32) would satisfy E <= 0.001 on this workload, so any observed violation is attributable to the fp16 probability cast rather than fp32 score/accumulation arithmetic."
+      },
+      "created_at": "2026-09-30T09:02:58Z",
+      "id": "t7",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t7",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "fp16 has ~11-bit mantissa (~4.9e-4 relative rounding on p~1/128), and make_inputs' v -= 0.9*(p@v) strips the dominant softmax-weighted component of V, shrinking ||reference|| and the E denominator toward the 0.001*sqrt(32)~0.00566 floor; the amplified per-probability relative errors plausibly push ||out-ref||/max(||ref||, 0.00566) above 0.001. A probe should run make_inputs() on CUDA, compute the kernel output, the float64 reference on the same float32 inputs, and report E, ||ref||, and the floor.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The workload is exactly make_inputs() in kernel.py; E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite."
+          },
+          {
+            "source": "kernel.py make_inputs",
+            "summary": "v -= 0.9*(p@v) removes the softmax-weighted component from V, adversarially reducing the reference output norm."
+          },
+          {
+            "source": "kernel.py line 15",
+            "summary": "p = p.to(tl.float16).to(tl.float32) explicitly rounds probabilities to fp16 before the weighted sum."
+          }
+        ],
+        "scope_rationale": "The contract requires E <= 0.001 on exactly the make_inputs() workload (N=128, D=32, seed 813), and this claim tests a budget violation on that workload caused by the kernel's fp16 probability rounding interacting with the workload's own value-centering cancellation.",
+        "statement": "On the exact make_inputs() workload (N=128, D=32, seed 813), the kernel's fp16 rounding of softmax probabilities (p.to(tl.float16) at line 15), amplified by the value-centering cancellation (v -= 0.9*(p@v)), yields E = ||out - float64_ref||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the compliance budget."
+      },
+      "created_at": "2026-09-30T09:03:10Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-30T09:03:10Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "fp16 has ~11-bit mantissa (~4.9e-4 relative rounding on p~1/128), and make_inputs' v -= 0.9*(p@v) strips the dominant softmax-weighted component of V, shrinking ||reference|| and the E denominator toward the 0.001*sqrt(32)~0.00566 floor; the amplified per-probability relative errors plausibly push ||out-ref||/max(||ref||, 0.00566) above 0.001. A probe should run make_inputs() on CUDA, compute the kernel output, the float64 reference on the same float32 inputs, and report E, ||ref||, and the floor.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The workload is exactly make_inputs() in kernel.py; E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite."
+          },
+          {
+            "source": "kernel.py make_inputs",
+            "summary": "v -= 0.9*(p@v) removes the softmax-weighted component from V, adversarially reducing the reference output norm."
+          },
+          {
+            "source": "kernel.py line 15",
+            "summary": "p = p.to(tl.float16).to(tl.float32) explicitly rounds probabilities to fp16 before the weighted sum."
+          }
+        ],
+        "scope_rationale": "The contract requires E <= 0.001 on exactly the make_inputs() workload (N=128, D=32, seed 813), and this claim tests a budget violation on that workload caused by the kernel's fp16 probability rounding interacting with the workload's own value-centering cancellation.",
+        "statement": "On the exact make_inputs() workload (N=128, D=32, seed 813), the kernel's fp16 rounding of softmax probabilities (p.to(tl.float16) at line 15), amplified by the value-centering cancellation (v -= 0.9*(p@v)), yields E = ||out - float64_ref||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the compliance budget.",
+        "status": "open",
+        "updated_at": "2026-09-30T09:03:10Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Decomposition evidence: replacing the fp16 round with a pure-fp32 softmax (or computing the same p-rounding error term on CPU) tells the Judge whether any observed failure is attributable to the lossy probability cast rather than fp32 exp/score arithmetic, per the adversarial-precision guidance on separating lossy-step error from benign reduced precision.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reduced precision arithmetic is explicitly permitted if the E <= 0.001 budget is met, so the decisive question is which reduced-precision step causes any observed budget violation."
+          }
+        ],
+        "scope_rationale": "The contract explicitly permits reduced-precision arithmetic as long as E <= 0.001 on the single make_inputs() workload, so isolating which step (fp32 arithmetic vs fp16 probability cast) drives any measured E is decisive for attributing a violation.",
+        "statement": "A float32 pipeline without the fp16 probability rounding (scores, exp/sum, and weighted sum all in fp32) satisfies E <= 0.001 on this workload, so any observed violation is attributable to the fp16 probability cast rather than fp32 score/accumulation arithmetic."
+      },
+      "created_at": "2026-09-30T09:03:10Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-30T09:03:10Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "Decomposition evidence: replacing the fp16 round with a pure-fp32 softmax (or computing the same p-rounding error term on CPU) tells the Judge whether any observed failure is attributable to the lossy probability cast rather than fp32 exp/score arithmetic, per the adversarial-precision guidance on separating lossy-step error from benign reduced precision.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reduced precision arithmetic is explicitly permitted if the E <= 0.001 budget is met, so the decisive question is which reduced-precision step causes any observed budget violation."
+          }
+        ],
+        "scope_rationale": "The contract explicitly permits reduced-precision arithmetic as long as E <= 0.001 on the single make_inputs() workload, so isolating which step (fp32 arithmetic vs fp16 probability cast) drives any measured E is decisive for attributing a violation.",
+        "statement": "A float32 pipeline without the fp16 probability rounding (scores, exp/sum, and weighted sum all in fp32) satisfies E <= 0.001 on this workload, so any observed violation is attributable to the fp16 probability cast rather than fp32 score/accumulation arithmetic.",
+        "status": "open",
+        "updated_at": "2026-09-30T09:03:10Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32, single attention row, output shape [32].",
+          "Reference is the mathematical operation in float64 on the SAME float32 input values; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+          "Single fixed workload: make_inputs() in kernel.py (PCG64 seed 813, N=128, D=32, k scale 1.1, center 0.9); no other inputs or shapes in scope.",
+          "Reduced precision and approximate arithmetic are explicitly permitted if the budget is met; their presence alone is neither defect nor proof.",
+          "Verdict scope is finite-workload numerical compliance (trust / reject / needs_more_evidence), not general correctness."
+        ],
+        "kernel_model": [
+          "Triton single-CTA kernel (lines 6-17): loads q [32], K [128,32], V [128,32]; scores = tl.sum(k*q,1) * D**-0.5 in fp32.",
+          "Softmax: p = exp(scores - max(scores)); p /= sum(p); line 15 explicitly rounds p to float16 then back to float32 before the weighted sum.",
+          "Output y = tl.sum(p[:,None]*v, 0) accumulated in fp32 and stored to a float32 tensor of length d; run() launches one block with enable_fp_fusion=False.",
+          "make_inputs (lines 27-44): q, k sampled as standard normal (k scaled 1.1), rounded to float32; then v -= 0.9*(p@v) using a float64-computed softmax p, which removes the dominant softmax-weighted component of V and shrinks the reference output norm.",
+          "No indexing, scaling, or softmax-order bugs are visible in the kernel source; the only deliberately lossy step is the fp16 probability round at line 15."
+        ],
+        "open_questions": [
+          "What is the measured ||float64 ref|| for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor, and hence which term dominates the E denominator?",
+          "What is the measured E for the kernel vs. the float64 reference (claim c1), and does the fp32-only pipeline (no fp16 round) stay within budget (claim c2)?",
+          "How much of any observed error comes from fp16 probability rounding versus fp32 score/exp/accumulation arithmetic and tl.sum reduction order?"
+        ],
+        "risk_map": [
+          "fp16 rounding of softmax probabilities (line 15): p ~ 1/128 ~ 0.0078 has fp16 relative error ~2^-11 ~ 4.9e-4; combined with the center=0.9 value cancellation, this may push relative output error above the 0.001 budget (claim c1's core suspect).",
+          "Cancellation amplification in make_inputs: v -= 0.9*(p@v) shrinks the reference output norm, shrinking the E denominator toward the 0.00566 floor and magnifying probability quantization error.",
+          "fp32 tl.exp and score accumulation vs float64 reference: expected minor, likely within budget alone (claim c2 tests this attribution).",
+          "fp16 underflow of small tail probabilities to zero: likely harmless for this metric but direction of error needs runtime evidence."
+        ],
+        "scope_notes": [
+          "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.",
+          "Target stack: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; inputs float32 on device, output float32.",
+          "E threshold 0.001 with floor term 0.001*sqrt(32); the value-centering construction (center=0.9) is designed to push the case near this boundary.",
+          "Decisive experiments are the direct E measurement on the exact workload (c1) and a decomposition comparing against an fp32-only pipeline (c2); both claims currently lack evidence."
+        ],
+        "summary": "Cleanup re-issue of case_94 description with properly separated scope notes; no new source facts beyond the previous update (du1). The kernel computes a single attention row with an explicit fp16 round of softmax probabilities (line 15); the adversarial workload centers V against the softmax weights, making the E<=0.001 budget the decisive question, currently pending runtime evidence for claims c1/c2."
+      },
+      "created_at": "2026-09-30T09:03:29Z",
+      "id": "t10",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32 (single attention row, output shape [32]).",
+            "Reference is float64 math on the SAME float32 input values; compliance metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+            "Single fixed workload from make_inputs() (PCG64 seed 813, N=128, D=32, k scale 1.1, value centering offset 0.9); no other inputs/shapes in scope.",
+            "Reduced precision arithmetic is explicitly permitted if the relative-error budget is met.",
+            "Verdict scope is finite-workload numerical compliance, not general correctness.",
+            "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32, single attention row, output shape [32].",
+            "Reference is the mathematical operation in float64 on the SAME float32 input values; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+            "Single fixed workload: make_inputs() in kernel.py (PCG64 seed 813, N=128, D=32, k scale 1.1, center 0.9); no other inputs or shapes in scope.",
+            "Reduced precision and approximate arithmetic are explicitly permitted if the budget is met; their presence alone is neither defect nor proof.",
+            "Verdict scope is finite-workload numerical compliance (trust / reject / needs_more_evidence), not general correctness."
+          ],
+          "kernel_model": [
+            "Triton single-block kernel: loads q (1x32), K (128x32), V (128x32); scores = row-wise dot of k with q times D**-0.5 in fp32.",
+            "Softmax: p = exp(scores - max(scores)); p /= sum(p); then explicitly rounds probabilities to float16 and back to float32 (line 15).",
+            "Output y = sum over N of p[:,None]*v, accumulated in fp32, stored to a torch.float32 tensor of length d.",
+            "run() derives N,D from k.shape and launches one CTA with enable_fp_fusion=False; no scaling or softmax mistakes visible in indexing.",
+            "make_inputs constructs adversarial values: v -= 0.9*(p@v), removing the dominant softmax-weighted component from V to amplify relative error in the output norm.",
+            "q and k are rounded to float32 before the structured v adjustment; reference uses these exact float32 inputs.",
+            "Triton single-CTA kernel (lines 6-17): loads q [32], K [128,32], V [128,32]; scores = tl.sum(k*q,1) * D**-0.5 in fp32.",
+            "Softmax: p = exp(scores - max(scores)); p /= sum(p); line 15 explicitly rounds p to float16 then back to float32 before the weighted sum.",
+            "Output y = tl.sum(p[:,None]*v, 0) accumulated in fp32 and stored to a float32 tensor of length d; run() launches one block with enable_fp_fusion=False.",
+            "make_inputs (lines 27-44): q, k sampled as standard normal (k scaled 1.1), rounded to float32; then v -= 0.9*(p@v) using a float64-computed softmax p, which removes the dominant softmax-weighted component of V and shrinks the reference output norm.",
+            "No indexing, scaling, or softmax-order bugs are visible in the kernel source; the only deliberately lossy step is the fp16 probability round at line 15."
+          ],
+          "open_questions": [
+            "What is the actual float64 reference output norm for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor -- does the denominator use the reference norm or the floor?",
+            "What is the realized relative error of the fp16-rounded softmax probabilities after the p@V cancellation; an Experimenter probe computing E directly is needed.",
+            "Does tl.sum accumulation order or exp accuracy contribute measurably compared to the fp16 rounding step?",
+            "What is the measured ||float64 ref|| for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor, and hence which term dominates the E denominator?",
+            "What is the measured E for the kernel vs. the float64 reference (claim c1), and does the fp32-only pipeline (no fp16 round) stay within budget (claim c2)?",
+            "How much of any observed error comes from fp16 probability rounding versus fp32 score/exp/accumulation arithmetic and tl.sum reduction order?"
+          ],
+          "risk_map": [
+            "fp16 rounding of softmax probabilities (line 15): with N=128 probabilities summing to 1, typical p ~ 1/128 ~ 0.0078 has fp16 relative error ~ 2^-11 ~ 4.9e-4; combined with the value-centering cancellation (center=0.9 strips the dominant direction), relative output error may exceed the 0.001 budget -- this is the primary suspect.",
+            "Cancellation amplification: the reference output norm is reduced by the v -= 0.9*(p@v) construction, shrinking the denominator of E and magnifying the effect of probability quantization error.",
+            "tl.exp in fp32 vs float64 reference: minor, likely within budget by itself.",
+            "fp16 cast of p could also underflow very small tail probabilities to zero (harmless for this metric) or round the max probability; direction of error needs runtime evidence.",
+            "Potential mismatch between kernel's fp32 score computation and make_inputs' float64-computed p used for value centering -- kernel is not the source of that, but it affects how adversarial the case is.",
+            "fp16 rounding of softmax probabilities (line 15): p ~ 1/128 ~ 0.0078 has fp16 relative error ~2^-11 ~ 4.9e-4; combined with the center=0.9 value cancellation, this may push relative output error above the 0.001 budget (claim c1's core suspect).",
+            "Cancellation amplification in make_inputs: v -= 0.9*(p@v) shrinks the reference output norm, shrinking the E denominator toward the 0.00566 floor and magnifying probability quantization error.",
+            "fp32 tl.exp and score accumulation vs float64 reference: expected minor, likely within budget alone (claim c2 tests this attribution).",
+            "fp16 underflow of small tail probabilities to zero: likely harmless for this metric but direction of error needs runtime evidence."
+          ],
+          "scope_notes": [
+            "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.\", \"Target stack: NVIDIA T4 (no tf32/fp8 features assumed relevant), PyTorch 2.8.0, Triton 3.4.0.\", \"Inputs are float32 on device; output tensor is float32; kernel arithmetic mixes fp32 accumulation with an explicit fp16 round of probabilities.\", \"E threshold 0.001 with the 0.001*sqrt(32) floor term means tiny-norm outputs get a floor; the value-centering construction is designed to push the case near this boundary.\"]",
+            "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.",
+            "Target stack: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; inputs float32 on device, output float32.",
+            "E threshold 0.001 with floor term 0.001*sqrt(32); the value-centering construction (center=0.9) is designed to push the case near this boundary.",
+            "Decisive experiments are the direct E measurement on the exact workload (c1) and a decomposition comparing against an fp32-only pipeline (c2); both claims currently lack evidence."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over N=128 tokens, D=32, single attention row, output shape [32].",
+            "Reference is the mathematical operation in float64 on the SAME float32 input values; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite.",
+            "Single fixed workload: make_inputs() in kernel.py (PCG64 seed 813, N=128, D=32, k scale 1.1, center 0.9); no other inputs or shapes in scope.",
+            "Reduced precision and approximate arithmetic are explicitly permitted if the budget is met; their presence alone is neither defect nor proof.",
+            "Verdict scope is finite-workload numerical compliance (trust / reject / needs_more_evidence), not general correctness."
+          ],
+          "created_at": "2026-09-30T09:03:29Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton single-CTA kernel (lines 6-17): loads q [32], K [128,32], V [128,32]; scores = tl.sum(k*q,1) * D**-0.5 in fp32.",
+            "Softmax: p = exp(scores - max(scores)); p /= sum(p); line 15 explicitly rounds p to float16 then back to float32 before the weighted sum.",
+            "Output y = tl.sum(p[:,None]*v, 0) accumulated in fp32 and stored to a float32 tensor of length d; run() launches one block with enable_fp_fusion=False.",
+            "make_inputs (lines 27-44): q, k sampled as standard normal (k scaled 1.1), rounded to float32; then v -= 0.9*(p@v) using a float64-computed softmax p, which removes the dominant softmax-weighted component of V and shrinks the reference output norm.",
+            "No indexing, scaling, or softmax-order bugs are visible in the kernel source; the only deliberately lossy step is the fp16 probability round at line 15."
+          ],
+          "open_questions": [
+            "What is the measured ||float64 ref|| for this workload relative to the 0.001*sqrt(32) ~ 0.00566 floor, and hence which term dominates the E denominator?",
+            "What is the measured E for the kernel vs. the float64 reference (claim c1), and does the fp32-only pipeline (no fp16 round) stay within budget (claim c2)?",
+            "How much of any observed error comes from fp16 probability rounding versus fp32 score/exp/accumulation arithmetic and tl.sum reduction order?"
+          ],
+          "risk_map": [
+            "fp16 rounding of softmax probabilities (line 15): p ~ 1/128 ~ 0.0078 has fp16 relative error ~2^-11 ~ 4.9e-4; combined with the center=0.9 value cancellation, this may push relative output error above the 0.001 budget (claim c1's core suspect).",
+            "Cancellation amplification in make_inputs: v -= 0.9*(p@v) shrinks the reference output norm, shrinking the E denominator toward the 0.00566 floor and magnifying probability quantization error.",
+            "fp32 tl.exp and score accumulation vs float64 reference: expected minor, likely within budget alone (claim c2 tests this attribution).",
+            "fp16 underflow of small tail probabilities to zero: likely harmless for this metric but direction of error needs runtime evidence."
+          ],
+          "scope_notes": [
+            "Only the exact make_inputs() workload (N=128, D=32, seed 813) is in scope; general-input correctness claims are out of scope.",
+            "Target stack: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; inputs float32 on device, output float32.",
+            "E threshold 0.001 with floor term 0.001*sqrt(32); the value-centering construction (center=0.9) is designed to push the case near this boundary.",
+            "Decisive experiments are the direct E measurement on the exact workload (c1) and a decomposition comparing against an fp32-only pipeline (c2); both claims currently lack evidence."
+          ],
+          "summary": "Cleanup re-issue of case_94 description with properly separated scope notes; no new source facts beyond the previous update (du1). The kernel computes a single attention row with an explicit fp16 round of softmax probabilities (line 15); the adversarial workload centers V against the softmax weights, making the E<=0.001 budget the decisive question, currently pending runtime evidence for claims c1/c2.",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "The ledger already covers the primary in-scope suspect (fp16 probability rounding vs. the E<=0.001 budget on the exact make_inputs() workload, claim c1) and the decomposition claim isolating the fp16 cast from fp32 arithmetic (claim c2). The kernel source shows no other bug surface (indexing, scaling, softmax order all correct), and only the single fixed workload is in scope, so no additional testable in-scope hypotheses remain.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-30T09:03:37Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-09-30T09:03:37Z",
+        "decision": "no_new_claims",
+        "reason": "The ledger already covers the primary in-scope suspect (fp16 probability rounding vs. the E<=0.001 budget on the exact make_inputs() workload, claim c1) and the decomposition claim isolating the fp16 cast from fp32 arithmetic (claim c2). The kernel source shows no other bug surface (indexing, scaling, softmax order all correct), and only the single fixed workload is in scope, so no additional testable in-scope hypotheses remain.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 10,
+        "tool_event_id": "t11",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, importlib.util, torch, numpy as np\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/pilot_cases/case_94/kernel.py\")\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\nq, k, v = km.make_inputs(\"cuda\")\nout = km.run(q, k, v)\nqd = q.cpu().numpy().astype(np.float64); kd = k.cpu().numpy().astype(np.float64); vd = v.cpu().numpy().astype(np.float64)\nz = kd @ qd / np.sqrt(32)\np = np.exp(z - z.max()); p /= p.sum()\nref = p @ vd\nE = np.linalg.norm(out.cpu().numpy() - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\nprint(json.dumps({\"E\": float(E), \"ref_norm\": float(np.linalg.norm(ref)),\n \"floor\": 0.001*np.sqrt(32), \"all_finite\": bool(np.isfinite(out.cpu().numpy()).all()),\n \"budget\": 0.001, \"meets_budget\": bool(E <= 0.001)}))",
+        "expected_signal": "E vs 0.001 budget on exact workload"
+      },
+      "created_at": "2026-09-30T09:03:55Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "202e2ba71f215bd57f414c54af80113306658b5f4615395bcf317c4d7a6fff8f"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "47ad17f932dbc31f730de6d2af6606c4a16aaba7ef9bb91e81e9386c47d88770"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "fd06ba7746005970ad595a2603404d1317966881b9e005da9ec07043ed7f5e93"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On the exact make_inputs() workload (N=128, D=32, seed 813), the kernel's fp16 rounding of softmax probabilities (p.to(tl.float16) at line 15), amplified by the value-centering cancellation (v -= 0.9*(p@v)), yields E = ||out - float64_ref||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the compliance budget.",
+        "cwd": "/root/pilot_cases/case_94",
+        "duration_s": 5.169844,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "202e2ba71f215bd57f414c54af80113306658b5f4615395bcf317c4d7a6fff8f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "47ad17f932dbc31f730de6d2af6606c4a16aaba7ef9bb91e81e9386c47d88770"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "fd06ba7746005970ad595a2603404d1317966881b9e005da9ec07043ed7f5e93"
+              }
+            ],
+            "duration_s": 5.169844,
+            "exit_code": 0,
+            "expected_signal": "E vs 0.001 budget on exact workload",
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.0019032712117112664,
+              "all_finite": true,
+              "budget": 0.001,
+              "floor": 0.005656854249492381,
+              "meets_budget": false,
+              "ref_norm": 0.0645028609656322
+            },
+            "stderr": "",
+            "stdout": "{\"E\": 0.0019032712117112664, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"all_finite\": true, \"budget\": 0.001, \"meets_budget\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "E vs 0.001 budget on exact workload",
+        "json_parse_error": null,
+        "json_result": {
+          "E": 0.0019032712117112664,
+          "all_finite": true,
+          "budget": 0.001,
+          "floor": 0.005656854249492381,
+          "meets_budget": false,
+          "ref_norm": 0.0645028609656322
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"E\": 0.0019032712117112664, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"all_finite\": true, \"budget\": 0.001, \"meets_budget\": false}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import json, importlib.util, torch, numpy as np\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/pilot_cases/case_94/kernel.py\")\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\nq, k, v = km.make_inputs(\"cuda\")\n# fp32-only pipeline emulating the kernel without the fp16 round\nqf, kf, vf = q.float(), k.float(), v.float()\nscores = (kf @ qf) * (32 ** -0.5)\np32 = torch.softmax(scores.float(), dim=0)\nout_fp32 = (p32[:, None] * vf).sum(0)\nqd = q.cpu().numpy().astype(np.float64); kd = k.cpu().numpy().astype(np.float64); vd = v.cpu().numpy().astype(np.float64)\nz = kd @ qd / np.sqrt(32)\np = np.exp(z - z.max()); p /= p.sum()\nref = p @ vd\nE32 = np.linalg.norm(out_fp32.cpu().numpy() - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\n# also fp16-rounded probability pipeline on CPU for attribution\np16 = p32.cpu().numpy().astype(np.float16).astype(np.float32)\nout16 = p16 @ vf.cpu().numpy()\nE16 = np.linalg.norm(out16 - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\nprint(json.dumps({\"E_fp32_only\": float(E32), \"E_fp16_probs\": float(E16),\n \"ref_norm\": float(np.linalg.norm(ref)), \"floor\": 0.001*np.sqrt(32),\n \"budget\": 0.001, \"fp32_only_meets_budget\": bool(E32 <= 0.001)}))",
+        "expected_signal": "fp32-only pipeline E vs budget; fp16-probability pipeline E for attribution"
+      },
+      "created_at": "2026-09-30T09:03:58Z",
+      "id": "t13",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t13_probe.py",
+            "sha256": "975e1bbee3fb4aff87e927a477bccd0d8260540fe405db7d59ed5f1bc72097a2"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t13_stdout.txt",
+            "sha256": "83abda19decdd1ba99cbf400a9d1f4a1a8747e620009db8f3b0a45046207d87c"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t13_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t13_json_result.json",
+            "sha256": "64ed02037a7d7d369f666b03752f716860de3bd4ade3f405e243d8111527f52f"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "A float32 pipeline without the fp16 probability rounding (scores, exp/sum, and weighted sum all in fp32) satisfies E <= 0.001 on this workload, so any observed violation is attributable to the fp16 probability cast rather than fp32 score/accumulation arithmetic.",
+        "cwd": "/root/pilot_cases/case_94",
+        "duration_s": 3.80428,
+        "event_id": "t13",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "975e1bbee3fb4aff87e927a477bccd0d8260540fe405db7d59ed5f1bc72097a2"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "83abda19decdd1ba99cbf400a9d1f4a1a8747e620009db8f3b0a45046207d87c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "64ed02037a7d7d369f666b03752f716860de3bd4ade3f405e243d8111527f52f"
+              }
+            ],
+            "duration_s": 3.80428,
+            "exit_code": 0,
+            "expected_signal": "fp32-only pipeline E vs budget; fp16-probability pipeline E for attribution",
+            "json_parse_error": null,
+            "json_result": {
+              "E_fp16_probs": 0.0019034597012761458,
+              "E_fp32_only": 1.3360530731152125e-06,
+              "budget": 0.001,
+              "floor": 0.005656854249492381,
+              "fp32_only_meets_budget": true,
+              "ref_norm": 0.0645028609656322
+            },
+            "stderr": "",
+            "stdout": "{\"E_fp32_only\": 1.3360530731152125e-06, \"E_fp16_probs\": 0.0019034597012761458, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"budget\": 0.001, \"fp32_only_meets_budget\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t13"
+        },
+        "exit_code": 0,
+        "expected_signal": "fp32-only pipeline E vs budget; fp16-probability pipeline E for attribution",
+        "json_parse_error": null,
+        "json_result": {
+          "E_fp16_probs": 0.0019034597012761458,
+          "E_fp32_only": 1.3360530731152125e-06,
+          "budget": 0.001,
+          "floor": 0.005656854249492381,
+          "fp32_only_meets_budget": true,
+          "ref_norm": 0.0645028609656322
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"E_fp32_only\": 1.3360530731152125e-06, \"E_fp16_probs\": 0.0019034597012761458, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"budget\": 0.001, \"fp32_only_meets_budget\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "E": 0.0019032712117112664,
+          "all_finite": true,
+          "budget": 0.001,
+          "floor": 0.005656854249492381,
+          "meets_budget": false,
+          "ref_norm": 0.0645028609656322
+        },
+        "event_id": "t12",
+        "status": "confirmed",
+        "summary": "On the exact make_inputs() workload (N=128, D=32, seed 813), the Triton kernel output has E = 0.001903 > 0.001 against the float64 reference (ref_norm = 0.0645, floor 0.00566, so denominator = ref_norm), violating the compliance budget; all outputs finite. Claim c1's predicted budget violation is confirmed.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T09:04:08Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T09:03:10Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T09:04:08Z",
+              "data": {
+                "E": 0.0019032712117112664,
+                "all_finite": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "202e2ba71f215bd57f414c54af80113306658b5f4615395bcf317c4d7a6fff8f"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "47ad17f932dbc31f730de6d2af6606c4a16aaba7ef9bb91e81e9386c47d88770"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "fd06ba7746005970ad595a2603404d1317966881b9e005da9ec07043ed7f5e93"
+                  }
+                ],
+                "budget": 0.001,
+                "duration_s": 5.169844,
+                "exit_code": 0,
+                "expected_signal": "E vs 0.001 budget on exact workload",
+                "floor": 0.005656854249492381,
+                "json_parse_error": null,
+                "json_result": {
+                  "E": 0.0019032712117112664,
+                  "all_finite": true,
+                  "budget": 0.001,
+                  "floor": 0.005656854249492381,
+                  "meets_budget": false,
+                  "ref_norm": 0.0645028609656322
+                },
+                "meets_budget": false,
+                "ref_norm": 0.0645028609656322,
+                "stderr": "",
+                "stdout": "{\"E\": 0.0019032712117112664, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"all_finite\": true, \"budget\": 0.001, \"meets_budget\": false}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the exact make_inputs() workload (N=128, D=32, seed 813), the Triton kernel output has E = 0.001903 > 0.001 against the float64 reference (ref_norm = 0.0645, floor 0.00566, so denominator = ref_norm), violating the compliance budget; all outputs finite. Claim c1's predicted budget violation is confirmed.",
+              "supports": "confirmed",
+              "tool_event_id": "t12"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "fp16 has ~11-bit mantissa (~4.9e-4 relative rounding on p~1/128), and make_inputs' v -= 0.9*(p@v) strips the dominant softmax-weighted component of V, shrinking ||reference|| and the E denominator toward the 0.001*sqrt(32)~0.00566 floor; the amplified per-probability relative errors plausibly push ||out-ref||/max(||ref||, 0.00566) above 0.001. A probe should run make_inputs() on CUDA, compute the kernel output, the float64 reference on the same float32 inputs, and report E, ||ref||, and the floor.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "The workload is exactly make_inputs() in kernel.py; E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite."
+            },
+            {
+              "source": "kernel.py make_inputs",
+              "summary": "v -= 0.9*(p@v) removes the softmax-weighted component from V, adversarially reducing the reference output norm."
+            },
+            {
+              "source": "kernel.py line 15",
+              "summary": "p = p.to(tl.float16).to(tl.float32) explicitly rounds probabilities to fp16 before the weighted sum."
+            }
+          ],
+          "scope_rationale": "The contract requires E <= 0.001 on exactly the make_inputs() workload (N=128, D=32, seed 813), and this claim tests a budget violation on that workload caused by the kernel's fp16 probability rounding interacting with the workload's own value-centering cancellation.",
+          "statement": "On the exact make_inputs() workload (N=128, D=32, seed 813), the kernel's fp16 rounding of softmax probabilities (p.to(tl.float16) at line 15), amplified by the value-centering cancellation (v -= 0.9*(p@v)), yields E = ||out - float64_ref||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the compliance budget.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T09:04:08Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:04:08Z",
+          "data": {
+            "E": 0.0019032712117112664,
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "202e2ba71f215bd57f414c54af80113306658b5f4615395bcf317c4d7a6fff8f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "47ad17f932dbc31f730de6d2af6606c4a16aaba7ef9bb91e81e9386c47d88770"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "fd06ba7746005970ad595a2603404d1317966881b9e005da9ec07043ed7f5e93"
+              }
+            ],
+            "budget": 0.001,
+            "duration_s": 5.169844,
+            "exit_code": 0,
+            "expected_signal": "E vs 0.001 budget on exact workload",
+            "floor": 0.005656854249492381,
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.0019032712117112664,
+              "all_finite": true,
+              "budget": 0.001,
+              "floor": 0.005656854249492381,
+              "meets_budget": false,
+              "ref_norm": 0.0645028609656322
+            },
+            "meets_budget": false,
+            "ref_norm": 0.0645028609656322,
+            "stderr": "",
+            "stdout": "{\"E\": 0.0019032712117112664, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"all_finite\": true, \"budget\": 0.001, \"meets_budget\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact make_inputs() workload (N=128, D=32, seed 813), the Triton kernel output has E = 0.001903 > 0.001 against the float64 reference (ref_norm = 0.0645, floor 0.00566, so denominator = ref_norm), violating the compliance budget; all outputs finite. Claim c1's predicted budget violation is confirmed.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "E_fp16_probs": 0.0019034597012761458,
+          "E_fp32_only": 1.3360530731152125e-06,
+          "budget": 0.001,
+          "fp32_only_meets_budget": true,
+          "ref_norm": 0.0645028609656322
+        },
+        "event_id": "t13",
+        "status": "confirmed",
+        "summary": "Decomposition: an fp32-only pipeline (scores, softmax, weighted sum in fp32, no fp16 round) gives E = 1.34e-6, far within the 0.001 budget, while the same pipeline with fp16-rounded probabilities gives E = 1.90e-3, matching the kernel's measured violation. Any budget violation is attributable to the fp16 probability cast, not fp32 arithmetic. Claim c2 confirmed.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T09:04:08Z",
+      "id": "t15",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T09:03:10Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T09:04:08Z",
+              "data": {
+                "E_fp16_probs": 0.0019034597012761458,
+                "E_fp32_only": 1.3360530731152125e-06,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t13_probe.py",
+                    "sha256": "975e1bbee3fb4aff87e927a477bccd0d8260540fe405db7d59ed5f1bc72097a2"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t13_stdout.txt",
+                    "sha256": "83abda19decdd1ba99cbf400a9d1f4a1a8747e620009db8f3b0a45046207d87c"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t13_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t13_json_result.json",
+                    "sha256": "64ed02037a7d7d369f666b03752f716860de3bd4ade3f405e243d8111527f52f"
+                  }
+                ],
+                "budget": 0.001,
+                "duration_s": 3.80428,
+                "exit_code": 0,
+                "expected_signal": "fp32-only pipeline E vs budget; fp16-probability pipeline E for attribution",
+                "fp32_only_meets_budget": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "E_fp16_probs": 0.0019034597012761458,
+                  "E_fp32_only": 1.3360530731152125e-06,
+                  "budget": 0.001,
+                  "floor": 0.005656854249492381,
+                  "fp32_only_meets_budget": true,
+                  "ref_norm": 0.0645028609656322
+                },
+                "ref_norm": 0.0645028609656322,
+                "stderr": "",
+                "stdout": "{\"E_fp32_only\": 1.3360530731152125e-06, \"E_fp16_probs\": 0.0019034597012761458, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"budget\": 0.001, \"fp32_only_meets_budget\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Decomposition: an fp32-only pipeline (scores, softmax, weighted sum in fp32, no fp16 round) gives E = 1.34e-6, far within the 0.001 budget, while the same pipeline with fp16-rounded probabilities gives E = 1.90e-3, matching the kernel's measured violation. Any budget violation is attributable to the fp16 probability cast, not fp32 arithmetic. Claim c2 confirmed.",
+              "supports": "confirmed",
+              "tool_event_id": "t13"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "Decomposition evidence: replacing the fp16 round with a pure-fp32 softmax (or computing the same p-rounding error term on CPU) tells the Judge whether any observed failure is attributable to the lossy probability cast rather than fp32 exp/score arithmetic, per the adversarial-precision guidance on separating lossy-step error from benign reduced precision.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Reduced precision arithmetic is explicitly permitted if the E <= 0.001 budget is met, so the decisive question is which reduced-precision step causes any observed budget violation."
+            }
+          ],
+          "scope_rationale": "The contract explicitly permits reduced-precision arithmetic as long as E <= 0.001 on the single make_inputs() workload, so isolating which step (fp32 arithmetic vs fp16 probability cast) drives any measured E is decisive for attributing a violation.",
+          "statement": "A float32 pipeline without the fp16 probability rounding (scores, exp/sum, and weighted sum all in fp32) satisfies E <= 0.001 on this workload, so any observed violation is attributable to the fp16 probability cast rather than fp32 score/accumulation arithmetic.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T09:04:08Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:04:08Z",
+          "data": {
+            "E_fp16_probs": 0.0019034597012761458,
+            "E_fp32_only": 1.3360530731152125e-06,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "975e1bbee3fb4aff87e927a477bccd0d8260540fe405db7d59ed5f1bc72097a2"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "83abda19decdd1ba99cbf400a9d1f4a1a8747e620009db8f3b0a45046207d87c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "64ed02037a7d7d369f666b03752f716860de3bd4ade3f405e243d8111527f52f"
+              }
+            ],
+            "budget": 0.001,
+            "duration_s": 3.80428,
+            "exit_code": 0,
+            "expected_signal": "fp32-only pipeline E vs budget; fp16-probability pipeline E for attribution",
+            "fp32_only_meets_budget": true,
+            "json_parse_error": null,
+            "json_result": {
+              "E_fp16_probs": 0.0019034597012761458,
+              "E_fp32_only": 1.3360530731152125e-06,
+              "budget": 0.001,
+              "floor": 0.005656854249492381,
+              "fp32_only_meets_budget": true,
+              "ref_norm": 0.0645028609656322
+            },
+            "ref_norm": 0.0645028609656322,
+            "stderr": "",
+            "stdout": "{\"E_fp32_only\": 1.3360530731152125e-06, \"E_fp16_probs\": 0.0019034597012761458, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"budget\": 0.001, \"fp32_only_meets_budget\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Decomposition: an fp32-only pipeline (scores, softmax, weighted sum in fp32, no fp16 round) gives E = 1.34e-6, far within the 0.001 budget, while the same pipeline with fp16-rounded probabilities gives E = 1.90e-3, matching the kernel's measured violation. Any budget violation is attributable to the fp16 probability cast, not fp32 arithmetic. Claim c2 confirmed.",
+          "supports": "confirmed",
+          "tool_event_id": "t13"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: the new probe evidence fully resolves both open in-scope claims. c1 is confirmed \u2014 on the exact make_inputs() workload the kernel's E = 0.001903 > 0.001 budget (all outputs finite, ref_norm 0.0645 dominating the floor), and c2 is confirmed \u2014 the fp32-only pipeline yields E = 1.34e-6 while the fp16-probability pipeline yields 1.90e-3, attributing the violation entirely to the fp16 probability cast at kernel line 15. No additional material, testable, in-scope problem remains uncovered; only the single fixed workload is in scope and the kernel source shows no other bug surface.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-30T09:04:15Z",
+      "id": "t16",
+      "output": {
+        "created_at": "2026-09-30T09:04:15Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the new probe evidence fully resolves both open in-scope claims. c1 is confirmed \u2014 on the exact make_inputs() workload the kernel's E = 0.001903 > 0.001 budget (all outputs finite, ref_norm 0.0645 dominating the floor), and c2 is confirmed \u2014 the fp32-only pipeline yields E = 1.34e-6 while the fp16-probability pipeline yields 1.90e-3, attributing the violation entirely to the fp16 probability cast at kernel line 15. No additional material, testable, in-scope problem remains uncovered; only the single fixed workload is in scope and the kernel source shows no other bug surface.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 15,
+        "tool_event_id": "t16",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "On the exact make_inputs() workload (N=128, D=32, seed 813) \u2014 the single workload the contract specifies \u2014 the kernel output is finite but has E = 0.001903 > 0.001 against the float64 reference on the same float32 inputs (ref_norm 0.0645 dominates the floor, so the denominator is the reference norm itself). The contract explicitly requires E <= 0.001 for compliance, so this is a budget violation, not an acceptable reduced-precision deviation. Decomposition probe (c2) confirms attribution: an fp32-only pipeline (no fp16 probability round) yields E = 1.34e-6, well within budget, while the fp16-rounded probability pipeline reproduces E = 1.90e-3 \u2014 the violation is caused solely by the explicit fp16 cast of softmax probabilities at kernel.py line 15, amplified by the workload's value-centering cancellation. Both claims are in_scope with scope evidence tied to the stated workload, and the Skeptic reviewed the latest evidence and recorded no new claims. Reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T09:04:23Z",
+      "id": "t17",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-30T09:04:23Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "On the exact make_inputs() workload (N=128, D=32, seed 813) \u2014 the single workload the contract specifies \u2014 the kernel output is finite but has E = 0.001903 > 0.001 against the float64 reference on the same float32 inputs (ref_norm 0.0645 dominates the floor, so the denominator is the reference norm itself). The contract explicitly requires E <= 0.001 for compliance, so this is a budget violation, not an acceptable reduced-precision deviation. Decomposition probe (c2) confirms attribution: an fp32-only pipeline (no fp16 probability round) yields E = 1.34e-6, well within budget, while the fp16-rounded probability pipeline reproduces E = 1.90e-3 \u2014 the violation is caused solely by the explicit fp16 cast of softmax probabilities at kernel.py line 15, amplified by the workload's value-centering cancellation. Both claims are in_scope with scope evidence tied to the stated workload, and the Skeptic reviewed the latest evidence and recorded no new claims. Reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-30T09:04:23Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "On the exact make_inputs() workload (N=128, D=32, seed 813) \u2014 the single workload the contract specifies \u2014 the kernel output is finite but has E = 0.001903 > 0.001 against the float64 reference on the same float32 inputs (ref_norm 0.0645 dominates the floor, so the denominator is the reference norm itself). The contract explicitly requires E <= 0.001 for compliance, so this is a budget violation, not an acceptable reduced-precision deviation. Decomposition probe (c2) confirms attribution: an fp32-only pipeline (no fp16 probability round) yields E = 1.34e-6, well within budget, while the fp16-rounded probability pipeline reproduces E = 1.90e-3 \u2014 the violation is caused solely by the explicit fp16 cast of softmax probabilities at kernel.py line 15, amplified by the workload's value-centering cancellation. Both claims are in_scope with scope evidence tied to the stated workload, and the Skeptic reviewed the latest evidence and recorded no new claims. Reject.",
+    "verdict": "reject"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "id": "chatcmpl-c8a1b543471842038b711e937a511296",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.6, \"reason\": \"The kernel computes softmax(Kq/sqrt(D))@V correctly; the only approximation is rounding probabilities to fp16 (relative error ~5e-4), which for this workload (n=64, near-uniform softmax, well-scaled v) yields expected relative error well under the 1e-3 budget, and all quantities stay well within fp16/subnormal range so outputs are finite.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "The kernel computes softmax then rounds p to fp16. p values up to ~1; fp16 relative error ~5e-4 per element. Sum over 64 tokens of p*v; error contribution: sum p_i * eps_i * v_i, eps~2^-11\u22484.9e-4. Relative error of output roughly up to ~ few e-4? Output norm vs sum of |p_i v_i| \u2014 relative error could be up to 4.9e-4 * (\u03a3|p v|/||y||). Cancellation in v (structured offset centers output near... v -= center*(p@v), making reference output \u2248 0.5*(p@v), nonzero). Actually y_ref = p@v' where v' = v - 0.5(p@v). p@v' = (p@v) - 0.5(p@v) = 0.5(p@v). So output = 0.5*(p@v). The fp16 error relative to p@v is same relative. fp16 rounding: p in [0,1], values < 2^-24 flush to zero but negligible. Relative error per p_i \u2264 2^-11. Expected error ~ sqrt(sum p_i^2)*4.9e-4*||v||_typ relative to ||p@v||. With random v, ||p@v|| ~ sqrt(sum p_i^2)*||v|| roughly (if v entries independent). So relative error ~4.9e-4/sqrt(something)... Actually error vector = sum (p_i+\u03b4_i)v_i, \u03b4_i \u2264 4.9e-4 p_i. Error norm \u2264 4.9e-4 * sum p_i |v_i| ~ 4.9e-4 * E|v| * ... and ||y|| ~ sqrt(\u03a3p_i\u00b2)||v||. With n=64, p roughly uniform 1/64? scores variance: k*var 0.7\u00b2... scores = dot of 32 dims, k rows N(0,0.49), q N(0,1), score var \u2248 32*0.49 \u2248 15.7, std ~4/sqrt(32)=... std \u2248 3.96/sqrt(d)... = sqrt(15.7)\u22483.96/sqrt(d)? No: var of dot = d*0.49 = 15.7, std \u2248 3.96/sqrt(d) = 3.96/5.66 \u2248 0.7... wait D^{-0.5} scale: scores = dot/sqrt(32), std \u2248 sqrt(15.7)/5.66 \u2248 3.96/5.66 \u2248 0.7. So softmax fairly uniform, p\u22481/64 with variation. sum p_i\u00b2 \u2248 maybe 2/64. ||y|| \u2248 sqrt(2/64)*||v||... error \u2248 4.9e-4 * (1/sqrt(n))||v|| roughly? error \u2264 4.9e-4 \u03a3p_i ||v_i|| \u2248 4.9e-4*E||v_row||... per-dim: error_d = \u03a3 \u03b4_i p_i v_id, random signs, std \u2248 4.9e-4/sqrt(3) * sqrt(\u03a3p_i\u00b2 v_id\u00b2)... roughly error/||y|| \u2248 4.9e-4/sqrt(3) \u2248 2.8e-4 < 1e-3. Also fp16 max p fine, subnormal p fine. Seems within budget. Also tl.max(scores, 0) with axis 0 on 1-D tensor \u2014 that's fine (scores is 1-D length N). So trust, moderate confidence.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756427,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 927,
+    "prompt_tokens": 1337,
+    "total_tokens": 2264,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 824,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 824
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-9104ba2823de4dc3bd16a48479e6bdc0",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'm launching two independent runtime probes on the exact make_inputs() workload: c1 measures the kernel's E against the float64 reference, and c2 measures the same pipeline without the fp16 probability round (fp32-only) to attribute any error.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9e7b484a68062aba",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json, importlib.util, torch, numpy as np\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/pilot_cases/case_94/kernel.py\\\")\\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\\nq, k, v = km.make_inputs(\\\"cuda\\\")\\nout = km.run(q, k, v)\\nqd = q.cpu().numpy().astype(np.float64); kd = k.cpu().numpy().astype(np.float64); vd = v.cpu().numpy().astype(np.float64)\\nz = kd @ qd / np.sqrt(32)\\np = np.exp(z - z.max()); p /= p.sum()\\nref = p @ vd\\nE = np.linalg.norm(out.cpu().numpy() - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\\nprint(json.dumps({\\\"E\\\": float(E), \\\"ref_norm\\\": float(np.linalg.norm(ref)),\\n \\\"floor\\\": 0.001*np.sqrt(32), \\\"all_finite\\\": bool(np.isfinite(out.cpu().numpy()).all()),\\n \\\"budget\\\": 0.001, \\\"meets_budget\\\": bool(E <= 0.001)}))\", \"expected_signal\": \"E vs 0.001 budget on exact workload\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-a1e54bc7bc35f8e0",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import json, importlib.util, torch, numpy as np\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/pilot_cases/case_94/kernel.py\\\")\\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\\nq, k, v = km.make_inputs(\\\"cuda\\\")\\n# fp32-only pipeline emulating the kernel without the fp16 round\\nqf, kf, vf = q.float(), k.float(), v.float()\\nscores = (kf @ qf) * (32 ** -0.5)\\np32 = torch.softmax(scores.float(), dim=0)\\nout_fp32 = (p32[:, None] * vf).sum(0)\\nqd = q.cpu().numpy().astype(np.float64); kd = k.cpu().numpy().astype(np.float64); vd = v.cpu().numpy().astype(np.float64)\\nz = kd @ qd / np.sqrt(32)\\np = np.exp(z - z.max()); p /= p.sum()\\nref = p @ vd\\nE32 = np.linalg.norm(out_fp32.cpu().numpy() - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\\n# also fp16-rounded probability pipeline on CPU for attribution\\np16 = p32.cpu().numpy().astype(np.float16).astype(np.float32)\\nout16 = p16 @ vf.cpu().numpy()\\nE16 = np.linalg.norm(out16 - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\\nprint(json.dumps({\\\"E_fp32_only\\\": float(E32), \\\"E_fp16_probs\\\": float(E16),\\n \\\"ref_norm\\\": float(np.linalg.norm(ref)), \\\"floor\\\": 0.001*np.sqrt(32),\\n \\\"budget\\\": 0.001, \\\"fp32_only_meets_budget\\\": bool(E32 <= 0.001)}))\", \"expected_signal\": \"fp32-only pipeline E vs budget; fp16-probability pipeline E for attribution\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch two probes: c1 direct E measurement, c2 fp32-only pipeline E. Both independent.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790759017,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 774,
+    "prompt_tokens": 26992,
+    "total_tokens": 27766,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 21,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 21
+    }
+  }
+}

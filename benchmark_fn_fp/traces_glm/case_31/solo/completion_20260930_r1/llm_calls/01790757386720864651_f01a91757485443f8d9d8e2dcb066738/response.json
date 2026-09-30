@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-df7c56bb6c454ef490f55420d2d99c84",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe for claim c1 with a concrete partial-block case (q/k lengths 5+3, block size 4, total 8 divisible by 4) compared against a dense per-sequence reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a618a12758a08126",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_31/kernel.py\\\")\\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\\n\\ntorch.manual_seed(0)\\ndev='cuda'\\ndef ref(q,k,v,cuq,cuk,mask,qbs,kbs,causal,scale,hd,nhq,nhk):\\n    out=torch.empty_like(q)\\n    for b in range(len(cuq)-1):\\n        qs,qe=int(cuq[b]),int(cuq[b+1]); ks,ke=int(cuk[b]),int(cuk[b+1])\\n        for i in range((qe-qs+qbs-1)//qbs):\\n            mi_s,mi_e=qs+i*qbs,min(qs+(i+1)*qbs,qe)\\n            for j in range((ke-ks+kbs-1)//kbs):\\n                if not mask[:, i, j].all(): continue\\n                mj_s,mj_e=ks+j*kbs,min(ks+(j+1)*kbs,ke)\\n                if causal and (mi_s-qs) + (ke-ks)-(qe-qs) >= mj_s-ks + kbs: pass\\n                qb=q[mi_s:mi_e]; kb=k[mj_s:mj_e]; vb=v[mj_s:mj_e]\\n                s=(qb@kb.transpose(-1,-2))*scale\\n                if causal:\\n                    # causal within sequence: q pos -> key pos allowed if key<=q+offset\\n                    off=(ke-ks)-(qe-qs)\\n                    qi=torch.arange(mi_s-qs,mi_e-qs,device=q.device)[:,None]\\n                    kj=torch.arange(mj_s-ks,mj_e-ks,device=q.device)[None,:]\\n                    s=s.masked_fill(kj > qi+off, float('-inf'))\\n                p=torch.softmax(s,dim=-1)\\n                out[mi_s:mi_e]=(p@vb)\\n    return out\\n\\nresults={}\\nfor lens_q, lens_k, kbs in [([5,3],[5,3],4), ([6,2],[6,2],4), ([9,7,4],[9,7,4],8)]:\\n    cuq=torch.tensor([0]+list(torch.tensor(lens_q).cumsum(0)),device=dev,dtype=torch.int32)\\n    cuk=torch.tensor([0]+list(torch.tensor(lens_k).cumsum(0)),device=dev,dtype=torch.int32)\\n    tq,tk=int(cuq[-1]),int(cuk[-1])\\n    nhq,nhk,hd=2,2,16\\n    q=torch.randn(tq,nhq,hd,device=dev); k=torch.randn(tk,nhk,hd,device=dev); v=torch.randn(tk,nhk,hd,device=dev)\\n    nqb=(tq+kbs-1)//kbs  # blocks per batch ceil(l/qbs)\\n    total_q_blocks=sum((l+kbs-1)//kbs for l in lens_q)\\n    total_k_blocks=sum((l+kbs-1)//kbs for l in lens_k)\\n    mask=torch.ones(nhq,total_q_blocks,total_k_blocks,dtype=torch.bool,device=dev)\\n    scale=hd**-0.5\\n    got=m.block_sparse_attention(q,k,v,cuq,cuk,mask,kbs,kbs,causal=False,softmax_scale=scale)\\n    exp=ref(q,k,v,cuq,cuk,mask,kbs,kbs,False,scale,hd,nhq,nhk)\\n    err=(got-exp).abs().max().item()\\n    results[f\\\"lens={lens_q},kbs={kbs}\\\"]=err\\nprint(json.dumps({\\\"errors\\\":results,\\\"total_k_divisible\\\":[ [sum([5,3])%4==0, sum([6,2])%4==0, sum([9,7,4])%8==0] ]}))\\n\", \"timeout_s\": 240}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run a probe: construct case with q lengths 5,3, k lengths 5,3, block size 4, all mask True, compare against reference.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757868,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 949,
+    "prompt_tokens": 14047,
+    "total_tokens": 14996,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 34,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4608,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 34
+    }
+  }
+}

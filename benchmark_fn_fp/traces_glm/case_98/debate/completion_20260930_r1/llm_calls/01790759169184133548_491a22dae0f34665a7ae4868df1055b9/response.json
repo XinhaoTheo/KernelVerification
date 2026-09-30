@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-fea0d2977aff4a18acea0fabeb42c089",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run two probes on the exact fixed workload: one measuring E against the fp64 reference (c1), and one measuring per-timestep error norms, late-time dominance, and bitwise agreement with a CPU simulation of the quantized recurrence (c2). They're independent, so I'm launching both together.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8e1a854d28439998",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, numpy as np, sys, os\\nsys.path.insert(0, \\\"/root/pilot_cases/case_98\\\")\\nimport kernel as K\\n\\na, b = K.make_inputs(\\\"cuda\\\")\\nout = K.run(a, b)\\n\\na64 = a.double().cpu().numpy(); b64 = b.double().cpu().numpy()\\nref = np.zeros_like(b64); h = np.zeros(b64.shape[1])\\nfor t in range(a64.shape[0]):\\n    h = a64[t] * h + b64[t]\\n    ref[t] = h\\n\\no = out.float().cpu().numpy()\\ndiff = o - ref\\nnum = float(np.linalg.norm(diff.ravel()))\\nden = max(float(np.linalg.norm(ref.ravel())), 0.001*np.sqrt(ref.size))\\nE = num/den\\nres = {\\n    \\\"metric\\\": \\\"E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) on exact workload\\\",\\n    \\\"E\\\": E, \\\"budget\\\": 0.003,\\n    \\\"num_norm\\\": num, \\\"ref_norm\\\": float(np.linalg.norm(ref.ravel())),\\n    \\\"all_finite\\\": bool(np.isfinite(o).all()),\\n    \\\"max_abs_err\\\": float(np.abs(diff).max()),\\n    \\\"max_rel_err\\\": float((np.abs(diff)/np.abs(ref)).max()),\\n    \\\"exceeds_budget\\\": bool(E > 0.003),\\n}\\nprint(json.dumps(res))\", \"expected_signal\": \"E value on exact workload vs 0.003 budget\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-ba2f46c52a84d402",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, numpy as np, sys\\nsys.path.insert(0, \\\"/root/pilot_cases/case_98\\\")\\nimport kernel as K\\n\\na, b = K.make_inputs(\\\"cuda\\\")\\nout = K.run(a, b).float().cpu().numpy()\\na32 = a.float().cpu().numpy(); b32 = b.float().cpu().numpy()\\n\\n# fp64 reference\\nref = np.zeros((640,32)); h = np.zeros(32)\\nfor t in range(640):\\n    h = a32[t].astype(np.float64) * h + b32[t].astype(np.float64)\\n    ref[t] = h\\n\\n# CPU simulation of quantized recurrence (fp32 compute, fp16 round via torch)\\nsim = np.zeros((640,32)); hs = np.zeros(32, dtype=np.float32)\\nfor t in range(640):\\n    hs = (a32[t].astype(np.float32) * hs + b32[t]).astype(np.float32)\\n    hs = torch.from_numpy(hs).to(torch.float16).to(torch.float32).numpy()\\n    sim[t] = hs\\n\\nper_t = np.linalg.norm(out - ref, axis=1)\\nerr_full = np.linalg.norm((out-ref).ravel())\\nerr_late = np.linalg.norm((out-ref)[400:])\\nerr_early = np.linalg.norm((out-ref)[:400])\\nbitwise_match = bool((out == sim).all())\\nres = {\\n    \\\"metric\\\": \\\"per-timestep ||out[t]-ref[t]|| vs late-time fraction; bitwise CPU fp16-round sim match\\\",\\n    \\\"err_norm_early_t0_400\\\": float(err_early),\\n    \\\"err_norm_late_t400_640\\\": float(err_late),\\n    \\\"late_fraction\\\": float(err_late/err_full),\\n    \\\"per_t_err_first\\\": float(per_t[0]), \\\"per_t_err_mid\\\": float(per_t[320]), \\\"per_t_err_last\\\": float(per_t[639]),\\n    \\\"per_t_err_max\\\": float(per_t.max()), \\\"per_t_err_max_t\\\": int(per_t.argmax()),\\n    \\\"mean_sign_out_last100\\\": float(np.sign(out[-100:]-ref[-100:]).mean()),\\n    \\\"bitwise_match_to_cpu_sim\\\": bitwise_match,\\n    \\\"late_states_dominate\\\": bool(err_late > err_early),\\n}\\nprint(json.dumps(res))\", \"expected_signal\": \"late-time error fraction and sign bias / fixed-point attractor behavior\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run two probes: c1 (measure E) and c2 (per-timestep error norms, late-time dominance, CPU simulation bitwise match). They're independent — launch both together.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790759169,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 981,
+    "prompt_tokens": 28041,
+    "total_tokens": 29022,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 37,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3925,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 37
+    }
+  }
+}

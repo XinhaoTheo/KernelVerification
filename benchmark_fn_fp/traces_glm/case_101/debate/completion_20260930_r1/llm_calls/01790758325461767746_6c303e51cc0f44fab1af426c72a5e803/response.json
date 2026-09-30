@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-96d77008971c402ba1b1e67605cd6eb9",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'm describing the kernel: a serial fp16-snapped linear recurrence on a fixed workload, so I'll record the description model now.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-ad3a58c823ec5ef2",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Compute h[0]=a[0]*0+b[0] and h[t]=a[t]*h[t-1]+b[t] for all t, returning all states, on a single fixed workload from make_inputs() (seed 453, T=768, D=32, decay=0.99, noise=0.001, bias=0.01).\", \"Inputs are CPU-generated float32 (NumPy 2.2.6 PCG64) then moved to CUDA; no other shapes or inputs are in scope.\", \"Reference is the mathematical recurrence evaluated in float64 on the same float32 input values.\", \"Compliance iff all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(num_elements)) <= 0.003, flattened.\", \"Reduced-precision arithmetic is explicitly permitted if the error budget is met; this is finite-workload compliance only.\", \"Target stack: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\"], \"kernel_model\": [\"Single Triton program (grid (1,)) runs a Python-level loop over T=768 steps, each step handling the full D=32 vector via tl.arange(0, D).\", \"Per step: h = a*h + b in fp32, then rounds h to fp16 and back to fp32 before storing to O; fp16 rounding is applied to the carried state every step.\", \"run() allocates output via torch.empty_like(b) (fp32, shape (768, 32)) and passes a, b, out with T and D as constexpr.\", \"Input dtypes: make_inputs uses decay 0.99 and noise-scaled b plus bias 0.01, all rounded once to float32 before CUDA transfer (tensor helper).\", \"enable_fp_fusion=False is set, so no fused multiply-add at the Triton level.\"], \"risk_map</arg_key>[\\\"Error accumulation: fp16 rounding of the carried state at every one of 768 steps could compound; whether E stays <= 0.003 depends on the workload's value magnitudes (decay 0.99 makes the fp32 reference converge toward ~1.0, while fp16 hysteresis may oscillate).\\\", \\\"fp16 has ~2^-11 relative precision and subnormal/overflow range; h values here are O(1) so overflow is unlikely, but per-step 1e-3-ish relative error could exceed the relative error budget when compounded.\\\", \\\"Sequential Python loop in one Triton program: functional correctness concern is minimal, but T is passed as constexpr and loop is unrolled-compat; verify it compiles/runs at T=768.\\\", \\\"b is stored to O without fp16 rounding? No -- h after rounding is stored, so O equals the rounded recurrence; consistent.\\\", \\\"torch.empty_like(b) assumes b has the target output shape (T, D), which matches the recurrence output; consistent with problem statement.\\\", \\\"No masked loads; D=32 and T=768 are powers of two so tl.arange(0, D) needs D power-of-two (32 is).\\\"]</arg_value><arg_key>scope_notes\": \"Only the single make_inputs() workload (T=768, D=32) is in scope; verdicts about other shapes/distributions are out of scope.\\\", \\\"Reduced precision (fp16) is permitted by contract if E<=0.003; presence of fp16 alone is not a defect.\\\", \\\"Compliance metric E is a normalized global L2 distance over all 768*32=24576 output elements, with denominator floor 0.001*sqrt(24576)~=0.157.\\\"]\", \"summary\": \"case_101 is a fixed-workload numerical-compliance check of a linear recurrence h[t]=a[t]*h[t-1]+b[t] over T=768, D=32, implemented as a single sequential Triton program that carries the state in fp32 but snaps it to fp16 (and back) at every step. The contract allows reduced precision if E<=0.003, so the key question is whether cumulative fp16 rounding error over 768 steps stays within the normalized-L2 budget.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790758326,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 935,
+    "prompt_tokens": 5617,
+    "total_tokens": 6552,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 347,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-4a039c1c62ad4398b68d213e4dd93170",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Launching both probes together: c1 (statistical unbiasedness over many seeds and repeated elements) and c2 (fp32 behavior at exact decimal multiples of STEP). They are independent, so I'll run both in one batch and finalize next turn.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9d2f0b99cb7bfd28",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json\\ntorch.manual_seed(0)\\nfrom kernel import stochastic_round_to_grid\\n\\nSTEP = 0.05\\nN = 64  # power of two, single block\\n# repeated elements with varied fractional distances, incl. negatives\\nvals = [0.375, -0.375, 0.0125, -0.0625, 1.234, -2.567, 0.9999, -0.9999] * 8\\nx = torch.tensor(vals, dtype=torch.float32, device='cuda')\\nS = 2000\\nouts = torch.stack([stochastic_round_to_grid(x, s) for s in range(S)])\\nmean_out = outs.mean().item()\\nmean_in = x.mean().item()\\nstd_mc = (outs.std() / (S**0.5)).item()\\nbias = mean_out - mean_in\\nz = bias / std_mc if std_mc > 0 else 0.0\\nprint(json.dumps({\\n    \\\"N\\\": N, \\\"seeds\\\": S, \\\"mean_in\\\": mean_in, \\\"mean_out\\\": mean_out,\\n    \\\"bias\\\": bias, \\\"mc_std\\\": std_mc, \\\"z_score\\\": z,\\n    \\\"metric\\\": \\\"sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant\\\"\\n}))\\n\", \"expected_signal\": \"bias within Monte-Carlo noise of sample mean vs input mean (z < ~4)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-889dee820a8a47c9",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json\\nfrom kernel import stochastic_round_to_grid\\nSTEP = 0.05\\nvals = [0.15, -0.25, 0.30, -0.55, 1.10, 0.05, -0.05, 0.20, 0.35, -0.10]\\nx = torch.tensor(vals, dtype=torch.float32, device='cuda')\\nres = {}\\nS = 100\\nfor v in vals:\\n    xi = torch.full((16,), v, dtype=torch.float32, device='cuda')\\n    o = torch.stack([stochastic_round_to_grid(xi, s) for s in range(S)])\\n    # fp32 grid computation per contract formula\\n    lo = (torch.floor(xi / STEP) * STEP)\\n    p_up = ((xi - lo) / STEP)\\n    out_lo = o.min().item(); out_hi = o.max().item()\\n    frac_up = (o > lo[0].item() + STEP/2).float().mean().item()\\n    # distance of outputs from exact decimal grid (k*0.05)\\n    k = torch.round(o / STEP)\\n    resid = (o - k * STEP).abs().max().item()\\n    res[repr(v)] = {\\n        \\\"p_up_fp32\\\": p_up[0].item(),\\n        \\\"output_min\\\": out_lo, \\\"output_max\\\": out_hi,\\n        \\\"frac_upper\\\": frac_up,\\n        \\\"max_resid_from_decimal_grid\\\": resid,\\n    }\\nprint(json.dumps({\\n    \\\"per_value\\\": res,\\n    \\\"metric\\\": \\\"p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05\\\"\\n}))\\n\", \"expected_signal\": \"p_up near 1 (instead of 0) and outputs jumping to next grid point, or outputs off the decimal grid by ~1e-8\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch two probes: c1 statistical unbiasedness (repeated values, many seeds) and c2 exact grid multiples. Independent, run both now.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756345,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 834,
+    "prompt_tokens": 20316,
+    "total_tokens": 21150,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 30,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 30
+    }
+  }
+}

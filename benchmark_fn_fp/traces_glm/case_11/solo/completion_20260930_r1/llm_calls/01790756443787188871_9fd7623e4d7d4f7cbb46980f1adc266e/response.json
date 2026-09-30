@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-b24b81a3dddf4705b1222a83ad59be45",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe comparing the kernel against a torch reference for both interleaved modes across representative shapes.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bbfabb96ab0b21d2",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, math, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_11/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndef ref(x, cos, sin, interleaved):\\n    S,H,D = x.shape\\n    x0, x1 = x[..., :D//2].float(), x[..., D//2:].float()\\n    o0 = x0*cos - x1*sin\\n    o1 = x0*sin + x1*cos\\n    if not interleaved:\\n        return torch.cat([o0,o1], dim=-1).to(x.dtype)\\n    return torch.stack([o0,o1], dim=-1).flatten(-2).to(x.dtype)\\n\\nresults = []\\ntorch.manual_seed(0)\\nfor S,H,D in [(1,2,64),(128,8,128),(7,3,96),(33,5,32),(256,16,256)]:\\n    x = torch.randn(S,H,D, device=\\\"cuda\\\")\\n    pos = torch.arange(S, device=\\\"cuda\\\", dtype=torch.float32)\\n    freqs = 1.0/(10000.0 ** (torch.arange(0, D//2, device=\\\"cuda\\\", dtype=torch.float32)/(D//2)))\\n    ang = torch.outer(pos, freqs)\\n    cos = torch.cos(ang).contiguous(); sin = torch.sin(ang).contiguous()\\n    for il in [False, True]:\\n        out = k.apply_rotary(x, cos, sin, il)\\n        r = ref(x, cos, sin, il)\\n        err = (out.float()-r.float()).abs().max().item()\\n        # relative-position invariance check: dot(q_m, k_n) should depend only on m-n\\n        q = k.apply_rotary(x, cos, sin, il)\\n        # recompute rotation for shifted positions directly via ref\\n        q2 = ref(x, cos, sin, il)\\n        results.append({\\\"S\\\":S,\\\"H\\\":H,\\\"D\\\":D,\\\"interleaved\\\":il,\\\"max_abs_err\\\":err,\\n                        \\\"dtype\\\":str(out.dtype),\\\"shape\\\":list(out.shape)})\\n\\n# also fp16 and non-even-D? D must be even by contract; test fp16\\nfor dtype in [torch.float16, torch.bfloat16]:\\n    x = torch.randn(64,4,128, device=\\\"cuda\\\", dtype=dtype)\\n    pos = torch.arange(64, device=\\\"cuda\\\", dtype=torch.float32)\\n    freqs = 1.0/(10000.0**(torch.arange(0,64,device=\\\"cuda\\\",dtype=torch.float32)/64))\\n    ang = torch.outer(pos, freqs)\\n    cos = torch.cos(ang).contiguous(); sin = torch.sin(ang).contiguous()\\n    for il in [False, True]:\\n        out = k.apply_rotary(x, cos, sin, il)\\n        r = ref(x.float(), cos, sin, il).to(dtype)\\n        err = (out.float()-r.float()).abs().max().item()\\n        results.append({\\\"dtype\\\":str(dtype),\\\"interleaved\\\":il,\\\"max_abs_err\\\":err})\\n\\n# relative-position invariance test\\ndef rope_ref(x, ang_cos, ang_sin, il):\\n    return ref(x, ang_cos, ang_sin, il)\\nS,H,D = 32,2,64\\nx = torch.randn(S,H,D, device=\\\"cuda\\\")\\npos = torch.arange(2*S, device=\\\"cuda\\\", dtype=torch.float32)\\nfreqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\\\"cuda\\\",dtype=torch.float32)/(D//2)))\\nang = torch.outer(pos, freqs)\\ncos = torch.cos(ang).contiguous(); sin = torch.sin(ang).contiguous()\\nok_inv = True\\nfor il in [False, True]:\\n    xs = k.apply_rotary(x, cos, sin, il)\\n    dots = torch.einsum(\\\"shd,thd->st\\\", xs[:,0], xs[:,0])\\n    ref_dots = torch.einsum(\\\"shd,thd->st\\\", ref(x,cos,sin,il)[:,0], ref(x,cos,sin,il)[:,0])\\n    rel = (dots - ref_dots).abs().max().item()\\n    ok_inv &= (rel < 1e-3)\\nprint(json.dumps({\\\"results\\\": results, \\\"invariance_vs_ref_rel_diff\\\": rel, \\\"invariance_ok\\\": ok_inv}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756444,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 998,
+    "prompt_tokens": 10202,
+    "total_tokens": 11200,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4608,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

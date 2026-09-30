@@ -1,0 +1,2584 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_09",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    shape: tl.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]\n    y = tl.reshape(x, shape)\n    mask = tl.arange(0, 2)[None, :, None]\n    left = tl.broadcast_to(tl.sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)\n    right = tl.broadcast_to(tl.sum(y * mask, 1)[:, None, :], shape).to(y.dtype)\n    left = tl.reshape(left, x.shape)\n    right = tl.reshape(right, x.shape)\n    y_idx = tl.reshape(ids, shape)\n    left_idx = tl.broadcast_to(tl.sum(y_idx * (1 - mask), 1)[:, None, :], shape)\n    right_idx = tl.broadcast_to(tl.sum(y_idx * mask, 1)[:, None, :], shape)\n    left_idx = tl.reshape(left_idx, x.shape).to(y_idx.dtype)\n    right_idx = tl.reshape(right_idx, x.shape).to(y_idx.dtype)\n    idtype = tl.core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)\n    ileft = left.to(idtype, bitcast=True)\n    iright = right.to(idtype, bitcast=True)\n    ix = x.to(idtype, bitcast=True)\n    cond = (left > right) != flip\n    ret = ix ^ tl.where(cond, ileft ^ iright, tl.zeros_like(ix))\n    new_ids = ids ^ tl.where(cond, left_idx ^ right_idx, tl.zeros_like(ids))\n    return ret.to(x.dtype, bitcast=True), new_ids\n\n\n@triton.jit\ndef _bitonic_merge(x, ids, stage: tl.constexpr, order: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    tl.static_assert(stage <= n_dims)\n    if order == 2:\n        shape: tl.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]\n        flip = tl.reshape(tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape), x.shape)\n    else:\n        flip = order\n    for i in tl.static_range(stage):\n        x, ids = _compare_and_swap(x, ids, flip, i + (n_dims - stage), n_dims)\n    return x, ids\n\n\n@triton.jit\ndef _row_argsort_kernel(X_ptr, IDS_ptr, stride_row, N: tl.constexpr, N_DIMS: tl.constexpr, DESCENDING: tl.constexpr):\n    # tl.log2(x.shape[dim]); that call path is not constexpr-stable on every\n    # Triton version, so N_DIMS is passed in from the (Python-side, so still\n    # compile-time-known) caller instead. The bitonic merge/compare-and-swap\n    # primitives below -- where the actual tie-break mechanism lives -- are\n    # byte-for-byte the real kernel, unchanged.\n    row = tl.program_id(0)\n    offs = tl.arange(0, N)\n    x = tl.load(X_ptr + row * stride_row + offs)\n    ids = tl.load(IDS_ptr + row * stride_row + offs)\n    for i in tl.static_range(1, N_DIMS + 1):\n        x, ids = _bitonic_merge(x, ids, i, 2 if i < N_DIMS else DESCENDING, N_DIMS)\n    tl.store(X_ptr + row * stride_row + offs, x)\n    tl.store(IDS_ptr + row * stride_row + offs, ids)\n\n\ndef sorted_topk_indices(scores: torch.Tensor, k: int) -> torch.Tensor:\n    \"\"\"Host wrapper: real bitonic-sort kernel, launched one program per row.\"\"\"\n    import math\n    assert scores.is_cuda\n    B, N = scores.shape\n    n_dims = int(math.log2(N))\n    x = scores.clone().contiguous()\n    ids = torch.arange(N, device=scores.device, dtype=torch.int32).unsqueeze(0).expand(B, N).contiguous()\n    _row_argsort_kernel[(B,)](x, ids, N, N=N, N_DIMS=n_dims, DESCENDING=True)\n    return ids[:, :k].long()\n",
+    "passed": null,
+    "problem_text": "Operation: top-1 routing (a gate) over per-expert scores, implemented with the\nbitonic sort network used by Native Sparse Attention's selection branch\n(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).\n\n`sorted_topk_indices(scores, k=1)` must return, for each token, the index of\nthe highest-scoring expert.\n\nContract on ties: when two experts have exactly equal scores, the LOWER\nindex must be the one kept.\n\nEach token's chosen expert contributes its output vector; the batch is then\nmean-pooled into a single continuous representation.\n\nInput domain: `scores` has a power-of-two number of columns (the bitonic\nnetwork this kernel family uses is defined only for power-of-two extents).\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_09",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:18:52Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:19:27Z",
+          "data": {},
+          "id": "c1.e1",
+          "kind": "tool_error",
+          "summary": "First tie-break probe (t9) crashed in my reference code (torch.arange on CPU indexing a CUDA tensor), so it produced no evidence about the kernel; rerunning with a fixed reference.",
+          "supports": "inconclusive",
+          "tool_event_id": null
+        },
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:20:17Z",
+          "data": {
+            "all_equal_rows": "100/100 all-equal rows returned nonzero index instead of contractually required 0 (this check does not depend on the buggy mask reference)",
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "e40cc09432004120756208134b3d121882781b476e29e2addc44098c0764a3ed"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "b6a1191672f051e82580c4a4e496ea02ed9a91b7bd6405f4f64836c80b816dbd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "9fd13ee53143a298e49fd5157a7b7bd6c2831e144e1198593614e1fa12511f7c"
+              }
+            ],
+            "duration_s": 5.44454,
+            "example_N16": {
+              "correct_lowest_tied_index": 10,
+              "kernel_returned": 12,
+              "tied_max_positions": [
+                10,
+                12
+              ],
+              "tied_value": 5.0
+            },
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "N16": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 0,
+                  "kernel": 12,
+                  "ref": 10,
+                  "scores": [
+                    -0.9246624112129211,
+                    -0.42534422874450684,
+                    -2.643845796585083,
+                    0.14518386125564575,
+                    -0.12086640298366547,
+                    -0.5797257423400879,
+                    -0.6228510141372681,
+                    -0.32838690280914307,
+                    -1.0745419263839722,
+                    -0.3631439507007599,
+                    5.0,
+                    2.265504837036133,
+                    5.0,
+                    -0.1841890960931778,
+                    1.2866426706314087,
+                    1.181952714920044
+                  ]
+                },
+                "tied_rows_bad": 686,
+                "total": 2000
+              },
+              "N2": {
+                "all_equal_bad_nonzero": 100,
+                "example": null,
+                "tied_rows_bad": 0,
+                "total": 2000
+              },
+              "N32": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 3,
+                  "kernel": 22,
+                  "ref": 18,
+                  "scores": [
+                    -0.08569779992103577,
+                    -1.4976551532745361,
+                    -0.9073574542999268,
+                    -0.4524354040622711,
+                    0.06617258489131927,
+                    -0.03838057816028595,
+                    0.5839722752571106,
+                    0.8845420479774475,
+                    -1.6147876977920532,
+                    0.4484913945198059,
+                    0.7340670824050903,
+                    -0.8456965088844299,
+                    0.6587180495262146,
+                    -0.35540685057640076,
+                    -1.9106861352920532,
+                    -0.1684996336698532,
+                    1.8969159126281738,
+                    0.5132860541343689,
+                    5.0,
+                    -1.3909039497375488,
+                    -0.26249027252197266,
+                    -1.442936658859253,
+                    5.0,
+                    0.012184752151370049,
+                    2.143650531768799,
+                    -0.9264177083969116,
+                    1.6909056901931763,
+                    -0.2550846338272095,
+                    -0.9021109938621521,
+                    -0.21281515061855316,
+                    -0.3314812481403351,
+                    -0.2022598534822464
+                  ]
+                },
+                "tied_rows_bad": 590,
+                "total": 2000
+              },
+              "N4": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 1,
+                  "kernel": 0,
+                  "ref": 2,
+                  "scores": [
+                    5.0,
+                    -0.5797257423400879,
+                    5.0,
+                    -0.32838690280914307
+                  ]
+                },
+                "tied_rows_bad": 689,
+                "total": 2000
+              },
+              "N64": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 0,
+                  "kernel": 46,
+                  "ref": 44,
+                  "scores": [
+                    -0.9246624112129211,
+                    -0.42534422874450684,
+                    -2.643845796585083,
+                    0.14518386125564575,
+                    -0.12086640298366547,
+                    -0.5797257423400879,
+                    -0.6228510141372681,
+                    -0.32838690280914307,
+                    -1.0745419263839722,
+                    -0.3631439507007599,
+                    -1.6710504293441772,
+                    2.265504837036133,
+                    0.311684787273407,
+                    -0.1841890960931778,
+                    1.2866426706314087,
+                    1.181952714920044,
+                    -0.12705934047698975,
+                    1.2168909311294556,
+                    1.4353200197219849,
+                    1.0604605674743652,
+                    -0.49413183331489563,
+                    -1.4243810176849365,
+                    -0.7244344353675842,
+                    -1.2972735166549683,
+                    0.06968985497951508,
+                    -0.007406571414321661,
+                    1.896948218345642,
+                    0.6877782344818115,
+                    -0.07794807106256485,
+                    -0.8372799754142761,
+                    1.3506464958190918,
+                    -0.2879197299480438,
+                    -0.596531331539154,
+                    -0.3282594382762909,
+                    -0.9086048007011414,
+                    -0.8059370517730713,
+                    -0.7406656742095947,
+                    -0.050385482609272,
+                    0.5434768199920654,
+                    1.5150033235549927,
+                    0.014120638370513916,
+                    0.45320117473602295,
+                    1.6349115371704102,
+                    0.7123923897743225,
+                    5.0,
+                    1.0252224206924438,
+                    5.0,
+                    -0.7553848028182983,
+                    -0.18363918364048004,
+                    0.38238805532455444,
+                    0.3917717933654785,
+                    -0.08299090713262558,
+                    0.8971229791641235,
+                    -1.1122647523880005,
+                    0.11164596676826477,
+                    0.48627734184265137,
+                    -0.54993736743927,
+                    -0.3230888545513153,
+                    -0.5468879342079163,
+                    0.9048829078674316,
+                    0.28368571400642395,
+                    0.12103382498025894,
+                    0.4729706346988678,
+                    -1.0822831392288208
+                  ]
+                },
+                "tied_rows_bad": 531,
+                "total": 2000
+              },
+              "N8": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 0,
+                  "kernel": 0,
+                  "ref": 4,
+                  "scores": [
+                    5.0,
+                    -0.42534422874450684,
+                    -2.643845796585083,
+                    0.14518386125564575,
+                    5.0,
+                    -0.5797257423400879,
+                    -0.6228510141372681,
+                    -0.32838690280914307
+                  ]
+                },
+                "tied_rows_bad": 773,
+                "total": 2000
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"N2\": {\"tied_rows_bad\": 0, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": null}, \"N4\": {\"tied_rows_bad\": 689, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 1, \"scores\": [5.0, -0.5797257423400879, 5.0, -0.32838690280914307], \"kernel\": 0, \"ref\": 2}}, \"N8\": {\"tied_rows_bad\": 773, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [5.0, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, 5.0, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307], \"kernel\": 0, \"ref\": 4}}, \"N16\": {\"tied_rows_bad\": 686, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [-0.9246624112129211, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, -0.12086640298366547, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307, -1.0745419263839722, -0.3631439507007599, 5.0, 2.265504837036133, 5.0, -0.1841890960931778, 1.2866426706314087, 1.181952714920044], \"kernel\": 12, \"ref\": 10}}, \"N32\": {\"tied_rows_bad\": 590, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 3, \"scores\": [-0.08569779992103577, -1.4976551532745361, -0.9073574542999268, -0.4524354040622711, 0.06617258489131927, -0.03838057816028595, 0.5839722752571106, 0.8845420479774475, -1.6147876977920532, 0.4484913945198059, 0.7340670824050903, -0.8456965088844299, 0.6587180495262146, -0.35540685057640076, -1.9106861352920532, -0.1684996336698532, 1.8969159126281738, 0.5132860541343689, 5.0, -1.3909039497375488, -0.26249027252197266, -1.442936658859253, 5.0, 0.012184752151370049, 2.143650531768799, -0.9264177083969116, 1.6909056901931763, -0.2550846338272095, -0.9021109938621521, -0.21281515061855316, -0.3314812481403351, -0.2022598534822464], \"kernel\": 22, \"ref\": 18}}, \"N64\": {\"tied_rows_bad\": 531, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [-0.9246624112129211, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, -0.12086640298366547, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307, -1.0745419263839722, -0.3631439507007599, -1.6710504293441772, 2.265504837036133, 0.311684787273407, -0.1841890960931778, 1.2866426706314087, 1.181952714920044, -0.12705934047698975, 1.2168909311294556, 1.4353200197219849, 1.0604605674743652, -0.49413183331489563, -1.4243810176849365, -0.7244344353675842, -1.2972735166549683, 0.06968985497951508, -0.007406571414321661, 1.896948218345642, 0.6877782344818115, -0.07794807106256485, -0.8372799754142761, 1.3506464958190918, -0.2879197299480438, -0.596531331539154, -0.3282594382762909, -0.9086048007011414, -0.8059370517730713, -0.7406656742095947, -0.050385482609272, 0.5434768199920654, 1.5150033235549927, 0.014120638370513916, 0.45320117473602295, 1.6349115371704102, 0.7123923897743225, 5.0, 1.0252224206924438, 5.0, -0.7553848028182983, -0.18363918364048004, 0.38238805532455444, 0.3917717933654785, -0.08299090713262558, 0.8971229791641235, -1.1122647523880005, 0.11164596676826477, 0.48627734184265137, -0.54993736743927, -0.3230888545513153, -0.5468879342079163, 0.9048829078674316, 0.28368571400642395, 0.12103382498025894, 0.4729706346988678, -1.0822831392288208], \"kernel\": 46, \"ref\": 44}}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Tie-break probe: on rows with two tied maximum scores, the kernel frequently returns a higher index than the lowest tied index (e.g. N16 row 0: tied 5.0 at positions 10 and 12, kernel returned 12, lowest tied is 10). The all-equal-rows check (independent of the buggy mask reference) shows 100/100 all-equal rows return a nonzero index instead of the required index 0. The tied-row mismatch counts from the buggy reference are not relied on, but the all-equal and example evidence alone confirm the tie-break violation.",
+          "supports": "confirmed",
+          "tool_event_id": "t13"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The comparator `cond = (left > right) != flip` compares only values; bitonic sort is unstable, so with equal top scores the winner is determined by network wiring, not by lower index.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
+        }
+      ],
+      "scope_rationale": "problem.txt explicitly requires the lower index to be kept on tied top scores; if the kernel returns a higher tied index on tied inputs, it violates this stated tie-break rule.",
+      "statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:20:17Z"
+    },
+    {
+      "created_at": "2026-09-30T08:18:52Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:19:27Z",
+          "data": {
+            "N128": {
+              "mismatch": 0
+            },
+            "N16": {
+              "mismatch": 0
+            },
+            "N2": {
+              "mismatch": 0
+            },
+            "N32": {
+              "mismatch": 0
+            },
+            "N4": {
+              "mismatch": 0
+            },
+            "N64": {
+              "mismatch": 0
+            },
+            "N8": {
+              "mismatch": 0
+            },
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "baa52494d63c4693f9d268f9015c12255b631a0b3b624b20d7ac2f365ee5aefa"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "3decec7641c9da587b630a8402c3ab2ac1d5ffa5f190be9df4c2f0d2649d4aa7"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "126eb0919e15e284832cf135af8afb1defca48f0b1fec9e40093127c04b6a84a"
+              }
+            ],
+            "duration_s": 9.466785,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "N128": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N16": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N2": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N32": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N4": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N64": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N8": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "k5_exact_match": true
+            },
+            "k5_exact_match": true,
+            "stderr": "",
+            "stdout": "{\"N2\": {\"mismatch\": 0, \"total\": 512}, \"N4\": {\"mismatch\": 0, \"total\": 512}, \"N8\": {\"mismatch\": 0, \"total\": 512}, \"N16\": {\"mismatch\": 0, \"total\": 512}, \"N32\": {\"mismatch\": 0, \"total\": 512}, \"N64\": {\"mismatch\": 0, \"total\": 512}, \"N128\": {\"mismatch\": 0, \"total\": 512}, \"k5_exact_match\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "For N in {2,4,8,16,32,64,128} with 512 random tie-free rows each, top-1 indices matched torch argmax exactly (0 mismatches), and k=5 ordering matched stable descending argsort exactly.",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "Need to confirm baseline correctness on the declared domain (power-of-two N) with tie-free random inputs, comparing against a descending stable reference.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns."
+        }
+      ],
+      "scope_rationale": "problem.txt requires returning the index of the highest-scoring expert for power-of-two N; random tie-free inputs are in the declared domain and a mismatch here would be a direct violation.",
+      "statement": "For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:19:27Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_09",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_09"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_09"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_09"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_09",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 11.301627550000006,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel is a bitonic sort with a strict `>` comparator and no index-based tie-break; the contract explicitly requires that on equal scores the LOWER index wins. That's the key risk. Let me record the claim and run a probe with tied scores.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The comparator `cond = (left > right) != flip` uses only value comparisons; bitonic sort is not stable, so when scores are equal the element that ends up first (and thus selected as top-1) is an arbitrary function of the network, not the lower index.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
+              }
+            ],
+            "statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Need to confirm the sorted output ordering and correctness of returned indices against torch argsort on random inputs across power-of-two N values.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns."
+              }
+            ],
+            "statement": "For random (tie-free) inputs with power-of-two N, the kernel returns indices matching a descending-stable reference sort (highest score first)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.302,
+        "input_tokens": 8349,
+        "output_tokens": 475
+      }
+    },
+    {
+      "duration_s": 6.92007313900001,
+      "role": "solo",
+      "round": 3,
+      "text": "The two claims failed to record due to missing scope_rationale; I'll re-send them with that field filled.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The comparator `cond = (left > right) != flip` compares only values; bitonic sort is unstable, so with equal top scores the winner is determined by network wiring, not by lower index.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
+              }
+            ],
+            "scope_rationale": "problem.txt explicitly requires the lower index to be kept on tied top scores; if the kernel returns a higher tied index on tied inputs, it violates this stated tie-break rule.",
+            "statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Need to confirm baseline correctness on the declared domain (power-of-two N) with tie-free random inputs, comparing against a descending stable reference.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns."
+              }
+            ],
+            "scope_rationale": "problem.txt requires returning the index of the highest-scoring expert for power-of-two N; random tie-free inputs are in the declared domain and a mismatch here would be a direct violation.",
+            "statement": "For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.92,
+        "input_tokens": 9467,
+        "output_tokens": 387
+      }
+    },
+    {
+      "duration_s": 12.262519599,
+      "role": "solo",
+      "round": 4,
+      "text": "I'll run both probes: the tie-break case and the random baseline.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, sys, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\ndef ref_lowest_tied(row):\n    return int(torch.arange(row.numel())[row == row.max()].min())\nres = {}\nfor N in [2,4,8,16,32,64]:\n    B = 2000\n    torch.manual_seed(0)\n    bad = 0; ex = None\n    # random rows, then set the max value at multiple random positions to create ties\n    scores = torch.randn(B, N, device=dev)\n    for b in range(B):\n        idxs = torch.randperm(N)[:2 + (b % (N-1))][:2].cuda()  # pick 2 tied positions\n        scores[b, idxs[0]] = 5.0; scores[b, idxs[1]] = 5.0\n        # sometimes leave another position as unique second\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\n    for b in range(B):\n        lo = ref_lowest_tied(scores[b])\n        if out[b].item() != lo:\n            bad += 1\n            if ex is None: ex = (b, scores[b].tolist(), out[b].item(), lo)\n    # also all-equal rows\n    scores_eq = torch.zeros(100, N, device=dev)\n    out_eq = k.sorted_topk_indices(scores_eq, 1).squeeze(-1)\n    eq_bad = (out_eq != 0).sum().item()\n    res[f\"N{N}\"] = {\"tied_rows_bad\": bad, \"total\": B, \"all_equal_bad_nonzero\": eq_bad, \"example\": ex}\nprint(json.dumps(res))\n"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev=\"cuda\"\nres={}\nfor N in [2,4,8,16,32,64,128]:\n    torch.manual_seed(1)\n    scores = torch.randn(512, N, device=dev)\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\n    ref = scores.argmax(dim=1)\n    res[f\"N{N}\"] = {\"mismatch\": int((out!=ref).sum().item()), \"total\": 512}\n# also check k>1 ordering matches descending sort on tie-free input\ntorch.manual_seed(2)\ns = torch.randn(64, 16, device=dev)\nout = k.sorted_topk_indices(s, 5)\nref = torch.argsort(s, dim=1, descending=True, stable=True)[:, :5]\nres[\"k5_exact_match\"] = bool(torch.equal(out, ref))\nprint(json.dumps(res))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.263,
+        "input_tokens": 11416,
+        "output_tokens": 705
+      }
+    },
+    {
+      "duration_s": 8.145506193999978,
+      "role": "solo",
+      "round": 5,
+      "text": "The c2 probe passed cleanly; the c1 tie probe crashed on a device mismatch in my reference computation. I'll record both results and rerun a fixed tie-break probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "N128": {
+                "mismatch": 0
+              },
+              "N16": {
+                "mismatch": 0
+              },
+              "N2": {
+                "mismatch": 0
+              },
+              "N32": {
+                "mismatch": 0
+              },
+              "N4": {
+                "mismatch": 0
+              },
+              "N64": {
+                "mismatch": 0
+              },
+              "N8": {
+                "mismatch": 0
+              },
+              "k5_exact_match": true
+            },
+            "event_id": "t10",
+            "status": "confirmed",
+            "summary": "For N in {2,4,8,16,32,64,128} with 512 random tie-free rows each, top-1 indices matched torch argmax exactly (0 mismatches), and k=5 ordering matched stable descending argsort exactly.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c1",
+            "kind": "tool_error",
+            "summary": "First tie-break probe (t9) crashed in my reference code (torch.arange on CPU indexing a CUDA tensor), so it produced no evidence about the kernel; rerunning with a fixed reference.",
+            "supports": "inconclusive"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.146,
+        "input_tokens": 15934,
+        "output_tokens": 335
+      }
+    },
+    {
+      "duration_s": 8.756692012999991,
+      "role": "solo",
+      "round": 6,
+      "text": "The c2 baseline is confirmed; c1 (tie-break rule) still needs its probe. Rerunning with a device-fixed reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\nres = {}\nfor N in [2,4,8,16,32,64]:\n    B = 2000\n    torch.manual_seed(0)\n    scores = torch.randn(B, N, device=dev)\n    ar = torch.arange(N, device=dev)\n    for b in range(B):\n        p = torch.randperm(N)[:2].to(dev)\n        scores[b, p] = 5.0\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\n    # reference: lowest index among tied max\n    lo = (scores == scores.max(dim=1, keepdim=True).values).float() * ar[None, :]\n    lo[lo == 0] = N\n    lo = lo.argmin(dim=1)\n    bad = int((out != lo).sum().item())\n    ex = None\n    if bad:\n        m = (out != lo).nonzero()[0]\n        b = int(m[0]); ex = {\"b\": b, \"scores\": scores[b].tolist(), \"kernel\": int(out[b]), \"ref\": int(lo[b])}\n    # all-equal rows: correct answer is index 0\n    scores_eq = torch.zeros(100, N, device=dev)\n    out_eq = k.sorted_topk_indices(scores_eq, 1).squeeze(-1)\n    eq_bad = int((out_eq != 0).sum().item())\n    res[f\"N{N}\"] = {\"tied_rows_bad\": bad, \"total\": B, \"all_equal_bad_nonzero\": eq_bad, \"example\": ex}\nprint(json.dumps(res))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.757,
+        "input_tokens": 20118,
+        "output_tokens": 454
+      }
+    },
+    {
+      "duration_s": 16.987372856000036,
+      "role": "solo",
+      "round": 7,
+      "text": "The t13 probe shows violations, but my reference computation had a bug (the `lo[lo==0]=N` trick also zeroes a legitimately-tied index 0, so the shown examples are unreliable). The all-equal-rows signal (100/100 rows returning nonzero) is suspicious but I need a clean reference. I'll rerun with `argmax` (which returns the first/lowest tied index) as reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\nres = {}\nfor N in [2,4,8,16,32,64]:\n    B = 2000\n    torch.manual_seed(0)\n    scores = torch.randn(B, N, device=dev)\n    for b in range(B):\n        p = torch.randperm(N)[:2].to(dev)\n        scores[b, p] = 5.0\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\n    ref = scores.argmax(dim=1)  # torch argmax returns the FIRST (lowest) max index\n    bad = int((out != ref).sum().item())\n    ex = None\n    if bad:\n        m = (out != ref).nonzero()[0]; b = int(m[0])\n        ex = {\"b\": b, \"scores\": scores[b].tolist(), \"kernel\": int(out[b]), \"ref\": int(ref[b])}\n    # all-equal rows: contract requires index 0\n    scores_eq = torch.zeros(100, N, device=dev)\n    out_eq = k.sorted_topk_indices(scores_eq, 1).squeeze(-1)\n    eq_bad = int((out_eq != 0).sum().item())\n    eq_ex = int(out_eq[0]) if eq_bad else None\n    res[f\"N{N}\"] = {\"tied_rows_bad\": bad, \"total\": B, \"example\": ex,\n                    \"all_equal_bad_nonzero\": eq_bad, \"all_equal_example_index\": eq_ex}\nprint(json.dumps(res))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 16.987,
+        "input_tokens": 28700,
+        "output_tokens": 846
+      }
+    },
+    {
+      "duration_s": 17.938688127999967,
+      "role": "solo",
+      "round": 8,
+      "text": "The t13 probe already contains decisive, reference-bug-free evidence: the all-equal-rows check (`out_eq != 0`) doesn't use my buggy mask trick, and it shows 100/100 all-equal rows return a nonzero index instead of the contractually required index 0. Also the N16 example (tied 5.0 at positions 10 and 12, kernel returned 12, correct lowest is 10) is valid independent of the buggy reference. I'll finalize t13 as confirming c1 and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "all_equal_rows": "100/100 all-equal rows returned nonzero index instead of contractually required 0 (this check does not depend on the buggy mask reference)",
+              "example_N16": {
+                "correct_lowest_tied_index": 10,
+                "kernel_returned": 12,
+                "tied_max_positions": [
+                  10,
+                  12
+                ],
+                "tied_value": 5.0
+              }
+            },
+            "event_id": "t13",
+            "status": "confirmed",
+            "summary": "Tie-break probe: on rows with two tied maximum scores, the kernel frequently returns a higher index than the lowest tied index (e.g. N16 row 0: tied 5.0 at positions 10 and 12, kernel returned 12, lowest tied is 10). The all-equal-rows check (independent of the buggy mask reference) shows 100/100 all-equal rows return a nonzero index instead of the required index 0. The tied-row mismatch counts from the buggy reference are not relied on, but the all-equal and example evidence alone confirm the tie-break violation.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.939,
+        "input_tokens": 29507,
+        "output_tokens": 654
+      }
+    },
+    {
+      "duration_s": 9.162178153000013,
+      "role": "solo",
+      "round": 9,
+      "text": "Both claims are resolved: c2 confirms tie-free correctness, c1 confirms the tie-break violation (in-scope, backed by the contract's explicit lower-index rule). Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probes: t10 (claim c2) showed the kernel matches torch argmax exactly on tie-free random inputs for N in {2,4,8,16,32,64,128} (0 mismatches, 512 rows each), so the sort itself is correct on the declared power-of-two domain. However, t13 (claim c1) showed the contract's explicit tie-break rule is violated: on rows with two tied maxima (e.g. N16 row 0, tied 5.0 at positions 10 and 12, kernel returned 12 instead of the required lowest index 10), and on 100/100 all-equal rows the kernel returned a nonzero index instead of the contractually required index 0. Since problem.txt explicitly requires \"when two experts have exactly equal scores, the LOWER index must be the one kept,\" this is a confirmed in-scope contract violation (the value-only bitonic comparator is unstable), warranting reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.162,
+        "input_tokens": 43963,
+        "output_tokens": 290
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_09"
+      },
+      "created_at": "2026-09-30T08:18:34Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_09",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    shape: tl.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]\n    y = tl.reshape(x, shape)\n    mask = tl.arange(0, 2)[None, :, None]\n    left = tl.broadcast_to(tl.sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)\n    right = tl.broadcast_to(tl.sum(y * mask, 1)[:, None, :], shape).to(y.dtype)\n    left = tl.reshape(left, x.shape)\n    right = tl.reshape(right, x.shape)\n    y_idx = tl.reshape(ids, shape)\n    left_idx = tl.broadcast_to(tl.sum(y_idx * (1 - mask), 1)[:, None, :], shape)\n    right_idx = tl.broadcast_to(tl.sum(y_idx * mask, 1)[:, None, :], shape)\n    left_idx = tl.reshape(left_idx, x.shape).to(y_idx.dtype)\n    right_idx = tl.reshape(right_idx, x.shape).to(y_idx.dtype)\n    idtype = tl.core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)\n    ileft = left.to(idtype, bitcast=True)\n    iright = right.to(idtype, bitcast=True)\n    ix = x.to(idtype, bitcast=True)\n    cond = (left > right) != flip\n    ret = ix ^ tl.where(cond, ileft ^ iright, tl.zeros_like(ix))\n    new_ids = ids ^ tl.where(cond, left_idx ^ right_idx, tl.zeros_like(ids))\n    return ret.to(x.dtype, bitcast=True), new_ids\n\n\n@triton.jit\ndef _bitonic_merge(x, ids, stage: tl.constexpr, order: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    tl.static_assert(stage <= n_dims)\n    if order == 2:\n        shape: tl.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]\n        flip = tl.reshape(tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape), x.shape)\n    else:\n        flip = order\n    for i in tl.static_range(stage):\n        x, ids = _compare_and_swap(x, ids, flip, i + (n_dims - stage), n_dims)\n    return x, ids\n\n\n@triton.jit\ndef _row_argsort_kernel(X_ptr, IDS_ptr, stride_row, N: tl.constexpr, N_DIMS: tl.constexpr, DESCENDING: tl.constexpr):\n    # tl.log2(x.shape[dim]); that call path is not constexpr-stable on every\n    # Triton version, so N_DIMS is passed in from the (Python-side, so still\n    # compile-time-known) caller instead. The bitonic merge/compare-and-swap\n    # primitives below -- where the actual tie-break mechanism lives -- are\n    # byte-for-byte the real kernel, unchanged.\n    row = tl.program_id(0)\n    offs = tl.arange(0, N)\n    x = tl.load(X_ptr + row * stride_row + offs)\n    ids = tl.load(IDS_ptr + row * stride_row + offs)\n    for i in tl.static_range(1, N_DIMS + 1):\n        x, ids = _bitonic_merge(x, ids, i, 2 if i < N_DIMS else DESCENDING, N_DIMS)\n    tl.store(X_ptr + row * stride_row + offs, x)\n    tl.store(IDS_ptr + row * stride_row + offs, ids)\n\n\ndef sorted_topk_indices(scores: torch.Tensor, k: int) -> torch.Tensor:\n    \"\"\"Host wrapper: real bitonic-sort kernel, launched one program per row.\"\"\"\n    import math\n    assert scores.is_cuda\n    B, N = scores.shape\n    n_dims = int(math.log2(N))\n    x = scores.clone().contiguous()\n    ids = torch.arange(N, device=scores.device, dtype=torch.int32).unsqueeze(0).expand(B, N).contiguous()\n    _row_argsort_kernel[(B,)](x, ids, N, N=N, N_DIMS=n_dims, DESCENDING=True)\n    return ids[:, :k].long()\n",
+        "passed": null,
+        "problem_text": "Operation: top-1 routing (a gate) over per-expert scores, implemented with the\nbitonic sort network used by Native Sparse Attention's selection branch\n(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).\n\n`sorted_topk_indices(scores, k=1)` must return, for each token, the index of\nthe highest-scoring expert.\n\nContract on ties: when two experts have exactly equal scores, the LOWER\nindex must be the one kept.\n\nEach token's chosen expert contributes its output vector; the batch is then\nmean-pooled into a single continuous representation.\n\nInput domain: `scores` has a power-of-two number of columns (the bitonic\nnetwork this kernel family uses is defined only for power-of-two extents).\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_09",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_09"
+      },
+      "created_at": "2026-09-30T08:18:34Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: top-1 routing (a gate) over per-expert scores, implemented with the\nbitonic sort network used by Native Sparse Attention's selection branch\n(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).\n\n`sorted_topk_indices(scores, k=1)` must return, for each token, the index of\nthe highest-scoring expert.\n\nContract on ties: when two experts have exactly equal scores, the LOWER\nindex must be the one kept.\n\nEach token's chosen expert contributes its output vector; the batch is then\nmean-pooled into a single continuous representation.\n\nInput domain: `scores` has a power-of-two number of columns (the bitonic\nnetwork this kernel family uses is defined only for power-of-two extents).\n",
+        "entry": "case_09",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_09"
+      },
+      "created_at": "2026-09-30T08:18:34Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_09",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3236
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 710
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_09",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:18:34Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_09\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_09",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The comparator `cond = (left > right) != flip` uses only value comparisons; bitonic sort is not stable, so when scores are equal the element that ends up first (and thus selected as top-1) is an arbitrary function of the network, not the lower index.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
+          }
+        ],
+        "statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule."
+      },
+      "created_at": "2026-09-30T08:18:45Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t5",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Need to confirm the sorted output ordering and correctness of returned indices against torch argsort on random inputs across power-of-two N values.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns."
+          }
+        ],
+        "statement": "For random (tie-free) inputs with power-of-two N, the kernel returns indices matching a descending-stable reference sort (highest score first)."
+      },
+      "created_at": "2026-09-30T08:18:45Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The comparator `cond = (left > right) != flip` compares only values; bitonic sort is unstable, so with equal top scores the winner is determined by network wiring, not by lower index.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly requires the lower index to be kept on tied top scores; if the kernel returns a higher tied index on tied inputs, it violates this stated tie-break rule.",
+        "statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule."
+      },
+      "created_at": "2026-09-30T08:18:52Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-30T08:18:52Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The comparator `cond = (left > right) != flip` compares only values; bitonic sort is unstable, so with equal top scores the winner is determined by network wiring, not by lower index.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly requires the lower index to be kept on tied top scores; if the kernel returns a higher tied index on tied inputs, it violates this stated tie-break rule.",
+        "statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:18:52Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Need to confirm baseline correctness on the declared domain (power-of-two N) with tie-free random inputs, comparing against a descending stable reference.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns."
+          }
+        ],
+        "scope_rationale": "problem.txt requires returning the index of the highest-scoring expert for power-of-two N; random tie-free inputs are in the declared domain and a mismatch here would be a direct violation.",
+        "statement": "For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort."
+      },
+      "created_at": "2026-09-30T08:18:52Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-30T08:18:52Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Need to confirm baseline correctness on the declared domain (power-of-two N) with tie-free random inputs, comparing against a descending stable reference.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns."
+          }
+        ],
+        "scope_rationale": "problem.txt requires returning the index of the highest-scoring expert for power-of-two N; random tie-free inputs are in the declared domain and a mismatch here would be a direct violation.",
+        "statement": "For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:18:52Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, sys, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\ndef ref_lowest_tied(row):\n    return int(torch.arange(row.numel())[row == row.max()].min())\nres = {}\nfor N in [2,4,8,16,32,64]:\n    B = 2000\n    torch.manual_seed(0)\n    bad = 0; ex = None\n    # random rows, then set the max value at multiple random positions to create ties\n    scores = torch.randn(B, N, device=dev)\n    for b in range(B):\n        idxs = torch.randperm(N)[:2 + (b % (N-1))][:2].cuda()  # pick 2 tied positions\n        scores[b, idxs[0]] = 5.0; scores[b, idxs[1]] = 5.0\n        # sometimes leave another position as unique second\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\n    for b in range(B):\n        lo = ref_lowest_tied(scores[b])\n        if out[b].item() != lo:\n            bad += 1\n            if ex is None: ex = (b, scores[b].tolist(), out[b].item(), lo)\n    # also all-equal rows\n    scores_eq = torch.zeros(100, N, device=dev)\n    out_eq = k.sorted_topk_indices(scores_eq, 1).squeeze(-1)\n    eq_bad = (out_eq != 0).sum().item()\n    res[f\"N{N}\"] = {\"tied_rows_bad\": bad, \"total\": B, \"all_equal_bad_nonzero\": eq_bad, \"example\": ex}\nprint(json.dumps(res))\n"
+      },
+      "created_at": "2026-09-30T08:19:10Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "ccf15749dbcecca28d515bedd484de464f2b1decb0399ac33108a68ab74716f0"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "415ad4d4565eb14a00de80fadee2d686263d67fbdcab4af7466f003ec91efad4"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.",
+        "cwd": "/root/cases/case_09",
+        "duration_s": 5.454502,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "ccf15749dbcecca28d515bedd484de464f2b1decb0399ac33108a68ab74716f0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "415ad4d4565eb14a00de80fadee2d686263d67fbdcab4af7466f003ec91efad4"
+              }
+            ],
+            "duration_s": 5.454502,
+            "exit_code": 1,
+            "expected_signal": null,
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_09/solo/probes/t9_probe.py\", line 21, in <module>\n    lo = ref_lowest_tied(scores[b])\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_09/solo/probes/t9_probe.py\", line 7, in ref_lowest_tied\n    return int(torch.arange(row.numel())[row == row.max()].min())\n               ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^\nRuntimeError: indices should be either on cpu or on the same device as the indexed tensor (cpu)\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 1,
+        "expected_signal": null,
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_09/solo/probes/t9_probe.py\", line 21, in <module>\n    lo = ref_lowest_tied(scores[b])\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_09/solo/probes/t9_probe.py\", line 7, in ref_lowest_tied\n    return int(torch.arange(row.numel())[row == row.max()].min())\n               ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^\nRuntimeError: indices should be either on cpu or on the same device as the indexed tensor (cpu)\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev=\"cuda\"\nres={}\nfor N in [2,4,8,16,32,64,128]:\n    torch.manual_seed(1)\n    scores = torch.randn(512, N, device=dev)\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\n    ref = scores.argmax(dim=1)\n    res[f\"N{N}\"] = {\"mismatch\": int((out!=ref).sum().item()), \"total\": 512}\n# also check k>1 ordering matches descending sort on tie-free input\ntorch.manual_seed(2)\ns = torch.randn(64, 16, device=dev)\nout = k.sorted_topk_indices(s, 5)\nref = torch.argsort(s, dim=1, descending=True, stable=True)[:, :5]\nres[\"k5_exact_match\"] = bool(torch.equal(out, ref))\nprint(json.dumps(res))\n"
+      },
+      "created_at": "2026-09-30T08:19:19Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "baa52494d63c4693f9d268f9015c12255b631a0b3b624b20d7ac2f365ee5aefa"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "3decec7641c9da587b630a8402c3ab2ac1d5ffa5f190be9df4c2f0d2649d4aa7"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t10_json_result.json",
+            "sha256": "126eb0919e15e284832cf135af8afb1defca48f0b1fec9e40093127c04b6a84a"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort.",
+        "cwd": "/root/cases/case_09",
+        "duration_s": 9.466785,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "baa52494d63c4693f9d268f9015c12255b631a0b3b624b20d7ac2f365ee5aefa"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "3decec7641c9da587b630a8402c3ab2ac1d5ffa5f190be9df4c2f0d2649d4aa7"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "126eb0919e15e284832cf135af8afb1defca48f0b1fec9e40093127c04b6a84a"
+              }
+            ],
+            "duration_s": 9.466785,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "N128": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N16": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N2": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N32": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N4": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N64": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N8": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "k5_exact_match": true
+            },
+            "stderr": "",
+            "stdout": "{\"N2\": {\"mismatch\": 0, \"total\": 512}, \"N4\": {\"mismatch\": 0, \"total\": 512}, \"N8\": {\"mismatch\": 0, \"total\": 512}, \"N16\": {\"mismatch\": 0, \"total\": 512}, \"N32\": {\"mismatch\": 0, \"total\": 512}, \"N64\": {\"mismatch\": 0, \"total\": 512}, \"N128\": {\"mismatch\": 0, \"total\": 512}, \"k5_exact_match\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "N128": {
+            "mismatch": 0,
+            "total": 512
+          },
+          "N16": {
+            "mismatch": 0,
+            "total": 512
+          },
+          "N2": {
+            "mismatch": 0,
+            "total": 512
+          },
+          "N32": {
+            "mismatch": 0,
+            "total": 512
+          },
+          "N4": {
+            "mismatch": 0,
+            "total": 512
+          },
+          "N64": {
+            "mismatch": 0,
+            "total": 512
+          },
+          "N8": {
+            "mismatch": 0,
+            "total": 512
+          },
+          "k5_exact_match": true
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"N2\": {\"mismatch\": 0, \"total\": 512}, \"N4\": {\"mismatch\": 0, \"total\": 512}, \"N8\": {\"mismatch\": 0, \"total\": 512}, \"N16\": {\"mismatch\": 0, \"total\": 512}, \"N32\": {\"mismatch\": 0, \"total\": 512}, \"N64\": {\"mismatch\": 0, \"total\": 512}, \"N128\": {\"mismatch\": 0, \"total\": 512}, \"k5_exact_match\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "N128": {
+            "mismatch": 0
+          },
+          "N16": {
+            "mismatch": 0
+          },
+          "N2": {
+            "mismatch": 0
+          },
+          "N32": {
+            "mismatch": 0
+          },
+          "N4": {
+            "mismatch": 0
+          },
+          "N64": {
+            "mismatch": 0
+          },
+          "N8": {
+            "mismatch": 0
+          },
+          "k5_exact_match": true
+        },
+        "event_id": "t10",
+        "status": "confirmed",
+        "summary": "For N in {2,4,8,16,32,64,128} with 512 random tie-free rows each, top-1 indices matched torch argmax exactly (0 mismatches), and k=5 ordering matched stable descending argsort exactly.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:19:27Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:18:52Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:19:27Z",
+              "data": {
+                "N128": {
+                  "mismatch": 0
+                },
+                "N16": {
+                  "mismatch": 0
+                },
+                "N2": {
+                  "mismatch": 0
+                },
+                "N32": {
+                  "mismatch": 0
+                },
+                "N4": {
+                  "mismatch": 0
+                },
+                "N64": {
+                  "mismatch": 0
+                },
+                "N8": {
+                  "mismatch": 0
+                },
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "baa52494d63c4693f9d268f9015c12255b631a0b3b624b20d7ac2f365ee5aefa"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "3decec7641c9da587b630a8402c3ab2ac1d5ffa5f190be9df4c2f0d2649d4aa7"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t10_json_result.json",
+                    "sha256": "126eb0919e15e284832cf135af8afb1defca48f0b1fec9e40093127c04b6a84a"
+                  }
+                ],
+                "duration_s": 9.466785,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "N128": {
+                    "mismatch": 0,
+                    "total": 512
+                  },
+                  "N16": {
+                    "mismatch": 0,
+                    "total": 512
+                  },
+                  "N2": {
+                    "mismatch": 0,
+                    "total": 512
+                  },
+                  "N32": {
+                    "mismatch": 0,
+                    "total": 512
+                  },
+                  "N4": {
+                    "mismatch": 0,
+                    "total": 512
+                  },
+                  "N64": {
+                    "mismatch": 0,
+                    "total": 512
+                  },
+                  "N8": {
+                    "mismatch": 0,
+                    "total": 512
+                  },
+                  "k5_exact_match": true
+                },
+                "k5_exact_match": true,
+                "stderr": "",
+                "stdout": "{\"N2\": {\"mismatch\": 0, \"total\": 512}, \"N4\": {\"mismatch\": 0, \"total\": 512}, \"N8\": {\"mismatch\": 0, \"total\": 512}, \"N16\": {\"mismatch\": 0, \"total\": 512}, \"N32\": {\"mismatch\": 0, \"total\": 512}, \"N64\": {\"mismatch\": 0, \"total\": 512}, \"N128\": {\"mismatch\": 0, \"total\": 512}, \"k5_exact_match\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "For N in {2,4,8,16,32,64,128} with 512 random tie-free rows each, top-1 indices matched torch argmax exactly (0 mismatches), and k=5 ordering matched stable descending argsort exactly.",
+              "supports": "confirmed",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "solo",
+          "rationale": "Need to confirm baseline correctness on the declared domain (power-of-two N) with tie-free random inputs, comparing against a descending stable reference.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns."
+            }
+          ],
+          "scope_rationale": "problem.txt requires returning the index of the highest-scoring expert for power-of-two N; random tie-free inputs are in the declared domain and a mismatch here would be a direct violation.",
+          "statement": "For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:19:27Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:19:27Z",
+          "data": {
+            "N128": {
+              "mismatch": 0
+            },
+            "N16": {
+              "mismatch": 0
+            },
+            "N2": {
+              "mismatch": 0
+            },
+            "N32": {
+              "mismatch": 0
+            },
+            "N4": {
+              "mismatch": 0
+            },
+            "N64": {
+              "mismatch": 0
+            },
+            "N8": {
+              "mismatch": 0
+            },
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "baa52494d63c4693f9d268f9015c12255b631a0b3b624b20d7ac2f365ee5aefa"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "3decec7641c9da587b630a8402c3ab2ac1d5ffa5f190be9df4c2f0d2649d4aa7"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "126eb0919e15e284832cf135af8afb1defca48f0b1fec9e40093127c04b6a84a"
+              }
+            ],
+            "duration_s": 9.466785,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "N128": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N16": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N2": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N32": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N4": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N64": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "N8": {
+                "mismatch": 0,
+                "total": 512
+              },
+              "k5_exact_match": true
+            },
+            "k5_exact_match": true,
+            "stderr": "",
+            "stdout": "{\"N2\": {\"mismatch\": 0, \"total\": 512}, \"N4\": {\"mismatch\": 0, \"total\": 512}, \"N8\": {\"mismatch\": 0, \"total\": 512}, \"N16\": {\"mismatch\": 0, \"total\": 512}, \"N32\": {\"mismatch\": 0, \"total\": 512}, \"N64\": {\"mismatch\": 0, \"total\": 512}, \"N128\": {\"mismatch\": 0, \"total\": 512}, \"k5_exact_match\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "For N in {2,4,8,16,32,64,128} with 512 random tie-free rows each, top-1 indices matched torch argmax exactly (0 mismatches), and k=5 ordering matched stable descending argsort exactly.",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "kind": "tool_error",
+        "summary": "First tie-break probe (t9) crashed in my reference code (torch.arange on CPU indexing a CUDA tensor), so it produced no evidence about the kernel; rerunning with a fixed reference.",
+        "supports": "inconclusive"
+      },
+      "created_at": "2026-09-30T08:19:27Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:19:27Z",
+        "data": {},
+        "id": "c1.e1",
+        "kind": "tool_error",
+        "summary": "First tie-break probe (t9) crashed in my reference code (torch.arange on CPU indexing a CUDA tensor), so it produced no evidence about the kernel; rerunning with a fixed reference.",
+        "supports": "inconclusive",
+        "tool_event_id": null
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\nres = {}\nfor N in [2,4,8,16,32,64]:\n    B = 2000\n    torch.manual_seed(0)\n    scores = torch.randn(B, N, device=dev)\n    ar = torch.arange(N, device=dev)\n    for b in range(B):\n        p = torch.randperm(N)[:2].to(dev)\n        scores[b, p] = 5.0\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\n    # reference: lowest index among tied max\n    lo = (scores == scores.max(dim=1, keepdim=True).values).float() * ar[None, :]\n    lo[lo == 0] = N\n    lo = lo.argmin(dim=1)\n    bad = int((out != lo).sum().item())\n    ex = None\n    if bad:\n        m = (out != lo).nonzero()[0]\n        b = int(m[0]); ex = {\"b\": b, \"scores\": scores[b].tolist(), \"kernel\": int(out[b]), \"ref\": int(lo[b])}\n    # all-equal rows: correct answer is index 0\n    scores_eq = torch.zeros(100, N, device=dev)\n    out_eq = k.sorted_topk_indices(scores_eq, 1).squeeze(-1)\n    eq_bad = int((out_eq != 0).sum().item())\n    res[f\"N{N}\"] = {\"tied_rows_bad\": bad, \"total\": B, \"all_equal_bad_nonzero\": eq_bad, \"example\": ex}\nprint(json.dumps(res))\n"
+      },
+      "created_at": "2026-09-30T08:19:42Z",
+      "id": "t13",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t13_probe.py",
+            "sha256": "e40cc09432004120756208134b3d121882781b476e29e2addc44098c0764a3ed"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t13_stdout.txt",
+            "sha256": "b6a1191672f051e82580c4a4e496ea02ed9a91b7bd6405f4f64836c80b816dbd"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t13_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t13_json_result.json",
+            "sha256": "9fd13ee53143a298e49fd5157a7b7bd6c2831e144e1198593614e1fa12511f7c"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.",
+        "cwd": "/root/cases/case_09",
+        "duration_s": 5.44454,
+        "event_id": "t13",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "e40cc09432004120756208134b3d121882781b476e29e2addc44098c0764a3ed"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "b6a1191672f051e82580c4a4e496ea02ed9a91b7bd6405f4f64836c80b816dbd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "9fd13ee53143a298e49fd5157a7b7bd6c2831e144e1198593614e1fa12511f7c"
+              }
+            ],
+            "duration_s": 5.44454,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "N16": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 0,
+                  "kernel": 12,
+                  "ref": 10,
+                  "scores": [
+                    -0.9246624112129211,
+                    -0.42534422874450684,
+                    -2.643845796585083,
+                    0.14518386125564575,
+                    -0.12086640298366547,
+                    -0.5797257423400879,
+                    -0.6228510141372681,
+                    -0.32838690280914307,
+                    -1.0745419263839722,
+                    -0.3631439507007599,
+                    5.0,
+                    2.265504837036133,
+                    5.0,
+                    -0.1841890960931778,
+                    1.2866426706314087,
+                    1.181952714920044
+                  ]
+                },
+                "tied_rows_bad": 686,
+                "total": 2000
+              },
+              "N2": {
+                "all_equal_bad_nonzero": 100,
+                "example": null,
+                "tied_rows_bad": 0,
+                "total": 2000
+              },
+              "N32": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 3,
+                  "kernel": 22,
+                  "ref": 18,
+                  "scores": [
+                    -0.08569779992103577,
+                    -1.4976551532745361,
+                    -0.9073574542999268,
+                    -0.4524354040622711,
+                    0.06617258489131927,
+                    -0.03838057816028595,
+                    0.5839722752571106,
+                    0.8845420479774475,
+                    -1.6147876977920532,
+                    0.4484913945198059,
+                    0.7340670824050903,
+                    -0.8456965088844299,
+                    0.6587180495262146,
+                    -0.35540685057640076,
+                    -1.9106861352920532,
+                    -0.1684996336698532,
+                    1.8969159126281738,
+                    0.5132860541343689,
+                    5.0,
+                    -1.3909039497375488,
+                    -0.26249027252197266,
+                    -1.442936658859253,
+                    5.0,
+                    0.012184752151370049,
+                    2.143650531768799,
+                    -0.9264177083969116,
+                    1.6909056901931763,
+                    -0.2550846338272095,
+                    -0.9021109938621521,
+                    -0.21281515061855316,
+                    -0.3314812481403351,
+                    -0.2022598534822464
+                  ]
+                },
+                "tied_rows_bad": 590,
+                "total": 2000
+              },
+              "N4": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 1,
+                  "kernel": 0,
+                  "ref": 2,
+                  "scores": [
+                    5.0,
+                    -0.5797257423400879,
+                    5.0,
+                    -0.32838690280914307
+                  ]
+                },
+                "tied_rows_bad": 689,
+                "total": 2000
+              },
+              "N64": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 0,
+                  "kernel": 46,
+                  "ref": 44,
+                  "scores": [
+                    -0.9246624112129211,
+                    -0.42534422874450684,
+                    -2.643845796585083,
+                    0.14518386125564575,
+                    -0.12086640298366547,
+                    -0.5797257423400879,
+                    -0.6228510141372681,
+                    -0.32838690280914307,
+                    -1.0745419263839722,
+                    -0.3631439507007599,
+                    -1.6710504293441772,
+                    2.265504837036133,
+                    0.311684787273407,
+                    -0.1841890960931778,
+                    1.2866426706314087,
+                    1.181952714920044,
+                    -0.12705934047698975,
+                    1.2168909311294556,
+                    1.4353200197219849,
+                    1.0604605674743652,
+                    -0.49413183331489563,
+                    -1.4243810176849365,
+                    -0.7244344353675842,
+                    -1.2972735166549683,
+                    0.06968985497951508,
+                    -0.007406571414321661,
+                    1.896948218345642,
+                    0.6877782344818115,
+                    -0.07794807106256485,
+                    -0.8372799754142761,
+                    1.3506464958190918,
+                    -0.2879197299480438,
+                    -0.596531331539154,
+                    -0.3282594382762909,
+                    -0.9086048007011414,
+                    -0.8059370517730713,
+                    -0.7406656742095947,
+                    -0.050385482609272,
+                    0.5434768199920654,
+                    1.5150033235549927,
+                    0.014120638370513916,
+                    0.45320117473602295,
+                    1.6349115371704102,
+                    0.7123923897743225,
+                    5.0,
+                    1.0252224206924438,
+                    5.0,
+                    -0.7553848028182983,
+                    -0.18363918364048004,
+                    0.38238805532455444,
+                    0.3917717933654785,
+                    -0.08299090713262558,
+                    0.8971229791641235,
+                    -1.1122647523880005,
+                    0.11164596676826477,
+                    0.48627734184265137,
+                    -0.54993736743927,
+                    -0.3230888545513153,
+                    -0.5468879342079163,
+                    0.9048829078674316,
+                    0.28368571400642395,
+                    0.12103382498025894,
+                    0.4729706346988678,
+                    -1.0822831392288208
+                  ]
+                },
+                "tied_rows_bad": 531,
+                "total": 2000
+              },
+              "N8": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 0,
+                  "kernel": 0,
+                  "ref": 4,
+                  "scores": [
+                    5.0,
+                    -0.42534422874450684,
+                    -2.643845796585083,
+                    0.14518386125564575,
+                    5.0,
+                    -0.5797257423400879,
+                    -0.6228510141372681,
+                    -0.32838690280914307
+                  ]
+                },
+                "tied_rows_bad": 773,
+                "total": 2000
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"N2\": {\"tied_rows_bad\": 0, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": null}, \"N4\": {\"tied_rows_bad\": 689, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 1, \"scores\": [5.0, -0.5797257423400879, 5.0, -0.32838690280914307], \"kernel\": 0, \"ref\": 2}}, \"N8\": {\"tied_rows_bad\": 773, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [5.0, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, 5.0, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307], \"kernel\": 0, \"ref\": 4}}, \"N16\": {\"tied_rows_bad\": 686, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [-0.9246624112129211, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, -0.12086640298366547, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307, -1.0745419263839722, -0.3631439507007599, 5.0, 2.265504837036133, 5.0, -0.1841890960931778, 1.2866426706314087, 1.181952714920044], \"kernel\": 12, \"ref\": 10}}, \"N32\": {\"tied_rows_bad\": 590, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 3, \"scores\": [-0.08569779992103577, -1.4976551532745361, -0.9073574542999268, -0.4524354040622711, 0.06617258489131927, -0.03838057816028595, 0.5839722752571106, 0.8845420479774475, -1.6147876977920532, 0.4484913945198059, 0.7340670824050903, -0.8456965088844299, 0.6587180495262146, -0.35540685057640076, -1.9106861352920532, -0.1684996336698532, 1.8969159126281738, 0.5132860541343689, 5.0, -1.3909039497375488, -0.26249027252197266, -1.442936658859253, 5.0, 0.012184752151370049, 2.143650531768799, -0.9264177083969116, 1.6909056901931763, -0.2550846338272095, -0.9021109938621521, -0.21281515061855316, -0.3314812481403351, -0.2022598534822464], \"kernel\": 22, \"ref\": 18}}, \"N64\": {\"tied_rows_bad\": 531, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [-0.9246624112129211, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, -0.12086640298366547, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307, -1.0745419263839722, -0.3631439507007599, -1.6710504293441772, 2.265504837036133, 0.311684787273407, -0.1841890960931778, 1.2866426706314087, 1.181952714920044, -0.12705934047698975, 1.2168909311294556, 1.4353200197219849, 1.0604605674743652, -0.49413183331489563, -1.4243810176849365, -0.7244344353675842, -1.2972735166549683, 0.06968985497951508, -0.007406571414321661, 1.896948218345642, 0.6877782344818115, -0.07794807106256485, -0.8372799754142761, 1.3506464958190918, -0.2879197299480438, -0.596531331539154, -0.3282594382762909, -0.9086048007011414, -0.8059370517730713, -0.7406656742095947, -0.050385482609272, 0.5434768199920654, 1.5150033235549927, 0.014120638370513916, 0.45320117473602295, 1.6349115371704102, 0.7123923897743225, 5.0, 1.0252224206924438, 5.0, -0.7553848028182983, -0.18363918364048004, 0.38238805532455444, 0.3917717933654785, -0.08299090713262558, 0.8971229791641235, -1.1122647523880005, 0.11164596676826477, 0.48627734184265137, -0.54993736743927, -0.3230888545513153, -0.5468879342079163, 0.9048829078674316, 0.28368571400642395, 0.12103382498025894, 0.4729706346988678, -1.0822831392288208], \"kernel\": 46, \"ref\": 44}}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t13"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "N16": {
+            "all_equal_bad_nonzero": 100,
+            "example": {
+              "b": 0,
+              "kernel": 12,
+              "ref": 10,
+              "scores": [
+                -0.9246624112129211,
+                -0.42534422874450684,
+                -2.643845796585083,
+                0.14518386125564575,
+                -0.12086640298366547,
+                -0.5797257423400879,
+                -0.6228510141372681,
+                -0.32838690280914307,
+                -1.0745419263839722,
+                -0.3631439507007599,
+                5.0,
+                2.265504837036133,
+                5.0,
+                -0.1841890960931778,
+                1.2866426706314087,
+                1.181952714920044
+              ]
+            },
+            "tied_rows_bad": 686,
+            "total": 2000
+          },
+          "N2": {
+            "all_equal_bad_nonzero": 100,
+            "example": null,
+            "tied_rows_bad": 0,
+            "total": 2000
+          },
+          "N32": {
+            "all_equal_bad_nonzero": 100,
+            "example": {
+              "b": 3,
+              "kernel": 22,
+              "ref": 18,
+              "scores": [
+                -0.08569779992103577,
+                -1.4976551532745361,
+                -0.9073574542999268,
+                -0.4524354040622711,
+                0.06617258489131927,
+                -0.03838057816028595,
+                0.5839722752571106,
+                0.8845420479774475,
+                -1.6147876977920532,
+                0.4484913945198059,
+                0.7340670824050903,
+                -0.8456965088844299,
+                0.6587180495262146,
+                -0.35540685057640076,
+                -1.9106861352920532,
+                -0.1684996336698532,
+                1.8969159126281738,
+                0.5132860541343689,
+                5.0,
+                -1.3909039497375488,
+                -0.26249027252197266,
+                -1.442936658859253,
+                5.0,
+                0.012184752151370049,
+                2.143650531768799,
+                -0.9264177083969116,
+                1.6909056901931763,
+                -0.2550846338272095,
+                -0.9021109938621521,
+                -0.21281515061855316,
+                -0.3314812481403351,
+                -0.2022598534822464
+              ]
+            },
+            "tied_rows_bad": 590,
+            "total": 2000
+          },
+          "N4": {
+            "all_equal_bad_nonzero": 100,
+            "example": {
+              "b": 1,
+              "kernel": 0,
+              "ref": 2,
+              "scores": [
+                5.0,
+                -0.5797257423400879,
+                5.0,
+                -0.32838690280914307
+              ]
+            },
+            "tied_rows_bad": 689,
+            "total": 2000
+          },
+          "N64": {
+            "all_equal_bad_nonzero": 100,
+            "example": {
+              "b": 0,
+              "kernel": 46,
+              "ref": 44,
+              "scores": [
+                -0.9246624112129211,
+                -0.42534422874450684,
+                -2.643845796585083,
+                0.14518386125564575,
+                -0.12086640298366547,
+                -0.5797257423400879,
+                -0.6228510141372681,
+                -0.32838690280914307,
+                -1.0745419263839722,
+                -0.3631439507007599,
+                -1.6710504293441772,
+                2.265504837036133,
+                0.311684787273407,
+                -0.1841890960931778,
+                1.2866426706314087,
+                1.181952714920044,
+                -0.12705934047698975,
+                1.2168909311294556,
+                1.4353200197219849,
+                1.0604605674743652,
+                -0.49413183331489563,
+                -1.4243810176849365,
+                -0.7244344353675842,
+                -1.2972735166549683,
+                0.06968985497951508,
+                -0.007406571414321661,
+                1.896948218345642,
+                0.6877782344818115,
+                -0.07794807106256485,
+                -0.8372799754142761,
+                1.3506464958190918,
+                -0.2879197299480438,
+                -0.596531331539154,
+                -0.3282594382762909,
+                -0.9086048007011414,
+                -0.8059370517730713,
+                -0.7406656742095947,
+                -0.050385482609272,
+                0.5434768199920654,
+                1.5150033235549927,
+                0.014120638370513916,
+                0.45320117473602295,
+                1.6349115371704102,
+                0.7123923897743225,
+                5.0,
+                1.0252224206924438,
+                5.0,
+                -0.7553848028182983,
+                -0.18363918364048004,
+                0.38238805532455444,
+                0.3917717933654785,
+                -0.08299090713262558,
+                0.8971229791641235,
+                -1.1122647523880005,
+                0.11164596676826477,
+                0.48627734184265137,
+                -0.54993736743927,
+                -0.3230888545513153,
+                -0.5468879342079163,
+                0.9048829078674316,
+                0.28368571400642395,
+                0.12103382498025894,
+                0.4729706346988678,
+                -1.0822831392288208
+              ]
+            },
+            "tied_rows_bad": 531,
+            "total": 2000
+          },
+          "N8": {
+            "all_equal_bad_nonzero": 100,
+            "example": {
+              "b": 0,
+              "kernel": 0,
+              "ref": 4,
+              "scores": [
+                5.0,
+                -0.42534422874450684,
+                -2.643845796585083,
+                0.14518386125564575,
+                5.0,
+                -0.5797257423400879,
+                -0.6228510141372681,
+                -0.32838690280914307
+              ]
+            },
+            "tied_rows_bad": 773,
+            "total": 2000
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"N2\": {\"tied_rows_bad\": 0, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": null}, \"N4\": {\"tied_rows_bad\": 689, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 1, \"scores\": [5.0, -0.5797257423400879, 5.0, -0.32838690280914307], \"kernel\": 0, \"ref\": 2}}, \"N8\": {\"tied_rows_bad\": 773, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [5.0, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, 5.0, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307], \"kernel\": 0, \"ref\": 4}}, \"N16\": {\"tied_rows_bad\": 686, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [-0.9246624112129211, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, -0.12086640298366547, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307, -1.0745419263839722, -0.3631439507007599, 5.0, 2.265504837036133, 5.0, -0.1841890960931778, 1.2866426706314087, 1.181952714920044], \"kernel\": 12, \"ref\": 10}}, \"N32\": {\"tied_rows_bad\": 590, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 3, \"scores\": [-0.08569779992103577, -1.4976551532745361, -0.9073574542999268, -0.4524354040622711, 0.06617258489131927, -0.03838057816028595, 0.5839722752571106, 0.8845420479774475, -1.6147876977920532, 0.4484913945198059, 0.7340670824050903, -0.8456965088844299, 0.6587180495262146, -0.35540685057640076, -1.9106861352920532, -0.1684996336698532, 1.8969159126281738, 0.5132860541343689, 5.0, -1.3909039497375488, -0.26249027252197266, -1.442936658859253, 5.0, 0.012184752151370049, 2.143650531768799, -0.9264177083969116, 1.6909056901931763, -0.2550846338272095, -0.9021109938621521, -0.21281515061855316, -0.3314812481403351, -0.2022598534822464], \"kernel\": 22, \"ref\": 18}}, \"N64\": {\"tied_rows_bad\": 531, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [-0.9246624112129211, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, -0.12086640298366547, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307, -1.0745419263839722, -0.3631439507007599, -1.6710504293441772, 2.265504837036133, 0.311684787273407, -0.1841890960931778, 1.2866426706314087, 1.181952714920044, -0.12705934047698975, 1.2168909311294556, 1.4353200197219849, 1.0604605674743652, -0.49413183331489563, -1.4243810176849365, -0.7244344353675842, -1.2972735166549683, 0.06968985497951508, -0.007406571414321661, 1.896948218345642, 0.6877782344818115, -0.07794807106256485, -0.8372799754142761, 1.3506464958190918, -0.2879197299480438, -0.596531331539154, -0.3282594382762909, -0.9086048007011414, -0.8059370517730713, -0.7406656742095947, -0.050385482609272, 0.5434768199920654, 1.5150033235549927, 0.014120638370513916, 0.45320117473602295, 1.6349115371704102, 0.7123923897743225, 5.0, 1.0252224206924438, 5.0, -0.7553848028182983, -0.18363918364048004, 0.38238805532455444, 0.3917717933654785, -0.08299090713262558, 0.8971229791641235, -1.1122647523880005, 0.11164596676826477, 0.48627734184265137, -0.54993736743927, -0.3230888545513153, -0.5468879342079163, 0.9048829078674316, 0.28368571400642395, 0.12103382498025894, 0.4729706346988678, -1.0822831392288208], \"kernel\": 46, \"ref\": 44}}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\nres = {}\nfor N in [2,4,8,16,32,64]:\n    B = 2000\n    torch.manual_seed(0)\n    scores = torch.randn(B, N, device=dev)\n    for b in range(B):\n        p = torch.randperm(N)[:2].to(dev)\n        scores[b, p] = 5.0\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\n    ref = scores.argmax(dim=1)  # torch argmax returns the FIRST (lowest) max index\n    bad = int((out != ref).sum().item())\n    ex = None\n    if bad:\n        m = (out != ref).nonzero()[0]; b = int(m[0])\n        ex = {\"b\": b, \"scores\": scores[b].tolist(), \"kernel\": int(out[b]), \"ref\": int(ref[b])}\n    # all-equal rows: contract requires index 0\n    scores_eq = torch.zeros(100, N, device=dev)\n    out_eq = k.sorted_topk_indices(scores_eq, 1).squeeze(-1)\n    eq_bad = int((out_eq != 0).sum().item())\n    eq_ex = int(out_eq[0]) if eq_bad else None\n    res[f\"N{N}\"] = {\"tied_rows_bad\": bad, \"total\": B, \"example\": ex,\n                    \"all_equal_bad_nonzero\": eq_bad, \"all_equal_example_index\": eq_ex}\nprint(json.dumps(res))\n"
+      },
+      "created_at": "2026-09-30T08:19:59Z",
+      "id": "t14",
+      "output": {
+        "error": {
+          "message": "claim c1 already has a successful probe you have not interpreted: event t13. Call finalize_probe_evidence(event_id='t13', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t13 first and then probe again.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t14",
+        "message": "claim c1 already has a successful probe you have not interpreted: event t13. Call finalize_probe_evidence(event_id='t13', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t13 first and then probe again.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "all_equal_rows": "100/100 all-equal rows returned nonzero index instead of contractually required 0 (this check does not depend on the buggy mask reference)",
+          "example_N16": {
+            "correct_lowest_tied_index": 10,
+            "kernel_returned": 12,
+            "tied_max_positions": [
+              10,
+              12
+            ],
+            "tied_value": 5.0
+          }
+        },
+        "event_id": "t13",
+        "status": "confirmed",
+        "summary": "Tie-break probe: on rows with two tied maximum scores, the kernel frequently returns a higher index than the lowest tied index (e.g. N16 row 0: tied 5.0 at positions 10 and 12, kernel returned 12, lowest tied is 10). The all-equal-rows check (independent of the buggy mask reference) shows 100/100 all-equal rows return a nonzero index instead of the required index 0. The tied-row mismatch counts from the buggy reference are not relied on, but the all-equal and example evidence alone confirm the tie-break violation.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:20:17Z",
+      "id": "t15",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:18:52Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:19:27Z",
+              "data": {},
+              "id": "c1.e1",
+              "kind": "tool_error",
+              "summary": "First tie-break probe (t9) crashed in my reference code (torch.arange on CPU indexing a CUDA tensor), so it produced no evidence about the kernel; rerunning with a fixed reference.",
+              "supports": "inconclusive",
+              "tool_event_id": null
+            },
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:20:17Z",
+              "data": {
+                "all_equal_rows": "100/100 all-equal rows returned nonzero index instead of contractually required 0 (this check does not depend on the buggy mask reference)",
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t13_probe.py",
+                    "sha256": "e40cc09432004120756208134b3d121882781b476e29e2addc44098c0764a3ed"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t13_stdout.txt",
+                    "sha256": "b6a1191672f051e82580c4a4e496ea02ed9a91b7bd6405f4f64836c80b816dbd"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t13_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t13_json_result.json",
+                    "sha256": "9fd13ee53143a298e49fd5157a7b7bd6c2831e144e1198593614e1fa12511f7c"
+                  }
+                ],
+                "duration_s": 5.44454,
+                "example_N16": {
+                  "correct_lowest_tied_index": 10,
+                  "kernel_returned": 12,
+                  "tied_max_positions": [
+                    10,
+                    12
+                  ],
+                  "tied_value": 5.0
+                },
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "N16": {
+                    "all_equal_bad_nonzero": 100,
+                    "example": {
+                      "b": 0,
+                      "kernel": 12,
+                      "ref": 10,
+                      "scores": [
+                        -0.9246624112129211,
+                        -0.42534422874450684,
+                        -2.643845796585083,
+                        0.14518386125564575,
+                        -0.12086640298366547,
+                        -0.5797257423400879,
+                        -0.6228510141372681,
+                        -0.32838690280914307,
+                        -1.0745419263839722,
+                        -0.3631439507007599,
+                        5.0,
+                        2.265504837036133,
+                        5.0,
+                        -0.1841890960931778,
+                        1.2866426706314087,
+                        1.181952714920044
+                      ]
+                    },
+                    "tied_rows_bad": 686,
+                    "total": 2000
+                  },
+                  "N2": {
+                    "all_equal_bad_nonzero": 100,
+                    "example": null,
+                    "tied_rows_bad": 0,
+                    "total": 2000
+                  },
+                  "N32": {
+                    "all_equal_bad_nonzero": 100,
+                    "example": {
+                      "b": 3,
+                      "kernel": 22,
+                      "ref": 18,
+                      "scores": [
+                        -0.08569779992103577,
+                        -1.4976551532745361,
+                        -0.9073574542999268,
+                        -0.4524354040622711,
+                        0.06617258489131927,
+                        -0.03838057816028595,
+                        0.5839722752571106,
+                        0.8845420479774475,
+                        -1.6147876977920532,
+                        0.4484913945198059,
+                        0.7340670824050903,
+                        -0.8456965088844299,
+                        0.6587180495262146,
+                        -0.35540685057640076,
+                        -1.9106861352920532,
+                        -0.1684996336698532,
+                        1.8969159126281738,
+                        0.5132860541343689,
+                        5.0,
+                        -1.3909039497375488,
+                        -0.26249027252197266,
+                        -1.442936658859253,
+                        5.0,
+                        0.012184752151370049,
+                        2.143650531768799,
+                        -0.9264177083969116,
+                        1.6909056901931763,
+                        -0.2550846338272095,
+                        -0.9021109938621521,
+                        -0.21281515061855316,
+                        -0.3314812481403351,
+                        -0.2022598534822464
+                      ]
+                    },
+                    "tied_rows_bad": 590,
+                    "total": 2000
+                  },
+                  "N4": {
+                    "all_equal_bad_nonzero": 100,
+                    "example": {
+                      "b": 1,
+                      "kernel": 0,
+                      "ref": 2,
+                      "scores": [
+                        5.0,
+                        -0.5797257423400879,
+                        5.0,
+                        -0.32838690280914307
+                      ]
+                    },
+                    "tied_rows_bad": 689,
+                    "total": 2000
+                  },
+                  "N64": {
+                    "all_equal_bad_nonzero": 100,
+                    "example": {
+                      "b": 0,
+                      "kernel": 46,
+                      "ref": 44,
+                      "scores": [
+                        -0.9246624112129211,
+                        -0.42534422874450684,
+                        -2.643845796585083,
+                        0.14518386125564575,
+                        -0.12086640298366547,
+                        -0.5797257423400879,
+                        -0.6228510141372681,
+                        -0.32838690280914307,
+                        -1.0745419263839722,
+                        -0.3631439507007599,
+                        -1.6710504293441772,
+                        2.265504837036133,
+                        0.311684787273407,
+                        -0.1841890960931778,
+                        1.2866426706314087,
+                        1.181952714920044,
+                        -0.12705934047698975,
+                        1.2168909311294556,
+                        1.4353200197219849,
+                        1.0604605674743652,
+                        -0.49413183331489563,
+                        -1.4243810176849365,
+                        -0.7244344353675842,
+                        -1.2972735166549683,
+                        0.06968985497951508,
+                        -0.007406571414321661,
+                        1.896948218345642,
+                        0.6877782344818115,
+                        -0.07794807106256485,
+                        -0.8372799754142761,
+                        1.3506464958190918,
+                        -0.2879197299480438,
+                        -0.596531331539154,
+                        -0.3282594382762909,
+                        -0.9086048007011414,
+                        -0.8059370517730713,
+                        -0.7406656742095947,
+                        -0.050385482609272,
+                        0.5434768199920654,
+                        1.5150033235549927,
+                        0.014120638370513916,
+                        0.45320117473602295,
+                        1.6349115371704102,
+                        0.7123923897743225,
+                        5.0,
+                        1.0252224206924438,
+                        5.0,
+                        -0.7553848028182983,
+                        -0.18363918364048004,
+                        0.38238805532455444,
+                        0.3917717933654785,
+                        -0.08299090713262558,
+                        0.8971229791641235,
+                        -1.1122647523880005,
+                        0.11164596676826477,
+                        0.48627734184265137,
+                        -0.54993736743927,
+                        -0.3230888545513153,
+                        -0.5468879342079163,
+                        0.9048829078674316,
+                        0.28368571400642395,
+                        0.12103382498025894,
+                        0.4729706346988678,
+                        -1.0822831392288208
+                      ]
+                    },
+                    "tied_rows_bad": 531,
+                    "total": 2000
+                  },
+                  "N8": {
+                    "all_equal_bad_nonzero": 100,
+                    "example": {
+                      "b": 0,
+                      "kernel": 0,
+                      "ref": 4,
+                      "scores": [
+                        5.0,
+                        -0.42534422874450684,
+                        -2.643845796585083,
+                        0.14518386125564575,
+                        5.0,
+                        -0.5797257423400879,
+                        -0.6228510141372681,
+                        -0.32838690280914307
+                      ]
+                    },
+                    "tied_rows_bad": 773,
+                    "total": 2000
+                  }
+                },
+                "stderr": "",
+                "stdout": "{\"N2\": {\"tied_rows_bad\": 0, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": null}, \"N4\": {\"tied_rows_bad\": 689, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 1, \"scores\": [5.0, -0.5797257423400879, 5.0, -0.32838690280914307], \"kernel\": 0, \"ref\": 2}}, \"N8\": {\"tied_rows_bad\": 773, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [5.0, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, 5.0, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307], \"kernel\": 0, \"ref\": 4}}, \"N16\": {\"tied_rows_bad\": 686, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [-0.9246624112129211, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, -0.12086640298366547, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307, -1.0745419263839722, -0.3631439507007599, 5.0, 2.265504837036133, 5.0, -0.1841890960931778, 1.2866426706314087, 1.181952714920044], \"kernel\": 12, \"ref\": 10}}, \"N32\": {\"tied_rows_bad\": 590, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 3, \"scores\": [-0.08569779992103577, -1.4976551532745361, -0.9073574542999268, -0.4524354040622711, 0.06617258489131927, -0.03838057816028595, 0.5839722752571106, 0.8845420479774475, -1.6147876977920532, 0.4484913945198059, 0.7340670824050903, -0.8456965088844299, 0.6587180495262146, -0.35540685057640076, -1.9106861352920532, -0.1684996336698532, 1.8969159126281738, 0.5132860541343689, 5.0, -1.3909039497375488, -0.26249027252197266, -1.442936658859253, 5.0, 0.012184752151370049, 2.143650531768799, -0.9264177083969116, 1.6909056901931763, -0.2550846338272095, -0.9021109938621521, -0.21281515061855316, -0.3314812481403351, -0.2022598534822464], \"kernel\": 22, \"ref\": 18}}, \"N64\": {\"tied_rows_bad\": 531, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [-0.9246624112129211, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, -0.12086640298366547, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307, -1.0745419263839722, -0.3631439507007599, -1.6710504293441772, 2.265504837036133, 0.311684787273407, -0.1841890960931778, 1.2866426706314087, 1.181952714920044, -0.12705934047698975, 1.2168909311294556, 1.4353200197219849, 1.0604605674743652, -0.49413183331489563, -1.4243810176849365, -0.7244344353675842, -1.2972735166549683, 0.06968985497951508, -0.007406571414321661, 1.896948218345642, 0.6877782344818115, -0.07794807106256485, -0.8372799754142761, 1.3506464958190918, -0.2879197299480438, -0.596531331539154, -0.3282594382762909, -0.9086048007011414, -0.8059370517730713, -0.7406656742095947, -0.050385482609272, 0.5434768199920654, 1.5150033235549927, 0.014120638370513916, 0.45320117473602295, 1.6349115371704102, 0.7123923897743225, 5.0, 1.0252224206924438, 5.0, -0.7553848028182983, -0.18363918364048004, 0.38238805532455444, 0.3917717933654785, -0.08299090713262558, 0.8971229791641235, -1.1122647523880005, 0.11164596676826477, 0.48627734184265137, -0.54993736743927, -0.3230888545513153, -0.5468879342079163, 0.9048829078674316, 0.28368571400642395, 0.12103382498025894, 0.4729706346988678, -1.0822831392288208], \"kernel\": 46, \"ref\": 44}}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e2",
+              "kind": "runtime_probe",
+              "summary": "Tie-break probe: on rows with two tied maximum scores, the kernel frequently returns a higher index than the lowest tied index (e.g. N16 row 0: tied 5.0 at positions 10 and 12, kernel returned 12, lowest tied is 10). The all-equal-rows check (independent of the buggy mask reference) shows 100/100 all-equal rows return a nonzero index instead of the required index 0. The tied-row mismatch counts from the buggy reference are not relied on, but the all-equal and example evidence alone confirm the tie-break violation.",
+              "supports": "confirmed",
+              "tool_event_id": "t13"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The comparator `cond = (left > right) != flip` compares only values; bitonic sort is unstable, so with equal top scores the winner is determined by network wiring, not by lower index.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
+            }
+          ],
+          "scope_rationale": "problem.txt explicitly requires the lower index to be kept on tied top scores; if the kernel returns a higher tied index on tied inputs, it violates this stated tie-break rule.",
+          "statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:20:17Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:20:17Z",
+          "data": {
+            "all_equal_rows": "100/100 all-equal rows returned nonzero index instead of contractually required 0 (this check does not depend on the buggy mask reference)",
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "e40cc09432004120756208134b3d121882781b476e29e2addc44098c0764a3ed"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "b6a1191672f051e82580c4a4e496ea02ed9a91b7bd6405f4f64836c80b816dbd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "9fd13ee53143a298e49fd5157a7b7bd6c2831e144e1198593614e1fa12511f7c"
+              }
+            ],
+            "duration_s": 5.44454,
+            "example_N16": {
+              "correct_lowest_tied_index": 10,
+              "kernel_returned": 12,
+              "tied_max_positions": [
+                10,
+                12
+              ],
+              "tied_value": 5.0
+            },
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "N16": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 0,
+                  "kernel": 12,
+                  "ref": 10,
+                  "scores": [
+                    -0.9246624112129211,
+                    -0.42534422874450684,
+                    -2.643845796585083,
+                    0.14518386125564575,
+                    -0.12086640298366547,
+                    -0.5797257423400879,
+                    -0.6228510141372681,
+                    -0.32838690280914307,
+                    -1.0745419263839722,
+                    -0.3631439507007599,
+                    5.0,
+                    2.265504837036133,
+                    5.0,
+                    -0.1841890960931778,
+                    1.2866426706314087,
+                    1.181952714920044
+                  ]
+                },
+                "tied_rows_bad": 686,
+                "total": 2000
+              },
+              "N2": {
+                "all_equal_bad_nonzero": 100,
+                "example": null,
+                "tied_rows_bad": 0,
+                "total": 2000
+              },
+              "N32": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 3,
+                  "kernel": 22,
+                  "ref": 18,
+                  "scores": [
+                    -0.08569779992103577,
+                    -1.4976551532745361,
+                    -0.9073574542999268,
+                    -0.4524354040622711,
+                    0.06617258489131927,
+                    -0.03838057816028595,
+                    0.5839722752571106,
+                    0.8845420479774475,
+                    -1.6147876977920532,
+                    0.4484913945198059,
+                    0.7340670824050903,
+                    -0.8456965088844299,
+                    0.6587180495262146,
+                    -0.35540685057640076,
+                    -1.9106861352920532,
+                    -0.1684996336698532,
+                    1.8969159126281738,
+                    0.5132860541343689,
+                    5.0,
+                    -1.3909039497375488,
+                    -0.26249027252197266,
+                    -1.442936658859253,
+                    5.0,
+                    0.012184752151370049,
+                    2.143650531768799,
+                    -0.9264177083969116,
+                    1.6909056901931763,
+                    -0.2550846338272095,
+                    -0.9021109938621521,
+                    -0.21281515061855316,
+                    -0.3314812481403351,
+                    -0.2022598534822464
+                  ]
+                },
+                "tied_rows_bad": 590,
+                "total": 2000
+              },
+              "N4": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 1,
+                  "kernel": 0,
+                  "ref": 2,
+                  "scores": [
+                    5.0,
+                    -0.5797257423400879,
+                    5.0,
+                    -0.32838690280914307
+                  ]
+                },
+                "tied_rows_bad": 689,
+                "total": 2000
+              },
+              "N64": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 0,
+                  "kernel": 46,
+                  "ref": 44,
+                  "scores": [
+                    -0.9246624112129211,
+                    -0.42534422874450684,
+                    -2.643845796585083,
+                    0.14518386125564575,
+                    -0.12086640298366547,
+                    -0.5797257423400879,
+                    -0.6228510141372681,
+                    -0.32838690280914307,
+                    -1.0745419263839722,
+                    -0.3631439507007599,
+                    -1.6710504293441772,
+                    2.265504837036133,
+                    0.311684787273407,
+                    -0.1841890960931778,
+                    1.2866426706314087,
+                    1.181952714920044,
+                    -0.12705934047698975,
+                    1.2168909311294556,
+                    1.4353200197219849,
+                    1.0604605674743652,
+                    -0.49413183331489563,
+                    -1.4243810176849365,
+                    -0.7244344353675842,
+                    -1.2972735166549683,
+                    0.06968985497951508,
+                    -0.007406571414321661,
+                    1.896948218345642,
+                    0.6877782344818115,
+                    -0.07794807106256485,
+                    -0.8372799754142761,
+                    1.3506464958190918,
+                    -0.2879197299480438,
+                    -0.596531331539154,
+                    -0.3282594382762909,
+                    -0.9086048007011414,
+                    -0.8059370517730713,
+                    -0.7406656742095947,
+                    -0.050385482609272,
+                    0.5434768199920654,
+                    1.5150033235549927,
+                    0.014120638370513916,
+                    0.45320117473602295,
+                    1.6349115371704102,
+                    0.7123923897743225,
+                    5.0,
+                    1.0252224206924438,
+                    5.0,
+                    -0.7553848028182983,
+                    -0.18363918364048004,
+                    0.38238805532455444,
+                    0.3917717933654785,
+                    -0.08299090713262558,
+                    0.8971229791641235,
+                    -1.1122647523880005,
+                    0.11164596676826477,
+                    0.48627734184265137,
+                    -0.54993736743927,
+                    -0.3230888545513153,
+                    -0.5468879342079163,
+                    0.9048829078674316,
+                    0.28368571400642395,
+                    0.12103382498025894,
+                    0.4729706346988678,
+                    -1.0822831392288208
+                  ]
+                },
+                "tied_rows_bad": 531,
+                "total": 2000
+              },
+              "N8": {
+                "all_equal_bad_nonzero": 100,
+                "example": {
+                  "b": 0,
+                  "kernel": 0,
+                  "ref": 4,
+                  "scores": [
+                    5.0,
+                    -0.42534422874450684,
+                    -2.643845796585083,
+                    0.14518386125564575,
+                    5.0,
+                    -0.5797257423400879,
+                    -0.6228510141372681,
+                    -0.32838690280914307
+                  ]
+                },
+                "tied_rows_bad": 773,
+                "total": 2000
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"N2\": {\"tied_rows_bad\": 0, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": null}, \"N4\": {\"tied_rows_bad\": 689, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 1, \"scores\": [5.0, -0.5797257423400879, 5.0, -0.32838690280914307], \"kernel\": 0, \"ref\": 2}}, \"N8\": {\"tied_rows_bad\": 773, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [5.0, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, 5.0, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307], \"kernel\": 0, \"ref\": 4}}, \"N16\": {\"tied_rows_bad\": 686, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [-0.9246624112129211, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, -0.12086640298366547, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307, -1.0745419263839722, -0.3631439507007599, 5.0, 2.265504837036133, 5.0, -0.1841890960931778, 1.2866426706314087, 1.181952714920044], \"kernel\": 12, \"ref\": 10}}, \"N32\": {\"tied_rows_bad\": 590, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 3, \"scores\": [-0.08569779992103577, -1.4976551532745361, -0.9073574542999268, -0.4524354040622711, 0.06617258489131927, -0.03838057816028595, 0.5839722752571106, 0.8845420479774475, -1.6147876977920532, 0.4484913945198059, 0.7340670824050903, -0.8456965088844299, 0.6587180495262146, -0.35540685057640076, -1.9106861352920532, -0.1684996336698532, 1.8969159126281738, 0.5132860541343689, 5.0, -1.3909039497375488, -0.26249027252197266, -1.442936658859253, 5.0, 0.012184752151370049, 2.143650531768799, -0.9264177083969116, 1.6909056901931763, -0.2550846338272095, -0.9021109938621521, -0.21281515061855316, -0.3314812481403351, -0.2022598534822464], \"kernel\": 22, \"ref\": 18}}, \"N64\": {\"tied_rows_bad\": 531, \"total\": 2000, \"all_equal_bad_nonzero\": 100, \"example\": {\"b\": 0, \"scores\": [-0.9246624112129211, -0.42534422874450684, -2.643845796585083, 0.14518386125564575, -0.12086640298366547, -0.5797257423400879, -0.6228510141372681, -0.32838690280914307, -1.0745419263839722, -0.3631439507007599, -1.6710504293441772, 2.265504837036133, 0.311684787273407, -0.1841890960931778, 1.2866426706314087, 1.181952714920044, -0.12705934047698975, 1.2168909311294556, 1.4353200197219849, 1.0604605674743652, -0.49413183331489563, -1.4243810176849365, -0.7244344353675842, -1.2972735166549683, 0.06968985497951508, -0.007406571414321661, 1.896948218345642, 0.6877782344818115, -0.07794807106256485, -0.8372799754142761, 1.3506464958190918, -0.2879197299480438, -0.596531331539154, -0.3282594382762909, -0.9086048007011414, -0.8059370517730713, -0.7406656742095947, -0.050385482609272, 0.5434768199920654, 1.5150033235549927, 0.014120638370513916, 0.45320117473602295, 1.6349115371704102, 0.7123923897743225, 5.0, 1.0252224206924438, 5.0, -0.7553848028182983, -0.18363918364048004, 0.38238805532455444, 0.3917717933654785, -0.08299090713262558, 0.8971229791641235, -1.1122647523880005, 0.11164596676826477, 0.48627734184265137, -0.54993736743927, -0.3230888545513153, -0.5468879342079163, 0.9048829078674316, 0.28368571400642395, 0.12103382498025894, 0.4729706346988678, -1.0822831392288208], \"kernel\": 46, \"ref\": 44}}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Tie-break probe: on rows with two tied maximum scores, the kernel frequently returns a higher index than the lowest tied index (e.g. N16 row 0: tied 5.0 at positions 10 and 12, kernel returned 12, lowest tied is 10). The all-equal-rows check (independent of the buggy mask reference) shows 100/100 all-equal rows return a nonzero index instead of the required index 0. The tied-row mismatch counts from the buggy reference are not relied on, but the all-equal and example evidence alone confirm the tie-break violation.",
+          "supports": "confirmed",
+          "tool_event_id": "t13"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probes: t10 (claim c2) showed the kernel matches torch argmax exactly on tie-free random inputs for N in {2,4,8,16,32,64,128} (0 mismatches, 512 rows each), so the sort itself is correct on the declared power-of-two domain. However, t13 (claim c1) showed the contract's explicit tie-break rule is violated: on rows with two tied maxima (e.g. N16 row 0, tied 5.0 at positions 10 and 12, kernel returned 12 instead of the required lowest index 10), and on 100/100 all-equal rows the kernel returned a nonzero index instead of the contractually required index 0. Since problem.txt explicitly requires \"when two experts have exactly equal scores, the LOWER index must be the one kept,\" this is a confirmed in-scope contract violation (the value-only bitonic comparator is unstable), warranting reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:20:26Z",
+      "id": "t16",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-30T08:20:26Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probes: t10 (claim c2) showed the kernel matches torch argmax exactly on tie-free random inputs for N in {2,4,8,16,32,64,128} (0 mismatches, 512 rows each), so the sort itself is correct on the declared power-of-two domain. However, t13 (claim c1) showed the contract's explicit tie-break rule is violated: on rows with two tied maxima (e.g. N16 row 0, tied 5.0 at positions 10 and 12, kernel returned 12 instead of the required lowest index 10), and on 100/100 all-equal rows the kernel returned a nonzero index instead of the contractually required index 0. Since problem.txt explicitly requires \"when two experts have exactly equal scores, the LOWER index must be the one kept,\" this is a confirmed in-scope contract violation (the value-only bitonic comparator is unstable), warranting reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-30T08:20:26Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probes: t10 (claim c2) showed the kernel matches torch argmax exactly on tie-free random inputs for N in {2,4,8,16,32,64,128} (0 mismatches, 512 rows each), so the sort itself is correct on the declared power-of-two domain. However, t13 (claim c1) showed the contract's explicit tie-break rule is violated: on rows with two tied maxima (e.g. N16 row 0, tied 5.0 at positions 10 and 12, kernel returned 12 instead of the required lowest index 10), and on 100/100 all-equal rows the kernel returned a nonzero index instead of the contractually required index 0. Since problem.txt explicitly requires \"when two experts have exactly equal scores, the LOWER index must be the one kept,\" this is a confirmed in-scope contract violation (the value-only bitonic comparator is unstable), warranting reject.",
+    "verdict": "reject"
+  }
+}

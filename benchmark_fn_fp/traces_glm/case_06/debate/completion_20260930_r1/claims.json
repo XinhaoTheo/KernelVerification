@@ -1,0 +1,244 @@
+[
+  {
+    "created_at": "2026-09-30T08:17:22Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:17:59Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "6c97042f5ec33aec6db4013fc94cc3900e549c694910ae588b7783bee0a9e5a3"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "a80a4cdee80bd03cc945be8a7e1445c959d1b36a96bd683def7bfdc004c8255e"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "9ab8d609aaf04479812b462050050e1a7bb768edba0374b51a914216a0e7fdcd"
+            }
+          ],
+          "duration_s": 5.33958,
+          "exit_code": 0,
+          "expected_signal": "final state deviates from exact FP reference by up to ~2.5e-3 per chunk, error growing with nchunks",
+          "json_parse_error": null,
+          "json_result": {
+            "nchunks256_dim8": {
+              "dim": 8,
+              "max_abs_err": 0.00567057728767395,
+              "max_rel_err": 0.042213961482048035,
+              "mean_abs_err": 0.0035548917949199677,
+              "n_chunks": 256,
+              "on_grid_frac": 1.0
+            },
+            "nchunks64_dim32": {
+              "dim": 32,
+              "max_abs_err": 0.020241260528564453,
+              "max_rel_err": 0.04379585012793541,
+              "mean_abs_err": 0.006441847421228886,
+              "n_chunks": 64,
+              "on_grid_frac": 1.0
+            },
+            "nchunks8_dim16": {
+              "dim": 16,
+              "max_abs_err": 0.004717707633972168,
+              "max_rel_err": 0.015723776072263718,
+              "mean_abs_err": 0.00233918777666986,
+              "n_chunks": 8,
+              "on_grid_frac": 1.0
+            }
+          },
+          "max_abs_err_256c": 0.00567057728767395,
+          "max_abs_err_64c": 0.020241260528564453,
+          "max_abs_err_8c": 0.004717707633972168,
+          "max_rel_err_64c": 0.04379585012793541,
+          "on_grid_frac": 1.0,
+          "quant_step": 0.005,
+          "stderr": "",
+          "stdout": "{\"nchunks8_dim16\": {\"max_abs_err\": 0.004717707633972168, \"mean_abs_err\": 0.00233918777666986, \"max_rel_err\": 0.015723776072263718, \"n_chunks\": 8, \"dim\": 16, \"on_grid_frac\": 1.0}, \"nchunks64_dim32\": {\"max_abs_err\": 0.020241260528564453, \"mean_abs_err\": 0.006441847421228886, \"max_rel_err\": 0.04379585012793541, \"n_chunks\": 64, \"dim\": 32, \"on_grid_frac\": 1.0}, \"nchunks256_dim8\": {\"max_abs_err\": 0.00567057728767395, \"mean_abs_err\": 0.0035548917949199677, \"max_rel_err\": 0.042213961482048035, \"n_chunks\": 256, \"dim\": 8, \"on_grid_frac\": 1.0}}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Final state deviates from exact FP reference for generic random inputs at all tested sequence lengths: max abs err 4.7e-3 at 8 chunks, 2.0e-2 at 64 chunks, 5.7e-3 at 256 chunks; outputs are exactly on the 5e-3 grid (on_grid_frac=1.0), confirming the round-to-grid quantization as the error source, with error far above FP rounding scale and growing with nchunks.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "Problem text says \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length,\" yet kernel lines 5 and 32 implement tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP after every chunk update, which is an approximation step, so the final state can deviate from the reference by up to 2.5e-3 per chunk (accumulating).",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\""
+      },
+      {
+        "source": "kernel.py line 32",
+        "summary": "states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP applied unconditionally after each chunk update, before the final-state store."
+      }
+    ],
+    "scope_rationale": "problem.txt requires exactness at any sequence length for any contract-admitted input (e.g. nchunks>=2, dim>=1, generic random values), so a nonzero grid-rounding error in the returned final state is a contract violation.",
+    "statement": "The kernel's unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence state <- exp(dA_cs[c])*state + new_states[c] whenever any chunk update produces a state value not already on the 5e-3 grid.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:17:59Z"
+  },
+  {
+    "created_at": "2026-09-30T08:17:22Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:17:59Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "76fa0ba7b9aa5675599acc76643483a783a644bbd0f1a26134765bb7e839bdc7"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "b178cc5549dab4628a3c17bc2dce9d0460864edaf17c1d37dfa63d69573e20c1"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "bc21dc64a8a8fc22d54e765df96d4127b23987e4551002578364562a37056a86"
+            }
+          ],
+          "duration_s": 5.100973,
+          "exit_code": 0,
+          "expected_signal": "small-magnitude true states snap to 0.0, producing large (up to 100%) relative error",
+          "json_parse_error": null,
+          "json_result": {
+            "strong_decay": {
+              "kernel_final": [
+                -0.6549999713897705,
+                1.649999976158142,
+                -0.6100000143051147,
+                -0.5,
+                1.25,
+                -0.3100000023841858,
+                0.03999999910593033,
+                -0.06499999761581421
+              ],
+              "max_abs_err": 0.002222936600446701,
+              "max_rel_err": 0.052647609263658524,
+              "ref_final": [
+                -0.6534335017204285,
+                1.6494196653366089,
+                -0.610783576965332,
+                -0.5012956261634827,
+                1.2486979961395264,
+                -0.3115837872028351,
+                0.04222293570637703,
+                -0.06656432151794434
+              ],
+              "ref_max_abs": 1.6494196653366089
+            },
+            "tiny_new_states": {
+              "kernel_final": [
+                0.0,
+                0.0,
+                0.004999999888241291,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "max_abs_err": 0.003461373969912529,
+              "max_rel_err": 2.249652862548828,
+              "ref_final": [
+                -0.0001952950842678547,
+                0.0009007854387164116,
+                0.0015386258019134402,
+                0.0011158442357555032,
+                -0.0005514519289135933,
+                -0.0003086308133788407,
+                -0.002993066795170307,
+                0.001024095923639834
+              ],
+              "ref_max_abs": 0.002993066795170307,
+              "zeros_in_kernel": 7,
+              "zeros_in_ref": 0
+            }
+          },
+          "kernel_final_example": [
+            0.0,
+            0.0,
+            0.004999999888241291,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "kernel_zeros": 7,
+          "max_rel_err_tiny": 2.249652862548828,
+          "ref_final_example": [
+            -0.000195,
+            0.000901,
+            0.001539,
+            0.001116,
+            -0.000551,
+            -0.000309,
+            -0.002993,
+            0.001024
+          ],
+          "ref_max_abs": 0.002993066795170307,
+          "ref_zeros": 0,
+          "stderr": "",
+          "stdout": "{\"tiny_new_states\": {\"kernel_final\": [0.0, 0.0, 0.004999999888241291, 0.0, 0.0, 0.0, 0.0, 0.0], \"ref_final\": [-0.0001952950842678547, 0.0009007854387164116, 0.0015386258019134402, 0.0011158442357555032, -0.0005514519289135933, -0.0003086308133788407, -0.002993066795170307, 0.001024095923639834], \"zeros_in_kernel\": 7, \"zeros_in_ref\": 0, \"max_abs_err\": 0.003461373969912529, \"max_rel_err\": 2.249652862548828, \"ref_max_abs\": 0.002993066795170307}, \"strong_decay\": {\"kernel_final\": [-0.6549999713897705, 1.649999976158142, -0.6100000143051147, -0.5, 1.25, -0.3100000023841858, 0.03999999910593033, -0.06499999761581421], \"ref_final\": [-0.6534335017204285, 1.6494196653366089, -0.610783576965332, -0.5012956261634827, 1.2486979961395264, -0.3115837872028351, 0.04222293570637703, -0.06656432151794434], \"max_abs_err\": 0.002222936600446701, \"max_rel_err\": 0.052647609263658524, \"ref_max_abs\": 1.6494196653366089}}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Flush-to-zero confirmed: with tiny new_states (ref final magnitudes ~3e-4 to 3e-3), kernel output is 0.0 for 7 of 8 lanes while the exact reference has no zeros (max_rel_err 2.25, i.e. 225% relative error); remaining lane snapped to 0.005, also off the exact value. This is a snap-to-zero of true sub-half-grid states.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The fixed absolute grid step means tiny (contract-admissible) state magnitudes get snapped to 0, a relative error of up to 100% in the final state; this is the flush-to-zero tail of the same quantization bug and may not show up in large-magnitude random probes.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Exact recurrence with no approximation at any sequence length; no restriction is placed on state magnitudes, so small-magnitude states are contract-admitted."
+      }
+    ],
+    "scope_rationale": "Inputs that decay the state toward zero (e.g. strongly negative dA_cs) are ordinary contract inputs; the problem demands exactness there too, and relative error of the final state is unbounded.",
+    "statement": "For contract-admitted inputs where the true carried state magnitude is below 2.5e-3 at any chunk (e.g. small new_states or strongly decaying dA_cs), the kernel's floor-based quantization snaps the state to 0.0, producing up to 100% relative error in the returned final state even for short sequences.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:17:59Z"
+  }
+]

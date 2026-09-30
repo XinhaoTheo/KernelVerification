@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-c5bd20ce3ad34a82995d3f36267bc199",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll test the tie-across-blocks hypothesis directly with a GPU probe: n_cols large enough to span multiple blocks, with the row maximum tied at indices in different blocks.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a64eecd64c1dc885",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_19\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\nn_cols = 70000  # spans blocks: BLOCK_SIZE = min(32768, next_pow2(70000)) = 32768\\nBLOCK = min(K.MAX_FUSED_SIZE, 32768)\\nn_rows = 4\\ntorch.manual_seed(0)\\nlogits = torch.randn(n_rows, n_cols, device=dev, dtype=torch.float32)\\ntargets = torch.randint(0, n_cols, (n_rows,), device=dev)\\n\\n# tie the row max across blocks: idx0 in block0 (small), idx1 in block1 (large)\\nidx0, idx1 = 10, 40000  # both == row max\\nresults = []\\nfor r in range(n_rows):\\n    logits[r] = -5.0\\n    logits[r, idx0] = 3.0\\n    logits[r, idx1] = 3.0\\n\\nlogits_in = logits.clone()\\nloss, pred = K.cross_entropy_with_predictions(logits_in, targets)\\n\\n# reference\\nref_pred = []\\nfor r in range(n_rows):\\n    ref_pred.append(int(torch.argmin(logits[r])))  # not used\\n# proper reference: lowest argmax index\\nref_pred = [int((logits[r] == logits[r].max()).nonzero()[0].item()) for r in range(n_rows)]\\nref_loss = torch.nn.functional.cross_entropy(logits, targets, reduction=\\\"none\\\")\\n\\nout = {\\n    \\\"BLOCK_SIZE\\\": BLOCK,\\n    \\\"n_cols\\\": n_cols,\\n    \\\"n_blocks\\\": (n_cols + BLOCK - 1)//BLOCK,\\n    \\\"kernel_pred\\\": pred.tolist(),\\n    \\\"ref_lowest_tie_pred\\\": ref_pred,\\n    \\\"tie_indices\\\": [idx0, idx1],\\n    \\\"loss_kernel\\\": loss.tolist(),\\n    \\\"loss_ref\\\": ref_loss.tolist(),\\n    \\\"loss_max_abs_err\\\": float((loss - ref_loss).abs().max()),\\n    \\\"metric\\\": \\\"exact predicted index vs contract's lowest-tied-index rule\\\",\\n}\\nprint(json.dumps(out, indent=2))\\n\", \"expected_signal\": \"kernel reports idx1 (40000) instead of idx0 (10) when tie spans blocks\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run a probe: construct logits with n_cols > BLOCK_SIZE, tie max across blocks. BLOCK_SIZE = min(32768, next_pow2(n_cols)). Use n_cols = 70000 → BLOCK_SIZE=32768, two blocks. Set max at index 5 and index 40000.\n\nWrite probe importing kernel from /root/cases/case_19/kernel.py.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756864,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 613,
+    "prompt_tokens": 14969,
+    "total_tokens": 15582,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 79,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4608,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 79
+    }
+  }
+}

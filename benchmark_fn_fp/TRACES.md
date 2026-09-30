@@ -17,7 +17,13 @@ New GLM runs use `<case>/<arm>/<trial>/`. Main historical GLM runs use `legacy` 
 
 The 2026-09-23 migration combined 12 main GLM runs and 8 case_36/case_37 runs. The initial provider subdirectories have been flattened into `traces_glm/<case>/<arm>/<trial>/`; `traces_glm_fireworks` is no longer a separate tree. Every original file is checked by SHA-256, and migration manifests retain the inventories and path changes. Historical case_36/case_37 source archives remain under `correlation_pair/traces_fireworks` so old reports/links still work; the canonical index and scorer use the unified copies, once each.
 
-Start with [the GLM index](traces_glm/INDEX.md).
+Start with [the GLM index](traces_glm/INDEX.md): its first table covers all 104
+active cases and three arms, and its lower section retains every historical
+trial. Each case/arm links to its earliest completed judgment, including wrong
+answers and valid abstentions. Running, failed and missing slots remain visible.
+The [2026-09-30 completion report](traces_glm/COMPLETION_20260930.md)
+records the completed 312/312 coverage, new results and costs. In general, the
+presence of a reserved directory does not mean that its experiment is complete.
 
 ## A tool-enabled run
 
@@ -54,13 +60,28 @@ A `single_call` has no claim ledger or probes. It records exact `request.json`, 
 
 Choose one new trial name for a comparison batch. Before a paid request, the runner reserves the trial directory. Existing trials cannot be overwritten; differing archive files also fail rather than replacing history. To resume a known batch with completed tool trials, use `--skip-existing --trial <same-name>`. Incomplete trials are preserved; retry them under a new trial ID.
 
+For coverage completion, the shared Modal tool runner also accepts
+`--only-missing`, which checks valid judgments across earlier trials in the
+same dataset and model-family tree:
+
+```sh
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset numerical_pilot --arm both --all --provider fireworks --only-missing --total-output-tokens 32768 --trial my_completion_batch
+```
+
+Correct, incorrect and `needs_more_evidence` judgments all fill a slot; tool
+errors, token limits and unfinished attempts do not. The flag preserves old
+OpenRouter GLM results as well as Fireworks results. This fills coverage without
+establishing a matched-model or matched-budget comparison. Do not launch
+duplicate jobs for slots already running. The source-only runner requires an
+explicit missing-case list; it currently has no `--only-missing` option.
+
 ```
 python benchmark_fn_fp/eval_scripts/audit_traces.py
 python benchmark_fn_fp/eval_scripts/summarize_traces.py
 python benchmark_fn_fp/eval_scripts/index_traces.py
 ```
 
-Readers recursively discover metadata-aware trials and retain legacy paths. Reports group by dataset, provider, exact model, arm and trial, and distinguish correct, wrong, abstention, token limit and no verdict. Prices come from the exact model profile, not the common GLM directory name; unknown prices remain unknown.
+Readers recursively discover metadata-aware trials and retain legacy paths. Reports group by dataset, provider, exact model, arm and trial, and distinguish correct, wrong, abstention, token limit and no verdict. Prices use a run's `pricing_snapshot` when present, otherwise its historical exact-model profile; unknown prices remain unknown. New Fireworks snapshots record the source and check date (2026-09-30 for this batch), with cached input conservatively estimated at the uncached rate. Updating current rates does not reprice old traces. These estimates are not invoices and exclude Modal charges.
 
 When raw API responses exist, their reported usage takes precedence over parsed agent history, including calls that failed during parsing. Missing responses or usage are marked as incomplete cost coverage. Historical runs without raw responses retain their history-based estimates; those estimates do not certify complete API capture.
 

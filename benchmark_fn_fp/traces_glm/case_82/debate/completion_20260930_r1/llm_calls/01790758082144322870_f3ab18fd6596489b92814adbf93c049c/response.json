@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-89e54adc3cfa456fabd395a07a99552e",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'm recording the description model for this single-workload attention case: a Triton kernel computing softmax(K@q/√D)@V with a float16 round-trip on the probabilities, against a float64 reference with E ≤ 0.001, where the input generator deliberately engineers output cancellation to make precision loss visible.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-84d20680d197335f",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Single fixed workload: make_inputs() in kernel.py with seed 815, N=128, D=32, K scaled by 1.9, V recentered by 0.9*(p@v); no other inputs/shapes in scope.\", \"Operation: y = softmax(K @ q / sqrt(D)) @ V, softmax over the N=128 tokens, output is D=32 floats.\", \"Reference is the same operation evaluated in float64 on the exact float32 input values; contract is E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 and finite outputs.\", \"Reduced precision arithmetic is explicitly permitted if the budget is met; correctness for other inputs is out of scope.\", \"Environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; inputs generated with NumPy 2.2.6 PCG64 on CPU and rounded once to float32 before transfer.\"], \"kernel_model\": [\"Single Triton program (grid (1,)) loads the full 128x32 K, V, and 32-vector q in one block; scores = row-wise dot(k, q) * D**-0.5 (line 12).\", \"Softmax uses max-subtraction: p = exp(s - max(s)); p /= sum(p) (lines 13-14), so exp overflow/underflow is handled.\", \"Line 15 rounds the probabilities to float16 and back to float32 before the weighted sum over V (line 16); this is the kernel's main deliberate precision reduction.\", \"Output stored to a float32 tensor of shape (D,) (line 17-21); kernel launched with enable_fp_fusion=False to control FMA fusion.\", \"run() infers n,d from k.shape and passes them as constexpr, matching the fixed workload; make_inputs also embeds the workload generator (V is recentered to induce cancellation).\"], \"risk_map\": [\"FP16 quantization of softmax probabilities (line 15): relative error per p up to ~2^-11; the input generator's structured V recentering is designed to make the weighted output small through cancellation, so the absolute E may amplify this rounding.\", \"Summation order: tl.sum reductions in a single block, plus float32 accumulate; differences vs float64 reference are in scope only via the E budget.\", \"Denominator floor: since reference norm may be small after centering, the 0.001*sqrt(32) floor (~0.0057) may dominate the max, which changes how tight the budget actually is; needs the actual ||ref|| value.\", \"exp and division in Triton vs NumPy float64 could add small ulp differences; likely minor relative to fp16 rounding.\", \"D**-0.5 computed in Python constexpr is exact enough (D=32, scale 0.176776...); not a real risk.\"], \"scope_notes\": \"Only seed-815 workload with N=128, D=32 is in scope; any failure mode tied to other shapes/seeds is out of scope for the verdict.\\\", \\\"Compliance is decided by E <= 0.001 with finite outputs against a float64 reference on the exact float32 inputs; reduced precision is not itself a defect.\\\", \\\"Both kernel and make_inputs live in kernel.py; the generator's quantization and decay branches are dead code for this config.\\\"]\", \"open_questions\": [\"What is ||ref||_2 for this workload — i.e., does the 0.001*sqrt(32) floor or the reference norm dominate the E denominator? This determines how much error the fp16 probability rounding can produce.\", \"Does the computed E on the actual workload exceed 0.001? Requires a runtime probe by the Experimenter.\", \"Are all outputs finite on the actual run? (Max-subtracted softmax suggests yes, but this needs runtime confirmation.)\"], \"summary\": \"Initial description of case_82: single-workload attention kernel (softmax(K@q/sqrt(D))@V, N=128, D=32) implemented as one Triton program that computes float32 scores, softmax, then rounds probabilities to fp16 before the weighted V sum; contract is relative-E <= 0.001 vs a float64 reference, with the input generator engineered to cancel the output (recentering V), making the fp16 probability rounding the chief risk surface.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790758083,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1020,
+    "prompt_tokens": 5717,
+    "total_tokens": 6737,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 2002,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

@@ -1,0 +1,65 @@
+## Problem statement (contract + reference behavior)
+
+Operation: the recovered-token sampler used by speculative decoding
+(vllm-project/vllm, vllm/v1/sample/rejection_sampler.py::sample_recovered_tokens_kernel).
+
+After a draft token is rejected, a replacement token must be sampled from the
+residual distribution
+
+    p_residual(v)  proportional to  max(target_prob[v] - draft_prob[v], 0)
+
+i.e. a token the draft over-proposed (target_prob < draft_prob) carries zero
+residual probability and must never be returned as the recovered token.
+
+The kernel samples from that distribution with the exponential-race
+(Gumbel-max) trick: given q[v] ~ Exponential(1) supplied as inv_q = 1/q, it
+returns argmax_v( p_residual(v) * inv_q[v] ).
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def sample_recovered_tokens_kernel(
+    output_token_ids_ptr,
+    draft_probs_ptr,
+    target_probs_ptr,
+    inv_q_ptr,
+    vocab_size,
+    BLOCK_SIZE: tl.constexpr,
+):
+    req_idx = tl.program_id(0)
+    max_val = tl.full((), float("-inf"), tl.float32)
+    recovered_id = 0
+    for v in range(0, vocab_size, BLOCK_SIZE):
+        vocab_offset = v + tl.arange(0, BLOCK_SIZE)
+        vocab_mask = vocab_offset < vocab_size
+        draft_prob = tl.load(draft_probs_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)
+        target_prob = tl.load(target_probs_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)
+        prob = target_prob - draft_prob
+        inv_q = tl.load(inv_q_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)
+        score = prob * inv_q
+        score = tl.where(vocab_mask, score, float("-inf"))
+        local_max, local_id = tl.max(score, axis=0, return_indices=True)
+        if local_max > max_val:
+            max_val = local_max
+            recovered_id = v + local_id
+    recovered_id = tl.minimum(recovered_id, vocab_size - 1)
+    tl.store(output_token_ids_ptr + req_idx, recovered_id)
+
+
+def sample_recovered_tokens(target_probs, draft_probs, inv_q):
+    batch_size, vocab_size = target_probs.shape
+    out = torch.empty(batch_size, dtype=torch.int64, device=target_probs.device)
+    BLOCK_SIZE = triton.next_power_of_2(vocab_size)
+    sample_recovered_tokens_kernel[(batch_size,)](out, draft_probs, target_probs, inv_q, vocab_size, BLOCK_SIZE=BLOCK_SIZE)
+    return out
+
+```
+
+Is this implementation correct?

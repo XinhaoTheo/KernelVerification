@@ -1,0 +1,699 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_98",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):\n    d = tl.arange(0, D)\n    h = tl.full((D,), 0.0, tl.float32)\n    for t in range(T):\n        a = tl.load(A + t * D + d)\n        b = tl.load(B + t * D + d)\n        h = a * h + b\n        h = h.to(tl.float16).to(tl.float32)\n        tl.store(O + t * D + d, h)\n\ndef run(a, b):\n    t, d = a.shape\n    out = torch.empty_like(b)\n    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'recurrence', 'seed': 452, 't': 640, 'd': 32, 'decay': 0.99, 'noise': 0.001, 'bias': 0.01}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+    "passed": null,
+    "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\nh[0] = a[0] * 0 + b[0]; h[t] = a[t] * h[t-1] + b[t]. Return ALL states.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.003.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+    "rounds": null,
+    "session_dir": "/root/pilot_cases/case_98",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T09:04:31Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:04:47Z",
+          "data": {
+            "E": 0.0011270422258975712,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "c8c93185de4accacec2e90cce62237577afefb3f7ca4fe6dce157fd7441df162"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "f7caf336e5a173e20d9e866564eb40557f7d7f881a2a57bb722870d4f29259d5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "9032a1dcefac5f03552debf8c9a0033869629ef39fbb7875de4f90f147b3f330"
+              }
+            ],
+            "duration_s": 5.250382,
+            "exit_code": 0,
+            "expected_signal": null,
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.0011270422258975712,
+              "den": 125.44363913162529,
+              "finite": true,
+              "max_abs_err": 0.005229335578440963,
+              "num": 0.14138027827159863,
+              "passes": true,
+              "ref_norm": 125.44363913162529
+            },
+            "max_abs_err": 0.005229335578440963,
+            "num": 0.14138027827159863,
+            "ref_norm": 125.44363913162529,
+            "stderr": "",
+            "stdout": "{\"E\": 0.0011270422258975712, \"finite\": true, \"num\": 0.14138027827159863, \"den\": 125.44363913162529, \"ref_norm\": 125.44363913162529, \"max_abs_err\": 0.005229335578440963, \"passes\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exact make_inputs() workload run on GPU: all outputs finite, E = 0.00113 (num 0.1414, den 125.44), well under the 0.003 budget. Max abs err 0.0052 on values ~1.0.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel casts h to float16 every iteration (line 13). If the fp16 rounding error accumulates or the tolerance E > 0.003 is exceeded, the contract is violated.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Implementation satisfies the contract iff all outputs are finite and E <= 0.003, where E is relative L2 error against float64 reference on the exact make_inputs() workload."
+        }
+      ],
+      "scope_rationale": "The contract requires E <= 0.003 with all finite outputs on the single specified workload from make_inputs().",
+      "statement": "Running the kernel on the exact make_inputs() workload yields E <= 0.003 with finite outputs (contract compliant).",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T09:04:47Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_98",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_98"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_98"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_98"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_98",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 7.0359139629999845,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel is a linear recurrence with the state h deliberately truncated to fp16 at every step. The workload (decay 0.99, bias 0.01) drives h toward ~1.0, where fp16 relative error ~5e-4 should be within the 0.003 budget \u2014 but this needs to be measured, not assumed.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel casts h to float16 every iteration (line 13). If the fp16 rounding error accumulates or the tolerance E > 0.003 is exceeded, the contract is violated.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Implementation satisfies the contract iff all outputs are finite and E <= 0.003, where E is relative L2 error against float64 reference on the exact make_inputs() workload."
+              }
+            ],
+            "scope_rationale": "The contract requires E <= 0.003 with all finite outputs on the single specified workload from make_inputs().",
+            "statement": "Running the kernel on the exact make_inputs() workload yields E <= 0.003 with finite outputs (contract compliant)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.036,
+        "input_tokens": 8223,
+        "output_tokens": 363
+      }
+    },
+    {
+      "duration_s": 6.179928413000084,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run the exact workload and compare against a float64 reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, numpy as np, json, sys\nsys.path.insert(0, \"/root/pilot_cases/case_98\")\nimport kernel as K\na, b = K.make_inputs()\nout = K.run(a, b)\n# reference in float64 on same float32 inputs\naf = a.double().cpu().numpy(); bf = b.double().cpu().numpy()\nh = np.zeros_like(bf[0])\nref = np.empty_like(bf)\nfor t in range(bf.shape[0]):\n    h = af[t]*h + bf[t]; ref[t] = h\no = out.float().cpu().numpy()\nnum = np.linalg.norm(o - ref)\nden = max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))\nfinite = bool(np.isfinite(o).all())\nE = num/den\nprint(json.dumps({\"E\": E, \"finite\": finite, \"num\": float(num), \"den\": float(den), \"ref_norm\": float(np.linalg.norm(ref)), \"max_abs_err\": float(np.abs(o-ref).max()), \"passes\": bool(finite and E<=0.003)}))"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.18,
+        "input_tokens": 9280,
+        "output_tokens": 271
+      }
+    },
+    {
+      "duration_s": 4.824753364999992,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe (t6) confirms compliance: E \u2248 0.00113 \u2264 0.003 with all outputs finite. I'll finalize the evidence, mark the claim, and record a trust verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "E": 0.0011270422258975712,
+              "finite": true,
+              "max_abs_err": 0.005229335578440963,
+              "num": 0.14138027827159863,
+              "ref_norm": 125.44363913162529
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "Exact make_inputs() workload run on GPU: all outputs finite, E = 0.00113 (num 0.1414, den 125.44), well under the 0.003 budget. Max abs err 0.0052 on values ~1.0.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.825,
+        "input_tokens": 11382,
+        "output_tokens": 250
+      }
+    },
+    {
+      "duration_s": 5.311177577999956,
+      "role": "solo",
+      "round": 5,
+      "text": "The single in-scope claim is confirmed with the decisive metric (E = 0.00113 \u2264 0.003, all outputs finite on the exact workload, probe t6). I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t6 ran the kernel on the exact make_inputs() workload (t=640, d=32, decay 0.99, bias 0.01) on GPU and compared to a float64 reference on the same float32 inputs. All outputs finite; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) = 0.1414/125.44 = 0.00113, well under the 0.003 budget. The per-step fp16 truncation of the recurrence state is explicitly permitted reduced precision and stays within budget. Contract satisfied for this single-specified workload.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.311,
+        "input_tokens": 14630,
+        "output_tokens": 230
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_98"
+      },
+      "created_at": "2026-09-30T09:04:24Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_98",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):\n    d = tl.arange(0, D)\n    h = tl.full((D,), 0.0, tl.float32)\n    for t in range(T):\n        a = tl.load(A + t * D + d)\n        b = tl.load(B + t * D + d)\n        h = a * h + b\n        h = h.to(tl.float16).to(tl.float32)\n        tl.store(O + t * D + d, h)\n\ndef run(a, b):\n    t, d = a.shape\n    out = torch.empty_like(b)\n    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'recurrence', 'seed': 452, 't': 640, 'd': 32, 'decay': 0.99, 'noise': 0.001, 'bias': 0.01}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+        "passed": null,
+        "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\nh[0] = a[0] * 0 + b[0]; h[t] = a[t] * h[t-1] + b[t]. Return ALL states.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.003.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "rounds": null,
+        "session_dir": "/root/pilot_cases/case_98",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_98"
+      },
+      "created_at": "2026-09-30T09:04:24Z",
+      "id": "t2",
+      "output": {
+        "content": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\nh[0] = a[0] * 0 + b[0]; h[t] = a[t] * h[t-1] + b[t]. Return ALL states.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.003.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "entry": "case_98",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_98"
+      },
+      "created_at": "2026-09-30T09:04:24Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_98",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2418
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1065
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_98",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T09:04:24Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_98\",\n  \"status\": \"unverified\",\n  \"passed\": null\n}\n",
+        "entry": "case_98",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel casts h to float16 every iteration (line 13). If the fp16 rounding error accumulates or the tolerance E > 0.003 is exceeded, the contract is violated.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Implementation satisfies the contract iff all outputs are finite and E <= 0.003, where E is relative L2 error against float64 reference on the exact make_inputs() workload."
+          }
+        ],
+        "scope_rationale": "The contract requires E <= 0.003 with all finite outputs on the single specified workload from make_inputs().",
+        "statement": "Running the kernel on the exact make_inputs() workload yields E <= 0.003 with finite outputs (contract compliant)."
+      },
+      "created_at": "2026-09-30T09:04:31Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-30T09:04:31Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel casts h to float16 every iteration (line 13). If the fp16 rounding error accumulates or the tolerance E > 0.003 is exceeded, the contract is violated.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Implementation satisfies the contract iff all outputs are finite and E <= 0.003, where E is relative L2 error against float64 reference on the exact make_inputs() workload."
+          }
+        ],
+        "scope_rationale": "The contract requires E <= 0.003 with all finite outputs on the single specified workload from make_inputs().",
+        "statement": "Running the kernel on the exact make_inputs() workload yields E <= 0.003 with finite outputs (contract compliant).",
+        "status": "open",
+        "updated_at": "2026-09-30T09:04:31Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, numpy as np, json, sys\nsys.path.insert(0, \"/root/pilot_cases/case_98\")\nimport kernel as K\na, b = K.make_inputs()\nout = K.run(a, b)\n# reference in float64 on same float32 inputs\naf = a.double().cpu().numpy(); bf = b.double().cpu().numpy()\nh = np.zeros_like(bf[0])\nref = np.empty_like(bf)\nfor t in range(bf.shape[0]):\n    h = af[t]*h + bf[t]; ref[t] = h\no = out.float().cpu().numpy()\nnum = np.linalg.norm(o - ref)\nden = max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))\nfinite = bool(np.isfinite(o).all())\nE = num/den\nprint(json.dumps({\"E\": E, \"finite\": finite, \"num\": float(num), \"den\": float(den), \"ref_norm\": float(np.linalg.norm(ref)), \"max_abs_err\": float(np.abs(o-ref).max()), \"passes\": bool(finite and E<=0.003)}))"
+      },
+      "created_at": "2026-09-30T09:04:42Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "c8c93185de4accacec2e90cce62237577afefb3f7ca4fe6dce157fd7441df162"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "f7caf336e5a173e20d9e866564eb40557f7d7f881a2a57bb722870d4f29259d5"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "9032a1dcefac5f03552debf8c9a0033869629ef39fbb7875de4f90f147b3f330"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "Running the kernel on the exact make_inputs() workload yields E <= 0.003 with finite outputs (contract compliant).",
+        "cwd": "/root/pilot_cases/case_98",
+        "duration_s": 5.250382,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "c8c93185de4accacec2e90cce62237577afefb3f7ca4fe6dce157fd7441df162"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "f7caf336e5a173e20d9e866564eb40557f7d7f881a2a57bb722870d4f29259d5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "9032a1dcefac5f03552debf8c9a0033869629ef39fbb7875de4f90f147b3f330"
+              }
+            ],
+            "duration_s": 5.250382,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.0011270422258975712,
+              "den": 125.44363913162529,
+              "finite": true,
+              "max_abs_err": 0.005229335578440963,
+              "num": 0.14138027827159863,
+              "passes": true,
+              "ref_norm": 125.44363913162529
+            },
+            "stderr": "",
+            "stdout": "{\"E\": 0.0011270422258975712, \"finite\": true, \"num\": 0.14138027827159863, \"den\": 125.44363913162529, \"ref_norm\": 125.44363913162529, \"max_abs_err\": 0.005229335578440963, \"passes\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "E": 0.0011270422258975712,
+          "den": 125.44363913162529,
+          "finite": true,
+          "max_abs_err": 0.005229335578440963,
+          "num": 0.14138027827159863,
+          "passes": true,
+          "ref_norm": 125.44363913162529
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"E\": 0.0011270422258975712, \"finite\": true, \"num\": 0.14138027827159863, \"den\": 125.44363913162529, \"ref_norm\": 125.44363913162529, \"max_abs_err\": 0.005229335578440963, \"passes\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "E": 0.0011270422258975712,
+          "finite": true,
+          "max_abs_err": 0.005229335578440963,
+          "num": 0.14138027827159863,
+          "ref_norm": 125.44363913162529
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "Exact make_inputs() workload run on GPU: all outputs finite, E = 0.00113 (num 0.1414, den 125.44), well under the 0.003 budget. Max abs err 0.0052 on values ~1.0.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T09:04:47Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T09:04:31Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T09:04:47Z",
+              "data": {
+                "E": 0.0011270422258975712,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "c8c93185de4accacec2e90cce62237577afefb3f7ca4fe6dce157fd7441df162"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "f7caf336e5a173e20d9e866564eb40557f7d7f881a2a57bb722870d4f29259d5"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "9032a1dcefac5f03552debf8c9a0033869629ef39fbb7875de4f90f147b3f330"
+                  }
+                ],
+                "duration_s": 5.250382,
+                "exit_code": 0,
+                "expected_signal": null,
+                "finite": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "E": 0.0011270422258975712,
+                  "den": 125.44363913162529,
+                  "finite": true,
+                  "max_abs_err": 0.005229335578440963,
+                  "num": 0.14138027827159863,
+                  "passes": true,
+                  "ref_norm": 125.44363913162529
+                },
+                "max_abs_err": 0.005229335578440963,
+                "num": 0.14138027827159863,
+                "ref_norm": 125.44363913162529,
+                "stderr": "",
+                "stdout": "{\"E\": 0.0011270422258975712, \"finite\": true, \"num\": 0.14138027827159863, \"den\": 125.44363913162529, \"ref_norm\": 125.44363913162529, \"max_abs_err\": 0.005229335578440963, \"passes\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exact make_inputs() workload run on GPU: all outputs finite, E = 0.00113 (num 0.1414, den 125.44), well under the 0.003 budget. Max abs err 0.0052 on values ~1.0.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel casts h to float16 every iteration (line 13). If the fp16 rounding error accumulates or the tolerance E > 0.003 is exceeded, the contract is violated.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Implementation satisfies the contract iff all outputs are finite and E <= 0.003, where E is relative L2 error against float64 reference on the exact make_inputs() workload."
+            }
+          ],
+          "scope_rationale": "The contract requires E <= 0.003 with all finite outputs on the single specified workload from make_inputs().",
+          "statement": "Running the kernel on the exact make_inputs() workload yields E <= 0.003 with finite outputs (contract compliant).",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T09:04:47Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:04:47Z",
+          "data": {
+            "E": 0.0011270422258975712,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "c8c93185de4accacec2e90cce62237577afefb3f7ca4fe6dce157fd7441df162"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "f7caf336e5a173e20d9e866564eb40557f7d7f881a2a57bb722870d4f29259d5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "9032a1dcefac5f03552debf8c9a0033869629ef39fbb7875de4f90f147b3f330"
+              }
+            ],
+            "duration_s": 5.250382,
+            "exit_code": 0,
+            "expected_signal": null,
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.0011270422258975712,
+              "den": 125.44363913162529,
+              "finite": true,
+              "max_abs_err": 0.005229335578440963,
+              "num": 0.14138027827159863,
+              "passes": true,
+              "ref_norm": 125.44363913162529
+            },
+            "max_abs_err": 0.005229335578440963,
+            "num": 0.14138027827159863,
+            "ref_norm": 125.44363913162529,
+            "stderr": "",
+            "stdout": "{\"E\": 0.0011270422258975712, \"finite\": true, \"num\": 0.14138027827159863, \"den\": 125.44363913162529, \"ref_norm\": 125.44363913162529, \"max_abs_err\": 0.005229335578440963, \"passes\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exact make_inputs() workload run on GPU: all outputs finite, E = 0.00113 (num 0.1414, den 125.44), well under the 0.003 budget. Max abs err 0.0052 on values ~1.0.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 ran the kernel on the exact make_inputs() workload (t=640, d=32, decay 0.99, bias 0.01) on GPU and compared to a float64 reference on the same float32 inputs. All outputs finite; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) = 0.1414/125.44 = 0.00113, well under the 0.003 budget. The per-step fp16 truncation of the recurrence state is explicitly permitted reduced precision and stays within budget. Contract satisfied for this single-specified workload.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-30T09:04:52Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-30T09:04:52Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 ran the kernel on the exact make_inputs() workload (t=640, d=32, decay 0.99, bias 0.01) on GPU and compared to a float64 reference on the same float32 inputs. All outputs finite; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) = 0.1414/125.44 = 0.00113, well under the 0.003 budget. The per-step fp16 truncation of the recurrence state is explicitly permitted reduced precision and stays within budget. Contract satisfied for this single-specified workload.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-30T09:04:52Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t6 ran the kernel on the exact make_inputs() workload (t=640, d=32, decay 0.99, bias 0.01) on GPU and compared to a float64 reference on the same float32 inputs. All outputs finite; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) = 0.1414/125.44 = 0.00113, well under the 0.003 budget. The per-step fp16 truncation of the recurrence state is explicitly permitted reduced precision and stays within budget. Contract satisfied for this single-specified workload.",
+    "verdict": "trust"
+  }
+}

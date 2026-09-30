@@ -1,0 +1,41 @@
+## Problem statement (contract + reference behavior)
+
+Operation: the query-head to KV-head mapping of Grouped Query Attention, in
+the style of the index arithmetic in vllm-project/vllm,
+vllm/v1/attention/ops/triton_unified_attention.py.
+
+With num_q_heads query heads and num_kv_heads key/value heads
+(n_rep = num_q_heads // num_kv_heads), GQA groups CONSECUTIVE query heads onto
+the same KV head: query heads 0..n_rep-1 read KV head 0, query heads
+n_rep..2*n_rep-1 read KV head 1, and so on.
+
+`gqa_gather(kv, num_q_heads)` must return, for each query head, the KV row
+that query head is supposed to read.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def gqa_gather_kernel(kv_ptr, out_ptr, num_kv_heads, dim: tl.constexpr):
+    q_head = tl.program_id(0)
+    kv_head = q_head % num_kv_heads
+    offs_d = tl.arange(0, dim)
+    kv = tl.load(kv_ptr + kv_head * dim + offs_d)
+    tl.store(out_ptr + q_head * dim + offs_d, kv)
+
+
+def gqa_gather(kv: torch.Tensor, num_q_heads: int) -> torch.Tensor:
+    num_kv_heads, dim = kv.shape
+    out = torch.empty(num_q_heads, dim, device=kv.device, dtype=kv.dtype)
+    gqa_gather_kernel[(num_q_heads,)](kv, out, num_kv_heads, dim=dim)
+    return out
+
+```
+
+Is this implementation correct?

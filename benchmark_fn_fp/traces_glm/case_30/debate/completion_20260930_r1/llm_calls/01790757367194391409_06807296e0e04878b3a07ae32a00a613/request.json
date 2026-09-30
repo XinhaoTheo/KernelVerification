@@ -1,0 +1,411 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Experimenter agent in an agentic kernel verification system.\nYour job is to gather evidence for open claims using local tools.\n\nRules:\n- Start from the claim ledger and description_model. Use read_claim_ledger when claim state is unclear.\n- Use contract_model and scope_notes to avoid probing irrelevant out-of-scope behavior.\n- Account for every open claim before yielding control to the Judge. Do not silently ignore open claims.\n- For each open claim with no evidence, either gather direct evidence or attach explicit inconclusive evidence explaining the blocker.\n- For each experiment, target one concrete claim.\n- Prefer run_claim_probe for runtime experiments; pass the target claim_id and a concise expected_signal.\n- Probe code should print a final JSON object on the last stdout line when possible.\n- You cannot observe a run_claim_probe result in the same response that requested it, so it is the response after that consumes it -- which is not the same as spending that whole turn on it (see below).\n- Finalize and launch in the same response. An unfinalized run_claim_probe result must be consumed before you yield control, but consuming it does not need a turn of its own: put finalize_probe_evidence for the results you can now see and the next run_claim_probe in the same response. A turn that only finalizes, or only launches, spends a whole model call on half a step.\n- Launch independent probes together. When several open claims can be tested without one claim's outcome changing another's experiment design, issue a run_claim_probe for each in one response and finalize them all in the next. Hold a probe back only when it genuinely depends on a result you do not have yet -- for example when you must choose inputs that avoid triggering a defect another claim just confirmed, so the two cannot confound each other. Say in your message which claims you are batching and which you are holding back, and why.\n- Use finalize_probe_evidence to interpret the probe output; it appends runtime evidence and updates claim status in one tool call.\n- Put every decisive measurement in the evidence `data` object as named key/value pairs (for example {\"rms_1e-8_ratio\": 990.1, \"max_abs_err\": 0.0731, \"tolerance\": 0.01}), not only in the prose summary. `data` is preserved in full for later turns; long prose summaries may be trimmed, so a number that exists only in prose can be lost to the agents who read your evidence afterwards.\n- Use run_python_probe only for debugging or exploratory work that is not yet tied to a claim.\n- Use append_evidence and update_claim_status directly only for non-probe evidence, such as source inspection or artifact reads.\n- Mark evidence inconclusive when the tool output cannot decide the claim.\n- Use request_description when a probe result or source path needs Describer interpretation before you can finalize evidence.\n- If tool budget or missing environment prevents covering all claims in one turn, state exactly which claim ids remain uncovered.\n- Do not invent results that are not present in tool output or source context.\n- Do not output a final verdict. That is the Judge agent's job.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_30\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import torch\\n2: import triton\\n3: import triton.language as tl\\n4: \\n5: \\n6: @triton.jit\\n7: def _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):\\n8:     tok = tl.program_id(0)\\n9:     cols = tl.arange(0, BLOCK)\\n10:     valid = cols < E\\n11:     x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float(\\\"inf\\\"))\\n12: \\n13:     best = -float(\\\"inf\\\")\\n14:     best_i = 0\\n15:     for e in range(E):\\n16:         v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)\\n17:         take = v >= best\\n18:         best = tl.where(take, v, best)\\n19:         best_i = tl.where(take, e, best_i)\\n20:     tl.store(Idx + tok, best_i)\\n21: \\n22: \\n23: def route_top1(logits):\\n24:     # Pick one expert per token from the router logits.\\n25:     n_tokens, n_experts = logits.shape\\n26:     idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)\\n27:     _route_kernel[(n_tokens,)](logits, idx, logits.stride(0), E=n_experts,\\n28:                                BLOCK=triton.next_power_of_2(n_experts))\\n29:     return idx\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Operation: top-1 expert routing for a Mixture-of-Experts layer. For each token,\\nselect the expert with the largest router logit.\\n\\n    expert[t] = argmax over e of logits[t, e]\\n\\nTie rule: router logits are computed in reduced precision and distinct logits\\nroutinely round to the same representable value, so ties are a normal\\noccurrence rather than a curiosity. When several experts share the largest\\nlogit, the contract requires the LOWEST expert index to win, so that routing is\\nreproducible across runs and across replicas holding the experts in the same\\norder.\\n\\nThe selected expert's output is what the layer returns, and different experts\\nare independently trained, so which one wins a tie changes the continuous\\noutput substantially.\\n\\nDoes route_top1() satisfy this contract?\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_30\",\n    \"status\": \"under_test\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-09-30T08:35:45Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"skeptic\",\n      \"rationale\": \"kernel.py line 17 uses `take = v >= best`, so on equal logits each later expert replaces the current best; with all logits tied (e.g. all-equal logits, which reduced-precision routing routinely produces), the kernel returns E-1, whereas the contract requires the lowest tied index (0).\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Ties are a normal occurrence with reduced-precision router logits; when several experts share the largest logit, the contract requires the LOWEST expert index to win.\"\n        }\n      ],\n      \"scope_rationale\": \"The contract explicitly states ties occur routinely and requires the lowest tied expert index to win; the kernel's `v >= best` comparison makes the highest tied index win instead.\",\n      \"statement\": \"route_top1 breaks the required tie rule: with `take = v >= best`, the last (highest-index) expert among tied maxima wins, but the contract requires the LOWEST tied index; e.g. for a row where all logits are equal, the kernel returns E-1 instead of 0.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-09-30T08:35:45Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [\n      \"Per-token top-1 expert routing: expert[t] = argmax_e logits[t, e].\",\n      \"Explicit tie rule: when multiple experts share the maximum logit, the LOWEST expert index must win, for reproducibility across runs/replicas.\",\n      \"Ties are a normal occurrence (reduced-precision router logits), so tie handling is in-scope, not adversarial-only.\",\n      \"Output is the expert index per token; downstream impact is substantial because experts are independently trained.\",\n      \"No tolerance relaxation for ties: exact index match is the contract.\"\n    ],\n    \"kernel_model\": [\n      \"One Triton program per token (grid = n_tokens); loads a padded power-of-2 block of logits with mask cols < E, padding -inf.\",\n      \"Sequential loop e = 0..E-1 over experts, each iteration extracting x[e] via tl.sum(tl.where(cols == e, x, 0.0)).\",\n      \"Tie handling: take = v >= best, so a later expert with an equal logit replaces the current best (highest tied index wins).\",\n      \"Initialization best = -inf, best_i = 0; if all logits are -inf, take is true for every e, yielding best_i = E-1.\",\n      \"Output dtype int32; stores one index per token; uses logits.stride(0) so row stride is honored (column stride assumed 1).\",\n      \"BLOCK = next_power_of_2(n_experts); E is a constexpr loop bound, unrolled at compile time.\"\n    ],\n    \"open_questions\": [\n      \"What dtypes (fp32/fp16/bf16) and shapes do the hidden tests use for logits?\",\n      \"Do tests include NaN or all-(-inf) rows, and is any tie behavior specified beyond 'lowest index wins' for degenerate rows?\",\n      \"Is logits guaranteed 2D with unit column stride (e.g. could a transposed view be passed)?\"\n    ],\n    \"risk_map\": [\n      \"Tie-breaking direction: `v >= best` makes the LAST tied expert win, violating the lowest-index-wins contract (kernel.py lines 15-19); test tied maxima, e.g. all-equal logits (expect 0, kernel returns E-1).\",\n      \"All-(-inf) rows: best initialized to -inf makes every iteration take, yielding E-1 instead of 0.\",\n      \"NaN logits: NaN >= best is false, so NaN experts are skipped; an all-NaN row yields 0 (contract silent).\",\n      \"dtype assumptions: comparison and -inf fill assume float logits; bf16/fp16 quantization-induced ties are the primary in-scope distribution.\",\n      \"Column-stride assumption: kernel indexes Logits + tok*stride + cols assuming unit column stride; transposed/non-contiguous views would read wrong values.\",\n      \"Edge cases E=1 or E=0: loop and best_i=0 init likely fine but unconfirmed.\"\n    ],\n    \"scope_notes\": [\n      \"Test domain is argmax index correctness with a strict tie rule; no numeric tolerance applies, index equality is the pass condition.\",\n      \"Ties induced by reduced-precision quantization (bf16/fp16 rounded logits) are the primary in-scope failure distribution; benign continuous randn inputs rarely expose the tie-direction bug.\",\n      \"Single GPU Triton kernel, one token per program; performance is not the contract focus.\",\n      \"No test code is provided in the artifact, so the exact dtype/shape space remains for the Experimenter.\"\n    ]\n  },\n  \"entry\": \"case_30\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_30\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_30\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_30\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_30\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"describer\",\n      \"round\": 2,\n      \"text\": \"The kernel source and contract are already in context. The key surface: the loop uses `v >= best` with a running maximum, which selects the *last* tied expert, while the contract demands the *lowest* index on ties. I'll record the description model now.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"contract_model\": [\n              \"Per-token top-1 expert routing: expert[t] = argmax_e logits[t, e].\",\n              \"Explicit tie rule: when multiple experts share the maximum logit, the LOWEST expert index must win, for reproducibility across runs/replicas.\",\n              \"Ties are a normal occurrence (reduced-precision router logits), so tie handling is in-scope, not adversarial-only.\",\n              \"Output is the expert index (int32) per token; downstream impact is substantial because experts are independently trained.\",\n              \"No tolerance relaxation for ties: exact index match is the contract.\"\n            ],\n            \"kernel_model\": [\n              \"One Triton program per token (grid = n_tokens); loads a padded power-of-2 block of logits with mask cols < E, padding -inf.\",\n              \"Sequential loop e = 0..E-1 over experts, each iteration extracting x[e] via tl.sum(tl.where(cols == e, x, 0.0)).\",\n              \"Tie handling: take = v >= best, so a later expert with an equal logit REPLACES the current best (strictly: v >= best includes equality).\",\n              \"Initialization best = -inf, best_i = 0; if all logits are -inf, take is true for every e, yielding best_i = E-1.\",\n              \"Output dtype int32; stores one index per token; uses logits.stride(0) so non-contiguous row stride is honored (column stride assumed 1).\",\n              \"BLOCK = next_power_of_2(n_experts); E is a constexpr loop bound, so the loop is unrolled at compile time.\"\n            ],\n            \"open_questions\": \"[\\\"What dtypes (fp32/fp16/bf16) and shapes do the hidden tests use for logits?\\\", \\\"Do tests include NaN or all-(-inf) rows, and is any tie behavior specified beyond 'lowest index wins' for those degenerate rows?\\\", \\\"Is logits guaranteed 2D contiguous with column stride 1 (e.g. could a transposed view be passed)?\\\"\",\n            \"risk_map\": [\n              \"Tie-breaking direction: `v >= best` makes the LAST tied expert win, violating the lowest-index-wins contract (kernel.py lines 15-19). Skeptic should test tied maxima, e.g. all-equal logits (expect 0).\",\n              \"All-(-inf)/degenerate rows: with best initialized to -inf, every iteration takes, resulting in index E-1 instead of 0.\",\n              \"NaN logits: NaN >= best is false, so NaN experts are skipped; a row that is entirely NaN yields best_i = 0 \\u2014 behavior undefined by the contract, check whether tests cover it.\",\n              \"dtype assumptions: comparison and -inf fill assume float logits; int/bf16/half logits may change tie/rounding behavior \\u2014 check the test domain's dtypes.\",\n              \"Column-stride assumption: kernel indexes Logits + tok*stride + cols, assuming column stride 1; non-unit column stride (e.g. transposed views) would read wrong values.\",\n              \"Empty expert dimension E=0 or E=1 edge cases: loop behavior and best_i initialization (0) may still be correct but should be confirmed against the test contract.\"\n            ],\n            \"scope_notes\": \"\\\"Test domain is argmax index correctness with a strict tie rule; no numeric tolerance applies, index equality is the pass condition.\\\", \\\"Ties induced by reduced-precision quantization (bf16/fp16 rounded logits) are the primary in-scope failure distribution; benign continuous randn inputs rarely expose the tie direction bug.\\\", \\\"Single GPU Triton kernel, one token per program; performance is not the contract focus here.\\\", \\\"No test code is provided in the artifact, so the exact dtype/shape space is an open question for the Experimenter.\\\"\"\n          },\n          \"tool\": \"record_description_update\"\n        }\n      ]\n    },\n    {\n      \"role\": \"skeptic\",\n      \"round\": 3,\n      \"text\": \"The core contract violation is clear from source: `v >= best` makes the last tied expert win, while the contract requires the lowest index. Recording that claim plus a concrete test case.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"kernel.py line 17 uses `take = v >= best`, so on equal logits each later expert replaces the current best; with all logits equal (a tie covering every expert) the kernel returns E-1, whereas the contract requires index 0. Reduced-precision ties are stated as normal inputs, so this is the primary failure mode.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Ties are a normal occurrence; when several experts share the largest logit, the contract requires the LOWEST expert index to win.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract explicitly requires the lowest expert index to win ties and states ties occur routinely with reduced-precision logits; the kernel's `v >= best` tie handling returns the highest tied index instead.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"skeptic\",\n      \"round\": 4,\n      \"text\": \"The previous claim recording failed due to a missing `statement` field. Re-recording it now.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"kernel.py line 17 uses `take = v >= best`, so on equal logits each later expert replaces the current best; with all logits tied (e.g. all-equal logits, which reduced-precision routing routinely produces), the kernel returns E-1, whereas the contract requires the lowest tied index (0).\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Ties are a normal occurrence with reduced-precision router logits; when several experts share the largest logit, the contract requires the LOWEST expert index to win.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract explicitly states ties occur routinely and requires the lowest tied expert index to win; the kernel's `v >= best` comparison makes the highest tied index win instead.\",\n            \"statement\": \"route_top1 breaks the required tie rule: with `take = v >= best`, the last (highest-index) expert among tied maxima wins, but the contract requires the LOWEST tied index; e.g. for a row where all logits are equal, the kernel returns E-1 instead of 0.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"describer\",\n      \"round\": 5,\n      \"text\": \"My earlier description update failed for a missing `summary` field; re-recording it correctly now.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"contract_model\": [\n              \"Per-token top-1 expert routing: expert[t] = argmax_e logits[t, e].\",\n              \"Explicit tie rule: when multiple experts share the maximum logit, the LOWEST expert index must win, for reproducibility across runs/replicas.\",\n              \"Ties are a normal occurrence (reduced-precision router logits), so tie handling is in-scope, not adversarial-only.\",\n              \"Output is the expert index per token; downstream impact is substantial because experts are independently trained.\",\n              \"No tolerance relaxation for ties: exact index match is the contract.\"\n            ],\n            \"kernel_model\": [\n              \"One Triton program per token (grid = n_tokens); loads a padded power-of-2 block of logits with mask cols < E, padding -inf.\",\n              \"Sequential loop e = 0..E-1 over experts, each iteration extracting x[e] via tl.sum(tl.where(cols == e, x, 0.0)).\",\n              \"Tie handling: take = v >= best, so a later expert with an equal logit replaces the current best (highest tied index wins).\",\n              \"Initialization best = -inf, best_i = 0; if all logits are -inf, take is true for every e, yielding best_i = E-1.\",\n              \"Output dtype int32; stores one index per token; uses logits.stride(0) so row stride is honored (column stride assumed 1).\",\n              \"BLOCK = next_power_of_2(n_experts); E is a constexpr loop bound, unrolled at compile time.\"\n            ],\n            \"open_questions\": [\n              \"What dtypes (fp32/fp16/bf16) and shapes do the hidden tests use for logits?\",\n              \"Do tests include NaN or all-(-inf) rows, and is any tie behavior specified beyond 'lowest index wins' for degenerate rows?\",\n              \"Is logits guaranteed 2D with unit column stride (e.g. could a transposed view be passed)?\"\n            ],\n            \"risk_map\": [\n              \"Tie-breaking direction: `v >= best` makes the LAST tied expert win, violating the lowest-index-wins contract (kernel.py lines 15-19); test tied maxima, e.g. all-equal logits (expect 0, kernel returns E-1).\",\n              \"All-(-inf) rows: best initialized to -inf makes every iteration take, yielding E-1 instead of 0.\",\n              \"NaN logits: NaN >= best is false, so NaN experts are skipped; an all-NaN row yields 0 (contract silent).\",\n              \"dtype assumptions: comparison and -inf fill assume float logits; bf16/fp16 quantization-induced ties are the primary in-scope distribution.\",\n              \"Column-stride assumption: kernel indexes Logits + tok*stride + cols assuming unit column stride; transposed/non-contiguous views would read wrong values.\",\n              \"Edge cases E=1 or E=0: loop and best_i=0 init likely fine but unconfirmed.\"\n            ],\n            \"scope_notes\": [\n              \"Test domain is argmax index correctness with a strict tie rule; no numeric tolerance applies, index equality is the pass condition.\",\n              \"Ties induced by reduced-precision quantization (bf16/fp16 rounded logits) are the primary in-scope failure distribution; benign continuous randn inputs rarely expose the tie-direction bug.\",\n              \"Single GPU Triton kernel, one token per program; performance is not the contract focus.\",\n              \"No test code is provided in the artifact, so the exact dtype/shape space remains for the Experimenter.\"\n            ],\n            \"summary\": \"Description model for case_30 (top-1 MoE routing): contract requires lowest tied index to win; kernel's `v >= best` running-max makes the highest tied index win, matching open claim c1.\"\n          },\n          \"tool\": \"record_description_update\"\n        }\n      ]\n    },\n    {\n      \"role\": \"skeptic\",\n      \"round\": 6,\n      \"text\": \"The core contract violation (tie direction: `v >= best` makes the highest tied index win instead of the lowest) is already recorded as claim c1 with proper in-scope scope evidence. The risk map's other items (all-(-inf) rows, NaN rows, non-unit column stride, E=0/1) are contract-undefined or out-of-scope edge cases, and bf16/fp16 quantization-induced ties are the same root-cause failure mode already covered by c1. No additional distinct, high-quality in-scope claims remain.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"reason\": \"Claim c1 already captures the tie-direction contract violation (kernel.py line 17 `take = v >= best` yields the highest tied index, contract requires the lowest) with in-scope evidence from problem.txt. Remaining risk-map items (all-(-inf) rows, NaN rows, non-unit column stride, E=0/1 edge cases) are contract-undefined or out-of-scope per the stated input contract, and reduced-precision tie distributions are the same root cause as c1, so no distinct new in-scope claims are warranted.\",\n            \"reviewed_claims\": [\n              \"c1\"\n            ]\n          },\n          \"tool\": \"record_no_new_claims\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [\n    {\n      \"contract_model\": [\n        \"Per-token top-1 expert routing: expert[t] = argmax_e logits[t, e].\",\n        \"Explicit tie rule: when multiple experts share the maximum logit, the LOWEST expert index must win, for reproducibility across runs/replicas.\",\n        \"Ties are a normal occurrence (reduced-precision router logits), so tie handling is in-scope, not adversarial-only.\",\n        \"Output is the expert index per token; downstream impact is substantial because experts are independently trained.\",\n        \"No tolerance relaxation for ties: exact index match is the contract.\"\n      ],\n      \"created_at\": \"2026-09-30T08:35:56Z\",\n      \"created_by\": \"describer\",\n      \"id\": \"du1\",\n      \"impact_on_claims\": [],\n      \"kernel_model\": [\n        \"One Triton program per token (grid = n_tokens); loads a padded power-of-2 block of logits with mask cols < E, padding -inf.\",\n        \"Sequential loop e = 0..E-1 over experts, each iteration extracting x[e] via tl.sum(tl.where(cols == e, x, 0.0)).\",\n        \"Tie handling: take = v >= best, so a later expert with an equal logit replaces the current best (highest tied index wins).\",\n        \"Initialization best = -inf, best_i = 0; if all logits are -inf, take is true for every e, yielding best_i = E-1.\",\n        \"Output dtype int32; stores one index per token; uses logits.stride(0) so row stride is honored (column stride assumed 1).\",\n        \"BLOCK = next_power_of_2(n_experts); E is a constexpr loop bound, unrolled at compile time.\"\n      ],\n      \"open_questions\": [\n        \"What dtypes (fp32/fp16/bf16) and shapes do the hidden tests use for logits?\",\n        \"Do tests include NaN or all-(-inf) rows, and is any tie behavior specified beyond 'lowest index wins' for degenerate rows?\",\n        \"Is logits guaranteed 2D with unit column stride (e.g. could a transposed view be passed)?\"\n      ],\n      \"risk_map\": [\n        \"Tie-breaking direction: `v >= best` makes the LAST tied expert win, violating the lowest-index-wins contract (kernel.py lines 15-19); test tied maxima, e.g. all-equal logits (expect 0, kernel returns E-1).\",\n        \"All-(-inf) rows: best initialized to -inf makes every iteration take, yielding E-1 instead of 0.\",\n        \"NaN logits: NaN >= best is false, so NaN experts are skipped; an all-NaN row yields 0 (contract silent).\",\n        \"dtype assumptions: comparison and -inf fill assume float logits; bf16/fp16 quantization-induced ties are the primary in-scope distribution.\",\n        \"Column-stride assumption: kernel indexes Logits + tok*stride + cols assuming unit column stride; transposed/non-contiguous views would read wrong values.\",\n        \"Edge cases E=1 or E=0: loop and best_i=0 init likely fine but unconfirmed.\"\n      ],\n      \"scope_notes\": [\n        \"Test domain is argmax index correctness with a strict tie rule; no numeric tolerance applies, index equality is the pass condition.\",\n        \"Ties induced by reduced-precision quantization (bf16/fp16 rounded logits) are the primary in-scope failure distribution; benign continuous randn inputs rarely expose the tie-direction bug.\",\n        \"Single GPU Triton kernel, one token per program; performance is not the contract focus.\",\n        \"No test code is provided in the artifact, so the exact dtype/shape space remains for the Experimenter.\"\n      ],\n      \"summary\": \"Description model for case_30 (top-1 MoE routing): contract requires lowest tied index to win; kernel's `v >= best` running-max makes the highest tied index win, matching open claim c1.\",\n      \"task_ids\": [],\n      \"turn\": 5\n    }\n  ],\n  \"skeptic_review\": {\n    \"created_at\": \"2026-09-30T08:36:07Z\",\n    \"decision\": \"no_new_claims\",\n    \"reason\": \"Claim c1 already captures the tie-direction contract violation (kernel.py line 17 `take = v >= best` yields the highest tied index, contract requires the lowest) with in-scope evidence from problem.txt. Remaining risk-map items (all-(-inf) rows, NaN rows, non-unit column stride, E=0/1 edge cases) are contract-undefined or out-of-scope per the stated input contract, and reduced-precision tie distributions are the same root cause as c1, so no distinct new in-scope claims are warranted.\",\n    \"reviewed_claims\": [\n      \"c1\"\n    ],\n    \"reviewed_tool_event_count\": 8,\n    \"tool_event_id\": \"t9\",\n    \"turn\": 6\n  },\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_30\"\n      },\n      \"created_at\": \"2026-09-30T08:35:18Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_30\",\n        \"has_error\": null,\n        \"kernel_code\": \"import torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):\\n    tok = tl.program_id(0)\\n    cols = tl.arange(0, BLOCK)\\n    valid = cols < E\\n    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float(\\\"inf\\\"))\\n\\n    best = -float(\\\"inf\\\")\\n    best_i = 0\\n    for e in range(E):\\n        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)\\n        take = v >= best\\n        best = tl.where(take, v, best)\\n        best_i = tl.where(take, e, best_i)\\n    tl.store(Idx + tok, best_i)\\n\\n\\ndef route_top1(logits):\\n    # Pick one expert per token from the router logits.\\n    n_tokens, n_experts = logits.shape\\n    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)\\n    _route_kernel[(n_tokens,)](logits, idx, logits.stride(0), E=n_experts,\\n                               BLOCK=triton.next_power_of_2(n_experts))\\n    return idx\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Operation: top-1 expert routing for a Mixture-of-Experts layer. For each token,\\nselect the expert with the largest router logit.\\n\\n    expert[t] = argmax over e of logits[t, e]\\n\\nTie rule: router logits are computed in reduced precision and distinct logits\\nroutinely round to the same representable value, so ties are a normal\\noccurrence rather than a curiosity. When several experts share the largest\\nlogit, the contract requires the LOWEST expert index to win, so that routing is\\nreproducible across runs and across replicas holding the experts in the same\\norder.\\n\\nThe selected expert's output is what the layer returns, and different experts\\nare independently trained, so which one wins a tie changes the continuous\\noutput substantially.\\n\\nDoes route_top1() satisfy this contract?\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_30\",\n        \"status\": \"under_test\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_30\"\n      },\n      \"created_at\": \"2026-09-30T08:35:18Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Operation: top-1 expert routing for a Mixture-of-Experts layer. For each token,\\nselect the expert with the largest router logit.\\n\\n    expert[t] = argmax over e of logits[t, e]\\n\\nTie rule: router logits are computed in reduced precision and distinct logits\\nroutinely round to the same representable value, so ties are a normal\\noccurrence rather than a curiosity. When several experts share the largest\\nlogit, the contract requires the LOWEST expert index to win, so that routing is\\nreproducible across runs and across replicas holding the experts in the same\\norder.\\n\\nThe selected expert's output is what the layer returns, and different experts\\nare independently trained, so which one wins a tie changes the continuous\\noutput substantially.\\n\\nDoes route_top1() satisfy this contract?\\n\",\n        \"entry\": \"case_30\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_30\"\n      },\n      \"created_at\": \"2026-09-30T08:35:18Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_30\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 921\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 68\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 781\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_30\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-30T08:35:18Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_30\\\",\\n  \\\"status\\\": \\\"under_test\\\",\\n  \\\"passed\\\": null\\n}\\n\",\n        \"entry\": \"case_30\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 68,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"contract_model\": [\n          \"Per-token top-1 expert routing: expert[t] = argmax_e logits[t, e].\",\n          \"Explicit tie rule: when multiple experts share the maximum logit, the LOWEST expert index must win, for reproducibility across runs/replicas.\",\n          \"Ties are a normal occurrence (reduced-precision router logits), so tie handling is in-scope, not adversarial-only.\",\n          \"Output is the expert index (int32) per token; downstream impact is substantial because experts are independently trained.\",\n          \"No tolerance relaxation for ties: exact index match is the contract.\"\n        ],\n        \"kernel_model\": [\n          \"One Triton program per token (grid = n_tokens); loads a padded power-of-2 block of logits with mask cols < E, padding -inf.\",\n          \"Sequential loop e = 0..E-1 over experts, each iteration extracting x[e] via tl.sum(tl.where(cols == e, x, 0.0)).\",\n          \"Tie handling: take = v >= best, so a later expert with an equal logit REPLACES the current best (strictly: v >= best includes equality).\",\n          \"Initialization best = -inf, best_i = 0; if all logits are -inf, take is true for every e, yielding best_i = E-1.\",\n          \"Output dtype int32; stores one index per token; uses logits.stride(0) so non-contiguous row stride is honored (column stride assumed 1).\",\n          \"BLOCK = next_power_of_2(n_experts); E is a constexpr loop bound, so the loop is unrolled at compile time.\"\n        ],\n        \"open_questions\": \"[\\\"What dtypes (fp32/fp16/bf16) and shapes do the hidden tests use for logits?\\\", \\\"Do tests include NaN or all-(-inf) rows, and is any tie behavior specified beyond 'lowest index wins' for those degenerate rows?\\\", \\\"Is logits guaranteed 2D contiguous with column stride 1 (e.g. could a transposed view be passed)?\\\"\",\n        \"risk_map\": [\n          \"Tie-breaking direction: `v >= best` makes the LAST tied expert win, violating the lowest-index-wins contract (kernel.py lines 15-19). Skeptic should test tied maxima, e.g. all-equal logits (expect 0).\",\n          \"All-(-inf)/degenerate rows: with best initialized to -inf, every iteration takes, resulting in index E-1 instead of 0.\",\n          \"NaN logits: NaN >= best is false, so NaN experts are skipped; a row that is entirely NaN yields best_i = 0 \\u2014 behavior undefined by the contract, check whether tests cover it.\",\n          \"dtype assumptions: comparison and -inf fill assume float logits; int/bf16/half logits may change tie/rounding behavior \\u2014 check the test domain's dtypes.\",\n          \"Column-stride assumption: kernel indexes Logits + tok*stride + cols, assuming column stride 1; non-unit column stride (e.g. transposed views) would read wrong values.\",\n          \"Empty expert dimension E=0 or E=1 edge cases: loop behavior and best_i initialization (0) may still be correct but should be confirmed against the test contract.\"\n        ],\n        \"scope_notes\": \"\\\"Test domain is argmax index correctness with a strict tie rule; no numeric tolerance applies, index equality is the pass condition.\\\", \\\"Ties induced by reduced-precision quantization (bf16/fp16 rounded logits) are the primary in-scope failure distribution; benign continuous randn inputs rarely expose the tie direction bug.\\\", \\\"Single GPU Triton kernel, one token per program; performance is not the contract focus here.\\\", \\\"No test code is provided in the artifact, so the exact dtype/shape space is an open question for the Experimenter.\\\"\"\n      },\n      \"created_at\": \"2026-09-30T08:35:35Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"error\": {\n          \"message\": \"tool record_description_update missing required arg: summary\",\n          \"recoverable\": true,\n          \"type\": \"ToolRegistryError\"\n        },\n        \"error_type\": \"ToolRegistryError\",\n        \"event_id\": \"t5\",\n        \"message\": \"tool record_description_update missing required arg: summary\",\n        \"ok\": false\n      },\n      \"status\": \"error\",\n      \"tool\": \"record_description_update\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"kernel.py line 17 uses `take = v >= best`, so on equal logits each later expert replaces the current best; with all logits equal (a tie covering every expert) the kernel returns E-1, whereas the contract requires index 0. Reduced-precision ties are stated as normal inputs, so this is the primary failure mode.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Ties are a normal occurrence; when several experts share the largest logit, the contract requires the LOWEST expert index to win.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract explicitly requires the lowest expert index to win ties and states ties occur routinely with reduced-precision logits; the kernel's `v >= best` tie handling returns the highest tied index instead.\"\n      },\n      \"created_at\": \"2026-09-30T08:35:40Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"error\": {\n          \"message\": \"tool record_claim missing required arg: statement\",\n          \"recoverable\": true,\n          \"type\": \"ToolRegistryError\"\n        },\n        \"error_type\": \"ToolRegistryError\",\n        \"event_id\": \"t6\",\n        \"message\": \"tool record_claim missing required arg: statement\",\n        \"ok\": false\n      },\n      \"status\": \"error\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"kernel.py line 17 uses `take = v >= best`, so on equal logits each later expert replaces the current best; with all logits tied (e.g. all-equal logits, which reduced-precision routing routinely produces), the kernel returns E-1, whereas the contract requires the lowest tied index (0).\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Ties are a normal occurrence with reduced-precision router logits; when several experts share the largest logit, the contract requires the LOWEST expert index to win.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract explicitly states ties occur routinely and requires the lowest tied expert index to win; the kernel's `v >= best` comparison makes the highest tied index win instead.\",\n        \"statement\": \"route_top1 breaks the required tie rule: with `take = v >= best`, the last (highest-index) expert among tied maxima wins, but the contract requires the LOWEST tied index; e.g. for a row where all logits are equal, the kernel returns E-1 instead of 0.\"\n      },\n      \"created_at\": \"2026-09-30T08:35:45Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"created_at\": \"2026-09-30T08:35:45Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"skeptic\",\n        \"rationale\": \"kernel.py line 17 uses `take = v >= best`, so on equal logits each later expert replaces the current best; with all logits tied (e.g. all-equal logits, which reduced-precision routing routinely produces), the kernel returns E-1, whereas the contract requires the lowest tied index (0).\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Ties are a normal occurrence with reduced-precision router logits; when several experts share the largest logit, the contract requires the LOWEST expert index to win.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract explicitly states ties occur routinely and requires the lowest tied expert index to win; the kernel's `v >= best` comparison makes the highest tied index win instead.\",\n        \"statement\": \"route_top1 breaks the required tie rule: with `take = v >= best`, the last (highest-index) expert among tied maxima wins, but the contract requires the LOWEST tied index; e.g. for a row where all logits are equal, the kernel returns E-1 instead of 0.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-09-30T08:35:45Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"contract_model\": [\n          \"Per-token top-1 expert routing: expert[t] = argmax_e logits[t, e].\",\n          \"Explicit tie rule: when multiple experts share the maximum logit, the LOWEST expert index must win, for reproducibility across runs/replicas.\",\n          \"Ties are a normal occurrence (reduced-precision router logits), so tie handling is in-scope, not adversarial-only.\",\n          \"Output is the expert index per token; downstream impact is substantial because experts are independently trained.\",\n          \"No tolerance relaxation for ties: exact index match is the contract.\"\n        ],\n        \"kernel_model\": [\n          \"One Triton program per token (grid = n_tokens); loads a padded power-of-2 block of logits with mask cols < E, padding -inf.\",\n          \"Sequential loop e = 0..E-1 over experts, each iteration extracting x[e] via tl.sum(tl.where(cols == e, x, 0.0)).\",\n          \"Tie handling: take = v >= best, so a later expert with an equal logit replaces the current best (highest tied index wins).\",\n          \"Initialization best = -inf, best_i = 0; if all logits are -inf, take is true for every e, yielding best_i = E-1.\",\n          \"Output dtype int32; stores one index per token; uses logits.stride(0) so row stride is honored (column stride assumed 1).\",\n          \"BLOCK = next_power_of_2(n_experts); E is a constexpr loop bound, unrolled at compile time.\"\n        ],\n        \"open_questions\": [\n          \"What dtypes (fp32/fp16/bf16) and shapes do the hidden tests use for logits?\",\n          \"Do tests include NaN or all-(-inf) rows, and is any tie behavior specified beyond 'lowest index wins' for degenerate rows?\",\n          \"Is logits guaranteed 2D with unit column stride (e.g. could a transposed view be passed)?\"\n        ],\n        \"risk_map\": [\n          \"Tie-breaking direction: `v >= best` makes the LAST tied expert win, violating the lowest-index-wins contract (kernel.py lines 15-19); test tied maxima, e.g. all-equal logits (expect 0, kernel returns E-1).\",\n          \"All-(-inf) rows: best initialized to -inf makes every iteration take, yielding E-1 instead of 0.\",\n          \"NaN logits: NaN >= best is false, so NaN experts are skipped; an all-NaN row yields 0 (contract silent).\",\n          \"dtype assumptions: comparison and -inf fill assume float logits; bf16/fp16 quantization-induced ties are the primary in-scope distribution.\",\n          \"Column-stride assumption: kernel indexes Logits + tok*stride + cols assuming unit column stride; transposed/non-contiguous views would read wrong values.\",\n          \"Edge cases E=1 or E=0: loop and best_i=0 init likely fine but unconfirmed.\"\n        ],\n        \"scope_notes\": [\n          \"Test domain is argmax index correctness with a strict tie rule; no numeric tolerance applies, index equality is the pass condition.\",\n          \"Ties induced by reduced-precision quantization (bf16/fp16 rounded logits) are the primary in-scope failure distribution; benign continuous randn inputs rarely expose the tie-direction bug.\",\n          \"Single GPU Triton kernel, one token per program; performance is not the contract focus.\",\n          \"No test code is provided in the artifact, so the exact dtype/shape space remains for the Experimenter.\"\n        ],\n        \"summary\": \"Description model for case_30 (top-1 MoE routing): contract requires lowest tied index to win; kernel's `v >= best` running-max makes the highest tied index win, matching open claim c1.\"\n      },\n      \"created_at\": \"2026-09-30T08:35:56Z\",\n      \"id\": \"t8\",\n      \"output\": {\n        \"description_model\": {\n          \"contract_model\": [\n            \"Per-token top-1 expert routing: expert[t] = argmax_e logits[t, e].\",\n            \"Explicit tie rule: when multiple experts share the maximum logit, the LOWEST expert index must win, for reproducibility across runs/replicas.\",\n            \"Ties are a normal occurrence (reduced-precision router logits), so tie handling is in-scope, not adversarial-only.\",\n            \"Output is the expert index per token; downstream impact is substantial because experts are independently trained.\",\n            \"No tolerance relaxation for ties: exact index match is the contract.\"\n          ],\n          \"kernel_model\": [\n            \"One Triton program per token (grid = n_tokens); loads a padded power-of-2 block of logits with mask cols < E, padding -inf.\",\n            \"Sequential loop e = 0..E-1 over experts, each iteration extracting x[e] via tl.sum(tl.where(cols == e, x, 0.0)).\",\n            \"Tie handling: take = v >= best, so a later expert with an equal logit replaces the current best (highest tied index wins).\",\n            \"Initialization best = -inf, best_i = 0; if all logits are -inf, take is true for every e, yielding best_i = E-1.\",\n            \"Output dtype int32; stores one index per token; uses logits.stride(0) so row stride is honored (column stride assumed 1).\",\n            \"BLOCK = next_power_of_2(n_experts); E is a constexpr loop bound, unrolled at compile time.\"\n          ],\n          \"open_questions\": [\n            \"What dtypes (fp32/fp16/bf16) and shapes do the hidden tests use for logits?\",\n            \"Do tests include NaN or all-(-inf) rows, and is any tie behavior specified beyond 'lowest index wins' for degenerate rows?\",\n            \"Is logits guaranteed 2D with unit column stride (e.g. could a transposed view be passed)?\"\n          ],\n          \"risk_map\": [\n            \"Tie-breaking direction: `v >= best` makes the LAST tied expert win, violating the lowest-index-wins contract (kernel.py lines 15-19); test tied maxima, e.g. all-equal logits (expect 0, kernel returns E-1).\",\n            \"All-(-inf) rows: best initialized to -inf makes every iteration take, yielding E-1 instead of 0.\",\n            \"NaN logits: NaN >= best is false, so NaN experts are skipped; an all-NaN row yields 0 (contract silent).\",\n            \"dtype assumptions: comparison and -inf fill assume float logits; bf16/fp16 quantization-induced ties are the primary in-scope distribution.\",\n            \"Column-stride assumption: kernel indexes Logits + tok*stride + cols assuming unit column stride; transposed/non-contiguous views would read wrong values.\",\n            \"Edge cases E=1 or E=0: loop and best_i=0 init likely fine but unconfirmed.\"\n          ],\n          \"scope_notes\": [\n            \"Test domain is argmax index correctness with a strict tie rule; no numeric tolerance applies, index equality is the pass condition.\",\n            \"Ties induced by reduced-precision quantization (bf16/fp16 rounded logits) are the primary in-scope failure distribution; benign continuous randn inputs rarely expose the tie-direction bug.\",\n            \"Single GPU Triton kernel, one token per program; performance is not the contract focus.\",\n            \"No test code is provided in the artifact, so the exact dtype/shape space remains for the Experimenter.\"\n          ]\n        },\n        \"resolved_tasks\": [],\n        \"update\": {\n          \"contract_model\": [\n            \"Per-token top-1 expert routing: expert[t] = argmax_e logits[t, e].\",\n            \"Explicit tie rule: when multiple experts share the maximum logit, the LOWEST expert index must win, for reproducibility across runs/replicas.\",\n            \"Ties are a normal occurrence (reduced-precision router logits), so tie handling is in-scope, not adversarial-only.\",\n            \"Output is the expert index per token; downstream impact is substantial because experts are independently trained.\",\n            \"No tolerance relaxation for ties: exact index match is the contract.\"\n          ],\n          \"created_at\": \"2026-09-30T08:35:56Z\",\n          \"created_by\": \"describer\",\n          \"id\": \"du1\",\n          \"impact_on_claims\": [],\n          \"kernel_model\": [\n            \"One Triton program per token (grid = n_tokens); loads a padded power-of-2 block of logits with mask cols < E, padding -inf.\",\n            \"Sequential loop e = 0..E-1 over experts, each iteration extracting x[e] via tl.sum(tl.where(cols == e, x, 0.0)).\",\n            \"Tie handling: take = v >= best, so a later expert with an equal logit replaces the current best (highest tied index wins).\",\n            \"Initialization best = -inf, best_i = 0; if all logits are -inf, take is true for every e, yielding best_i = E-1.\",\n            \"Output dtype int32; stores one index per token; uses logits.stride(0) so row stride is honored (column stride assumed 1).\",\n            \"BLOCK = next_power_of_2(n_experts); E is a constexpr loop bound, unrolled at compile time.\"\n          ],\n          \"open_questions\": [\n            \"What dtypes (fp32/fp16/bf16) and shapes do the hidden tests use for logits?\",\n            \"Do tests include NaN or all-(-inf) rows, and is any tie behavior specified beyond 'lowest index wins' for degenerate rows?\",\n            \"Is logits guaranteed 2D with unit column stride (e.g. could a transposed view be passed)?\"\n          ],\n          \"risk_map\": [\n            \"Tie-breaking direction: `v >= best` makes the LAST tied expert win, violating the lowest-index-wins contract (kernel.py lines 15-19); test tied maxima, e.g. all-equal logits (expect 0, kernel returns E-1).\",\n            \"All-(-inf) rows: best initialized to -inf makes every iteration take, yielding E-1 instead of 0.\",\n            \"NaN logits: NaN >= best is false, so NaN experts are skipped; an all-NaN row yields 0 (contract silent).\",\n            \"dtype assumptions: comparison and -inf fill assume float logits; bf16/fp16 quantization-induced ties are the primary in-scope distribution.\",\n            \"Column-stride assumption: kernel indexes Logits + tok*stride + cols assuming unit column stride; transposed/non-contiguous views would read wrong values.\",\n            \"Edge cases E=1 or E=0: loop and best_i=0 init likely fine but unconfirmed.\"\n          ],\n          \"scope_notes\": [\n            \"Test domain is argmax index correctness with a strict tie rule; no numeric tolerance applies, index equality is the pass condition.\",\n            \"Ties induced by reduced-precision quantization (bf16/fp16 rounded logits) are the primary in-scope failure distribution; benign continuous randn inputs rarely expose the tie-direction bug.\",\n            \"Single GPU Triton kernel, one token per program; performance is not the contract focus.\",\n            \"No test code is provided in the artifact, so the exact dtype/shape space remains for the Experimenter.\"\n          ],\n          \"summary\": \"Description model for case_30 (top-1 MoE routing): contract requires lowest tied index to win; kernel's `v >= best` running-max makes the highest tied index win, matching open claim c1.\",\n          \"task_ids\": [],\n          \"turn\": 5\n        }\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_description_update\"\n    },\n    {\n      \"args\": {\n        \"reason\": \"Claim c1 already captures the tie-direction contract violation (kernel.py line 17 `take = v >= best` yields the highest tied index, contract requires the lowest) with in-scope evidence from problem.txt. Remaining risk-map items (all-(-inf) rows, NaN rows, non-unit column stride, E=0/1 edge cases) are contract-undefined or out-of-scope per the stated input contract, and reduced-precision tie distributions are the same root cause as c1, so no distinct new in-scope claims are warranted.\",\n        \"reviewed_claims\": [\n          \"c1\"\n        ]\n      },\n      \"created_at\": \"2026-09-30T08:36:07Z\",\n      \"id\": \"t9\",\n      \"output\": {\n        \"created_at\": \"2026-09-30T08:36:07Z\",\n        \"decision\": \"no_new_claims\",\n        \"reason\": \"Claim c1 already captures the tie-direction contract violation (kernel.py line 17 `take = v >= best` yields the highest tied index, contract requires the lowest) with in-scope evidence from problem.txt. Remaining risk-map items (all-(-inf) rows, NaN rows, non-unit column stride, E=0/1 edge cases) are contract-undefined or out-of-scope per the stated input contract, and reduced-precision tie distributions are the same root cause as c1, so no distinct new in-scope claims are warranted.\",\n        \"reviewed_claims\": [\n          \"c1\"\n        ],\n        \"reviewed_tool_event_count\": 8,\n        \"tool_event_id\": \"t9\",\n        \"turn\": 6\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_no_new_claims\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 29951,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "request_description",
+        "description": "Request a Describer clarification for source, contract, probe, or verdict ambiguity.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "reason_kind",
+            "question"
+          ],
+          "properties": {
+            "reason_kind": {
+              "type": "string",
+              "enum": [
+                "contract_scope",
+                "source_interpretation",
+                "probe_anomaly",
+                "verdict_blocker",
+                "other"
+              ]
+            },
+            "question": {
+              "type": "string"
+            },
+            "related_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "source_refs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

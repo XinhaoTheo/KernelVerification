@@ -1,0 +1,1454 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_01",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef sample_recovered_tokens_kernel(\n    output_token_ids_ptr,\n    draft_probs_ptr,\n    target_probs_ptr,\n    inv_q_ptr,\n    vocab_size,\n    BLOCK_SIZE: tl.constexpr,\n):\n    req_idx = tl.program_id(0)\n    max_val = tl.full((), float(\"-inf\"), tl.float32)\n    recovered_id = 0\n    for v in range(0, vocab_size, BLOCK_SIZE):\n        vocab_offset = v + tl.arange(0, BLOCK_SIZE)\n        vocab_mask = vocab_offset < vocab_size\n        draft_prob = tl.load(draft_probs_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        target_prob = tl.load(target_probs_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        prob = target_prob - draft_prob\n        inv_q = tl.load(inv_q_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        score = prob * inv_q\n        score = tl.where(vocab_mask, score, float(\"-inf\"))\n        local_max, local_id = tl.max(score, axis=0, return_indices=True)\n        if local_max > max_val:\n            max_val = local_max\n            recovered_id = v + local_id\n    recovered_id = tl.minimum(recovered_id, vocab_size - 1)\n    tl.store(output_token_ids_ptr + req_idx, recovered_id)\n\n\ndef sample_recovered_tokens(target_probs, draft_probs, inv_q):\n    batch_size, vocab_size = target_probs.shape\n    out = torch.empty(batch_size, dtype=torch.int64, device=target_probs.device)\n    BLOCK_SIZE = triton.next_power_of_2(vocab_size)\n    sample_recovered_tokens_kernel[(batch_size,)](out, draft_probs, target_probs, inv_q, vocab_size, BLOCK_SIZE=BLOCK_SIZE)\n    return out\n",
+    "passed": null,
+    "problem_text": "Operation: the recovered-token sampler used by speculative decoding\n(vllm-project/vllm, vllm/v1/sample/rejection_sampler.py::sample_recovered_tokens_kernel).\n\nAfter a draft token is rejected, a replacement token must be sampled from the\nresidual distribution\n\n    p_residual(v)  proportional to  max(target_prob[v] - draft_prob[v], 0)\n\ni.e. a token the draft over-proposed (target_prob < draft_prob) carries zero\nresidual probability and must never be returned as the recovered token.\n\nThe kernel samples from that distribution with the exponential-race\n(Gumbel-max) trick: given q[v] ~ Exponential(1) supplied as inv_q = 1/q, it\nreturns argmax_v( p_residual(v) * inv_q[v] ).\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_01",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:15:58Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:16:47Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6f05e29e642b551b315c7dc5aadeffd52b7765b4d9b34fbd313e43e1400855d6"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "503c8a180c894de2b78b471194be01301f58a0d9f8d32137c6185c4553492cab"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "16781a7187d2e81d5cbbc454a29ecd00e8d80c98f0c970f7cc1232636a61b283"
+              }
+            ],
+            "case1_kernel": 10,
+            "case1_ref": 10,
+            "case2_kernel": 3,
+            "case2_kernel_is_overproposed": false,
+            "case2_ref": 3,
+            "duration_s": 7.065499,
+            "exit_code": 0,
+            "expected_signal": "kernel returns an over-proposed token while positive-residual tokens exist, differing from clamped reference argmax",
+            "json_parse_error": null,
+            "json_result": {
+              "case1_kernel": 10,
+              "case1_ref": 10,
+              "case2_kernel": 3,
+              "case2_kernel_is_overproposed": false,
+              "case2_ref": 3
+            },
+            "stderr": "",
+            "stdout": "{\"case1_kernel\": 10, \"case1_ref\": 10, \"case2_kernel\": 3, \"case2_ref\": 3, \"case2_kernel_is_overproposed\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Two targeted cases with positive-residual tokens present: (1) token 500 with negative residual -0.4 and huge inv_q vs token 10 with positive score 0.02 \u2014 kernel and clamped reference both return 10; (2) sole positive-residual token 3 with near-zero score vs over-proposed token 700 \u2014 kernel and reference both return 3. Since inv_q = 1/q > 0, an over-proposed token's unclamped score is always negative and cannot beat any positive score; the hypothesized c1 failure mode does not materialize.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "kernel.py line 23 computes prob = target_prob - draft_prob with no clamp to >= 0, so a large negative residual multiplied by a large inv_q can exceed a small positive residual's score, changing the argmax to a forbidden token even when valid positive-residual tokens exist.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0); a token the draft over-proposed (target < draft) carries zero residual probability and must never be returned as the recovered token."
+        }
+      ],
+      "scope_rationale": "problem.txt explicitly defines p_residual(v) as proportional to max(target_prob[v] - draft_prob[v], 0) and states that over-proposed tokens must never be returned; any input with target_prob < draft_prob for some token is admitted by the contract.",
+      "statement": "For a request where some token v has target_prob[v] < draft_prob[v] (negative residual) with a large inv_q[v], the kernel's argmax of the unclamped score (target_prob - draft_prob) * inv_q can return that over-proposed token instead of a token with positive residual, violating the contract that over-proposed tokens carry zero residual probability.",
+      "status": "rebutted",
+      "updated_at": "2026-09-30T08:16:47Z"
+    },
+    {
+      "created_at": "2026-09-30T08:15:58Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:16:47Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "b2f3c2c375e01bb45c18a9b64cc28d5b2a3b7feb0f026198477c6c07a8ab3cee"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "779b39352c715b8ec86acb40afc42d053c9cc0f16582b23f21cfe11ba29dcaba"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "0c028464490e15ea410144b133500efdc88b8590d4de723354426d249e5d97b5"
+              }
+            ],
+            "duration_s": 4.773025,
+            "exit_code": 0,
+            "expected_signal": "on an all-residual<=0 row, kernel output differs from clamped reference argmax and is an over-proposed token",
+            "json_parse_error": null,
+            "json_result": {
+              "kernel_row0": 285,
+              "kernel_row0_overproposed": true,
+              "kernel_row1": 153,
+              "ref_row0": 0,
+              "ref_row0_overproposed": true,
+              "ref_row1": 153,
+              "row0_match": false,
+              "row1_match": true
+            },
+            "kernel_row0": 285,
+            "kernel_row0_overproposed": true,
+            "kernel_row1": 153,
+            "ref_row0": 0,
+            "ref_row0_overproposed": true,
+            "ref_row1": 153,
+            "row0_match": false,
+            "row1_match": true,
+            "stderr": "",
+            "stdout": "{\"kernel_row0\": 285, \"ref_row0\": 0, \"kernel_row0_overproposed\": true, \"ref_row0_overproposed\": true, \"kernel_row1\": 153, \"ref_row1\": 153, \"row1_match\": true, \"row0_match\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "On a row where every residual is < 0, the kernel returned token 285 (strictly negative residual, over-proposed), while the clamped reference argmax over all-zero p_residual*inv_q returned token 0 \u2014 mismatch confirmed. Note: the reference case is degenerate (all clamped scores tie at 0), so the reference argmax 0 is itself an over-proposed token; nevertheless the kernel returns the argmax of the raw negative scores (token 285), which is unclamped semantics and differs from the contract's clamp-then-argmax, and returns an over-proposed token with strictly negative residual. Benign positive-residual control row matched exactly.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "kernel.py lines 16-30 keep negative scores in the running max with initial -inf; the reference argmax over clamped scores would be the argmax of zeros (first index with residual clamped to 0, or semantics differing from torch.argmax of clamped values), whereas the kernel returns the most-negative-residual token or id 0.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Recovered token is argmax_v(p_residual(v) * inv_q[v]) where p_residual(v) = max(target - draft, 0), so with all residuals <= 0 the reference argmax operates on all-zero clamped scores, not raw negative differences."
+        }
+      ],
+      "scope_rationale": "problem.txt defines the sampled token as argmax_v(p_residual(v) * inv_q[v]) with p_residual clamped at 0, so a row where every target_prob <= draft_prob is within the stated formula and the kernel's behavior on it differs from the clamped reference.",
+      "statement": "When every residual target_prob[v] - draft_prob[v] is <= 0 for a request, the kernel returns the token with the largest (least negative) unclamped score \u2014 an over-proposed token or default id 0 \u2014 instead of the argmax over the all-zero clamped p_residual, producing a different token id than the contract's reference argmax.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:16:47Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Recovered token must be sampled from residual distribution p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0), per problem.txt.",
+      "Tokens where target_prob < draft_prob (draft over-proposed) must carry zero residual probability and must never be returned as the recovered token.",
+      "Sampling via exponential-race (Gumbel-max): with inv_q = 1/q and q ~ Exponential(1), output is argmax_v(p_residual(v) * inv_q[v]).",
+      "Inputs are (target_probs, draft_probs, inv_q), each [batch_size, vocab_size]; output is per-request token id tensor.",
+      "No explicit test_code or tolerance is present in the artifact, so the acceptance metric (exact index match vs distributional check) is not specified."
+    ],
+    "kernel_model": [
+      "One Triton program per request (grid = batch_size); loops over vocab in BLOCK_SIZE chunks and tracks a running max of score = (target_prob - draft_prob) * inv_q, using tl.max(..., return_indices=True) per chunk.",
+      "score = prob * inv_q is computed WITHOUT clamping prob to >= 0 (kernel.py line 23); the only masking is vocab_offset < vocab_size which sets out-of-range entries to -inf (lines 20, 26).",
+      "recovered_id defaults to 0 and is updated only when local_max > max_val strictly, so the first block containing the global max wins but strict '>' plus identical -inf chunks keeps 0 on ties with -inf (line 28-30).",
+      "A final clamp tl.minimum(recovered_id, vocab_size - 1) guards against out-of-range indices (line 31); output is int64 per request.",
+      "Python wrapper assumes contiguous [batch, vocab] layout, indexing flat as req_idx * vocab_size + offset; BLOCK_SIZE = next_power_of_2(vocab_size)."
+    ],
+    "open_questions": [
+      "What is the actual acceptance test \u2014 exact index equality against a reference argmax, or statistical/distributional equivalence over many random draws?",
+      "Are inv_q values guaranteed strictly positive, or can they be zero/inf (e.g. q extremely small), and does that interact with negative-residual scoring?",
+      "Is there a guaranteed positive-residual region in test inputs, or are degenerate all-over-proposed rows in scope?"
+    ],
+    "risk_map": [
+      "Missing clamp: score uses raw target_prob - draft_prob, so a token with target < draft gets a negative score rather than 0; per contract it must have zero residual mass. This matters when all real residuals are 0 or negative, or when negative residual * large inv_q beats near-zero positive scores.",
+      "Behavior when every score is <= 0: kernel returns the argmax of negative values (an over-proposed token) or default id 0, whereas the contract forbids ever returning an over-proposed token; the clamp-then-argmax semantics differ.",
+      "Masked-out lanes use -inf but in-range lanes with negative score can still win over a masked lane; combined with the uninitialized recovered_id = 0, ties or all-negative cases may return id 0 even if token 0 is over-proposed.",
+      "Strict '>' comparison across block loop plus tl.max tie-breaking: first-index tie-breaking within a block, but a later block with an equal max does not update \u2014 generally consistent with first-occurrence argmax, worth checking against reference tie semantics.",
+      "Contiguity/stride assumption: wrapper passes tensors directly with flat req_idx * vocab_size indexing; non-contiguous inputs would silently misread.",
+      "inv_q loaded with other=0.0 for masked lanes \u2014 fine given -inf mask on score, but negative residual * inv_q with unusual inv_q values (0, inf, NaN) could alter argmax."
+    ],
+    "scope_notes": [
+      "Only the per-request recovered-token argmax is in scope; no softmax normalization or downstream sampling beyond inv_q multiplication is required by problem.txt.",
+      "inv_q is supplied (precomputed 1/q); generating q or exponentials is out of scope.",
+      "Test code is absent from the artifact (test_code empty), so scope of validation metrics is currently undefined.",
+      "No dtype information is given; kernel loads implicitly per pointer dtype and compares in fp32 via max_val, but input dtype (fp16/bf16/fp32) is unspecified."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Recovered token must be sampled from residual distribution p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0), per problem.txt.",
+        "Tokens where target_prob < draft_prob (draft over-proposed) must carry zero residual probability and must never be returned as the recovered token.",
+        "Sampling via exponential-race (Gumbel-max): with inv_q = 1/q and q ~ Exponential(1), output is argmax_v(p_residual(v) * inv_q[v]).",
+        "Inputs are (target_probs, draft_probs, inv_q), each [batch_size, vocab_size]; output is per-request token id tensor.",
+        "No explicit test_code or tolerance is present in the artifact, so the acceptance metric (exact index match vs distributional check) is not specified."
+      ],
+      "created_at": "2026-09-30T08:15:45Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "One Triton program per request (grid = batch_size); loops over vocab in BLOCK_SIZE chunks and tracks a running max of score = (target_prob - draft_prob) * inv_q, using tl.max(..., return_indices=True) per chunk.",
+        "score = prob * inv_q is computed WITHOUT clamping prob to >= 0 (kernel.py line 23); the only masking is vocab_offset < vocab_size which sets out-of-range entries to -inf (lines 20, 26).",
+        "recovered_id defaults to 0 and is updated only when local_max > max_val strictly, so the first block containing the global max wins but strict '>' plus identical -inf chunks keeps 0 on ties with -inf (line 28-30).",
+        "A final clamp tl.minimum(recovered_id, vocab_size - 1) guards against out-of-range indices (line 31); output is int64 per request.",
+        "Python wrapper assumes contiguous [batch, vocab] layout, indexing flat as req_idx * vocab_size + offset; BLOCK_SIZE = next_power_of_2(vocab_size)."
+      ],
+      "open_questions": [
+        "What is the actual acceptance test \u2014 exact index equality against a reference argmax, or statistical/distributional equivalence over many random draws?",
+        "Are inv_q values guaranteed strictly positive, or can they be zero/inf (e.g. q extremely small), and does that interact with negative-residual scoring?",
+        "Is there a guaranteed positive-residual region in test inputs, or are degenerate all-over-proposed rows in scope?"
+      ],
+      "risk_map": [
+        "Missing clamp: score uses raw target_prob - draft_prob, so a token with target < draft gets a negative score rather than 0; per contract it must have zero residual mass. This matters when all real residuals are 0 or negative, or when negative residual * large inv_q beats near-zero positive scores.",
+        "Behavior when every score is <= 0: kernel returns the argmax of negative values (an over-proposed token) or default id 0, whereas the contract forbids ever returning an over-proposed token; the clamp-then-argmax semantics differ.",
+        "Masked-out lanes use -inf but in-range lanes with negative score can still win over a masked lane; combined with the uninitialized recovered_id = 0, ties or all-negative cases may return id 0 even if token 0 is over-proposed.",
+        "Strict '>' comparison across block loop plus tl.max tie-breaking: first-index tie-breaking within a block, but a later block with an equal max does not update \u2014 generally consistent with first-occurrence argmax, worth checking against reference tie semantics.",
+        "Contiguity/stride assumption: wrapper passes tensors directly with flat req_idx * vocab_size indexing; non-contiguous inputs would silently misread.",
+        "inv_q loaded with other=0.0 for masked lanes \u2014 fine given -inf mask on score, but negative residual * inv_q with unusual inv_q values (0, inf, NaN) could alter argmax."
+      ],
+      "scope_notes": [
+        "Only the per-request recovered-token argmax is in scope; no softmax normalization or downstream sampling beyond inv_q multiplication is required by problem.txt.",
+        "inv_q is supplied (precomputed 1/q); generating q or exponentials is out of scope.",
+        "Test code is absent from the artifact (test_code empty), so scope of validation metrics is currently undefined.",
+        "No dtype information is given; kernel loads implicitly per pointer dtype and compares in fp32 via max_val, but input dtype (fp16/bf16/fp32) is unspecified."
+      ],
+      "summary": "Initial description of case_01 recovered-token sampler: kernel implements chunked argmax of (target_prob - draft_prob) * inv_q per request, but omits the contractually required max(...,0) clamp on the residual probability.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_01",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_01"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_01"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_01"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_01",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 23.999383824,
+      "role": "describer",
+      "round": 2,
+      "text": "The contract clamps residual probabilities to zero, but the kernel computes a raw subtraction \u2014 that's the main description gap worth recording for the Skeptic.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Recovered token must be sampled from residual distribution p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0), per problem.txt.",
+              "Tokens where target_prob < draft_prob (draft over-proposed) must carry zero residual probability and must never be returned as the recovered token.",
+              "Sampling via exponential-race (Gumbel-max): with inv_q = 1/q and q ~ Exponential(1), output is argmax_v(p_residual(v) * inv_q[v]).",
+              "Inputs are (target_probs, draft_probs, inv_q), each [batch_size, vocab_size]; output is per-request token id tensor.",
+              "No explicit test_code or tolerance is present in the artifact, so the acceptance metric (exact index match vs distributional check) is not specified."
+            ],
+            "kernel_model": [
+              "One Triton program per request (grid = batch_size); loops over vocab in BLOCK_SIZE chunks and tracks a running max of score = (target_prob - draft_prob) * inv_q, using tl.max(..., return_indices=True) per chunk.",
+              "score = prob * inv_q is computed WITHOUT clamping prob to >= 0 (kernel.py line 23); the only masking is vocab_offset < vocab_size which sets out-of-range entries to -inf (lines 20, 26).",
+              "recovered_id defaults to 0 and is updated only when local_max > max_val strictly, so the first block containing the global max wins but strict '>' plus identical -inf chunks keeps 0 on ties with -inf (line 28-30).",
+              "A final clamp tl.minimum(recovered_id, vocab_size - 1) guards against out-of-range indices (line 31); output is int64 per request.",
+              "Python wrapper assumes contiguous [batch, vocab] layout, indexing flat as req_idx * vocab_size + offset; BLOCK_SIZE = next_power_of_2(vocab_size)."
+            ],
+            "open_questions": [
+              "What is the actual acceptance test \u2014 exact index equality against a reference argmax, or statistical/distributional equivalence over many random draws?",
+              "Are inv_q values guaranteed strictly positive, or can they be zero/inf (e.g. q extremely small), and does that interact with negative-residual scoring?",
+              "Is there a guaranteed positive-residual region in test inputs, or are degenerate all-over-proposed rows in scope?"
+            ],
+            "risk_map": [
+              "Missing clamp: score uses raw target_prob - draft_prob, so a token with target < draft gets a negative score rather than 0; per contract it must have zero residual mass. This matters when all real residuals are 0 or negative, or when negative residual * large inv_q beats near-zero positive scores.",
+              "Behavior when every score is <= 0: kernel returns the argmax of negative values (an over-proposed token) or default id 0, whereas the contract forbids ever returning an over-proposed token; the clamp-then-argmax semantics differ.",
+              "Masked-out lanes use -inf but in-range lanes with negative score can still win over a masked lane; combined with the uninitialized recovered_id = 0, ties or all-negative cases may return id 0 even if token 0 is over-proposed.",
+              "Strict '>' comparison across block loop plus tl.max tie-breaking: first-index tie-breaking within a block, but a later block with an equal max does not update \u2014 generally consistent with first-occurrence argmax, worth checking against reference tie semantics.",
+              "Contiguity/stride assumption: wrapper passes tensors directly with flat req_idx * vocab_size indexing; non-contiguous inputs would silently misread.",
+              "inv_q loaded with other=0.0 for masked lanes \u2014 fine given -inf mask on score, but negative residual * inv_q with unusual inv_q values (0, inf, NaN) could alter argmax."
+            ],
+            "scope_notes": [
+              "Only the per-request recovered-token argmax is in scope; no softmax normalization or downstream sampling beyond inv_q multiplication is required by problem.txt.",
+              "inv_q is supplied (precomputed 1/q); generating q or exponentials is out of scope.",
+              "Test code is absent from the artifact (test_code empty), so scope of validation metrics is currently undefined.",
+              "No dtype information is given; kernel loads implicitly per pointer dtype and compares in fp32 via max_val, but input dtype (fp16/bf16/fp32) is unspecified."
+            ],
+            "summary": "Initial description of case_01 recovered-token sampler: kernel implements chunked argmax of (target_prob - draft_prob) * inv_q per request, but omits the contractually required max(...,0) clamp on the residual probability."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 23.999,
+        "input_tokens": 4541,
+        "output_tokens": 1206
+      }
+    },
+    {
+      "duration_s": 12.694498578999998,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The core risk is clear from the source: the kernel computes `score = (target_prob - draft_prob) * inv_q` without the contractually required `max(..., 0)` clamp on the residual. I'll record the highest-value testable claims tied to problem.txt.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "kernel.py line 23 computes prob = target_prob - draft_prob with no clamp to >= 0, so a large negative residual multiplied by a large inv_q can exceed a small positive residual's score, changing the argmax to a forbidden token even when valid positive-residual tokens exist.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0); a token the draft over-proposed (target < draft) carries zero residual probability and must never be returned as the recovered token."
+              }
+            ],
+            "scope_rationale": "problem.txt explicitly defines p_residual(v) as proportional to max(target_prob[v] - draft_prob[v], 0) and states that over-proposed tokens must never be returned; any input with target_prob < draft_prob for some token is admitted by the contract.",
+            "statement": "For a request where some token v has target_prob[v] < draft_prob[v] (negative residual) with a large inv_q[v], the kernel's argmax of the unclamped score (target_prob - draft_prob) * inv_q can return that over-proposed token instead of a token with positive residual, violating the contract that over-proposed tokens carry zero residual probability."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "kernel.py lines 16-30 keep negative scores in the running max with initial -inf; the reference argmax over clamped scores would be the argmax of zeros (first index with residual clamped to 0, or semantics differing from torch.argmax of clamped values), whereas the kernel returns the most-negative-residual token or id 0.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Recovered token is argmax_v(p_residual(v) * inv_q[v]) where p_residual(v) = max(target - draft, 0), so with all residuals <= 0 the reference argmax operates on all-zero clamped scores, not raw negative differences."
+              }
+            ],
+            "scope_rationale": "problem.txt defines the sampled token as argmax_v(p_residual(v) * inv_q[v]) with p_residual clamped at 0, so a row where every target_prob <= draft_prob is within the stated formula and the kernel's behavior on it differs from the clamped reference.",
+            "statement": "When every residual target_prob[v] - draft_prob[v] is <= 0 for a request, the kernel returns the token with the largest (least negative) unclamped score \u2014 an over-proposed token or default id 0 \u2014 instead of the argmax over the all-zero clamped p_residual, producing a different token id than the contract's reference argmax."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.694,
+        "input_tokens": 12416,
+        "output_tokens": 671
+      }
+    },
+    {
+      "duration_s": 21.61089707,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'll launch two independent runtime probes: c1 tests whether an over-proposed token with a large inv_q can beat valid positive-residual tokens, and c2 tests the all-nonpositive-residual row where the kernel's unclamped argmax diverges from the clamped reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json\nfrom kernel import sample_recovered_tokens\n\ntorch.manual_seed(0)\ndev = 'cuda'\nB, V = 1, 1024\ntarget = torch.full((B, V), 0.05, device=dev)\ndraft = target.clone()\ninv_q = torch.full((B, V), 1.0, device=dev)\n# token 10: small positive residual with modest inv_q\ndraft[0, 10] = 0.04\ninv_q[0, 10] = 2.0  # score = 0.01*2 = 0.02\n# token 500: strong negative residual with huge inv_q -> unclamped score 0.4 beats 0.02\ndraft[0, 500] = 0.45\ninv_q[0, 500] = 1e9  # score = (0.05-0.45)*1e9 = -4e8? wait, negative*positive is negative\n# fix: to make negative residual win over positive score, need negative residual * large inv_q POSITIVE is impossible; the risk is that a large positive-residual? Re-check: unclamped score of over-proposed token is negative, can't beat positive. But claim states negative * large inv_q could exceed small positive score only if inv_q were negative or residual sign issue. Let's also test: positive residual tiny * inv_q negative? inv_q is 1/q > 0. So construct case: positive residual tiny (score ~0), over-proposed token residual negative tiny but inv_q huge -> score = -tiny*huge = very negative, still negative. Cannot beat 0. Instead test the realistic failure: positive residual scores are all 0? covered by c2. Try: token A residual +1e-9 (score ~1e-9), token B residual -1e-6 with inv_q huge -> score negative. No win. So probe whether kernel output ever equals an over-proposed token when positive-residual tokens exist with positive scores.\nresid = (target - draft).clamp(min=0)\nref = (resid * inv_q).argmax(dim=1)\nout = sample_recovered_tokens(target, draft, inv_q)\n# extra targeted case: make the only positive residual have inv_q very small (score ~0) and an over-proposed token have tiny negative residual\ntarget2 = torch.full((B, V), 0.0, device=dev); draft2 = target2.clone(); inv_q2 = torch.rand(B, V, device=dev) * 10 + 1.0\ntarget2[0, 3] = 1.0; inv_q2[0, 3] = 1e-9  # score 1e-9\ndraft2[0, 700] = 0.5  # residual -0.5, inv_q ~5 -> score -2.5\nref2 = ((target2 - draft2).clamp(min=0) * inv_q2).argmax(dim=1)\nout2 = sample_recovered_tokens(target2, draft2, inv_q2)\nres = dict(\n    case1_kernel=int(out[0].item()), case1_ref=int(ref[0].item()),\n    case2_kernel=int(out2[0].item()), case2_ref=int(ref2[0].item()),\n    case2_kernel_is_overproposed=bool(draft2[0, out2[0].item()] > target2[0, out2[0].item()]),\n)\nprint(json.dumps(res))",
+            "expected_signal": "kernel returns an over-proposed token while positive-residual tokens exist, differing from clamped reference argmax",
+            "use_gpu": true
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import torch, json\nfrom kernel import sample_recovered_tokens\n\ntorch.manual_seed(0)\ndev = 'cuda'\nB, V = 2, 512\n# row 0: every target <= draft (all residuals <= 0); some strictly negative\ntarget = torch.rand(B, V, device=dev) * 0.4\ndraft = target + 0.5  # all residuals negative\ninv_q = torch.rand(B, V, device=dev) * 5 + 0.5\n# row 1: benign positive-residual control\ntarget[1] = torch.rand(V, device=dev)\ndraft[1] = torch.rand(V, device=dev) * 0.5\nref = ((target - draft).clamp(min=0) * inv_q).argmax(dim=1)\nout = sample_recovered_tokens(target, draft, inv_q)\nresid = target - draft\nres = dict(\n    kernel_row0=int(out[0].item()), ref_row0=int(ref[0].item()),\n    kernel_row0_overproposed=bool(draft[0, out[0].item()].item() > target[0, out[0].item()].item()),\n    ref_row0_overproposed=bool(draft[0, ref[0].item()].item() > target[0, ref[0].item()].item()),\n    kernel_row1=int(out[1].item()), ref_row1=int(ref[1].item()),\n    row1_match=bool(out[1].item() == ref[1].item()),\n    row0_match=bool(out[0].item() == ref[0].item()),\n)\nprint(json.dumps(res))",
+            "expected_signal": "on an all-residual<=0 row, kernel output differs from clamped reference argmax and is an over-proposed token",
+            "use_gpu": true
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 21.611,
+        "input_tokens": 15627,
+        "output_tokens": 1309
+      }
+    },
+    {
+      "duration_s": 15.759860786999994,
+      "role": "experimenter",
+      "round": 5,
+      "text": "Both probes have returned. I can now interpret and finalize both: the c1 probe shows the kernel matched the clamped reference in both targeted cases (a negative residual times positive inv_q is always negative, so it cannot beat a positive score); the c2 probe shows the kernel diverges from the clamped reference on an all-nonpositive-residual row and returns a token with strictly negative residual.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "case1_kernel": 10,
+              "case1_ref": 10,
+              "case2_kernel": 3,
+              "case2_kernel_is_overproposed": false,
+              "case2_ref": 3
+            },
+            "event_id": "t8",
+            "status": "rebutted",
+            "summary": "Two targeted cases with positive-residual tokens present: (1) token 500 with negative residual -0.4 and huge inv_q vs token 10 with positive score 0.02 \u2014 kernel and clamped reference both return 10; (2) sole positive-residual token 3 with near-zero score vs over-proposed token 700 \u2014 kernel and reference both return 3. Since inv_q = 1/q > 0, an over-proposed token's unclamped score is always negative and cannot beat any positive score; the hypothesized c1 failure mode does not materialize.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "kernel_row0": 285,
+              "kernel_row0_overproposed": true,
+              "kernel_row1": 153,
+              "ref_row0": 0,
+              "ref_row0_overproposed": true,
+              "ref_row1": 153,
+              "row0_match": false,
+              "row1_match": true
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "On a row where every residual is < 0, the kernel returned token 285 (strictly negative residual, over-proposed), while the clamped reference argmax over all-zero p_residual*inv_q returned token 0 \u2014 mismatch confirmed. Note: the reference case is degenerate (all clamped scores tie at 0), so the reference argmax 0 is itself an over-proposed token; nevertheless the kernel returns the argmax of the raw negative scores (token 285), which is unclamped semantics and differs from the contract's clamp-then-argmax, and returns an over-proposed token with strictly negative residual. Benign positive-residual control row matched exactly.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.76,
+        "input_tokens": 20999,
+        "output_tokens": 809
+      }
+    },
+    {
+      "duration_s": 7.533550997000006,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The evidence is in: c1 was rebutted (a negative residual times positive inv_q is always negative, so it can't beat positive scores when positive-residual tokens exist), and c2 is confirmed on the all-nonpositive-residual row, where the kernel returns the argmax of raw negative scores instead of clamp-then-argmax semantics. That confirmed claim already covers the material in-scope defect (missing clamp). Nothing in the new evidence exposes a problem not covered by the existing claims \u2014 record no new claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the only material in-scope defect (missing max(...,0) clamp on residual) is already captured by claim c2, which is confirmed with runtime evidence showing the kernel returns the argmax of raw negative scores on an all-over-proposed row, diverging from the contract's clamp-then-argmax semantics. Claim c1 was properly rebutted since an over-proposed token's unclamped score is always negative and cannot win when positive-residual tokens exist. Remaining risks (contiguity, tie-breaking, unusual inv_q values) are either out-of-scope or already consistent with reference behavior on benign inputs, and no new evidence exposes an in-scope failure they don't cover.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.534,
+        "input_tokens": 27596,
+        "output_tokens": 302
+      }
+    },
+    {
+      "duration_s": 9.455084217999996,
+      "role": "judge",
+      "round": 7,
+      "text": "C2 confirmed: kernel lacks clamp, returns over-proposed token when all residuals \u22640. Scope: problem.txt is the operative contract (no test.py). But note the reference itself is degenerate\u2014reference also returns over-proposed token 0. The contract says over-proposed tokens must \"never be returned\" \u2014 kernel returned an over-proposed token, which is a direct violation of the explicit clause. That's a contract violation regardless of reference degenerate case. Reject.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.8,
+            "decisive_claims": [
+              "c2"
+            ],
+            "reason": "The contract (problem.txt is the operative contract; the artifact has no test.py/get_inputs) explicitly requires p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0) and states that a token the draft over-proposed (target_prob < draft_prob) \"must never be returned as the recovered token.\" The kernel computes score = (target_prob - draft_prob) * inv_q with no clamp (kernel.py line 23). Confirmed in-scope runtime evidence (probe t9, claim c2): on a row where every residual is strictly negative, the kernel returned token 285, which the probe verified is over-proposed (draft_prob > target_prob) \u2014 a token the contract says must never be returned. The clamped reference returned a different token (0), so index-level divergence from clamp-then-argmax semantics is also demonstrated. I acknowledge the reference's own argmax in this degenerate all-zero-residual case is itself an over-proposed token (tie at zero), which weakens exact-index-match as the failure metric; however, the decisive point is the contract's explicit invariant that over-proposed tokens must never be returned, which the kernel violates by returning the argmax of raw negative residuals. Claim c1 (negative residual beating a positive score) was rebutted with runtime evidence and does not affect the verdict. Benign positive-residual inputs match the reference exactly, so the kernel is correct on typical inputs but violates the explicitly required clamp behavior in the over-proposed regime.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.455,
+        "input_tokens": 28696,
+        "output_tokens": 448
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-30T08:16:55Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the only material in-scope defect (missing max(...,0) clamp on residual) is already captured by claim c2, which is confirmed with runtime evidence showing the kernel returns the argmax of raw negative scores on an all-over-proposed row, diverging from the contract's clamp-then-argmax semantics. Claim c1 was properly rebutted since an over-proposed token's unclamped score is always negative and cannot win when positive-residual tokens exist. Remaining risks (contiguity, tie-breaking, unusual inv_q values) are either out-of-scope or already consistent with reference behavior on benign inputs, and no new evidence exposes an in-scope failure they don't cover.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 11,
+    "tool_event_id": "t12",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_01"
+      },
+      "created_at": "2026-09-30T08:15:20Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_01",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef sample_recovered_tokens_kernel(\n    output_token_ids_ptr,\n    draft_probs_ptr,\n    target_probs_ptr,\n    inv_q_ptr,\n    vocab_size,\n    BLOCK_SIZE: tl.constexpr,\n):\n    req_idx = tl.program_id(0)\n    max_val = tl.full((), float(\"-inf\"), tl.float32)\n    recovered_id = 0\n    for v in range(0, vocab_size, BLOCK_SIZE):\n        vocab_offset = v + tl.arange(0, BLOCK_SIZE)\n        vocab_mask = vocab_offset < vocab_size\n        draft_prob = tl.load(draft_probs_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        target_prob = tl.load(target_probs_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        prob = target_prob - draft_prob\n        inv_q = tl.load(inv_q_ptr + req_idx * vocab_size + vocab_offset, mask=vocab_mask, other=0.0)\n        score = prob * inv_q\n        score = tl.where(vocab_mask, score, float(\"-inf\"))\n        local_max, local_id = tl.max(score, axis=0, return_indices=True)\n        if local_max > max_val:\n            max_val = local_max\n            recovered_id = v + local_id\n    recovered_id = tl.minimum(recovered_id, vocab_size - 1)\n    tl.store(output_token_ids_ptr + req_idx, recovered_id)\n\n\ndef sample_recovered_tokens(target_probs, draft_probs, inv_q):\n    batch_size, vocab_size = target_probs.shape\n    out = torch.empty(batch_size, dtype=torch.int64, device=target_probs.device)\n    BLOCK_SIZE = triton.next_power_of_2(vocab_size)\n    sample_recovered_tokens_kernel[(batch_size,)](out, draft_probs, target_probs, inv_q, vocab_size, BLOCK_SIZE=BLOCK_SIZE)\n    return out\n",
+        "passed": null,
+        "problem_text": "Operation: the recovered-token sampler used by speculative decoding\n(vllm-project/vllm, vllm/v1/sample/rejection_sampler.py::sample_recovered_tokens_kernel).\n\nAfter a draft token is rejected, a replacement token must be sampled from the\nresidual distribution\n\n    p_residual(v)  proportional to  max(target_prob[v] - draft_prob[v], 0)\n\ni.e. a token the draft over-proposed (target_prob < draft_prob) carries zero\nresidual probability and must never be returned as the recovered token.\n\nThe kernel samples from that distribution with the exponential-race\n(Gumbel-max) trick: given q[v] ~ Exponential(1) supplied as inv_q = 1/q, it\nreturns argmax_v( p_residual(v) * inv_q[v] ).\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_01",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_01"
+      },
+      "created_at": "2026-09-30T08:15:20Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: the recovered-token sampler used by speculative decoding\n(vllm-project/vllm, vllm/v1/sample/rejection_sampler.py::sample_recovered_tokens_kernel).\n\nAfter a draft token is rejected, a replacement token must be sampled from the\nresidual distribution\n\n    p_residual(v)  proportional to  max(target_prob[v] - draft_prob[v], 0)\n\ni.e. a token the draft over-proposed (target_prob < draft_prob) carries zero\nresidual probability and must never be returned as the recovered token.\n\nThe kernel samples from that distribution with the exponential-race\n(Gumbel-max) trick: given q[v] ~ Exponential(1) supplied as inv_q = 1/q, it\nreturns argmax_v( p_residual(v) * inv_q[v] ).\n",
+        "entry": "case_01",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_01"
+      },
+      "created_at": "2026-09-30T08:15:20Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_01",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1626
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 676
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_01",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:15:20Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_01\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_01",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Recovered token must be sampled from residual distribution p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0), per problem.txt.",
+          "Tokens where target_prob < draft_prob (draft over-proposed) must carry zero residual probability and must never be returned as the recovered token.",
+          "Sampling via exponential-race (Gumbel-max): with inv_q = 1/q and q ~ Exponential(1), output is argmax_v(p_residual(v) * inv_q[v]).",
+          "Inputs are (target_probs, draft_probs, inv_q), each [batch_size, vocab_size]; output is per-request token id tensor.",
+          "No explicit test_code or tolerance is present in the artifact, so the acceptance metric (exact index match vs distributional check) is not specified."
+        ],
+        "kernel_model": [
+          "One Triton program per request (grid = batch_size); loops over vocab in BLOCK_SIZE chunks and tracks a running max of score = (target_prob - draft_prob) * inv_q, using tl.max(..., return_indices=True) per chunk.",
+          "score = prob * inv_q is computed WITHOUT clamping prob to >= 0 (kernel.py line 23); the only masking is vocab_offset < vocab_size which sets out-of-range entries to -inf (lines 20, 26).",
+          "recovered_id defaults to 0 and is updated only when local_max > max_val strictly, so the first block containing the global max wins but strict '>' plus identical -inf chunks keeps 0 on ties with -inf (line 28-30).",
+          "A final clamp tl.minimum(recovered_id, vocab_size - 1) guards against out-of-range indices (line 31); output is int64 per request.",
+          "Python wrapper assumes contiguous [batch, vocab] layout, indexing flat as req_idx * vocab_size + offset; BLOCK_SIZE = next_power_of_2(vocab_size)."
+        ],
+        "open_questions": [
+          "What is the actual acceptance test \u2014 exact index equality against a reference argmax, or statistical/distributional equivalence over many random draws?",
+          "Are inv_q values guaranteed strictly positive, or can they be zero/inf (e.g. q extremely small), and does that interact with negative-residual scoring?",
+          "Is there a guaranteed positive-residual region in test inputs, or are degenerate all-over-proposed rows in scope?"
+        ],
+        "risk_map": [
+          "Missing clamp: score uses raw target_prob - draft_prob, so a token with target < draft gets a negative score rather than 0; per contract it must have zero residual mass. This matters when all real residuals are 0 or negative, or when negative residual * large inv_q beats near-zero positive scores.",
+          "Behavior when every score is <= 0: kernel returns the argmax of negative values (an over-proposed token) or default id 0, whereas the contract forbids ever returning an over-proposed token; the clamp-then-argmax semantics differ.",
+          "Masked-out lanes use -inf but in-range lanes with negative score can still win over a masked lane; combined with the uninitialized recovered_id = 0, ties or all-negative cases may return id 0 even if token 0 is over-proposed.",
+          "Strict '>' comparison across block loop plus tl.max tie-breaking: first-index tie-breaking within a block, but a later block with an equal max does not update \u2014 generally consistent with first-occurrence argmax, worth checking against reference tie semantics.",
+          "Contiguity/stride assumption: wrapper passes tensors directly with flat req_idx * vocab_size indexing; non-contiguous inputs would silently misread.",
+          "inv_q loaded with other=0.0 for masked lanes \u2014 fine given -inf mask on score, but negative residual * inv_q with unusual inv_q values (0, inf, NaN) could alter argmax."
+        ],
+        "scope_notes": [
+          "Only the per-request recovered-token argmax is in scope; no softmax normalization or downstream sampling beyond inv_q multiplication is required by problem.txt.",
+          "inv_q is supplied (precomputed 1/q); generating q or exponentials is out of scope.",
+          "Test code is absent from the artifact (test_code empty), so scope of validation metrics is currently undefined.",
+          "No dtype information is given; kernel loads implicitly per pointer dtype and compares in fp32 via max_val, but input dtype (fp16/bf16/fp32) is unspecified."
+        ],
+        "summary": "Initial description of case_01 recovered-token sampler: kernel implements chunked argmax of (target_prob - draft_prob) * inv_q per request, but omits the contractually required max(...,0) clamp on the residual probability."
+      },
+      "created_at": "2026-09-30T08:15:45Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Recovered token must be sampled from residual distribution p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0), per problem.txt.",
+            "Tokens where target_prob < draft_prob (draft over-proposed) must carry zero residual probability and must never be returned as the recovered token.",
+            "Sampling via exponential-race (Gumbel-max): with inv_q = 1/q and q ~ Exponential(1), output is argmax_v(p_residual(v) * inv_q[v]).",
+            "Inputs are (target_probs, draft_probs, inv_q), each [batch_size, vocab_size]; output is per-request token id tensor.",
+            "No explicit test_code or tolerance is present in the artifact, so the acceptance metric (exact index match vs distributional check) is not specified."
+          ],
+          "kernel_model": [
+            "One Triton program per request (grid = batch_size); loops over vocab in BLOCK_SIZE chunks and tracks a running max of score = (target_prob - draft_prob) * inv_q, using tl.max(..., return_indices=True) per chunk.",
+            "score = prob * inv_q is computed WITHOUT clamping prob to >= 0 (kernel.py line 23); the only masking is vocab_offset < vocab_size which sets out-of-range entries to -inf (lines 20, 26).",
+            "recovered_id defaults to 0 and is updated only when local_max > max_val strictly, so the first block containing the global max wins but strict '>' plus identical -inf chunks keeps 0 on ties with -inf (line 28-30).",
+            "A final clamp tl.minimum(recovered_id, vocab_size - 1) guards against out-of-range indices (line 31); output is int64 per request.",
+            "Python wrapper assumes contiguous [batch, vocab] layout, indexing flat as req_idx * vocab_size + offset; BLOCK_SIZE = next_power_of_2(vocab_size)."
+          ],
+          "open_questions": [
+            "What is the actual acceptance test \u2014 exact index equality against a reference argmax, or statistical/distributional equivalence over many random draws?",
+            "Are inv_q values guaranteed strictly positive, or can they be zero/inf (e.g. q extremely small), and does that interact with negative-residual scoring?",
+            "Is there a guaranteed positive-residual region in test inputs, or are degenerate all-over-proposed rows in scope?"
+          ],
+          "risk_map": [
+            "Missing clamp: score uses raw target_prob - draft_prob, so a token with target < draft gets a negative score rather than 0; per contract it must have zero residual mass. This matters when all real residuals are 0 or negative, or when negative residual * large inv_q beats near-zero positive scores.",
+            "Behavior when every score is <= 0: kernel returns the argmax of negative values (an over-proposed token) or default id 0, whereas the contract forbids ever returning an over-proposed token; the clamp-then-argmax semantics differ.",
+            "Masked-out lanes use -inf but in-range lanes with negative score can still win over a masked lane; combined with the uninitialized recovered_id = 0, ties or all-negative cases may return id 0 even if token 0 is over-proposed.",
+            "Strict '>' comparison across block loop plus tl.max tie-breaking: first-index tie-breaking within a block, but a later block with an equal max does not update \u2014 generally consistent with first-occurrence argmax, worth checking against reference tie semantics.",
+            "Contiguity/stride assumption: wrapper passes tensors directly with flat req_idx * vocab_size indexing; non-contiguous inputs would silently misread.",
+            "inv_q loaded with other=0.0 for masked lanes \u2014 fine given -inf mask on score, but negative residual * inv_q with unusual inv_q values (0, inf, NaN) could alter argmax."
+          ],
+          "scope_notes": [
+            "Only the per-request recovered-token argmax is in scope; no softmax normalization or downstream sampling beyond inv_q multiplication is required by problem.txt.",
+            "inv_q is supplied (precomputed 1/q); generating q or exponentials is out of scope.",
+            "Test code is absent from the artifact (test_code empty), so scope of validation metrics is currently undefined.",
+            "No dtype information is given; kernel loads implicitly per pointer dtype and compares in fp32 via max_val, but input dtype (fp16/bf16/fp32) is unspecified."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Recovered token must be sampled from residual distribution p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0), per problem.txt.",
+            "Tokens where target_prob < draft_prob (draft over-proposed) must carry zero residual probability and must never be returned as the recovered token.",
+            "Sampling via exponential-race (Gumbel-max): with inv_q = 1/q and q ~ Exponential(1), output is argmax_v(p_residual(v) * inv_q[v]).",
+            "Inputs are (target_probs, draft_probs, inv_q), each [batch_size, vocab_size]; output is per-request token id tensor.",
+            "No explicit test_code or tolerance is present in the artifact, so the acceptance metric (exact index match vs distributional check) is not specified."
+          ],
+          "created_at": "2026-09-30T08:15:45Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "One Triton program per request (grid = batch_size); loops over vocab in BLOCK_SIZE chunks and tracks a running max of score = (target_prob - draft_prob) * inv_q, using tl.max(..., return_indices=True) per chunk.",
+            "score = prob * inv_q is computed WITHOUT clamping prob to >= 0 (kernel.py line 23); the only masking is vocab_offset < vocab_size which sets out-of-range entries to -inf (lines 20, 26).",
+            "recovered_id defaults to 0 and is updated only when local_max > max_val strictly, so the first block containing the global max wins but strict '>' plus identical -inf chunks keeps 0 on ties with -inf (line 28-30).",
+            "A final clamp tl.minimum(recovered_id, vocab_size - 1) guards against out-of-range indices (line 31); output is int64 per request.",
+            "Python wrapper assumes contiguous [batch, vocab] layout, indexing flat as req_idx * vocab_size + offset; BLOCK_SIZE = next_power_of_2(vocab_size)."
+          ],
+          "open_questions": [
+            "What is the actual acceptance test \u2014 exact index equality against a reference argmax, or statistical/distributional equivalence over many random draws?",
+            "Are inv_q values guaranteed strictly positive, or can they be zero/inf (e.g. q extremely small), and does that interact with negative-residual scoring?",
+            "Is there a guaranteed positive-residual region in test inputs, or are degenerate all-over-proposed rows in scope?"
+          ],
+          "risk_map": [
+            "Missing clamp: score uses raw target_prob - draft_prob, so a token with target < draft gets a negative score rather than 0; per contract it must have zero residual mass. This matters when all real residuals are 0 or negative, or when negative residual * large inv_q beats near-zero positive scores.",
+            "Behavior when every score is <= 0: kernel returns the argmax of negative values (an over-proposed token) or default id 0, whereas the contract forbids ever returning an over-proposed token; the clamp-then-argmax semantics differ.",
+            "Masked-out lanes use -inf but in-range lanes with negative score can still win over a masked lane; combined with the uninitialized recovered_id = 0, ties or all-negative cases may return id 0 even if token 0 is over-proposed.",
+            "Strict '>' comparison across block loop plus tl.max tie-breaking: first-index tie-breaking within a block, but a later block with an equal max does not update \u2014 generally consistent with first-occurrence argmax, worth checking against reference tie semantics.",
+            "Contiguity/stride assumption: wrapper passes tensors directly with flat req_idx * vocab_size indexing; non-contiguous inputs would silently misread.",
+            "inv_q loaded with other=0.0 for masked lanes \u2014 fine given -inf mask on score, but negative residual * inv_q with unusual inv_q values (0, inf, NaN) could alter argmax."
+          ],
+          "scope_notes": [
+            "Only the per-request recovered-token argmax is in scope; no softmax normalization or downstream sampling beyond inv_q multiplication is required by problem.txt.",
+            "inv_q is supplied (precomputed 1/q); generating q or exponentials is out of scope.",
+            "Test code is absent from the artifact (test_code empty), so scope of validation metrics is currently undefined.",
+            "No dtype information is given; kernel loads implicitly per pointer dtype and compares in fp32 via max_val, but input dtype (fp16/bf16/fp32) is unspecified."
+          ],
+          "summary": "Initial description of case_01 recovered-token sampler: kernel implements chunked argmax of (target_prob - draft_prob) * inv_q per request, but omits the contractually required max(...,0) clamp on the residual probability.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "kernel.py line 23 computes prob = target_prob - draft_prob with no clamp to >= 0, so a large negative residual multiplied by a large inv_q can exceed a small positive residual's score, changing the argmax to a forbidden token even when valid positive-residual tokens exist.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0); a token the draft over-proposed (target < draft) carries zero residual probability and must never be returned as the recovered token."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly defines p_residual(v) as proportional to max(target_prob[v] - draft_prob[v], 0) and states that over-proposed tokens must never be returned; any input with target_prob < draft_prob for some token is admitted by the contract.",
+        "statement": "For a request where some token v has target_prob[v] < draft_prob[v] (negative residual) with a large inv_q[v], the kernel's argmax of the unclamped score (target_prob - draft_prob) * inv_q can return that over-proposed token instead of a token with positive residual, violating the contract that over-proposed tokens carry zero residual probability."
+      },
+      "created_at": "2026-09-30T08:15:58Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-30T08:15:58Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "kernel.py line 23 computes prob = target_prob - draft_prob with no clamp to >= 0, so a large negative residual multiplied by a large inv_q can exceed a small positive residual's score, changing the argmax to a forbidden token even when valid positive-residual tokens exist.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0); a token the draft over-proposed (target < draft) carries zero residual probability and must never be returned as the recovered token."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly defines p_residual(v) as proportional to max(target_prob[v] - draft_prob[v], 0) and states that over-proposed tokens must never be returned; any input with target_prob < draft_prob for some token is admitted by the contract.",
+        "statement": "For a request where some token v has target_prob[v] < draft_prob[v] (negative residual) with a large inv_q[v], the kernel's argmax of the unclamped score (target_prob - draft_prob) * inv_q can return that over-proposed token instead of a token with positive residual, violating the contract that over-proposed tokens carry zero residual probability.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:15:58Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "kernel.py lines 16-30 keep negative scores in the running max with initial -inf; the reference argmax over clamped scores would be the argmax of zeros (first index with residual clamped to 0, or semantics differing from torch.argmax of clamped values), whereas the kernel returns the most-negative-residual token or id 0.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Recovered token is argmax_v(p_residual(v) * inv_q[v]) where p_residual(v) = max(target - draft, 0), so with all residuals <= 0 the reference argmax operates on all-zero clamped scores, not raw negative differences."
+          }
+        ],
+        "scope_rationale": "problem.txt defines the sampled token as argmax_v(p_residual(v) * inv_q[v]) with p_residual clamped at 0, so a row where every target_prob <= draft_prob is within the stated formula and the kernel's behavior on it differs from the clamped reference.",
+        "statement": "When every residual target_prob[v] - draft_prob[v] is <= 0 for a request, the kernel returns the token with the largest (least negative) unclamped score \u2014 an over-proposed token or default id 0 \u2014 instead of the argmax over the all-zero clamped p_residual, producing a different token id than the contract's reference argmax."
+      },
+      "created_at": "2026-09-30T08:15:58Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-30T08:15:58Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "kernel.py lines 16-30 keep negative scores in the running max with initial -inf; the reference argmax over clamped scores would be the argmax of zeros (first index with residual clamped to 0, or semantics differing from torch.argmax of clamped values), whereas the kernel returns the most-negative-residual token or id 0.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Recovered token is argmax_v(p_residual(v) * inv_q[v]) where p_residual(v) = max(target - draft, 0), so with all residuals <= 0 the reference argmax operates on all-zero clamped scores, not raw negative differences."
+          }
+        ],
+        "scope_rationale": "problem.txt defines the sampled token as argmax_v(p_residual(v) * inv_q[v]) with p_residual clamped at 0, so a row where every target_prob <= draft_prob is within the stated formula and the kernel's behavior on it differs from the clamped reference.",
+        "statement": "When every residual target_prob[v] - draft_prob[v] is <= 0 for a request, the kernel returns the token with the largest (least negative) unclamped score \u2014 an over-proposed token or default id 0 \u2014 instead of the argmax over the all-zero clamped p_residual, producing a different token id than the contract's reference argmax.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:15:58Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json\nfrom kernel import sample_recovered_tokens\n\ntorch.manual_seed(0)\ndev = 'cuda'\nB, V = 1, 1024\ntarget = torch.full((B, V), 0.05, device=dev)\ndraft = target.clone()\ninv_q = torch.full((B, V), 1.0, device=dev)\n# token 10: small positive residual with modest inv_q\ndraft[0, 10] = 0.04\ninv_q[0, 10] = 2.0  # score = 0.01*2 = 0.02\n# token 500: strong negative residual with huge inv_q -> unclamped score 0.4 beats 0.02\ndraft[0, 500] = 0.45\ninv_q[0, 500] = 1e9  # score = (0.05-0.45)*1e9 = -4e8? wait, negative*positive is negative\n# fix: to make negative residual win over positive score, need negative residual * large inv_q POSITIVE is impossible; the risk is that a large positive-residual? Re-check: unclamped score of over-proposed token is negative, can't beat positive. But claim states negative * large inv_q could exceed small positive score only if inv_q were negative or residual sign issue. Let's also test: positive residual tiny * inv_q negative? inv_q is 1/q > 0. So construct case: positive residual tiny (score ~0), over-proposed token residual negative tiny but inv_q huge -> score = -tiny*huge = very negative, still negative. Cannot beat 0. Instead test the realistic failure: positive residual scores are all 0? covered by c2. Try: token A residual +1e-9 (score ~1e-9), token B residual -1e-6 with inv_q huge -> score negative. No win. So probe whether kernel output ever equals an over-proposed token when positive-residual tokens exist with positive scores.\nresid = (target - draft).clamp(min=0)\nref = (resid * inv_q).argmax(dim=1)\nout = sample_recovered_tokens(target, draft, inv_q)\n# extra targeted case: make the only positive residual have inv_q very small (score ~0) and an over-proposed token have tiny negative residual\ntarget2 = torch.full((B, V), 0.0, device=dev); draft2 = target2.clone(); inv_q2 = torch.rand(B, V, device=dev) * 10 + 1.0\ntarget2[0, 3] = 1.0; inv_q2[0, 3] = 1e-9  # score 1e-9\ndraft2[0, 700] = 0.5  # residual -0.5, inv_q ~5 -> score -2.5\nref2 = ((target2 - draft2).clamp(min=0) * inv_q2).argmax(dim=1)\nout2 = sample_recovered_tokens(target2, draft2, inv_q2)\nres = dict(\n    case1_kernel=int(out[0].item()), case1_ref=int(ref[0].item()),\n    case2_kernel=int(out2[0].item()), case2_ref=int(ref2[0].item()),\n    case2_kernel_is_overproposed=bool(draft2[0, out2[0].item()] > target2[0, out2[0].item()]),\n)\nprint(json.dumps(res))",
+        "expected_signal": "kernel returns an over-proposed token while positive-residual tokens exist, differing from clamped reference argmax",
+        "use_gpu": true
+      },
+      "created_at": "2026-09-30T08:16:26Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "6f05e29e642b551b315c7dc5aadeffd52b7765b4d9b34fbd313e43e1400855d6"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "503c8a180c894de2b78b471194be01301f58a0d9f8d32137c6185c4553492cab"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "16781a7187d2e81d5cbbc454a29ecd00e8d80c98f0c970f7cc1232636a61b283"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For a request where some token v has target_prob[v] < draft_prob[v] (negative residual) with a large inv_q[v], the kernel's argmax of the unclamped score (target_prob - draft_prob) * inv_q can return that over-proposed token instead of a token with positive residual, violating the contract that over-proposed tokens carry zero residual probability.",
+        "cwd": "/root/cases/case_01",
+        "duration_s": 7.065499,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6f05e29e642b551b315c7dc5aadeffd52b7765b4d9b34fbd313e43e1400855d6"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "503c8a180c894de2b78b471194be01301f58a0d9f8d32137c6185c4553492cab"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "16781a7187d2e81d5cbbc454a29ecd00e8d80c98f0c970f7cc1232636a61b283"
+              }
+            ],
+            "duration_s": 7.065499,
+            "exit_code": 0,
+            "expected_signal": "kernel returns an over-proposed token while positive-residual tokens exist, differing from clamped reference argmax",
+            "json_parse_error": null,
+            "json_result": {
+              "case1_kernel": 10,
+              "case1_ref": 10,
+              "case2_kernel": 3,
+              "case2_kernel_is_overproposed": false,
+              "case2_ref": 3
+            },
+            "stderr": "",
+            "stdout": "{\"case1_kernel\": 10, \"case1_ref\": 10, \"case2_kernel\": 3, \"case2_ref\": 3, \"case2_kernel_is_overproposed\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "kernel returns an over-proposed token while positive-residual tokens exist, differing from clamped reference argmax",
+        "json_parse_error": null,
+        "json_result": {
+          "case1_kernel": 10,
+          "case1_ref": 10,
+          "case2_kernel": 3,
+          "case2_kernel_is_overproposed": false,
+          "case2_ref": 3
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"case1_kernel\": 10, \"case1_ref\": 10, \"case2_kernel\": 3, \"case2_ref\": 3, \"case2_kernel_is_overproposed\": false}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import torch, json\nfrom kernel import sample_recovered_tokens\n\ntorch.manual_seed(0)\ndev = 'cuda'\nB, V = 2, 512\n# row 0: every target <= draft (all residuals <= 0); some strictly negative\ntarget = torch.rand(B, V, device=dev) * 0.4\ndraft = target + 0.5  # all residuals negative\ninv_q = torch.rand(B, V, device=dev) * 5 + 0.5\n# row 1: benign positive-residual control\ntarget[1] = torch.rand(V, device=dev)\ndraft[1] = torch.rand(V, device=dev) * 0.5\nref = ((target - draft).clamp(min=0) * inv_q).argmax(dim=1)\nout = sample_recovered_tokens(target, draft, inv_q)\nresid = target - draft\nres = dict(\n    kernel_row0=int(out[0].item()), ref_row0=int(ref[0].item()),\n    kernel_row0_overproposed=bool(draft[0, out[0].item()].item() > target[0, out[0].item()].item()),\n    ref_row0_overproposed=bool(draft[0, ref[0].item()].item() > target[0, ref[0].item()].item()),\n    kernel_row1=int(out[1].item()), ref_row1=int(ref[1].item()),\n    row1_match=bool(out[1].item() == ref[1].item()),\n    row0_match=bool(out[0].item() == ref[0].item()),\n)\nprint(json.dumps(res))",
+        "expected_signal": "on an all-residual<=0 row, kernel output differs from clamped reference argmax and is an over-proposed token",
+        "use_gpu": true
+      },
+      "created_at": "2026-09-30T08:16:31Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "b2f3c2c375e01bb45c18a9b64cc28d5b2a3b7feb0f026198477c6c07a8ab3cee"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "779b39352c715b8ec86acb40afc42d053c9cc0f16582b23f21cfe11ba29dcaba"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "0c028464490e15ea410144b133500efdc88b8590d4de723354426d249e5d97b5"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "When every residual target_prob[v] - draft_prob[v] is <= 0 for a request, the kernel returns the token with the largest (least negative) unclamped score \u2014 an over-proposed token or default id 0 \u2014 instead of the argmax over the all-zero clamped p_residual, producing a different token id than the contract's reference argmax.",
+        "cwd": "/root/cases/case_01",
+        "duration_s": 4.773025,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "b2f3c2c375e01bb45c18a9b64cc28d5b2a3b7feb0f026198477c6c07a8ab3cee"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "779b39352c715b8ec86acb40afc42d053c9cc0f16582b23f21cfe11ba29dcaba"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "0c028464490e15ea410144b133500efdc88b8590d4de723354426d249e5d97b5"
+              }
+            ],
+            "duration_s": 4.773025,
+            "exit_code": 0,
+            "expected_signal": "on an all-residual<=0 row, kernel output differs from clamped reference argmax and is an over-proposed token",
+            "json_parse_error": null,
+            "json_result": {
+              "kernel_row0": 285,
+              "kernel_row0_overproposed": true,
+              "kernel_row1": 153,
+              "ref_row0": 0,
+              "ref_row0_overproposed": true,
+              "ref_row1": 153,
+              "row0_match": false,
+              "row1_match": true
+            },
+            "stderr": "",
+            "stdout": "{\"kernel_row0\": 285, \"ref_row0\": 0, \"kernel_row0_overproposed\": true, \"ref_row0_overproposed\": true, \"kernel_row1\": 153, \"ref_row1\": 153, \"row1_match\": true, \"row0_match\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "on an all-residual<=0 row, kernel output differs from clamped reference argmax and is an over-proposed token",
+        "json_parse_error": null,
+        "json_result": {
+          "kernel_row0": 285,
+          "kernel_row0_overproposed": true,
+          "kernel_row1": 153,
+          "ref_row0": 0,
+          "ref_row0_overproposed": true,
+          "ref_row1": 153,
+          "row0_match": false,
+          "row1_match": true
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"kernel_row0\": 285, \"ref_row0\": 0, \"kernel_row0_overproposed\": true, \"ref_row0_overproposed\": true, \"kernel_row1\": 153, \"ref_row1\": 153, \"row1_match\": true, \"row0_match\": false}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "case1_kernel": 10,
+          "case1_ref": 10,
+          "case2_kernel": 3,
+          "case2_kernel_is_overproposed": false,
+          "case2_ref": 3
+        },
+        "event_id": "t8",
+        "status": "rebutted",
+        "summary": "Two targeted cases with positive-residual tokens present: (1) token 500 with negative residual -0.4 and huge inv_q vs token 10 with positive score 0.02 \u2014 kernel and clamped reference both return 10; (2) sole positive-residual token 3 with near-zero score vs over-proposed token 700 \u2014 kernel and reference both return 3. Since inv_q = 1/q > 0, an over-proposed token's unclamped score is always negative and cannot beat any positive score; the hypothesized c1 failure mode does not materialize.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-30T08:16:47Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:15:58Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:16:47Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "6f05e29e642b551b315c7dc5aadeffd52b7765b4d9b34fbd313e43e1400855d6"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "503c8a180c894de2b78b471194be01301f58a0d9f8d32137c6185c4553492cab"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "16781a7187d2e81d5cbbc454a29ecd00e8d80c98f0c970f7cc1232636a61b283"
+                  }
+                ],
+                "case1_kernel": 10,
+                "case1_ref": 10,
+                "case2_kernel": 3,
+                "case2_kernel_is_overproposed": false,
+                "case2_ref": 3,
+                "duration_s": 7.065499,
+                "exit_code": 0,
+                "expected_signal": "kernel returns an over-proposed token while positive-residual tokens exist, differing from clamped reference argmax",
+                "json_parse_error": null,
+                "json_result": {
+                  "case1_kernel": 10,
+                  "case1_ref": 10,
+                  "case2_kernel": 3,
+                  "case2_kernel_is_overproposed": false,
+                  "case2_ref": 3
+                },
+                "stderr": "",
+                "stdout": "{\"case1_kernel\": 10, \"case1_ref\": 10, \"case2_kernel\": 3, \"case2_ref\": 3, \"case2_kernel_is_overproposed\": false}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Two targeted cases with positive-residual tokens present: (1) token 500 with negative residual -0.4 and huge inv_q vs token 10 with positive score 0.02 \u2014 kernel and clamped reference both return 10; (2) sole positive-residual token 3 with near-zero score vs over-proposed token 700 \u2014 kernel and reference both return 3. Since inv_q = 1/q > 0, an over-proposed token's unclamped score is always negative and cannot beat any positive score; the hypothesized c1 failure mode does not materialize.",
+              "supports": "rebutted",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "kernel.py line 23 computes prob = target_prob - draft_prob with no clamp to >= 0, so a large negative residual multiplied by a large inv_q can exceed a small positive residual's score, changing the argmax to a forbidden token even when valid positive-residual tokens exist.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0); a token the draft over-proposed (target < draft) carries zero residual probability and must never be returned as the recovered token."
+            }
+          ],
+          "scope_rationale": "problem.txt explicitly defines p_residual(v) as proportional to max(target_prob[v] - draft_prob[v], 0) and states that over-proposed tokens must never be returned; any input with target_prob < draft_prob for some token is admitted by the contract.",
+          "statement": "For a request where some token v has target_prob[v] < draft_prob[v] (negative residual) with a large inv_q[v], the kernel's argmax of the unclamped score (target_prob - draft_prob) * inv_q can return that over-proposed token instead of a token with positive residual, violating the contract that over-proposed tokens carry zero residual probability.",
+          "status": "rebutted",
+          "updated_at": "2026-09-30T08:16:47Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:16:47Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6f05e29e642b551b315c7dc5aadeffd52b7765b4d9b34fbd313e43e1400855d6"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "503c8a180c894de2b78b471194be01301f58a0d9f8d32137c6185c4553492cab"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "16781a7187d2e81d5cbbc454a29ecd00e8d80c98f0c970f7cc1232636a61b283"
+              }
+            ],
+            "case1_kernel": 10,
+            "case1_ref": 10,
+            "case2_kernel": 3,
+            "case2_kernel_is_overproposed": false,
+            "case2_ref": 3,
+            "duration_s": 7.065499,
+            "exit_code": 0,
+            "expected_signal": "kernel returns an over-proposed token while positive-residual tokens exist, differing from clamped reference argmax",
+            "json_parse_error": null,
+            "json_result": {
+              "case1_kernel": 10,
+              "case1_ref": 10,
+              "case2_kernel": 3,
+              "case2_kernel_is_overproposed": false,
+              "case2_ref": 3
+            },
+            "stderr": "",
+            "stdout": "{\"case1_kernel\": 10, \"case1_ref\": 10, \"case2_kernel\": 3, \"case2_ref\": 3, \"case2_kernel_is_overproposed\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Two targeted cases with positive-residual tokens present: (1) token 500 with negative residual -0.4 and huge inv_q vs token 10 with positive score 0.02 \u2014 kernel and clamped reference both return 10; (2) sole positive-residual token 3 with near-zero score vs over-proposed token 700 \u2014 kernel and reference both return 3. Since inv_q = 1/q > 0, an over-proposed token's unclamped score is always negative and cannot beat any positive score; the hypothesized c1 failure mode does not materialize.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "kernel_row0": 285,
+          "kernel_row0_overproposed": true,
+          "kernel_row1": 153,
+          "ref_row0": 0,
+          "ref_row0_overproposed": true,
+          "ref_row1": 153,
+          "row0_match": false,
+          "row1_match": true
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "On a row where every residual is < 0, the kernel returned token 285 (strictly negative residual, over-proposed), while the clamped reference argmax over all-zero p_residual*inv_q returned token 0 \u2014 mismatch confirmed. Note: the reference case is degenerate (all clamped scores tie at 0), so the reference argmax 0 is itself an over-proposed token; nevertheless the kernel returns the argmax of the raw negative scores (token 285), which is unclamped semantics and differs from the contract's clamp-then-argmax, and returns an over-proposed token with strictly negative residual. Benign positive-residual control row matched exactly.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:16:47Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:15:58Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:16:47Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "b2f3c2c375e01bb45c18a9b64cc28d5b2a3b7feb0f026198477c6c07a8ab3cee"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "779b39352c715b8ec86acb40afc42d053c9cc0f16582b23f21cfe11ba29dcaba"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "0c028464490e15ea410144b133500efdc88b8590d4de723354426d249e5d97b5"
+                  }
+                ],
+                "duration_s": 4.773025,
+                "exit_code": 0,
+                "expected_signal": "on an all-residual<=0 row, kernel output differs from clamped reference argmax and is an over-proposed token",
+                "json_parse_error": null,
+                "json_result": {
+                  "kernel_row0": 285,
+                  "kernel_row0_overproposed": true,
+                  "kernel_row1": 153,
+                  "ref_row0": 0,
+                  "ref_row0_overproposed": true,
+                  "ref_row1": 153,
+                  "row0_match": false,
+                  "row1_match": true
+                },
+                "kernel_row0": 285,
+                "kernel_row0_overproposed": true,
+                "kernel_row1": 153,
+                "ref_row0": 0,
+                "ref_row0_overproposed": true,
+                "ref_row1": 153,
+                "row0_match": false,
+                "row1_match": true,
+                "stderr": "",
+                "stdout": "{\"kernel_row0\": 285, \"ref_row0\": 0, \"kernel_row0_overproposed\": true, \"ref_row0_overproposed\": true, \"kernel_row1\": 153, \"ref_row1\": 153, \"row1_match\": true, \"row0_match\": false}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "On a row where every residual is < 0, the kernel returned token 285 (strictly negative residual, over-proposed), while the clamped reference argmax over all-zero p_residual*inv_q returned token 0 \u2014 mismatch confirmed. Note: the reference case is degenerate (all clamped scores tie at 0), so the reference argmax 0 is itself an over-proposed token; nevertheless the kernel returns the argmax of the raw negative scores (token 285), which is unclamped semantics and differs from the contract's clamp-then-argmax, and returns an over-proposed token with strictly negative residual. Benign positive-residual control row matched exactly.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "kernel.py lines 16-30 keep negative scores in the running max with initial -inf; the reference argmax over clamped scores would be the argmax of zeros (first index with residual clamped to 0, or semantics differing from torch.argmax of clamped values), whereas the kernel returns the most-negative-residual token or id 0.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Recovered token is argmax_v(p_residual(v) * inv_q[v]) where p_residual(v) = max(target - draft, 0), so with all residuals <= 0 the reference argmax operates on all-zero clamped scores, not raw negative differences."
+            }
+          ],
+          "scope_rationale": "problem.txt defines the sampled token as argmax_v(p_residual(v) * inv_q[v]) with p_residual clamped at 0, so a row where every target_prob <= draft_prob is within the stated formula and the kernel's behavior on it differs from the clamped reference.",
+          "statement": "When every residual target_prob[v] - draft_prob[v] is <= 0 for a request, the kernel returns the token with the largest (least negative) unclamped score \u2014 an over-proposed token or default id 0 \u2014 instead of the argmax over the all-zero clamped p_residual, producing a different token id than the contract's reference argmax.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:16:47Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:16:47Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "b2f3c2c375e01bb45c18a9b64cc28d5b2a3b7feb0f026198477c6c07a8ab3cee"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "779b39352c715b8ec86acb40afc42d053c9cc0f16582b23f21cfe11ba29dcaba"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "0c028464490e15ea410144b133500efdc88b8590d4de723354426d249e5d97b5"
+              }
+            ],
+            "duration_s": 4.773025,
+            "exit_code": 0,
+            "expected_signal": "on an all-residual<=0 row, kernel output differs from clamped reference argmax and is an over-proposed token",
+            "json_parse_error": null,
+            "json_result": {
+              "kernel_row0": 285,
+              "kernel_row0_overproposed": true,
+              "kernel_row1": 153,
+              "ref_row0": 0,
+              "ref_row0_overproposed": true,
+              "ref_row1": 153,
+              "row0_match": false,
+              "row1_match": true
+            },
+            "kernel_row0": 285,
+            "kernel_row0_overproposed": true,
+            "kernel_row1": 153,
+            "ref_row0": 0,
+            "ref_row0_overproposed": true,
+            "ref_row1": 153,
+            "row0_match": false,
+            "row1_match": true,
+            "stderr": "",
+            "stdout": "{\"kernel_row0\": 285, \"ref_row0\": 0, \"kernel_row0_overproposed\": true, \"ref_row0_overproposed\": true, \"kernel_row1\": 153, \"ref_row1\": 153, \"row1_match\": true, \"row0_match\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "On a row where every residual is < 0, the kernel returned token 285 (strictly negative residual, over-proposed), while the clamped reference argmax over all-zero p_residual*inv_q returned token 0 \u2014 mismatch confirmed. Note: the reference case is degenerate (all clamped scores tie at 0), so the reference argmax 0 is itself an over-proposed token; nevertheless the kernel returns the argmax of the raw negative scores (token 285), which is unclamped semantics and differs from the contract's clamp-then-argmax, and returns an over-proposed token with strictly negative residual. Benign positive-residual control row matched exactly.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: the only material in-scope defect (missing max(...,0) clamp on residual) is already captured by claim c2, which is confirmed with runtime evidence showing the kernel returns the argmax of raw negative scores on an all-over-proposed row, diverging from the contract's clamp-then-argmax semantics. Claim c1 was properly rebutted since an over-proposed token's unclamped score is always negative and cannot win when positive-residual tokens exist. Remaining risks (contiguity, tie-breaking, unusual inv_q values) are either out-of-scope or already consistent with reference behavior on benign inputs, and no new evidence exposes an in-scope failure they don't cover.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-30T08:16:55Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-09-30T08:16:55Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the only material in-scope defect (missing max(...,0) clamp on residual) is already captured by claim c2, which is confirmed with runtime evidence showing the kernel returns the argmax of raw negative scores on an all-over-proposed row, diverging from the contract's clamp-then-argmax semantics. Claim c1 was properly rebutted since an over-proposed token's unclamped score is always negative and cannot win when positive-residual tokens exist. Remaining risks (contiguity, tie-breaking, unusual inv_q values) are either out-of-scope or already consistent with reference behavior on benign inputs, and no new evidence exposes an in-scope failure they don't cover.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 11,
+        "tool_event_id": "t12",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.8,
+        "decisive_claims": [
+          "c2"
+        ],
+        "reason": "The contract (problem.txt is the operative contract; the artifact has no test.py/get_inputs) explicitly requires p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0) and states that a token the draft over-proposed (target_prob < draft_prob) \"must never be returned as the recovered token.\" The kernel computes score = (target_prob - draft_prob) * inv_q with no clamp (kernel.py line 23). Confirmed in-scope runtime evidence (probe t9, claim c2): on a row where every residual is strictly negative, the kernel returned token 285, which the probe verified is over-proposed (draft_prob > target_prob) \u2014 a token the contract says must never be returned. The clamped reference returned a different token (0), so index-level divergence from clamp-then-argmax semantics is also demonstrated. I acknowledge the reference's own argmax in this degenerate all-zero-residual case is itself an over-proposed token (tie at zero), which weakens exact-index-match as the failure metric; however, the decisive point is the contract's explicit invariant that over-proposed tokens must never be returned, which the kernel violates by returning the argmax of raw negative residuals. Claim c1 (negative residual beating a positive score) was rebutted with runtime evidence and does not affect the verdict. Benign positive-residual inputs match the reference exactly, so the kernel is correct on typical inputs but violates the explicitly required clamp behavior in the over-proposed regime.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:17:04Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.8,
+        "created_at": "2026-09-30T08:17:04Z",
+        "decisive_claims": [
+          "c2"
+        ],
+        "reason": "The contract (problem.txt is the operative contract; the artifact has no test.py/get_inputs) explicitly requires p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0) and states that a token the draft over-proposed (target_prob < draft_prob) \"must never be returned as the recovered token.\" The kernel computes score = (target_prob - draft_prob) * inv_q with no clamp (kernel.py line 23). Confirmed in-scope runtime evidence (probe t9, claim c2): on a row where every residual is strictly negative, the kernel returned token 285, which the probe verified is over-proposed (draft_prob > target_prob) \u2014 a token the contract says must never be returned. The clamped reference returned a different token (0), so index-level divergence from clamp-then-argmax semantics is also demonstrated. I acknowledge the reference's own argmax in this degenerate all-zero-residual case is itself an over-proposed token (tie at zero), which weakens exact-index-match as the failure metric; however, the decisive point is the contract's explicit invariant that over-proposed tokens must never be returned, which the kernel violates by returning the argmax of raw negative residuals. Claim c1 (negative residual beating a positive score) was rebutted with runtime evidence and does not affect the verdict. Benign positive-residual inputs match the reference exactly, so the kernel is correct on typical inputs but violates the explicitly required clamp behavior in the over-proposed regime.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.8,
+    "created_at": "2026-09-30T08:17:04Z",
+    "decisive_claims": [
+      "c2"
+    ],
+    "reason": "The contract (problem.txt is the operative contract; the artifact has no test.py/get_inputs) explicitly requires p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0) and states that a token the draft over-proposed (target_prob < draft_prob) \"must never be returned as the recovered token.\" The kernel computes score = (target_prob - draft_prob) * inv_q with no clamp (kernel.py line 23). Confirmed in-scope runtime evidence (probe t9, claim c2): on a row where every residual is strictly negative, the kernel returned token 285, which the probe verified is over-proposed (draft_prob > target_prob) \u2014 a token the contract says must never be returned. The clamped reference returned a different token (0), so index-level divergence from clamp-then-argmax semantics is also demonstrated. I acknowledge the reference's own argmax in this degenerate all-zero-residual case is itself an over-proposed token (tie at zero), which weakens exact-index-match as the failure metric; however, the decisive point is the contract's explicit invariant that over-proposed tokens must never be returned, which the kernel violates by returning the argmax of raw negative residuals. Claim c1 (negative residual beating a positive score) was rebutted with runtime evidence and does not affect the verdict. Benign positive-residual inputs match the reference exactly, so the kernel is correct on typical inputs but violates the explicitly required clamp behavior in the over-proposed regime.",
+    "verdict": "reject"
+  }
+}

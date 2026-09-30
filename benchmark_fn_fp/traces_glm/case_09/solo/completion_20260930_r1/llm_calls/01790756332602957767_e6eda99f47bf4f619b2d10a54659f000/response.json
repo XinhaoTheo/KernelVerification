@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-d8a3960da2ff4cb79a7ed018de64918c",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run both probes: the tie-break case and the random baseline.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9c631aa2cdf35184",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, sys, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_09/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\ndef ref_lowest_tied(row):\\n    return int(torch.arange(row.numel())[row == row.max()].min())\\nres = {}\\nfor N in [2,4,8,16,32,64]:\\n    B = 2000\\n    torch.manual_seed(0)\\n    bad = 0; ex = None\\n    # random rows, then set the max value at multiple random positions to create ties\\n    scores = torch.randn(B, N, device=dev)\\n    for b in range(B):\\n        idxs = torch.randperm(N)[:2 + (b % (N-1))][:2].cuda()  # pick 2 tied positions\\n        scores[b, idxs[0]] = 5.0; scores[b, idxs[1]] = 5.0\\n        # sometimes leave another position as unique second\\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\\n    for b in range(B):\\n        lo = ref_lowest_tied(scores[b])\\n        if out[b].item() != lo:\\n            bad += 1\\n            if ex is None: ex = (b, scores[b].tolist(), out[b].item(), lo)\\n    # also all-equal rows\\n    scores_eq = torch.zeros(100, N, device=dev)\\n    out_eq = k.sorted_topk_indices(scores_eq, 1).squeeze(-1)\\n    eq_bad = (out_eq != 0).sum().item()\\n    res[f\\\"N{N}\\\"] = {\\\"tied_rows_bad\\\": bad, \\\"total\\\": B, \\\"all_equal_bad_nonzero\\\": eq_bad, \\\"example\\\": ex}\\nprint(json.dumps(res))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-a70c966427831e0c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_09/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev=\\\"cuda\\\"\\nres={}\\nfor N in [2,4,8,16,32,64,128]:\\n    torch.manual_seed(1)\\n    scores = torch.randn(512, N, device=dev)\\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\\n    ref = scores.argmax(dim=1)\\n    res[f\\\"N{N}\\\"] = {\\\"mismatch\\\": int((out!=ref).sum().item()), \\\"total\\\": 512}\\n# also check k>1 ordering matches descending sort on tie-free input\\ntorch.manual_seed(2)\\ns = torch.randn(64, 16, device=dev)\\nout = k.sorted_topk_indices(s, 5)\\nref = torch.argsort(s, dim=1, descending=True, stable=True)[:, :5]\\nres[\\\"k5_exact_match\\\"] = bool(torch.equal(out, ref))\\nprint(json.dumps(res))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run two probes: tie-case probe and random probe.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756333,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 705,
+    "prompt_tokens": 11416,
+    "total_tokens": 12121,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 11,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 11
+    }
+  }
+}

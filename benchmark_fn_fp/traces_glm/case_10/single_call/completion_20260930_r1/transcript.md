@@ -1,0 +1,322 @@
+# Single-call trace
+
+## System prompt
+
+You are verifying whether a GPU (Triton) kernel implementation is correct.
+
+You will be given:
+1. A problem statement describing the operation's contract and its reference behavior.
+2. The kernel implementation under test.
+
+Decide one of:
+- "reject": the implementation has a real defect / violates the stated contract.
+- "trust": the implementation is correct, or is an equally valid alternative implementation.
+- "needs_more_evidence": you genuinely cannot tell.
+
+Answer with the JSON object required by the output schema.
+Output schema:
+{"type": "object", "required": ["verdict", "confidence", "reason"], "properties": {"verdict": {"type": "string", "enum": ["trust", "reject", "needs_more_evidence"], "description": "'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell."}, "confidence": {"type": "number", "description": "0.0 to 1.0."}, "reason": {"type": "string", "description": "One or two sentences."}}, "additionalProperties": false}
+
+## User prompt
+
+## Problem statement (contract + reference behavior)
+
+Operation: top-k selection over candidate block scores, implemented with the
+bitonic sort network used by Native Sparse Attention's selection branch
+(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).
+
+`sorted_topk_indices(scores, k)` must return the indices of the k
+highest-scoring candidates, in descending score order.
+
+Contract on ties: when two candidates have exactly equal scores, the
+LOWER index must be the one kept.
+
+Downstream, the selected indices gather value vectors that are averaged
+together, so the selection feeds a continuous output.
+
+Input domain: `scores` has a power-of-two number of columns (the bitonic
+network this kernel family uses is defined only for power-of-two extents).
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):
+    n_outer: tl.constexpr = x.numel >> n_dims
+    shape: tl.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]
+    y = tl.reshape(x, shape)
+    mask = tl.arange(0, 2)[None, :, None]
+    left = tl.broadcast_to(tl.sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)
+    right = tl.broadcast_to(tl.sum(y * mask, 1)[:, None, :], shape).to(y.dtype)
+    left = tl.reshape(left, x.shape)
+    right = tl.reshape(right, x.shape)
+    y_idx = tl.reshape(ids, shape)
+    left_idx = tl.broadcast_to(tl.sum(y_idx * (1 - mask), 1)[:, None, :], shape)
+    right_idx = tl.broadcast_to(tl.sum(y_idx * mask, 1)[:, None, :], shape)
+    left_idx = tl.reshape(left_idx, x.shape).to(y_idx.dtype)
+    right_idx = tl.reshape(right_idx, x.shape).to(y_idx.dtype)
+    idtype = tl.core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    ileft = left.to(idtype, bitcast=True)
+    iright = right.to(idtype, bitcast=True)
+    ix = x.to(idtype, bitcast=True)
+    cond = (left > right) != flip
+    ret = ix ^ tl.where(cond, ileft ^ iright, tl.zeros_like(ix))
+    new_ids = ids ^ tl.where(cond, left_idx ^ right_idx, tl.zeros_like(ids))
+    return ret.to(x.dtype, bitcast=True), new_ids
+
+
+@triton.jit
+def _bitonic_merge(x, ids, stage: tl.constexpr, order: tl.constexpr, n_dims: tl.constexpr):
+    n_outer: tl.constexpr = x.numel >> n_dims
+    tl.static_assert(stage <= n_dims)
+    if order == 2:
+        shape: tl.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]
+        flip = tl.reshape(tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape), x.shape)
+    else:
+        flip = order
+    for i in tl.static_range(stage):
+        x, ids = _compare_and_swap(x, ids, flip, i + (n_dims - stage), n_dims)
+    return x, ids
+
+
+@triton.jit
+def _row_argsort_kernel(X_ptr, IDS_ptr, stride_row, N: tl.constexpr, N_DIMS: tl.constexpr, DESCENDING: tl.constexpr):
+    # tl.log2(x.shape[dim]); that call path is not constexpr-stable on every
+    # Triton version, so N_DIMS is passed in from the (Python-side, so still
+    # compile-time-known) caller instead. The bitonic merge/compare-and-swap
+    # primitives below -- where the actual tie-break mechanism lives -- are
+    # byte-for-byte the real kernel, unchanged.
+    row = tl.program_id(0)
+    offs = tl.arange(0, N)
+    x = tl.load(X_ptr + row * stride_row + offs)
+    ids = tl.load(IDS_ptr + row * stride_row + offs)
+    for i in tl.static_range(1, N_DIMS + 1):
+        x, ids = _bitonic_merge(x, ids, i, 2 if i < N_DIMS else DESCENDING, N_DIMS)
+    tl.store(X_ptr + row * stride_row + offs, x)
+    tl.store(IDS_ptr + row * stride_row + offs, ids)
+
+
+def sorted_topk_indices(scores: torch.Tensor, k: int) -> torch.Tensor:
+    """Host wrapper: real bitonic-sort kernel, launched one program per row."""
+    import math
+    assert scores.is_cuda
+    B, N = scores.shape
+    n_dims = int(math.log2(N))
+    x = scores.clone().contiguous()
+    ids = torch.arange(N, device=scores.device, dtype=torch.int32).unsqueeze(0).expand(B, N).contiguous()
+    _row_argsort_kernel[(B,)](x, ids, N, N=N, N_DIMS=n_dims, DESCENDING=True)
+    return ids[:, :k].long()
+
+```
+
+Is this implementation correct?
+
+## Provider reasoning (verbatim)
+
+This is the actual FLA kernel. Known behavior: bitonic sort with tie-break — does it keep lower index on ties? The kernel uses compare_and_swap with swap when (left > right) != flip. On equal scores, left == right, so no swap; identity after full sort... Actually the question: does bitonic sort with this swap condition preserve stable "lower index wins" tie-break? FLA's kernel is known to select the lower index on ties (this is a documented property in the repo issue — actually FLA's bitonic sort is not stable in general, but for top-k selection, there was a fix where they prepend index to the score to break ties).
+
+The original FLA kernel: in their tests they verify that on ties, lower indices are kept. Actually the FLA kernel has this comment in tests: "the bitonic sort is not stable... but it should always pick the lower indices"? Let me think about correctness of bitonic sort here with tie condition left > right (strict). In bitonic sorting networks with comparators that swap only on strict inequality, ties pass through unchanged at each comparator. Is the final order such that ties end with lower index first? Bitonic sort with such comparators is not stable in general; equal elements can be reordered by non-adjacent comparisons? A comparator compares elements at positions distance d apart, and if equal it doesn't swap. But equal elements not compared to each other directly can be reordered relative to each other via other elements? With all distinct other elements... Hmm, stability of bitonic sort: it's known to be unstable. Equal keys may end up in arbitrary relative order.
+
+Actually FLA repo had this exact issue: their test test asserts topk selection matches with ties, and there's a known behavior that the bitonic implementation returns the lower indices on ties — they had a fix "fix: topk indices with same scores" where they sort scores with index bits appended? Let me recall: fla's utils.py has functions cdiv, get_stride... Actually the "sorted_topk_indices" is from fla's ns-attention? I recall in fla, there's `get_sparse_indices` and they wrote a bitonic sort kernel in triton for topk selection (in tests of NSAttention, test_torch vs triton with random scores; duplicates unlikely).
+
+The question here is whether ties keep lower index. With strict > comparison, at comparator level ties never swap between the two compared. But two equal elements at positions i<j may be routed differently through the network. Consider N=4, values [1,1,2,3]? Sorting descending, need indices... hard to reason fully. Known fact: bitonic sort is not stable, so ties can come out with higher index first. So if contract demands lower index on ties, and the reference (the FLA kernel) — wait, the reference behavior IS this kernel family ("implemented with the bitonic sort network used by NSA"). So the reference behavior is this bitonic network's behavior. Hmm, the contract says lower index must be kept on ties; but is the real NSA kernel actually satisfying that? The problem says the reference is fla's ops/utils.py. If the actual FLA kernel satisfies the lower-index tie contract, then this implementation (identical primitives) is correct.
+
+Actually I recall FLA's bitonic sort test explicitly checks tie behavior: in fla tests there's a test that ties select lower indices, and the kernel does. Let me reason: does this compare-and-swap with strict inequality give a deterministic stable-for-ties result in bitonic networks? There is a known result: bitonic sort implemented with "swap only if strictly out of order" is not stable. Counterexample: sort ascending N=4 with keys [1a,1b,0,0]? Comparators... this is getting deep.
+
+But the task framing: the kernel claims primitives are byte-for-byte real. Likely the intended answer is "trust" — the kernel is the real FLA implementation and matches. But the tie contract... The FLA repo actually had a known bug where ties were broken arbitrarily, and they fixed it by comparing with index as tie-break? Let me recall fla/nsa ops. In fla, `native_sparse_attention/ops/utils.py` — I don't remember exactly. There's `get_indices_topk`? Hmm.
+
+Given the implementation is presented as the real kernel with unchanged tie-break primitives, and the grader expects judgment: The compare_and_swap here doesn't do any explicit index-based tie-breaking (e.g., no comparison of ids when scores equal). The contract requires lower index kept on ties. In a pure bitonic network with strict comparison, ties are... let me try a concrete counterexample for N=4, descending.
+
+Bitonic sort structure here: merges: stage 1 (i=1), stage 2 (i=2), with flip pattern.
+
+Let me simulate N=4, x=[0,0,1,1] with ids [0,1,2,3], want descending sorted: [1,1,0,0], ties order?
+
+Merge stage 1 (i=1 < N_DIMS=2, order=2):
+shape for flip: n_outer=1, stage=1, N_DIMS=2: shape=[1*2^(2-1-1),2,2^1]=[1,2,2]. flip = [0,0,1,1].
+compare_and_swap with i+ (n_dims - stage) = 1+1=2? Wait i loop: static_range(stage=1): i=0, call _compare_and_swap(x, ids, flip, i + (n_dims - stage)=0+1=1, n_dims=2).
+
+_compare_and_swap with i=1, n_dims=2: n_outer = 4>>2=1. shape=[1*2^1,2,2^(2-1-1)=2^0=1]=[2,2,1]. reshape x to [2,2,1]: x=[[0],[0]],[[1],[1]]? x=[0,0,1,1] reshaped to [2,2,1]: elements [[0],[0]], [[1],[1]]. left = element index 0 of dim1, right = index 1: left=[0,1], right=[0,1]. cond = (left > right) != flip, flip=[0,0,1,1]. left>right = [False,False]. != flip → [F,F]!=[0,0,1,1] → [False,False,True,True]. So swap rows where cond: rows are [ (0,0),(1,1) ]... wait per-element: for element with cond true, ret = ix ^ (ileft^iright) = swap. So elements 2 and 3 swap: new x = [0,0,1,1] → [0,0,1,1]? positions 2,3 hold 1,1; swapping them gives same values but ids swap: ids become [0,1,3,2]. So x=[0,0,1,1], ids=[0,1,3,2].
+
+Stage 2 (i=2, order=DESCENDING=True, flip=order=True? cond = (left>right) != True, so swap when left<=right... wait swap when left > right is False, i.e. left <= right, swap). Hmm that's ascending within... cond=(left>right)!=flip; flip=True → cond = not(left>right) = left<=right → swap. That means we want descending final: swap when left<=right. Ties: left==right → swap! Uh-oh, tie causes swap at final merge stage. That would put higher index first on ties!
+
+Wait: in stage 2 with order=DESCENDING, flip is scalar True. Compare pairs: shape i=1: [2,2,1], pairs (0,1),(2,3): left=[0,1],right=[0,1]. left>right=[F,F]. cond = F != True → True → swap both pairs. ids become [1,0,2,3]? Wait ids currently [0,1,3,2]; swap pair (0,1) → [1,0,3,2]; then i=0 compare: i=0, n_dims=2: shape=[1*1,2,2^1]=[1,2,2]. x reshaped [[0,0],[1,1]]. left = first of each pair? mask selects dim1 index. left = [0,0], right=[1,1]. left>right F. cond True → swap: x stays [1,1,0,0], ids [1,0,2,3]? Let's redo: after i=1 swap ids [1,0,3,2]; x=[0,0,1,1]. i=0: pairs (0,1) values (0,0) ids (1,0); (2,3) values (1,1) ids (3,2). swap both: ids → (0,1),(2,3)?? swapping pair (1,0) → (0,1), (3,2)→(2,3). Final ids [0,1,2,3], x=[0,0,1,1]→ sorted? x after swaps: values swapped within pairs: x=[0,0,1,1] unchanged values. Final x = [0,0,1,1]?? That's not sorted descending! Something's off.
+
+Hmm, let me recompute stage 2 more carefully. After stage1: x=[0,0,1,1], ids=[0,1,3,2].
+
+Stage 2 (i=2, order=True):
+flip = True (scalar). loop i in static_range(2): i=0,1 with offsets i + (n_dims - stage) = i + 0 = i.
+i=1: shape=[2,2,1]; pairs: (pos0,pos1) values (0,0); (pos2,pos3) values (1,1). left=[0,1], right=[0,1]. left>right = [False,False]. cond = False != True = True. swap: x unchanged (equal values), ids: swap (0,1)→(1,0), (3,2)→(2,3). ids=[1,0,2,3]. x=[0,0,1,1].
+i=0: shape=[1,2,2]; pairs (pos0,pos2) values (0,1); (pos1,pos3) values (0,1). left=[0,0], right=[1,1]. left>right=[F,F]. cond=True. swap: x → pos0↔pos2: [1,0,1,0]? wait pairs: (0,2) and (1,3). values (0,1),(0,1). swap → (1,0),(1,0): x=[1,1,0,0]? positions: pos0=1, pos1=1, pos2=0, pos3=0. ids: (1,2)→pos0=2,pos2=1; (0,3)→pos1=3,pos3=0. ids=[2,3,1,0].
+
+Final: x=[1,1,0,0] descending ✓, ids=[2,3,1,0]. Tie group value 1: ids 2,3 (lower... 2<3 ok). Tie group 0: ids 1,0 — higher index 1 comes first! So top-2 of value 1: indices 2 and 3, but the contract for ties among equal scores picks... all four: top-k with ties: candidates 2,3 score 1, candidates 0,1 score 0. For k=2, selection {2,3} — the contract "lower index kept" applies among equal scores competing for the last spot; here no ambiguity. For ties within the sorted order... The contract: "when two candidates have exactly equal scores, the LOWER index must be the one kept." E.g., scores [1,1,0,0] k=1: candidates 2,3 both score 1; lower index 3 should be kept? But we got order 2,3 — first element id 2. Lower index among 2,3 is 2 — kept id 2. OK fine. But if scores were e.g. [5,5,0,0] with ids 0,1 scoring 5: by symmetry test? Let's redo with x=[5,5,0,0], ids [0,1,2,3].
+
+Stage1 (order=2, flip=[0,0,1,1]):
+i=1 (offset 1): pairs (0,1) values (5,5); (2,3) values (0,0). left=[5,0], right=[5,0]. left>right=[F,F]. cond = [F,F]!=[F,F,T,T] → [F,F,T,T]. swap pair (2,3): ids [0,1,3,2]. x unchanged.
+i=0 (offset 0): pairs (0,2) values (5,0); (1,3) values (5,0). left=[5,5], right=[0,0]. left>right=[T,T]. cond = [T,T]!=[F,F,T,T] → [T,T,F,F]. swap pair (0,2) and (1,3): x=[0,0,5,5], ids=[3,2,1,0]? Wait: swap pos0↔pos2: pos0=0,pos2=5; pos1↔pos3: pos1=0,pos3=5. x=[0,0,5,5]. ids: pos0=2? original ids after stage1 step1: [0,1,3,2]. pos0↔pos2: (0,3)→(3,0); pos1↔pos3: (1,2)→(2,1). ids=[3,2,0,1]. x=[0,0,5,5].
+
+Stage2 (flip=True):
+i=1: pairs (0,1): (0,0) ids (3,2); (2,3): (5,5) ids (0,1). left>right=[F,F]. cond=True: swap both. ids: (3,2)→(2,3), (0,1)→(1,0). ids=[2,3,1,0]. x=[0,0,5,5].
+i=0: pairs (0,2): values (0,5) ids (2,1); (1,3): values (0,5) ids (3,0). left>right=[F,F], cond=True, swap: x=[5,5,0,0]; ids: pos0=1,pos2=2; pos1=0,pos3=3 → ids=[1,0,2,3].
+
+Final ids=[1,0,2,3], x=[5,5,0,0]. Top-1 should be id 0 (lower index on tie) but kernel returns 1! This violates the tie contract.
+
+Hmm wait — but is my simulation of the kernel semantics right? cond = (left > right) != flip. With flip=True scalar, cond = (left>right) != True = ~(left>right). Swap when left <= right. For descending order, comparator should swap when left < right (keep larger left). Swapping on ties means the tie gets swapped — putting right (higher position, not necessarily higher index) first. And indeed final result id 1 before id 0.
+
+But wait — maybe I mis-set DESCENDING. Reference descending sort: final order descending. With flip=True and cond=not(left>right): if left<right, swap → left becomes larger ✓ descending. Ties swapped arbitrarily.
+
+But hold on — is the actual FLA kernel's behavior this, and does the contract ("LOWER index kept") match the real FLA reference? The problem says reference is fla's kernel and contract says lower index kept. If the real FLA kernel also fails this, then... but the problem states the contract as truth. My simulation shows a violation: [5,5,0,0] k=1 returns 1 instead of 0.
+
+But let me double-check my _compare_and_swap understanding. The trick: left is broadcast of dim-1 index-0 element, right index-1. ret = ix ^ where(cond, ileft^iright, 0): swapping via XOR where cond true. mask on ids similarly. Yes.
+
+Also check the flip computation for order==2: shape=[n_outer * 2^(n_dims-1-stage), 2, 2^stage] then broadcast arange over dim1 and reshape to x.shape → alternating blocks: pattern [0]*2^(stage+? )... For n_dims=2, stage=1: [1,2,2]→ broadcast [0,0,1,1] after reshape ✓ matches my sim.
+
+Hmm, but wait — maybe in real FLA the tie behavior differs because they sort indices too... Actually I recall FLA's test: "test_topk_indices" checks torch.topk equivalence? torch.topk on ties is unspecified. But the contract here explicitly says lower index must be kept. My counterexample shows the kernel returns index 1 first for [5,5,0,0]. Let me re-verify stage 2 swap on ties: cond True on ties (since left>right False, !=True → True). Yes swap. So pair (0,1) with values (5,5) ids (0,1)... wait in my trace, at stage 2 start ids pair at positions (2,3) were (0,1) values (5,5). After i=1 swap → (1,0). Then i=0: pairs (0,2),(1,3). Values after swap... let me redo carefully.
+
+After stage 1: x=[0,0,5,5], ids=[3,2,0,1]? Let me recheck stage 1 i=0. Stage1: i=1 first (static_range(1) only has i=0! Wait stage=1: static_range(stage) = range(1) → i=0 only, offset = 0 + (n_dims - stage) = 0+1 = 1. So compare_and_swap with i=1 only. Then stage=2: static_range(2): i=0,1, offsets i+0.
+
+Redo stage1: only the i=1 call (offset 1): pairs (0,1),(2,3). flip=[0,0,1,1]. x=[5,5,0,0]: left=[5,0],right=[5,0], left>right=[F,F], cond=[F,F,T,T]: swap pair (2,3): ids [0,1,3,2]. x=[5,5,0,0].
+
+Stage2, i=1 (offset 1): pairs (0,1):(5,5) ids (0,1); (2,3):(0,0) ids (3,2). flip=True. left>right=[F,F]. cond=[T,T]. swap both: ids → (1,0),(2,3): ids=[1,0,2,3]. x unchanged [5,5,0,0].
+Stage2, i=0 (offset 0): pairs (0,2):(5,0) ids (1,2); (1,3):(5,0) ids (0,3). left>right=[T,T], cond=F. no swap. x=[5,5,0,0], ids=[1,0,2,3].
+
+Final ids=[1,0,2,3]. Top-1 = 1, but lower index 0 has same score. Contract violation. And values [5,5,0,0] sorted descending ✓ but tie order wrong.
+
+Hmm — but does the reference FLA kernel behave differently? If reference is byte-for-byte same primitives, reference also violates. But the contract statement asserts lower index kept. Given my analysis, the kernel violates the stated tie contract. But wait — maybe I have the DESCENDING convention backwards: maybe DESCENDING=True means order value... they pass order=2 if i<N_DIMS else DESCENDING. So final merge uses DESCENDING=True as flip. If True means... cond = (left>right) != True → swap when left ≤ right. For descending final order that's correct except ties. If instead flip=False for descending (swap when left>right... that would give ascending), no.
+
+Also consider: could the intended tie behavior come from final stage with flip as tensor... In real FLA, DESCENDING is passed similarly. And FLA actually had this exact issue: I recall a GitHub issue "NSA topk returns wrong indices when scores equal" and a fix... Actually there's a known fla test: `test_utils.py::test_bitonic_sort` maybe? I genuinely recall fla's `ops/utils.py` having these _compare_and_swap and _bitonic_merge functions (they appear in fla repo, e.g. in `fla/ops/utils.py` or ns_attention). And there was a fix commit appending lower bits: "co-author fix: ensure lower indices are selected on ties" by using index in comparison? Hmm.
+
+Actually I now recall: fla's utils.py has `get_sparse_indices`? No... The functions `_compare_and_swap`, `_bitonic_merge`, `_bitonic_merge_kernel`, and a host `bitonic_sort` appear in fla/l2norm? I've seen this code in "fla/ops/nsa/utils.py"? Regardless, this exact code with the note about ties: in FLA repo, there is a comment in tests: "Test that the kernel selects the lower index when scores are equal" — and the kernel handles it because... maybe because the swap on ties doesn't ultimately matter because equal elements end up adjacent and the final ascending... no, my counterexample is concrete.
+
+Actually wait — maybe in FLA the tie-breaking is handled differently: they might sort with flip pattern for last stage too? No, final stage must be a clean merge for the network to sort. Ties swapped in final merge → order determined by the network, not stable.
+
+Hmm, but perhaps my cond direction for descending is wrong: check with distinct values: x=[1,2,0,3], expect descending [3,2,1,0] ids [3,1,0,2].
+
+Stage1 (i=1 offset): pairs (1,2),(0,3): left=[1,0], right=[2,3]. left>right=[F,F]. cond=[F,F]!=[0,0,1,1]→[F,F,T,T]. swap pair(2,3): x=[1,2,3,0], ids=[0,1,3,2].
+Stage2: i=1: pairs (1,2),(3,0). left>right=[F,F]. cond=True, swap: x=[2,1,0,3], ids=[1,0,2,3]. i=0: pairs (2,0),(1,3): left=[2,1],right=[0,3]. left>right=[T,F]. cond=[F,T]. swap pair(1,3): x=[2,3,0,1], ids=[1,3,2,0]. Hmm final x=[2,3,0,1] not sorted descending! So my simulation must be wrong somewhere.
+
+Let me recheck _bitonic_merge loop indices. For stage: `for i in tl.static_range(stage): _compare_and_swap(x, ids, flip, i + (n_dims - stage), n_dims)`. For a bitonic merge of "stage" (block size 2^stage), the comparators should have distance 2^(stage-1-j)... hmm. Actually in standard bitonic merge for block size 2^k, comparator distances are 2^k-1, 2^k-2, ..., 1. Here with n_dims=2, stage=2: offsets 0,1 → distances 2^1=2 and 2^0=1 ✓. Stage=1: offset 1 → distance 2 ✓ (comparing adjacent... wait offset i means shape 2^(n_dims - i -1)... i=1, n_dims=2 → groups of 2, distance 1). Hmm stage=1 merge for block size 2: comparator distance 1, offset i + n_dims - stage = 0 + 1 = 1 → distance 2^(n_dims - i - 1)? Let's compute: _compare_and_swap with i: shape = [n_outer*2^i, 2, 2^(n_dims-i-1)] → group size 2^(n_dims-i)... The pair distance is 2^(n_dims - i - 1). i=1,n_dims=2 → distance 1. OK so stage 1 (block size 2) uses distance 1 ✓. Stage 2 (block size 4): i=0→distance 2, i=1→distance 1 ✓. Fine.
+
+But the flip for non-final merges (order==2): shape [n_outer * 2^(n_dims-1-stage), 2, 2^stage]. For stage=1, n_dims=2: [1,2,2] → flip=[0,0,1,1] ✓ (first half ascending, second half descending? cond = (left>right)!=flip: flip=0 → swap when left>right → ascending; flip=1 → swap when left<=right → descending). So after stage1 we should have a bitonic sequence: first half ascending, second half descending: from [1,2,0,3]: pairs (0,1) flip0: left=1,right=2, left>right F, cond F, no swap. pairs (2,3) flip1: left=0,right=3, left>right F, cond = F!=T = T → swap → x=[1,2,3,0] ✓ bitonic (asc then desc).
+
+Stage2 flip=True (descending everywhere): distance-2 pass (i=0): pairs (0,2):(1,3) flip T: cond=not(1>3)=T → swap → x=[3,2,1,0]? positions: pos0↔pos2: [3,2,1,0]. ids [0,1,3,2]→[3,1,0,2]. distance-1 pass (i=1): pairs (0,1):(3,2): cond = not(3>2)=F no swap; (1,0): cond=not(F)=T swap → x=[3,2,0,1]? Hmm x currently [3,2,1,0]: pairs (0,1)=(3,2) no swap; pairs(2,3)=(1,0): cond=not(1>0)=F no swap. Final [3,2,1,0] ✓ ids=[3,1,0,2] ✓.
+
+I made arithmetic errors earlier. Redo the tie example [5,5,0,0] properly.
+
+Stage1, i=1 (offset 1): pairs (0,1)=(5,5) flip 0: cond=(5>5)!=0 = F, no swap. pairs (2,3)=(0,0) flip 1: cond=(0>0)!=1 = T, swap → ids [0,1,3,2]. x=[5,5,0,0]. Bitonic ✓ (asc half [5,5], desc half [0,0]).
+
+Stage2, flip=True:
+i=0 (distance 2): pairs (0,2)=(5,0): cond=not(5>0)=F no swap. (1,3)=(5,0): no swap. x=[5,5,0,0], ids=[0,1,3,2].
+i=1 (distance 1): pairs (0,1)=(5,5): cond=not(F)=T → swap → ids (0,1)→(1,0). pairs (2,3)=(0,0): cond=T → swap → (3,2)→(2,3). Final ids=[1,0,2,3], x=[5,5,0,0].
+
+So top-1 = index 1, but contract says lower index 0. Violation confirmed: swap-on-tie in the final descending merge puts the higher position element first, and position correlates with... in this case higher index first.
+
+Hmm, but wait: is this actually the FLA reference behavior too? The contract says reference behavior is the FLA bitonic kernel AND that ties keep lower index. If FLA's actual kernel keeps lower index, then my simulation of the kernel under test must diverge from FLA somewhere. Possibly FLA's DESCENDING flip uses `left > right` vs `left >= right` asymmetry? E.g., in FLA, cond = (left > right) != flip; for descending with flip... Actually if for descending they used cond=(left < right) (strict, no swap on ties), then tie at final adjacent pass wouldn't swap, but earlier passes could still permute ties. With strict non-swap on ties everywhere... in my example with strict descending comparator (swap only if left<right): stage1 pair (2,3)=(0,0) flip1: cond=(0>0)!=1=T → still swaps! Hmm the flip pattern comparator: swap when (left>right)!=flip. For flip=1, swap when left<=right, ties swap. If instead the implementation is not stable regardless.
+
+But actually, maybe FLA's tie-break works because the ids are sorted along and the network's specific structure results in lower-index-first for ties? My counterexample shows not: [5,5,0,0] → [1,0,2,3]. Unless I mis-simulate the flip construction.
+
+Flip for order==2, stage=1, n_dims=2: shape=[n_outer * 2^(n_dims-1-stage), 2, 2^stage] = [1*2^0, 2, 2] = [1,2,2]. broadcast arange(0,2)[None,:,None] over [1,2,2] → [[[0,0]],[[1,1]]], reshape to [4] → [0,0,1,1] ✓.
+
+Hmm — but wait, is flip value 0 meaning ascending? cond=(left>right)!=0 = left>right → swap when left>right → ascending ✓ (first half ascending). And final DESCENDING=True: cond = left>right != True → swap when left<=right. Ties swap. So descending final merge swaps equal elements. That gives the higher-position element first among equals — and given bitonic routing, position among equal elements can correspond to either index order.
+
+So unless the reference FLA kernel does something additional, the kernel violates the tie contract. But the problem statement says the reference (FLA) satisfies the contract... The problem might be a trap: the implementation might be subtly altered from FLA (e.g., FLA pads scores with -inf and indices, or FLA's actual kernel breaks ties by comparing with the index encoded). Actually! I now recall: FLA's bitonic sort for top-k in NSA: they combine score and index into a single value to make ties deterministic? In fla's `nsa` there's `topk_indices`? Hmm.
+
+Alternatively maybe FLA kernel is exactly this and does violate, and the contract statement is aspirational — but the grader's ground truth presumably tested the kernel against reference behavior. The contract explicitly states "Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept." My counterexample demonstrates the kernel keeps index 1 over index 0 for equal top scores. That's a real defect w.r.t. the contract.
+
+But wait — could there be a subtlety: with `left`/`right` broadcast trick, maybe on ties the ids comparison... no ids only swapped when cond.
+
+Also double-check that on tie pair (0,1) at final distance-1 pass: cond True → swap ids 0,1 → position0 gets id1. Yes.
+
+But hmm — one more consideration: maybe DESCENDING semantics: flip=True scalar broadcast; `!=` with tensor: (left>right) != True → elementwise ✓.
+
+Also there's a subtle possibility: `order` for last stage should be DESCENDING but in FLA code the loop is `for i in tl.static_range(1, N_DIMS+1): _bitonic_merge(..., 2 if i < N_DIMS else DESCENDING)`. That matches.
+
+I recall now: FLA had issue #474 or so "NSA topk... same scores" — and the resolution: the kernel indeed doesn't guarantee, but they... Actually I remember fla's test `test_nsa.py` includes:
+```
+# Test with duplicate scores
+scores = torch.tensor([...]) 
+```
+Hmm can't recall.
+
+Given my concrete counterexample, I'll reject. Confidence: fairly high in the counterexample, moderate in interpretation. Let me sanity check the counterexample once more end-to-end with the real semantics, being careful about "left" being position-lower element.
+
+_compare_and_swap(x, ids, flip, i=1, n_dims=2) on x=[5,5,0,0], flip=[0,0,1,1]:
+shape=[2,2,1]. y = x reshaped: [[ [5],[5] ], [ [0],[0] ]] — dim0 = 2 blocks? Actually reshape [4] → [2,2,1]: element order preserved: y[0,0,0]=5, y[0,1,0]=5, y[1,0,0]=0, y[1,1,0]=0. mask arange(2) as [None,:,None]: mask[[0],[1]]. left = sum(y*(1-mask), axis=1) = y[:,0] = [5,0]. right = y[:,1] = [5,0]. Broadcast back: left = [5,5,0,0], right=[5,5,0,0]. cond = ([5,0] > [5,0]) != [0,1] = [F,F]!=[0,1] = [F,T]. Wait! flip here — flip is [0,0,1,1] reshaped to shape [2,2,1] = [[0,0],[1,1]]? cond computed elementwise on the [2,2,1] tensors before broadcast? In the code, cond = (left > right) != flip where left/right are already broadcast to x.shape? left = broadcast of the [n_outer*2^i, 2^(n_dims-i-1)]-shaped... it's broadcast to `shape` then reshaped to x.shape. flip is full x.shape. So cond elementwise on 4 elements: left=[5,5,0,0], right=[5,5,0,0], flip=[0,0,1,1]. left>right=[F,F,F,F]. cond = [F,F]!=[F,F? ... per element: element0: F!=0→F; element1: F!=0→F; element2: F!=1→T; element3: F!=1→T. cond=[F,F,T,T]. So swap elements 2,3: ids [0,1,3,2] ✓ as I had.
+
+Then stage2 i=1: same pairing: left=[5,0], right=[5,0]; flip=True: cond = (left>right)!=True: element0: F!=T→T; element1: F!=T→T. Wait per-element on full tensors: left=[5,5,0,0], right=[5,5,0,0], flip scalar True: cond = [T,T,T,T]. Swap all pairs: elements (0,1) swap → ids 0,1 → 1,0; (2,3): 3,2 → 2,3. ids=[1,0,2,3] ✓.
+
+Then i=0: shape=[1,2,2]: y[0,0]=x[0], y[0,1]=x[2], y[1,0]=x[1], y[1,1]=x[3]. left = y[:,0] = [x0,x1]=[5,5], right=[x2,x3]=[0,0]. cond = (5>0)!=True → F both. No swap. Final ids=[1,0,2,3].
+
+Yes: for scores [5,5,0,0], top-1 index returned = 1, contract requires 0. Reject.
+
+Wait — but if this is byte-for-byte the FLA kernel, then FLA's reference violates its own stated contract, meaning the "reference behavior" would also return 1... The problem statement asserts the contract; I trust the contract. The subtle alteration might be: in real FLA, DESCENDING handling or the flip for final stage differs (e.g., they pass `order=False` and then reverse, or use `left >= right`). Regardless, per the stated contract, this implementation fails.
+
+Hmm, one more thought: maybe the real FLA kernel breaks ties by initializing ids... no.
+
+Actually, let me reconsider: real FLA code (fla/ops/utils.py) — I actually do remember it now! It contains:
+
+```python
+@triton.jit
+def _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):
+```
+Yes this is genuine FLA code. And FLA's test (tests/test_utils.py) includes:
+```python
+def test_bitonic_sort():
+    ...
+```
+Hmm. If the genuine kernel violates the tie contract, then the answer depends on whether the grader considers the tie contract. The contract is explicitly stated in the problem, so a violation is a defect. Given FLA github issue: I actually recall issue "Top-k with equal scores selects wrong (higher) index" — and there's a known fact that FLA's `chunk_scaled_dot_kkt`... no.
+
+There's real memory: fla repo `fla/ops/utils/__init__.py` has `get_col_offset`... The bitonic sort with these exact functions exists in fla/ops/nsa? And in tests, they compare against torch.sort and the test explicitly uses random values. I also vaguely remember a comment in fla code: "Note that the bitonic sort is not stable" ... 
+
+Decision: reject, confidence ~0.7.
+
+## Final response (verbatim)
+
+{"verdict": "reject", "confidence": 0.7, "reason": "The bitonic network swaps on ties in the final descending merge (cond = (left>right) != True is true when left==right), so equal-score candidates get their order scrambled rather than preserving lower-index-first. Concrete counterexample: one row of scores [5,5,0,0] with ids [0,1,2,3] sorts to [5,5,0,0] with ids [1,0,2,3], so top-1 returns index 1 instead of the contractually required lower index 0."}
+
+## Verdict
+
+{
+  "verdict": "reject",
+  "confidence": 0.7,
+  "reason": "The bitonic network swaps on ties in the final descending merge (cond = (left>right) != True is true when left==right), so equal-score candidates get their order scrambled rather than preserving lower-index-first. Concrete counterexample: one row of scores [5,5,0,0] with ids [0,1,2,3] sorts to [5,5,0,0] with ids [1,0,2,3], so top-1 returns index 1 instead of the contractually required lower index 0."
+}
+
+## Usage and stop reason
+
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "provider": "fireworks",
+  "response": {
+    "verdict": "reject",
+    "confidence": 0.7,
+    "reason": "The bitonic network swaps on ties in the final descending merge (cond = (left>right) != True is true when left==right), so equal-score candidates get their order scrambled rather than preserving lower-index-first. Concrete counterexample: one row of scores [5,5,0,0] with ids [0,1,2,3] sorts to [5,5,0,0] with ids [1,0,2,3], so top-1 returns index 1 instead of the contractually required lower index 0."
+  },
+  "reasoning_effort": "low",
+  "timeout_s": 1800,
+  "usage": {
+    "input_tokens": 1413,
+    "output_tokens": 8512
+  },
+  "stop_reason": "stop",
+  "max_tokens": 32768,
+  "elapsed_s": 143.1477221660316,
+  "kernel_sha256": "be3ebf129fa6b22caa1ffb16efd5f394af480df61a429d71420cd0a78d9728df",
+  "problem_sha256": "a7713cfeccbe82cba91b11f153549be572caa6782524d9e5a875b124008c9afd",
+  "prompt_variant": "original",
+  "estimated_usd": 0.039431,
+  "pricing_snapshot": {
+    "input_per_million": 1.4,
+    "output_per_million": 4.4,
+    "cache_write_multiplier": 1.0,
+    "cache_read_multiplier": 1.0,
+    "basis": "published list price; cached input conservatively billed as uncached; excludes GPU",
+    "checked_at": "2026-09-30",
+    "source": "https://fireworks.ai/models/fireworks/glm-5p3"
+  },
+  "pricing": "dated list-price estimate; not invoice; excludes GPU and unreported HTTP usage"
+}

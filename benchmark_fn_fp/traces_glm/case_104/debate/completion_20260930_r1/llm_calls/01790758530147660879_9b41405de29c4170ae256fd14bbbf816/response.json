@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-f3ce4a5cc7934f72a8f97da86428e438",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Relaunching a corrected c2 probe: the decomposition must be per-row (each row's error is x·residual_row), and I compare the adversarial input's E against a benign-random-x baseline.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-98c0a559160d1d28",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import numpy as np, torch, json, sys, os\\nsys.path.insert(0, \\\"/root/pilot_cases/case_104\\\")\\nos.chdir(\\\"/root/pilot_cases/case_104\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\nx, w = K.make_inputs(dev)\\nxf = x.cpu().numpy().astype(np.float64)\\nwf = w.cpu().numpy().astype(np.float64)\\n\\n# float64 quantizer (same scheme as kernel/generator)\\nscale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\\nq = np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale\\nper_row_res = q - wf          # (m, k)\\nper_row_err = per_row_res @ xf  # (m,) exact per-row error of quantized matvec\\nerr_norm = np.linalg.norm(per_row_err)\\nref = wf @ xf\\nn = ref.size\\nden = max(np.linalg.norm(ref), 0.001*np.sqrt(n))\\nE_quant = err_norm / den\\n\\n# actual kernel output vs its fp64 quant model and vs reference\\nout = K.run(x, w).cpu().numpy().astype(np.float64)\\nE_kernel = np.linalg.norm(out - ref) / den\\nE_kernel_vs_quantmodel = np.linalg.norm(out - (q @ xf)) / max(np.linalg.norm(q @ xf), 1e-12)\\n\\n# directions in k-space\\nres_dir = per_row_res.sum(axis=0); res_dir /= np.linalg.norm(res_dir)\\nw_dir = wf.sum(axis=0); w_dir /= np.linalg.norm(w_dir)\\n# fraction of ||error||^2 explained by the aggregate residual direction:\\n# per-row error contribution of x's residual-aligned component\\nx_res_comp = float(np.dot(xf, res_dir))\\nx_w_comp = float(np.dot(xf, w_dir))\\nx_norm = float(np.linalg.norm(xf))\\n# benign random x baseline\\nrng = np.random.Generator(np.random.PCG64(1224))\\nxb = rng.standard_normal(256).astype(np.float64)\\nE_benign = np.linalg.norm(per_row_res @ xb) / max(np.linalg.norm(wf @ xb), 0.001*np.sqrt(n))\\n# residual-only amplification: error from residual-aligned part of x alone\\nx_only_res = xf - x_res_comp*0  # placeholder not needed\\nprint(json.dumps({\\n  \\\"E_quantmodel_fp64\\\": float(E_quant),\\n  \\\"E_kernel_actual\\\": float(E_kernel),\\n  \\\"E_kernel_vs_quantmodel\\\": float(E_kernel_vs_quantmodel),\\n  \\\"E_benign_random_x\\\": float(E_benign),\\n  \\\"err_norm\\\": float(err_norm),\\n  \\\"ref_norm\\\": float(np.linalg.norm(ref)),\\n  \\\"x_res_aligned_component\\\": x_res_comp,\\n  \\\"x_weight_aligned_component\\\": x_w_comp,\\n  \\\"x_norm\\\": x_norm,\\n  \\\"budget\\\": 0.12,\\n  \\\"E_over_budget\\\": bool(E_kernel > 0.12),\\n  \\\"adversarial_to_benign_ratio\\\": float(E_kernel / E_benign)}))\\n\", \"expected_signal\": \"Per-row error decomposition: adversarial E vs benign baseline, kernel vs fp64 quant model\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Relaunch corrected c2 probe: per-row error decomposition.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790758530,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 758,
+    "prompt_tokens": 22472,
+    "total_tokens": 23230,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 12,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 12
+    }
+  }
+}

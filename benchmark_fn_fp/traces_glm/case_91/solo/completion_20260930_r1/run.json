@@ -1,0 +1,754 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_91",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(X, W, O, K: tl.constexpr):\n    row = tl.program_id(0)\n    j = tl.arange(0, K)\n    x = tl.load(X + j)\n    w = tl.load(W + row * K + j)\n    scale = tl.max(tl.abs(w), 0) / 7.0\n    qi = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(w / scale + 0.5)))\n    y = tl.sum(x * (qi * scale), 0)\n    tl.store(O + row, y)\n\ndef run(x, w):\n    m, k = w.shape\n    out = torch.empty(m, dtype=torch.float32, device=x.device)\n    _kernel[(m,)](x, w, out, k, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'quantization', 'seed': 1224, 'm': 32, 'k': 256, 'mix': 0.75, 'residual': 1.0}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+    "passed": null,
+    "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = W @ x, using the original binary32 weights as real values.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.12.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+    "rounds": null,
+    "session_dir": "/root/pilot_cases/case_91",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T09:00:35Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:00:50Z",
+          "data": {
+            "E": 0.1737453960005445,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "70d229139d42517384d68388ba840942419ed1090d70ab090fed7bcd7b0688fe"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "9cc476598f406f9e577f5abc87c8300fbe943ffd585d03f8f9e196ee56169ee6"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "4181db58e97abe413dbbdc734c0b88b56a422f8a8194d223d1d6056f69181636"
+              }
+            ],
+            "budget": 0.12,
+            "duration_s": 4.334716,
+            "exit_code": 0,
+            "expected_signal": null,
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.1737453960005445,
+              "budget": 0.12,
+              "finite": true,
+              "max_abs_err": 1.0766464052925309,
+              "metric": "E budget ratio per problem.txt",
+              "norm_diff": 2.2262719879983486,
+              "norm_ref": 12.813415717740064,
+              "passes": false,
+              "shapes": [
+                32,
+                256
+              ]
+            },
+            "max_abs_err": 1.0766464052925309,
+            "norm_diff": 2.2262719879983486,
+            "norm_ref": 12.813415717740064,
+            "passes": false,
+            "shapes": [
+              32,
+              256
+            ],
+            "stderr": "",
+            "stdout": "{\"metric\": \"E budget ratio per problem.txt\", \"shapes\": [32, 256], \"finite\": true, \"E\": 0.1737453960005445, \"budget\": 0.12, \"norm_ref\": 12.813415717740064, \"norm_diff\": 2.2262719879983486, \"max_abs_err\": 1.0766464052925309, \"passes\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact make_inputs() workload (m=32, k=256, seed 1224), the kernel output is finite but E = 0.1737, exceeding the contract budget of 0.12 (norm_diff 2.226 vs norm_ref 12.813). The 7-level weight quantization error dominates: ||quantized-W @ x - W @ x||_2 is well above 0.12*||ref||.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel replaces each weight row by its 7-level symmetric quantization (step = max|w|/7) before the dot product; this introduces relative error that may exceed the budget E <= 0.12 on the exact make_inputs() workload (m=32, k=256, seed 1224).",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Workload is exactly make_inputs(); reference is float64 W@x on the same float32 inputs; contract satisfied iff outputs finite and E <= 0.12."
+        }
+      ],
+      "scope_rationale": "The contract requires finite outputs and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.12 on the exact make_inputs() workload; a quantization error budget violation is a direct contract violation.",
+      "statement": "The kernel's 7-level weight quantization yields E > 0.12 (contract violation) on the specified make_inputs() workload.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T09:00:50Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_91",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_91"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_91"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_91"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_91",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 5.82741630999999,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel quantizes each weight row to symmetric 8-ish levels (int in [-7,7], step = max|w|/7) before the matvec. I'll claim this may violate the error budget E \u2264 0.12 on the specified workload and measure it directly.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel replaces each weight row by its 7-level symmetric quantization (step = max|w|/7) before the dot product; this introduces relative error that may exceed the budget E <= 0.12 on the exact make_inputs() workload (m=32, k=256, seed 1224).",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Workload is exactly make_inputs(); reference is float64 W@x on the same float32 inputs; contract satisfied iff outputs finite and E <= 0.12."
+              }
+            ],
+            "scope_rationale": "The contract requires finite outputs and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.12 on the exact make_inputs() workload; a quantization error budget violation is a direct contract violation.",
+            "statement": "The kernel's 7-level weight quantization yields E > 0.12 (contract violation) on the specified make_inputs() workload."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.827,
+        "input_tokens": 8168,
+        "output_tokens": 314
+      }
+    },
+    {
+      "duration_s": 5.587471550000032,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run the decisive probe: compute the exact make_inputs() workload, the kernel output, the float64 reference, and E.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, sys, numpy as np, torch\nsys.path.insert(0, \"/root/pilot_cases/case_91\")\nimport kernel\n\nx, w = kernel.make_inputs(\"cuda\")\nout = kernel.run(x, w)\nref = w.to(torch.float64) @ x.to(torch.float64)\ndiff = out.to(torch.float64) - ref\nE = float(diff.norm() / max(float(ref.norm()), 0.001*np.sqrt(ref.numel())))\nprint(json.dumps({\n  \"metric\": \"E budget ratio per problem.txt\",\n  \"shapes\": list(w.shape),\n  \"finite\": bool(torch.isfinite(out).all()),\n  \"E\": E,\n  \"budget\": 0.12,\n  \"norm_ref\": float(ref.norm()),\n  \"norm_diff\": float(diff.norm()),\n  \"max_abs_err\": float(diff.abs().max()),\n  \"passes\": bool(torch.isfinite(out).all() and E <= 0.12),\n}))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.587,
+        "input_tokens": 9436,
+        "output_tokens": 245
+      }
+    },
+    {
+      "duration_s": 5.115095677999989,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe ran successfully: E = 0.1737 > 0.12 budget on the exact contract workload \u2014 a violation. Finalizing evidence and verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "E": 0.1737453960005445,
+              "budget": 0.12,
+              "finite": true,
+              "max_abs_err": 1.0766464052925309,
+              "norm_diff": 2.2262719879983486,
+              "norm_ref": 12.813415717740064,
+              "passes": false,
+              "shapes": [
+                32,
+                256
+              ]
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "On the exact make_inputs() workload (m=32, k=256, seed 1224), the kernel output is finite but E = 0.1737, exceeding the contract budget of 0.12 (norm_diff 2.226 vs norm_ref 12.813). The 7-level weight quantization error dominates: ||quantized-W @ x - W @ x||_2 is well above 0.12*||ref||.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.115,
+        "input_tokens": 11575,
+        "output_tokens": 280
+      }
+    },
+    {
+      "duration_s": 5.37563911899997,
+      "role": "solo",
+      "round": 5,
+      "text": "The decisive claim is confirmed and in-scope: the exact contract workload gives E = 0.1737 > 0.12. Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t6 ran the exact contract workload (make_inputs with seed 1224, m=32, k=256) on GPU: kernel output was finite but E = ||out - float64 W@x||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.1737, well above the contract budget of 0.12 (norm_diff 2.226 vs norm_ref 12.813, max abs err 1.08). The kernel replaces each weight row with a 7-level symmetric quantization (step = max|w_row|/7) before the dot product, and that quantization error alone exceeds the budget on this specified workload. Budget violation on the only in-scope workload is a contract violation; reduced precision is permitted only if E <= 0.12, which it is not.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.376,
+        "input_tokens": 15294,
+        "output_tokens": 265
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_91"
+      },
+      "created_at": "2026-09-30T09:00:29Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_91",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(X, W, O, K: tl.constexpr):\n    row = tl.program_id(0)\n    j = tl.arange(0, K)\n    x = tl.load(X + j)\n    w = tl.load(W + row * K + j)\n    scale = tl.max(tl.abs(w), 0) / 7.0\n    qi = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(w / scale + 0.5)))\n    y = tl.sum(x * (qi * scale), 0)\n    tl.store(O + row, y)\n\ndef run(x, w):\n    m, k = w.shape\n    out = torch.empty(m, dtype=torch.float32, device=x.device)\n    _kernel[(m,)](x, w, out, k, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'quantization', 'seed': 1224, 'm': 32, 'k': 256, 'mix': 0.75, 'residual': 1.0}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+        "passed": null,
+        "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = W @ x, using the original binary32 weights as real values.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.12.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "rounds": null,
+        "session_dir": "/root/pilot_cases/case_91",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_91"
+      },
+      "created_at": "2026-09-30T09:00:29Z",
+      "id": "t2",
+      "output": {
+        "content": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = W @ x, using the original binary32 weights as real values.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.12.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "entry": "case_91",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_91"
+      },
+      "created_at": "2026-09-30T09:00:29Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_91",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2439
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1055
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_91",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T09:00:29Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_91\",\n  \"status\": \"unverified\",\n  \"passed\": null\n}\n",
+        "entry": "case_91",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel replaces each weight row by its 7-level symmetric quantization (step = max|w|/7) before the dot product; this introduces relative error that may exceed the budget E <= 0.12 on the exact make_inputs() workload (m=32, k=256, seed 1224).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Workload is exactly make_inputs(); reference is float64 W@x on the same float32 inputs; contract satisfied iff outputs finite and E <= 0.12."
+          }
+        ],
+        "scope_rationale": "The contract requires finite outputs and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.12 on the exact make_inputs() workload; a quantization error budget violation is a direct contract violation.",
+        "statement": "The kernel's 7-level weight quantization yields E > 0.12 (contract violation) on the specified make_inputs() workload."
+      },
+      "created_at": "2026-09-30T09:00:35Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-30T09:00:35Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel replaces each weight row by its 7-level symmetric quantization (step = max|w|/7) before the dot product; this introduces relative error that may exceed the budget E <= 0.12 on the exact make_inputs() workload (m=32, k=256, seed 1224).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Workload is exactly make_inputs(); reference is float64 W@x on the same float32 inputs; contract satisfied iff outputs finite and E <= 0.12."
+          }
+        ],
+        "scope_rationale": "The contract requires finite outputs and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.12 on the exact make_inputs() workload; a quantization error budget violation is a direct contract violation.",
+        "statement": "The kernel's 7-level weight quantization yields E > 0.12 (contract violation) on the specified make_inputs() workload.",
+        "status": "open",
+        "updated_at": "2026-09-30T09:00:35Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, sys, numpy as np, torch\nsys.path.insert(0, \"/root/pilot_cases/case_91\")\nimport kernel\n\nx, w = kernel.make_inputs(\"cuda\")\nout = kernel.run(x, w)\nref = w.to(torch.float64) @ x.to(torch.float64)\ndiff = out.to(torch.float64) - ref\nE = float(diff.norm() / max(float(ref.norm()), 0.001*np.sqrt(ref.numel())))\nprint(json.dumps({\n  \"metric\": \"E budget ratio per problem.txt\",\n  \"shapes\": list(w.shape),\n  \"finite\": bool(torch.isfinite(out).all()),\n  \"E\": E,\n  \"budget\": 0.12,\n  \"norm_ref\": float(ref.norm()),\n  \"norm_diff\": float(diff.norm()),\n  \"max_abs_err\": float(diff.abs().max()),\n  \"passes\": bool(torch.isfinite(out).all() and E <= 0.12),\n}))\n"
+      },
+      "created_at": "2026-09-30T09:00:45Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "70d229139d42517384d68388ba840942419ed1090d70ab090fed7bcd7b0688fe"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "9cc476598f406f9e577f5abc87c8300fbe943ffd585d03f8f9e196ee56169ee6"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "4181db58e97abe413dbbdc734c0b88b56a422f8a8194d223d1d6056f69181636"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's 7-level weight quantization yields E > 0.12 (contract violation) on the specified make_inputs() workload.",
+        "cwd": "/root/pilot_cases/case_91",
+        "duration_s": 4.334716,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "70d229139d42517384d68388ba840942419ed1090d70ab090fed7bcd7b0688fe"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "9cc476598f406f9e577f5abc87c8300fbe943ffd585d03f8f9e196ee56169ee6"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "4181db58e97abe413dbbdc734c0b88b56a422f8a8194d223d1d6056f69181636"
+              }
+            ],
+            "duration_s": 4.334716,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.1737453960005445,
+              "budget": 0.12,
+              "finite": true,
+              "max_abs_err": 1.0766464052925309,
+              "metric": "E budget ratio per problem.txt",
+              "norm_diff": 2.2262719879983486,
+              "norm_ref": 12.813415717740064,
+              "passes": false,
+              "shapes": [
+                32,
+                256
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"E budget ratio per problem.txt\", \"shapes\": [32, 256], \"finite\": true, \"E\": 0.1737453960005445, \"budget\": 0.12, \"norm_ref\": 12.813415717740064, \"norm_diff\": 2.2262719879983486, \"max_abs_err\": 1.0766464052925309, \"passes\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "E": 0.1737453960005445,
+          "budget": 0.12,
+          "finite": true,
+          "max_abs_err": 1.0766464052925309,
+          "metric": "E budget ratio per problem.txt",
+          "norm_diff": 2.2262719879983486,
+          "norm_ref": 12.813415717740064,
+          "passes": false,
+          "shapes": [
+            32,
+            256
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"E budget ratio per problem.txt\", \"shapes\": [32, 256], \"finite\": true, \"E\": 0.1737453960005445, \"budget\": 0.12, \"norm_ref\": 12.813415717740064, \"norm_diff\": 2.2262719879983486, \"max_abs_err\": 1.0766464052925309, \"passes\": false}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "E": 0.1737453960005445,
+          "budget": 0.12,
+          "finite": true,
+          "max_abs_err": 1.0766464052925309,
+          "norm_diff": 2.2262719879983486,
+          "norm_ref": 12.813415717740064,
+          "passes": false,
+          "shapes": [
+            32,
+            256
+          ]
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "On the exact make_inputs() workload (m=32, k=256, seed 1224), the kernel output is finite but E = 0.1737, exceeding the contract budget of 0.12 (norm_diff 2.226 vs norm_ref 12.813). The 7-level weight quantization error dominates: ||quantized-W @ x - W @ x||_2 is well above 0.12*||ref||.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T09:00:50Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T09:00:35Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T09:00:50Z",
+              "data": {
+                "E": 0.1737453960005445,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "70d229139d42517384d68388ba840942419ed1090d70ab090fed7bcd7b0688fe"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "9cc476598f406f9e577f5abc87c8300fbe943ffd585d03f8f9e196ee56169ee6"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "4181db58e97abe413dbbdc734c0b88b56a422f8a8194d223d1d6056f69181636"
+                  }
+                ],
+                "budget": 0.12,
+                "duration_s": 4.334716,
+                "exit_code": 0,
+                "expected_signal": null,
+                "finite": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "E": 0.1737453960005445,
+                  "budget": 0.12,
+                  "finite": true,
+                  "max_abs_err": 1.0766464052925309,
+                  "metric": "E budget ratio per problem.txt",
+                  "norm_diff": 2.2262719879983486,
+                  "norm_ref": 12.813415717740064,
+                  "passes": false,
+                  "shapes": [
+                    32,
+                    256
+                  ]
+                },
+                "max_abs_err": 1.0766464052925309,
+                "norm_diff": 2.2262719879983486,
+                "norm_ref": 12.813415717740064,
+                "passes": false,
+                "shapes": [
+                  32,
+                  256
+                ],
+                "stderr": "",
+                "stdout": "{\"metric\": \"E budget ratio per problem.txt\", \"shapes\": [32, 256], \"finite\": true, \"E\": 0.1737453960005445, \"budget\": 0.12, \"norm_ref\": 12.813415717740064, \"norm_diff\": 2.2262719879983486, \"max_abs_err\": 1.0766464052925309, \"passes\": false}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the exact make_inputs() workload (m=32, k=256, seed 1224), the kernel output is finite but E = 0.1737, exceeding the contract budget of 0.12 (norm_diff 2.226 vs norm_ref 12.813). The 7-level weight quantization error dominates: ||quantized-W @ x - W @ x||_2 is well above 0.12*||ref||.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel replaces each weight row by its 7-level symmetric quantization (step = max|w|/7) before the dot product; this introduces relative error that may exceed the budget E <= 0.12 on the exact make_inputs() workload (m=32, k=256, seed 1224).",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Workload is exactly make_inputs(); reference is float64 W@x on the same float32 inputs; contract satisfied iff outputs finite and E <= 0.12."
+            }
+          ],
+          "scope_rationale": "The contract requires finite outputs and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.12 on the exact make_inputs() workload; a quantization error budget violation is a direct contract violation.",
+          "statement": "The kernel's 7-level weight quantization yields E > 0.12 (contract violation) on the specified make_inputs() workload.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T09:00:50Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T09:00:50Z",
+          "data": {
+            "E": 0.1737453960005445,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "70d229139d42517384d68388ba840942419ed1090d70ab090fed7bcd7b0688fe"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "9cc476598f406f9e577f5abc87c8300fbe943ffd585d03f8f9e196ee56169ee6"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "4181db58e97abe413dbbdc734c0b88b56a422f8a8194d223d1d6056f69181636"
+              }
+            ],
+            "budget": 0.12,
+            "duration_s": 4.334716,
+            "exit_code": 0,
+            "expected_signal": null,
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.1737453960005445,
+              "budget": 0.12,
+              "finite": true,
+              "max_abs_err": 1.0766464052925309,
+              "metric": "E budget ratio per problem.txt",
+              "norm_diff": 2.2262719879983486,
+              "norm_ref": 12.813415717740064,
+              "passes": false,
+              "shapes": [
+                32,
+                256
+              ]
+            },
+            "max_abs_err": 1.0766464052925309,
+            "norm_diff": 2.2262719879983486,
+            "norm_ref": 12.813415717740064,
+            "passes": false,
+            "shapes": [
+              32,
+              256
+            ],
+            "stderr": "",
+            "stdout": "{\"metric\": \"E budget ratio per problem.txt\", \"shapes\": [32, 256], \"finite\": true, \"E\": 0.1737453960005445, \"budget\": 0.12, \"norm_ref\": 12.813415717740064, \"norm_diff\": 2.2262719879983486, \"max_abs_err\": 1.0766464052925309, \"passes\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact make_inputs() workload (m=32, k=256, seed 1224), the kernel output is finite but E = 0.1737, exceeding the contract budget of 0.12 (norm_diff 2.226 vs norm_ref 12.813). The 7-level weight quantization error dominates: ||quantized-W @ x - W @ x||_2 is well above 0.12*||ref||.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 ran the exact contract workload (make_inputs with seed 1224, m=32, k=256) on GPU: kernel output was finite but E = ||out - float64 W@x||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.1737, well above the contract budget of 0.12 (norm_diff 2.226 vs norm_ref 12.813, max abs err 1.08). The kernel replaces each weight row with a 7-level symmetric quantization (step = max|w_row|/7) before the dot product, and that quantization error alone exceeds the budget on this specified workload. Budget violation on the only in-scope workload is a contract violation; reduced precision is permitted only if E <= 0.12, which it is not.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T09:00:55Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-30T09:00:55Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 ran the exact contract workload (make_inputs with seed 1224, m=32, k=256) on GPU: kernel output was finite but E = ||out - float64 W@x||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.1737, well above the contract budget of 0.12 (norm_diff 2.226 vs norm_ref 12.813, max abs err 1.08). The kernel replaces each weight row with a 7-level symmetric quantization (step = max|w_row|/7) before the dot product, and that quantization error alone exceeds the budget on this specified workload. Budget violation on the only in-scope workload is a contract violation; reduced precision is permitted only if E <= 0.12, which it is not.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-30T09:00:55Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t6 ran the exact contract workload (make_inputs with seed 1224, m=32, k=256) on GPU: kernel output was finite but E = ||out - float64 W@x||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.1737, well above the contract budget of 0.12 (norm_diff 2.226 vs norm_ref 12.813, max abs err 1.08). The kernel replaces each weight row with a 7-level symmetric quantization (step = max|w_row|/7) before the dot product, and that quantization error alone exceeds the budget on this specified workload. Budget violation on the only in-scope workload is a contract violation; reduced precision is permitted only if E <= 0.12, which it is not.",
+    "verdict": "reject"
+  }
+}

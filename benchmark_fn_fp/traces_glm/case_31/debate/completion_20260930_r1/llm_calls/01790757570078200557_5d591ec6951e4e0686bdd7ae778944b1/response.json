@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-703d7d2ee34e4d9c8a99d933055584b4",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Two open claims (c2, c3) have no evidence yet. I'll launch independent runtime probes for both: c2 uses cu_k_seqlens=[0,40,64] (total 64 is a multiple of 32 while batch 0's k length 40 is not) with causal=False and all blocks selected, comparing against a same-sequence-only reference; c3 uses a single batch with seq_q=32, seq_k=64 under causal=True, comparing against a position-based causal reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8aa3308a3b395778",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_31\\\")\\nimport kernel as K\\n\\ntorch.manual_seed(0)\\ndev = 'cuda'\\nseqlens_q = [32, 32]\\nseqlens_k = [40, 24]   # total 64 -> EVEN_SEQ_KBLOCK=True (misclassified); batch0 last k block partial\\ncu_q = torch.tensor([0, 32, 64], device=dev, dtype=torch.int32)\\ncu_k = torch.tensor([0, 40, 64], device=dev, dtype=torch.int32)\\nnq, nk, hd = 1, 1, 64\\nq = torch.randn(64, nq, hd, device=dev)\\nk = torch.randn(64, nk, hd, device=dev)\\nv = torch.randn_like(k)\\nqb, kb = 32, 32\\nqb_per_batch = [(l + qb - 1)//qb for l in seqlens_q]\\nkb_per_batch = [(l + kb - 1)//kb for l in seqlens_k]\\nqblk_off = [0, qb_per_batch[0]]\\nkblk_off = [0, kb_per_batch[0]]\\nnqb, nkb = sum(qb_per_batch), sum(kb_per_batch)\\nbm = torch.ones(nk, nqb, nkb, dtype=torch.bool, device=dev)  # all selected\\n\\nout = K.block_sparse_attention(q, k, v, cu_q, cu_k, bm, qb, kb, causal=False)\\n\\nscale = hd ** -0.5\\nref = torch.full_like(q, float('nan'))\\nfor t in range(64):\\n    b = 0 if t < 32 else 1\\n    kstart, kend = int(cu_k[b]), int(cu_k[b+1])\\n    qbi = qblk_off[b] + (t - int(cu_q[b]))//qb\\n    cols = []\\n    for j in range(kb_per_batch[b]):\\n        if bm[0, qbi, kblk_off[b] + j]:\\n            ks = kstart + j*kb\\n            cols += list(range(ks, min(ks+kb, kend)))\\n    cols = torch.tensor(cols, device=dev)\\n    scores = (q[t,0].float() @ k[cols,0].float().T) * scale\\n    p = torch.softmax(scores, -1)\\n    ref[t,0] = p @ v[cols,0].float()\\n\\nerr = (out.float() - ref).abs()\\n# rows in batch 0 (query rows 0-31) attend batch0 keys [0,40); kernel may leak keys 40-63 (batch 1)\\nres = {\\n  \\\"metric\\\": \\\"kernel output vs same-sequence-only masked-softmax reference (causal=False, all blocks selected)\\\",\\n  \\\"max_abs_err_batch0_rows\\\": float(err[:32].max().item()),\\n  \\\"max_abs_err_batch1_rows\\\": float(err[32:].max().item()),\\n  \\\"max_abs_err_overall\\\": float(err.max().item()),\\n  \\\"batch0_k_len\\\": 40, \\\"batch1_k_len\\\": 24, \\\"k_block_size\\\": 32,\\n  \\\"total_k_len\\\": 64, \\\"EVEN_SEQ_KBLOCK_kernel_value\\\": True,\\n  \\\"expected_signal\\\": \\\"large error on batch0 query rows if next-sequence keys leak into softmax\\\"\\n}\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"large max_abs_err on batch 0 rows (partial last k block leaks next-sequence keys into softmax) vs reference\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-b5ab07f83d0a1490",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_31\\\")\\nimport kernel as K\\n\\ntorch.manual_seed(1)\\ndev = 'cuda'\\n# single batch, q len 32, k len 64, both multiples of block size -> isolates causal offset effect\\nseqlens_q = [32]; seqlens_k = [64]\\ncu_q = torch.tensor([0, 32], device=dev, dtype=torch.int32)\\ncu_k = torch.tensor([0, 64], device=dev, dtype=torch.int32)\\nnq, nk, hd = 1, 1, 64\\nq = torch.randn(32, nq, hd, device=dev)\\nk = torch.randn(64, nk, hd, device=dev)\\nv = torch.randn_like(k)\\nqb, kb = 32, 32\\nnqb, nkb = 1, 2\\nbm = torch.ones(nk, nqb, nkb, dtype=torch.bool, device=dev)\\n\\nout = K.block_sparse_attention(q, k, v, cu_q, cu_k, bm, qb, kb, causal=True)\\n\\nscale = hd ** -0.5\\nref = torch.full_like(q, float('nan'))\\nfor t in range(32):\\n    # position-based causal: query i attends key j iff j <= i (same sequence)\\n    cols = torch.arange(0, t+1, device=dev)\\n    scores = (q[t,0].float() @ k[cols,0].float().T) * scale\\n    p = torch.softmax(scores, -1)\\n    ref[t,0] = p @ v[cols,0].float()\\n\\nerr = (out.float() - ref).abs()\\nres = {\\n  \\\"metric\\\": \\\"kernel output vs position-based causal reference (query i attends keys j<=i), causal=True, seq_q=32, seq_k=64\\\",\\n  \\\"max_abs_err\\\": float(err.max().item()),\\n  \\\"max_abs_err_row0\\\": float(err[0].max().item()),\\n  \\\"mean_abs_err\\\": float(err.mean().item()),\\n  \\\"seq_q\\\": 32, \\\"seq_k\\\": 64, \\\"offset_used_by_kernel\\\": 32,\\n  \\\"expected_signal\\\": \\\"large error if kernel's (k_len - q_len) offset shifts the causal boundary vs position-based causal\\\"\\n}\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"large max_abs_err vs position-based causal reference when seq_k > seq_q under causal=True\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Two open claims c2 and c3 need probes. Both can run independently. Launch two run_claim_probe calls in one response.\n\nc2 probe: cu_k = [0,40,64], kb=32, total 64 multiple of 32 → EVEN_SEQ_KBLOCK True while batch 0's last k block partial. Use q lengths multiple of qb so q side safe: seqlens_q = [32,32]. causal=False, bm all True. Reference: same-sequence keys only. Compute per-row ref, compare.\n\nc3 probe: causal=True, q lengths differ from k lengths, e.g. single batch seq_q=32, seq_k=64 (q=k? need both multiple of 32 to isolate causal effect). Reference: position-based causal (query i attends key j if j <= i). Compare.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757571,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1609,
+    "prompt_tokens": 41386,
+    "total_tokens": 42995,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 171,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 171
+    }
+  }
+}

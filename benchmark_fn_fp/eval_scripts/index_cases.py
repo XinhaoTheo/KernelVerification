@@ -62,7 +62,8 @@ def main():
         "[GLM 逐次运行索引](traces_glm/INDEX.md) 保留不同配置、复测与失败尝试；题库编号相同不代表三组都已跑齐。",
         "目录已统一编号；历史请求、回复、probe 代码和 trace metadata 保留执行当时的原始字节，"
         "其中旧编号不是另一道题。读取程序根据当前目录与本注册表核对身份，不修改历史证据。",
-        "早期数值 pilot（case_82–case_105）没有 GLM traces，其旧单次调用结果仍留在 numerical_pilot 中。", "",
+        "早期数值 pilot（case_82–case_105）的旧 Opus 单次调用结果仍留在 numerical_pilot 中；"
+        "新增 GLM 记录统一放入 traces_glm，对应覆盖情况以逐次运行索引为准。", "",
         "## 文件清理说明", "",
         "Numerical / Evidence 的 `private_data/` 保存答案、搜索过程和 GPU 真值校验；这些是实验可复现性依据，不能当作缓存删除。",
         "可阅读的 Markdown 实验报告继续保留。可从原始 traces 重建的 scoreboard JSON 已清理；报告脚本默认输出 Markdown，"

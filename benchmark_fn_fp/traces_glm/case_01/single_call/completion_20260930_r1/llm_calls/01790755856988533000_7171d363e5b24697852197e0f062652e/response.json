@@ -1,0 +1,50 @@
+{
+  "id": "chatcmpl-8fb26fc2ec614f90b1cb2d52137d3c86",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.9, \"reason\": \"This mirrors the actual vLLM kernel: computing score = (target - draft) * inv_q without an explicit max(...,0) clamp is safe because over-proposed tokens yield negative scores, which lose to any nonnegative score; only in the degenerate all-over-proposed case could a negative token win, matching the reference's own undefined behavior there. Masking with -inf, per-block argmax with return_indices, cross-block max tracking, and the final clamp are all handled correctly.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Issue: prob = target - draft can be negative (over-proposed tokens) and then prob*inv_q negative. Since inv_q > 0, negative score. But masked-off entries get -inf; valid entries with negative prob get negative scores, which could still beat -inf but not beat any nonneg score. However if all residual probs are zero... reference: max(·,0) so all scores zero → recovered could be any token; here negative scores, argmax would be... all negative or zero. If some token has target==draft, score 0, fine. But a token with negative prob: negative score < 0. So negatives never win against nonneg. Actually if all scores negative (all target<draft), argmax picks least negative — violates \"must never be returned\"? Edge case where all over-proposed; but reference also would have all-zero residual... In vllm actual kernel they do exactly this (target_prob - draft_prob, no max clamp) — that's the actual vllm implementation. Indeed vllm's kernel does exactly this. So trust.\n\nAlso recovered_id = 0 initial with max_val -inf; if all scores are -inf (impossible since prob could be 0*inv_q... masked load other=0, but score set to -inf via where, fine). If all valid scores negative, local_max > -inf so updates. OK.\n\ntl.max with return_indices — returns index within block, correct. Also tl.minimum(recovered_id, vocab_size-1) safeguards. BLOCK_SIZE could be huge (next_power_of_2 of vocab e.g. 128k) — fine but single loop. Correct semantics. Trust.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790755857,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 472,
+    "prompt_tokens": 873,
+    "total_tokens": 1345,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 349,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 349
+    }
+  }
+}

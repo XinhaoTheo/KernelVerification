@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-b9713abb92054d19a0ceb6006930df36",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I have full artifact context. The kernel is a scalar recurrence (h[t] = a[t]*h[t-1] + b[t]) implemented in Triton on a single program, with the state h explicitly rounded to fp16 and back to fp32 at every step. That per-step fp16 quantization is the main numerical-risk surface against the E <= 0.003 budget. I'll record the description model now.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bf5cf9ebd9323fd2",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Single fixed workload: make_inputs() with CONFIG seed 453, t=768, d=32, decay=0.999, noise=0.001, bias=0.01; recurrence family branch produces a = full(768x32, 0.999) and b = N(0, 0.001)+0.01, both float32.\", \"Operation: h[0] = a[0]*0 + b[0]; h[t] = a[t]*h[t-1] + b[t]; all intermediate states returned (shape 768x32, 24576 elements).\", \"Reference: same float32 input values evaluated in float64 (mathematical recurrence).\", \"Metric E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(N)); pass iff all outputs finite and E <= 0.003.\", \"Reduced precision is explicitly permitted if budget is met; judgment is finite-workload compliance only, not general correctness.\", \"Hardware/env: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\"], \"kernel_model\": [\"Triton kernel _kernel runs a single program (grid (1,)) with a scalar Python loop over t in range(T) and a d-vector (D=32) of lanes; h state vector initialized to fp32 zeros (kernel.py lines 7-14).\", \"Per step: h = a*h + b computed in fp32 (enable_fp_fusion=False passed to prevent FMA contraction), then h is quantized via h.to(tl.float16).to(tl.float32) each iteration, and the rounded h is stored to O (line 13-14).\", \"run() allocates out = torch.empty_like(b), launches the kernel with T and D as constexpr derived from a.shape; returns out.\", \"So each emitted state equals a float64-reference recurrence state where the carry is re-quantized to fp16 (relative precision ~2^-11, subnormals near 6e-8) at every one of the 768 steps.\", \"With decay=0.999 and bias=0.01, the reference state ramps toward steady state ~0.01/(1-0.999) ~ 10 per channel; magnitudes are well inside fp16 range (max 65504), so no overflow risk on this workload.\"], \"open_questions\": [\"Actual E on the specified workload: does the fp16-carry recurrence land within 0.003, and how far from the boundary is it? Needs a runtime experiment.\", \"Does the fixed E denominator (max(||ref||_2, 0.001*sqrt(N)) = 76.8-ish here) make the per-element tolerance effectively ~0.048, comfortably absorbing the fp16 rounding? Preliminary yes, but needs empirical confirmation.\", \"Does 'enable_fp_fusion=False' as a launch kwarg behave as expected on Triton 3.4.0 (no error, actually disabling FMA)?\"], \"risk_map\": [\"Per-step fp16 rounding of the carry (kernel.py line 13) injects ~5e-4 relative error each of 768 steps; error accumulation may violate E <= 0.003 even though magnitudes stay in fp16 range.\", \"Input dtypes are not asserted: make_inputs returns float32, and tl.load assumes contiguous row-major (t*D + d) layout; empty_like(b) preserves dtype/contiguity here, but any non-contiguous or wrong-dtype input would be misread.\", \"Single-program grid with a Python-level loop over T=768 is functionally correct (sequential dependency) but a performance concern only, out of scope for the numerical-compliance contract.\", \"fp16 subnormal flush behavior near h magnitudes ~1e-8-1e-5 (T4 has no fp16 denormal support? needs check) could zero small early-step states, though these contribute negligibly to the L2 error given denominator uses max(||ref||_2, 0.001*sqrt(N)) ~ 76.8.\", \"Skeptic should probe: final E value, per-element max deviation, and whether errors grow or saturate over t (steady state ~10 makes relative fp16 error ~5e-3 absolute per element; accumulated E plausibly near the 0.003 boundary).\"], \"scope_notes\": \"Only the single seeded workload is in scope; behavior on other shapes/seeds/dtypes is out of scope for the verdict.\\\", \\\"Attention and quantization branches of make_inputs are dead code for this case (family='recurrence'); no softmax/top-k/fp8 considerations apply.\\\", \\\"Performance (single program, serial loop) is out of scope; only finiteness and E matter.\\\"]\", \"summary\": \"Case 87: Triton elementwise linear recurrence h[t]=a*h[t-1]+b with per-step fp16 carry quantization, run on one fixed workload (768x32, decay=0.999, bias=0.01). Contract allows reduced precision if E<=0.003; the fp16 carry is the dominant risk surface.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Record description update. Key analysis: FP16 rounding each step; decay 0.999, t=768. Steady state h ≈ b/(1-0.999) ≈ 0.01/0.001 = 10. b noise 0.001. Reference values ~around ~0.01-10. FP16 relative precision ~2^-11 ≈ 4.9e-4. Error per step relative ~5e-4, but errors decay with decay 0.999 per step... accumulated. 768 steps, each adds rounding error ~5e-4*h. h grows to ~10. Accumulated error ~5e-4*10*sqrt(768)~0.14 vs reference norm? Need experiment. Risk: FP16 snap could break E<=0.003 budget. Also note fp16 max 65504, fine. Also `a*h` done in fp32 with fusion disabled — fine. Risk map entries.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790758638,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1409,
+    "prompt_tokens": 5617,
+    "total_tokens": 7026,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 207,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 347,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 207
+    }
+  }
+}

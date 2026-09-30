@@ -1,0 +1,411 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Experimenter agent in an agentic kernel verification system.\nYour job is to gather evidence for open claims using local tools.\n\nRules:\n- Start from the claim ledger and description_model. Use read_claim_ledger when claim state is unclear.\n- Use contract_model and scope_notes to avoid probing irrelevant out-of-scope behavior.\n- Account for every open claim before yielding control to the Judge. Do not silently ignore open claims.\n- For each open claim with no evidence, either gather direct evidence or attach explicit inconclusive evidence explaining the blocker.\n- For each experiment, target one concrete claim.\n- Prefer run_claim_probe for runtime experiments; pass the target claim_id and a concise expected_signal.\n- Probe code should print a final JSON object on the last stdout line when possible.\n- You cannot observe a run_claim_probe result in the same response that requested it, so it is the response after that consumes it -- which is not the same as spending that whole turn on it (see below).\n- Finalize and launch in the same response. An unfinalized run_claim_probe result must be consumed before you yield control, but consuming it does not need a turn of its own: put finalize_probe_evidence for the results you can now see and the next run_claim_probe in the same response. A turn that only finalizes, or only launches, spends a whole model call on half a step.\n- Launch independent probes together. When several open claims can be tested without one claim's outcome changing another's experiment design, issue a run_claim_probe for each in one response and finalize them all in the next. Hold a probe back only when it genuinely depends on a result you do not have yet -- for example when you must choose inputs that avoid triggering a defect another claim just confirmed, so the two cannot confound each other. Say in your message which claims you are batching and which you are holding back, and why.\n- Use finalize_probe_evidence to interpret the probe output; it appends runtime evidence and updates claim status in one tool call.\n- Put every decisive measurement in the evidence `data` object as named key/value pairs (for example {\"rms_1e-8_ratio\": 990.1, \"max_abs_err\": 0.0731, \"tolerance\": 0.01}), not only in the prose summary. `data` is preserved in full for later turns; long prose summaries may be trimmed, so a number that exists only in prose can be lost to the agents who read your evidence afterwards.\n- Use run_python_probe only for debugging or exploratory work that is not yet tied to a claim.\n- Use append_evidence and update_claim_status directly only for non-probe evidence, such as source inspection or artifact reads.\n- Mark evidence inconclusive when the tool output cannot decide the claim.\n- Use request_description when a probe result or source path needs Describer interpretation before you can finalize evidence.\n- If tool budget or missing environment prevents covering all claims in one turn, state exactly which claim ids remain uncovered.\n- Do not invent results that are not present in tool output or source context.\n- Do not output a final verdict. That is the Judge agent's job.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"__pycache__/kernel.cpython-311.pyc\",\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_34\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import torch\\n2: import triton\\n3: import triton.language as tl\\n4: \\n5: \\n6: @triton.jit\\n7: def _blocked_sum_kernel(X, Out, N, BLOCK: tl.constexpr):\\n8:     pid = tl.program_id(0)\\n9:     idx = pid * BLOCK + tl.arange(0, BLOCK)\\n10:     x = tl.load(X + idx, mask=idx < N, other=0.0)\\n11:     tl.atomic_add(Out, tl.sum(x, axis=0))\\n12: \\n13: \\n14: def blocked_sum(x: torch.Tensor, block: int = 1024) -> torch.Tensor:\\n15:     \\\"\\\"\\\"Sum of a float32 tensor, one atomic accumulation per block.\\\"\\\"\\\"\\n16:     out = torch.zeros(1, device=x.device, dtype=torch.float32)\\n17:     _blocked_sum_kernel[(triton.cdiv(x.numel(), block),)](x, out, x.numel(), BLOCK=block)\\n18:     return out\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Operation: sum of a float32 tensor, partitioned across blocks and combined with\\none atomic add per block, the reduction strategy used by split-K GEMM and\\nall-reduce kernels.\\n\\n    out = sum over i of x[i]\\n\\nThe sum is a per-tensor statistic over an activation buffer carried in full\\nfloat32. Every element of x is an ordinary activation value drawn from the\\nlayer's own distribution, standard normal in the shipped workload, and x holds\\nN = 65536 elements. No quantisation grid, common scale, or shared exponent\\napplies to them.\\n\\nContract: two calls on the same input must return bitwise identical results. The\\nstatistic is compared across replicas holding the same shard and is pinned as a\\ngolden value in CI, so two runs that disagree in their last bits are not\\ninterchangeable. How the sum is partitioned across blocks, and in what order the\\npartial sums are combined, are performance choices the contract leaves free; only\\nthe returned bits are constrained.\\n\\nDoes blocked_sum() satisfy this contract?\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_34\",\n    \"status\": \"under_test\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-09-30T08:41:50Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"skeptic\",\n      \"rationale\": \"tl.atomic_add to a single float32 address from many concurrent programs has an unspecified completion order; float32 addition is non-associative, so different cross-block orders round differently, producing last-bit differences between runs on the same input. The contract explicitly forbids any last-bit disagreement.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Contract: two calls on the same input must return bitwise identical results... two runs that disagree in their last bits are not interchangeable.\"\n        }\n      ],\n      \"scope_rationale\": \"The stated contract requires two calls on the same input (N=65536 float32 standard-normal) to return bitwise identical results; the shipped workload uses default block=1024, so 64 atomic adds per call compete on ordering. Any cross-run ULP difference in the output scalar violates this directly.\",\n      \"statement\": \"blocked_sum on a 65536-element standard-normal float32 input (default block=1024) can return different raw bits across repeated calls on the same input, because the 64 per-block partial sums are combined via tl.atomic_add in hardware-determined order and float32 addition is non-associative, violating the bitwise-identical contract.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-09-30T08:41:50Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_34\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_34\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_34\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_34\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_34\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"describer\",\n      \"round\": 2,\n      \"text\": \"The kernel uses a single atomic_add per block into one output scalar, and the contract demands bitwise-identical results across runs \\u2014 the atomic accumulation order is exactly the nondeterminism surface. I'll record this description.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"contract_model\": \"[\\\"Compute the sum of an N-element float32 tensor (N=65536, standard normal activations in the shipped workload) with no quantization or shared exponent.\\\", \\\"Partitioning across blocks and the order of combining partial sums are explicitly free performance choices; only the returned bits are constrained.\\\", \\\"Hard requirement: two calls on the same input must return bitwise identical results, because the value is pinned as a CI golden and compared across replicas holding the same shard.\\\"], \\\"kernel_model</arg_key><arg_value>[\\\"blocked_sum launches a Triton kernel over cdiv(N, block) programs (default block=1024), each masking its slice with other=0.0 and computing tl.sum over its BLOCK lanes.\\\", \\\"Each program then does tl.atomic_add(Out, partial_sum) into a single pre-zeroed float32 scalar on the GPU.\\\", \\\"Output is a length-1 float32 tensor; no deterministic reduction tree, no stream/device ordering trick, no CPU fallback.\\\", \\\"Within a block the tl.sum reduction order is compiler/ISA-fixed per launch, so per-block partials are presumably stable; the cross-block combination is delegated to hardware atomic ordering.\\\"], \\\"risk_map</arg_key><arg_value>[\\\"tl.atomic_add from many concurrent programs to the same float32 address has an unspecified completion order; the resulting rounding of the cross-block accumulation can differ between runs, violating the bitwise-identical contract even when each per-block partial is deterministic.\\\", \\\"With N=65536, block=1024 there are 64 competing atomics; for standard normal data the expected cross-run ULP differences are small but nonzero \\u2014 the contract forbids even last-bit disagreement.\\\", \\\"Atomic float adds on the same address may serialize unpredictably or, on some hardware, use different internal ordering (e.g. reduction networks), so determinism cannot be assumed from one passing run.\\\", \\\"If block is caller-chosen such that it does not divide N or is not a power of two, masking still guards correctness of values, but launch-count/order assump\\n...[truncated, 1659 more chars]\"\n          },\n          \"tool\": \"record_description_update\"\n        }\n      ]\n    },\n    {\n      \"role\": \"skeptic\",\n      \"round\": 3,\n      \"text\": \"The contract demands bitwise-identical results across repeated calls, while the kernel combines 64 per-block partial sums through hardware-order float32 atomic adds \\u2014 the exact nondeterminism surface. I'll record this as the primary in-scope claim.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"tl.atomic_add to a single float32 address from many concurrent programs has an unspecified completion order; float32 addition is non-associative, so different cross-block orders round differently, producing last-bit differences between runs on the same input. The contract explicitly forbids any last-bit disagreement.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Contract: two calls on the same input must return bitwise identical results... two runs that disagree in their last bits are not interchangeable.\"\n              }\n            ],\n            \"scope_rationale\": \"The stated contract requires two calls on the same input (N=65536 float32 standard-normal) to return bitwise identical results; the shipped workload uses default block=1024, so 64 atomic adds per call compete on ordering. Any cross-run ULP difference in the output scalar violates this directly.\",\n            \"statement\": \"blocked_sum on a 65536-element standard-normal float32 input (default block=1024) can return different raw bits across repeated calls on the same input, because the 64 per-block partial sums are combined via tl.atomic_add in hardware-determined order and float32 addition is non-associative, violating the bitwise-identical contract.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_34\"\n      },\n      \"created_at\": \"2026-09-30T08:41:26Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"__pycache__/kernel.cpython-311.pyc\",\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_34\",\n        \"has_error\": null,\n        \"kernel_code\": \"import torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _blocked_sum_kernel(X, Out, N, BLOCK: tl.constexpr):\\n    pid = tl.program_id(0)\\n    idx = pid * BLOCK + tl.arange(0, BLOCK)\\n    x = tl.load(X + idx, mask=idx < N, other=0.0)\\n    tl.atomic_add(Out, tl.sum(x, axis=0))\\n\\n\\ndef blocked_sum(x: torch.Tensor, block: int = 1024) -> torch.Tensor:\\n    \\\"\\\"\\\"Sum of a float32 tensor, one atomic accumulation per block.\\\"\\\"\\\"\\n    out = torch.zeros(1, device=x.device, dtype=torch.float32)\\n    _blocked_sum_kernel[(triton.cdiv(x.numel(), block),)](x, out, x.numel(), BLOCK=block)\\n    return out\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Operation: sum of a float32 tensor, partitioned across blocks and combined with\\none atomic add per block, the reduction strategy used by split-K GEMM and\\nall-reduce kernels.\\n\\n    out = sum over i of x[i]\\n\\nThe sum is a per-tensor statistic over an activation buffer carried in full\\nfloat32. Every element of x is an ordinary activation value drawn from the\\nlayer's own distribution, standard normal in the shipped workload, and x holds\\nN = 65536 elements. No quantisation grid, common scale, or shared exponent\\napplies to them.\\n\\nContract: two calls on the same input must return bitwise identical results. The\\nstatistic is compared across replicas holding the same shard and is pinned as a\\ngolden value in CI, so two runs that disagree in their last bits are not\\ninterchangeable. How the sum is partitioned across blocks, and in what order the\\npartial sums are combined, are performance choices the contract leaves free; only\\nthe returned bits are constrained.\\n\\nDoes blocked_sum() satisfy this contract?\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_34\",\n        \"status\": \"under_test\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_34\"\n      },\n      \"created_at\": \"2026-09-30T08:41:26Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Operation: sum of a float32 tensor, partitioned across blocks and combined with\\none atomic add per block, the reduction strategy used by split-K GEMM and\\nall-reduce kernels.\\n\\n    out = sum over i of x[i]\\n\\nThe sum is a per-tensor statistic over an activation buffer carried in full\\nfloat32. Every element of x is an ordinary activation value drawn from the\\nlayer's own distribution, standard normal in the shipped workload, and x holds\\nN = 65536 elements. No quantisation grid, common scale, or shared exponent\\napplies to them.\\n\\nContract: two calls on the same input must return bitwise identical results. The\\nstatistic is compared across replicas holding the same shard and is pinned as a\\ngolden value in CI, so two runs that disagree in their last bits are not\\ninterchangeable. How the sum is partitioned across blocks, and in what order the\\npartial sums are combined, are performance choices the contract leaves free; only\\nthe returned bits are constrained.\\n\\nDoes blocked_sum() satisfy this contract?\\n\",\n        \"entry\": \"case_34\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_34\"\n      },\n      \"created_at\": \"2026-09-30T08:41:26Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_34\",\n        \"files\": [\n          {\n            \"kind\": \"other\",\n            \"path\": \"__pycache__/kernel.cpython-311.pyc\",\n            \"size_bytes\": 1637\n          },\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 599\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 68\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1003\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_34\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-30T08:41:26Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_34\\\",\\n  \\\"status\\\": \\\"under_test\\\",\\n  \\\"passed\\\": null\\n}\\n\",\n        \"entry\": \"case_34\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 68,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"contract_model\": \"[\\\"Compute the sum of an N-element float32 tensor (N=65536, standard normal activations in the shipped workload) with no quantization or shared exponent.\\\", \\\"Partitioning across blocks and the order of combining partial sums are explicitly free performance choices; only the returned bits are constrained.\\\", \\\"Hard requirement: two calls on the same input must return bitwise identical results, because the value is pinned as a CI golden and compared across replicas holding the same shard.\\\"], \\\"kernel_model</arg_key><arg_value>[\\\"blocked_sum launches a Triton kernel over cdiv(N, block) programs (default block=1024), each masking its slice with other=0.0 and computing tl.sum over its BLOCK lanes.\\\", \\\"Each program then does tl.atomic_add(Out, partial_sum) into a single pre-zeroed float32 scalar on the GPU.\\\", \\\"Output is a length-1 float32 tensor; no deterministic reduction tree, no stream/device ordering trick, no CPU fallback.\\\", \\\"Within a block the tl.sum reduction order is compiler/ISA-fixed per launch, so per-block partials are presumably stable; the cross-block combination is delegated to hardware atomic ordering.\\\"], \\\"risk_map</arg_key><arg_value>[\\\"tl.atomic_add from many concurrent programs to the same float32 address has an unspecified completion order; the resulting rounding of the cross-block accumulation can differ between runs, violating the bitwise-identical contract even when each per-block partial is deterministic.\\\", \\\"With N=65536, block=1024 there are 64 competing atomics; for standard normal data the expected cross-run ULP differences are small but nonzero \\u2014 the contract forbids even last-bit disagreement.\\\", \\\"Atomic float adds on the same address may serialize unpredictably or, on some hardware, use different internal ordering (e.g. reduction networks), so determinism cannot be assumed from one passing run.\\\", \\\"If block is caller-chosen such that it does not divide N or is not a power of two, masking still guards correctness of values, but launch-count/order assumptions remain as-is; the atomic nondeterminism risk is independent of block size.\\\", \\\"tl.sum lane order within a block should be fixed by compilation, but JIT recompilation or different BLOCK constexpr values across runs would change partials \\u2014 worth noting only if the harness varies block.\\\"], \\\"scope_notes</arg_key><arg_value>In-scope: bitwise determinism of the returned scalar across repeated identical calls, per the problem contract; N=65536 float32, standard normal in the shipped workload.\\\", \\\"Out-of-scope per contract: how the sum is partitioned and the order in which partial sums are combined, as long as returned bits are stable; performance is a free choice.\\\", \\\"Test code is empty in this artifact (test_code: ''), so determinism evidence must come from repeated-run probes comparing raw bits, not from an existing harness.\\\"], \\\"open_questions\\\": [\\\"Does the runtime evidence show cross-run bitwise differences in the output scalar for identical inputs (e.g. via .view(torch.int32) comparison over repeated calls)?\\\", \\\"Does Triton/hardware on this platform happen to serialize same-address atomics in launch order consistently, which would mask the theoretical nondeterminism in a small number of runs?\\\", \\\"Is the reference/benchmark tolerance bitwise (contract says bits), or is there a hidden numeric tolerance that would make atomic nondeterminism acceptable?\\\"], \\\"summary</arg_key><arg_value>case_34: blocked_sum sums a 65536-element float32 tensor via per-block Triton partial sums combined by float32 atomic_add into one scalar. Contract requires bitwise-identical results across runs; the atomic accumulation order is the primary determinism risk.\"\n      },\n      \"created_at\": \"2026-09-30T08:41:42Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"error\": {\n          \"message\": \"tool record_description_update missing required arg: summary\",\n          \"recoverable\": true,\n          \"type\": \"ToolRegistryError\"\n        },\n        \"error_type\": \"ToolRegistryError\",\n        \"event_id\": \"t5\",\n        \"message\": \"tool record_description_update missing required arg: summary\",\n        \"ok\": false\n      },\n      \"status\": \"error\",\n      \"tool\": \"record_description_update\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"tl.atomic_add to a single float32 address from many concurrent programs has an unspecified completion order; float32 addition is non-associative, so different cross-block orders round differently, producing last-bit differences between runs on the same input. The contract explicitly forbids any last-bit disagreement.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Contract: two calls on the same input must return bitwise identical results... two runs that disagree in their last bits are not interchangeable.\"\n          }\n        ],\n        \"scope_rationale\": \"The stated contract requires two calls on the same input (N=65536 float32 standard-normal) to return bitwise identical results; the shipped workload uses default block=1024, so 64 atomic adds per call compete on ordering. Any cross-run ULP difference in the output scalar violates this directly.\",\n        \"statement\": \"blocked_sum on a 65536-element standard-normal float32 input (default block=1024) can return different raw bits across repeated calls on the same input, because the 64 per-block partial sums are combined via tl.atomic_add in hardware-determined order and float32 addition is non-associative, violating the bitwise-identical contract.\"\n      },\n      \"created_at\": \"2026-09-30T08:41:50Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"created_at\": \"2026-09-30T08:41:50Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"skeptic\",\n        \"rationale\": \"tl.atomic_add to a single float32 address from many concurrent programs has an unspecified completion order; float32 addition is non-associative, so different cross-block orders round differently, producing last-bit differences between runs on the same input. The contract explicitly forbids any last-bit disagreement.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Contract: two calls on the same input must return bitwise identical results... two runs that disagree in their last bits are not interchangeable.\"\n          }\n        ],\n        \"scope_rationale\": \"The stated contract requires two calls on the same input (N=65536 float32 standard-normal) to return bitwise identical results; the shipped workload uses default block=1024, so 64 atomic adds per call compete on ordering. Any cross-run ULP difference in the output scalar violates this directly.\",\n        \"statement\": \"blocked_sum on a 65536-element standard-normal float32 input (default block=1024) can return different raw bits across repeated calls on the same input, because the 64 per-block partial sums are combined via tl.atomic_add in hardware-determined order and float32 addition is non-associative, violating the bitwise-identical contract.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-09-30T08:41:50Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 31621,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "request_description",
+        "description": "Request a Describer clarification for source, contract, probe, or verdict ambiguity.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "reason_kind",
+            "question"
+          ],
+          "properties": {
+            "reason_kind": {
+              "type": "string",
+              "enum": [
+                "contract_scope",
+                "source_interpretation",
+                "probe_anomaly",
+                "verdict_blocker",
+                "other"
+              ]
+            },
+            "question": {
+              "type": "string"
+            },
+            "related_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "source_refs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

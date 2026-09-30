@@ -130,8 +130,10 @@ _TURN_MESSAGE_LIMIT = 1500
 # remembered to cap. Anything else -- a new state field, a dict nested inside a
 # tool output, a list an agent can append to without limit -- reaches the prompt
 # at full length. `_clamp` is the backstop: it walks the whole rendered state and
-# bounds EVERY string and list, so a field is bounded by default and only
-# oversized by explicit exception.
+# bounds auxiliary strings and lists. The source and contract are explicit
+# exceptions: changing the task by dropping a wrapper or a contract clause is
+# not a prompt-size optimization. Oversized full inputs must fail visibly at
+# the model/context boundary rather than silently become a different task.
 #
 # Paths are dot-joined keys with list indices dropped, and a limit applies to a
 # path and everything beneath it, so "tool_events.output" also bounds
@@ -143,13 +145,11 @@ _HISTORY_RETRIEVAL_LIMIT = 8000
 # one. Head-only truncation therefore drops exactly the part the probe was run
 # for. These fields keep both ends instead.
 _MIDDLE_TRUNCATE_KEYS = frozenset({"stdout", "stderr"})
+_COMPLETE_ARTIFACT_PATHS = frozenset({
+    "artifact.kernel_code", "artifact.problem_text", "artifact.test_code",
+})
 _PATH_STRING_LIMITS: dict[str, int] = {
-    # The artifact under test: the agents' primary reading material.
-    "artifact.kernel_code": 12000,
-    # The contract every verdict is judged against; never trim it to the generic default.
-    "artifact.problem_text": 12000,
     "history.text": _TURN_MESSAGE_LIMIT,
-    "artifact.test_code": 12000,
     # Probe source and probe output, already capped by _tool_event_for_prompt;
     # repeated here so the same bound reaches nested tool payloads.
     "tool_events.args": _PROBE_SOURCE_LIMIT,
@@ -169,8 +169,10 @@ _PATH_STRING_LIMITS: dict[str, int] = {
 
 
 def _clamp(value: JsonValue, path: str = "") -> JsonValue:
-    """Bound every string and list in `value`, recursively."""
+    """Bound auxiliary state recursively, preserving the complete task inputs."""
     if isinstance(value, str):
+        if path in _COMPLETE_ARTIFACT_PATHS:
+            return value
         limit = _limit_for(path)
         if path.rsplit(".", 1)[-1] in _MIDDLE_TRUNCATE_KEYS:
             return _truncate_middle(value, limit)
@@ -273,10 +275,8 @@ def _state_for_prompt_unbounded(state: RunState, *, role: str | None = None) -> 
     artifact = dict(state.artifact or {})
     for key in ("kernel_code", "test_code"):
         if isinstance(artifact.get(key), str) and artifact[key]:
-            artifact[key] = _truncate(_number_lines(str(artifact[key])), 12000)
-    # The operative contract, prose rather than code, so it is not numbered.
-    if isinstance(artifact.get("problem_text"), str) and artifact["problem_text"]:
-        artifact["problem_text"] = _truncate(str(artifact["problem_text"]), 12000)
+            artifact[key] = _number_lines(str(artifact[key]))
+    # The operative contract remains verbatim; only source gains line numbers.
     # A null here means "nobody ran the tests", but rendered as JSON null beside
     # a field named `passed` it reads as a failing result. Say what it means.
     for key in ("passed", "has_error"):

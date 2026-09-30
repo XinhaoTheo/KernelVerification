@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-5b333108400d4526976c6a0b5a3a8bc4",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe covering varied W (power-of-2 and not), duplicate-heavy rows, and extreme int64 values, checking sortedness and stability.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a6a5e08331e54adf",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, '/root/cases/case_32')\\nfrom kernel import triton_argsort\\n\\ndef check(keys):\\n    N, W = keys.shape\\n    s, p = triton_argsort(keys.cuda())\\n    s = s.cpu(); p = p.cpu()\\n    sorted_ok = bool(torch.all(s[:, :-1] <= s[:, 1:]))\\n    gather_ok = bool(torch.all(s == torch.gather(keys.cpu(), 1, p)))\\n    # stability: reference stable argsort\\n    ref = torch.argsort(keys.cpu(), dim=1, stable=True)\\n    stable_ok = bool(torch.all(p == ref))\\n    return sorted_ok, gather_ok, stable_ok\\n\\nresults = {}\\ntorch.manual_seed(0)\\n\\n# 1: power-of-2 W, duplicates\\nk = torch.randint(0, 5, (64, 16), dtype=torch.int64)\\nresults['W16_dup'] = check(k)\\n# 2: non-power-of-2 W\\nk = torch.randint(0, 7, (64, 13), dtype=torch.int64)\\nresults['W13_dup'] = check(k)\\nk = torch.randint(-100, 100, (32, 9), dtype=torch.int64)\\nresults['W9_rand'] = check(k)\\nk = torch.randint(-100, 100, (16, 3), dtype=torch.int64)\\nresults['W3_rand'] = check(k)\\nk = torch.randint(-100, 100, (16, 1), dtype=torch.int64)\\nresults['W1_rand'] = check(k)\\n# 3: extreme values including INT64_MAX/MIN as actual keys\\nk = torch.randint(-2**62, 2**62, (32, 11), dtype=torch.int64)\\nk[0, :] = torch.tensor([2**63-1]*5 + [0]*3 + [-2**63]*3)\\nk[1, :] = torch.tensor([2**63-1, -2**63, 2**63-1, -2**63, 5, 5])\\nresults['W11_extremes'] = check(k)\\n# 4: all-equal row\\nk = torch.full((8, 10), 42, dtype=torch.int64)\\nresults['W10_all_equal'] = check(k)\\n# 5: many random sizes\\nbad = []\\nfor W in [2,3,4,5,6,7,8,12,17,32,33]:\\n    for t in range(10):\\n        k = torch.randint(-3, 3, (16, W), dtype=torch.int64)\\n        s_ok, g_ok, st_ok = check(k)\\n        if not (s_ok and g_ok and st_ok):\\n            bad.append((W, t, s_ok, g_ok, st_ok))\\nresults['sweep_bad'] = bad\\n\\nprint(json.dumps({k: (list(v) if isinstance(v, tuple) else v) for k, v in results.items()}))\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757963,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 693,
+    "prompt_tokens": 10036,
+    "total_tokens": 10729,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4608,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

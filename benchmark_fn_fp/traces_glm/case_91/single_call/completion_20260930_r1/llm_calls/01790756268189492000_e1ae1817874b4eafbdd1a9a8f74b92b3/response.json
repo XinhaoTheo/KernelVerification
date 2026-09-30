@@ -1,0 +1,50 @@
+{
+  "id": "chatcmpl-f73526a02d7343598217f84ef6c0e1dd",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"reject\", \"confidence\": 0.7, \"reason\": \"The kernel replaces each weight with a coarse symmetric quantization (step = row max/7, clipped to ±7), giving per-element error std ≈ 0.29·(max|w|/7) ≈ 0.13 for Gaussian weights. The workload is adversarial for exactly this scheme: make_inputs adds x += 1.0·(normalized summed per-row quantization residual), so the dot-product errors correlate across rows, yielding relative error roughly ~0.2–0.35, well above the 0.12 budget.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "The quantization is 3-bit-ish (values to nearest multiple of scale, clipped to ±7). Error: each w element quantized with error up to scale/2 = max|w|/14 per row... Actually w/scale range ±7 with step 1, error ≤ 0.5*scale = max|w|/14. Relative error per element ~ 1/14 / (typical |w|). For Gaussian, max|w| over 256 entries ≈ 3, typical |w| ≈ 0.8. Error relative ~ (3/14)/0.8 ≈ 0.27 per element, but errors average out over sum: relative error of dot product ~ error_per/sqrt(K)/typical contribution... Sum over 256 random signs: error std ≈ 0.5*scale ≈ 0.107; signal |sum x_j w_j| with x mix... x has 0.75 aligned with direction of sum of w columns. Hmm, x direction = normalized column sums. The dot product y_i = w_i · x. With x having large component along column-sum direction, output may be large, good. Error per row ≈ scale*0.5*sqrt(K)*||x_resid part||... hard precisely, but relative error ~ 0.107*sqrt(256)/|y| = 1.7/|y|. Typical |w_i·x̂|: random Gaussian vector dot unit vector ~ N(0,1), so |y| ~ 0.75*sqrt(256)... wait x includes 0.75*direction + 0.25*x_hat. y_i = 0.75*(w_i·direction) + 0.25*(w_i·x_hat). w_i·unit ≈ N(0,1). Hmm plus residual component adds more signal. Then ||y|| over 32 rows ≈ sqrt(32)*~1 ≈ 5.7. Quantization error norm over 32 rows: per row error std ≈ 0.5*scale*sqrt(sum x_j²)*... actually error vector e_i independent per element ~ U(-0.5,0.5)*scale; y error = e_i·x, std ≈ 0.29*scale*||x||... x norm = ~sqrt(0.75²+0.25²+residual) ~ 1.1. scale ≈ 3/7=0.43, so per-row error std ≈ 0.29*0.43*1.1 ≈ 0.14. Over 32 rows, error norm ≈ 0.14*sqrt(32)=0.8. ||y|| ≈ sqrt(32)*E|y| with |y|~max(...). Hmm signal: y_i std ≈ 1.1 (unit vector dot Gaussian row). ||y|| ≈ sqrt(32)*1.1 ≈ 6.2. Relative error ≈ 0.8/6.2 ≈ 0.13. Hmm, borderline near 0.12 budget. But residual component of x is designed to align with quantization residual — that makes error larger (adversarial). residual=1.0 adds component aligned with sum of per-row quantization errors. With x containing quantization residual direction with coefficient 1.0 plus x norm... e·residual: sum of e_i,j*residual_j = residual dot (quant error of row) — actually residual direction is normalized sum over rows of quantization errors; dotting row i's error with that gives correlated error ~ ||e_i||*cos... This is precisely the adversarial test. Budget is 0.12 though, and reduced precision is \"explicitly permitted if budget met.\"\n\nEstimate: per-row quant error vector e_i, ||e_i|| ≈ 0.29*scale*sqrt(256) ≈ 0.29*0.43*16 ≈ 2.0. x = 0.75*dir + 0.25*x̂ + 1.0*resid. Error contribution: e_i·x ≈ e_i·resid (correlated) ~ ||e_i||*(projection). residual direction normalized sum_i e_i (as column vector over k). e_i·resid: since resid ∝ sum_j e_{·,j}... resid = sum over rows of error vectors (k-dim), normalized. e_i·resid ≈ ||e_i||² * sqrt(32)/||sum||... sum of errors norm ≈ sqrt(32)*2 = 11.3; e_i·resid ≈ e_i·(sum)/11.3 ≈ (||e_i||² + small)/11.3 ≈ 4/11.3 ≈ 0.35. Random part e_i·other components: 0.29*scale*sqrt(0.75²+0.25²)*sqrt(256)≈0.29*0.43*0.79*16≈1.57... wait that's std of e_i·x̂ where e elements ~U(-.5,.5)*scale, x̂ unit: std = 0.29*scale ≈ 0.125. Hmm recompute: e_i·v for unit v: std = std(e)*1 = 0.29*0.43 ≈ 0.125. So per-row error std ~ sqrt(0.125²*2 + 0.35²) ≈ 0.39? But wait the correlated part: e_i·resid ≈ 0.35 mean-ish (with fluctuation). So error per row ~ 0.35 constant-ish bias + 0.13 noise. Error norm over 32 rows ≈ sqrt(32*0.35² + 32*0.13²) ≈ sqrt(3.9+0.54) ≈ 2.1. Signal: y_i = w_i·x; resid component: w_i·resid where resid is quant residual sum — w_i·resid relates to -e_i·resid ≈ -0.35 (since w = q+e). Also 0.75*(w_i·dir) etc. y_i ≈ quant part + ... magnitude ~ maybe 1.1. ||y|| ≈ 6.5. Relative error 2.1/6.5 ≈ 0.32? That exceeds 0.12. Hmm, but the denominator max includes reference norm; also this is a rough estimate with big uncertainty.\n\nActually wait — resid direction was computed from w quantization, and error e_i·resid: e_i·(sum_j e_j)/||sum||. E[e_i·sum] = ||e_i||² ≈ (0.29*0.43)²*256 = (0.125)²*256 = 4.0 → sqrt = 2.0. ||sum|| ≈ sqrt(32)*2 ≈ 11.3 (errors independent across rows). So e_i·resid ≈ 4/11.3 = 0.354. But y_i includes w_i·resid = (q_i + e_i)·resid = q_i·resid + 0.354. The reference y uses w. Output uses q. Error = e_i·x_total. x also has 0.75 dir + 0.25 x̂, contributing e_i·those ~ N(0, 0.125²*... ) small.\n\nSo error per row mean ≈ 0.354, plus noise. Error norm ≈ sqrt(32*(0.354² + small)) ≈ sqrt(32)*0.36 ≈ 2.0. Reference ||y||: y_i = w_i·x. Components: 0.75*w_i·dir ~ 0.75*N(0,1); 0.25*w_i·x̂ ~ 0.25*N(0,1); w_i·resid ≈ 0.354 + fluct ~ N(0,?)+... q_i·resid: q_i is quantized, related to -e_i? w = q+e so q·resid = w·resid - e·resid. Hmm w_i·resid: resid ∝ sum of e_j over rows j, so w_i·resid = sum_j w_i·e_j /11.3 — w_i vs e_j independent for j≠i, w_i·e_i = w_i·(w_i - q_i)... messy. Roughly |y_i| ~ sqrt(0.75²+0.25²+something) ~ 1. ||y|| ≈ sqrt(32)*1 = 5.7. Error norm 2.0 → E ≈ 0.35 > 0.12.\n\nSo this quantization approach likely fails. This CONFIG (residual=1.0, mix=0.75) is designed adversarially to punish exactly this symmetric uniform quantization. So verdict: reject.\n\nBut wait — is the error estimate solid? ||e_i||: e elements uniform in ±0.5*scale → std 0.29*scale, scale = max|w_row|/7. For Gaussian row of 256, max ≈ 3.2σ ≈ 3.2. scale ≈ 0.46. per-element error std ≈ 0.132. ||e_i|| ≈ 0.132*16 = 2.1. E[e_i·resid] = ||e_i||²/||sum e|| = 4.4/(2.1*√32)=4.4/11.9=0.37. Yes. So E ≈ 0.37/1 * sqrt ratio... error norm / ref norm ≈ (√32*0.37)/(√32*~1) ≈ 0.37. Fails budget 0.12.\n\nHmm but is ref norm ~1 per row? y_i = w_i·x, x norm = sqrt(0.75²+0.25²+1²)=1.29. y_i variance = ||x||²-ish... w_i·x where x fixed, w_i ~ N(0,I): var = ||x||² = 1.66, std 1.29. So ref norm ≈ √32*1.29 ≈ 7.3. Error norm: per-row error = e_i·x, mean 0.37 (from resid component), plus noise std ~ 0.132*1.29... noise: e_i·x random part std = 0.132*√(0.75²+0.25²)·1? e_i·v for fixed v: std = 0.132*||v|| = 0.132*1.03=0.136. So error norm ≈ √(32*(0.37²+0.136²)) = √(32*0.155)=2.23. E ≈ 2.23/7.3 = 0.31 > 0.12. Reject.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756268,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2534,
+    "prompt_tokens": 1275,
+    "total_tokens": 3809,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 2398,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 2398
+    }
+  }
+}

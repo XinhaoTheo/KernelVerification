@@ -18,14 +18,20 @@ import pytest
 @pytest.fixture
 def runner(tmp_path, monkeypatch):
     class Image:
+        def __init__(self):
+            self.packages = []
+            self.mounts = []
+
         @classmethod
         def debian_slim(cls, **kwargs):
             return cls()
 
         def pip_install(self, *args, **kwargs):
+            self.packages.extend(args)
             return self
 
         def add_local_dir(self, *args, **kwargs):
+            self.mounts.append(args)
             return self
 
     class App:
@@ -33,7 +39,10 @@ def runner(tmp_path, monkeypatch):
             pass
 
         def function(self, **kwargs):
-            return lambda function: function
+            def decorate(function):
+                function._modal_options = kwargs
+                return function
+            return decorate
 
         def local_entrypoint(self):
             return lambda function: function
@@ -247,3 +256,76 @@ def test_numerical_batch_checks_all_frozen_cases_before_submitting(runner, monke
         assert job[9] == {key: value for key, value in validated[job[0]].items() if key.endswith("sha256")}
         meta = read(benchmark / "traces_glm" / job[0] / job[1] / "challenge/trace_meta.json")
         assert meta["dataset"] == "numerical_challenges"
+
+
+def test_pilot_uses_its_pinned_image_and_shared_worker(runner, monkeypatch):
+    import hashlib
+    import shutil
+    module, _, benchmark = runner
+    root = benchmark / "numerical_pilot"
+    shutil.copytree(benchmark / "triton_eval_cases", root / "eval_cases")
+    validated = {name: {"ground_truth": "trust", **{
+        f"{kind}_sha256": hashlib.sha256((root / "eval_cases" / name / filename).read_bytes()).hexdigest()
+        for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt"))}}
+        for name in ("case_a", "case_b", "case_c")}
+    (root / "answer_key.json").write_text(json.dumps({"cases": validated}))
+    assert "numpy==1.26.4" in module.image.packages
+    assert "numpy==2.2.6" in module.pilot_image.packages
+    assert "numpy==1.26.4" not in module.pilot_image.packages
+    assert module.run_one._modal_options["image"] is module.image
+    assert module.run_pilot._modal_options["image"] is module.pilot_image
+    assert any(remote == "/root/pilot_cases" for local, remote in module.pilot_image.mounts)
+    assert all("answer_key" not in local and "private_data" not in local
+               for local, remote in module.pilot_image.mounts)
+
+    original_worker, pilot_worker = module.run_one, module.run_pilot
+    forwarded = []
+    monkeypatch.setattr(module, "_run_one_impl", lambda *args: forwarded.append(args) or {})
+    pilot_worker("case_a", "solo", 10, "model", 32768, "fireworks", 1800)
+    assert forwarded[0][7] == "numerical_pilot"
+    with pytest.raises(ValueError, match="NumPy 2.2.6 worker"):
+        original_worker("case_a", "solo", 10, "model", 32768, "fireworks", 1800,
+                        dataset="numerical_pilot")
+    with pytest.raises(ValueError, match="reserved"):
+        pilot_worker("case_a", "solo", 10, "model", 32768, "fireworks", 1800,
+                     dataset="benchmark_fn_fp")
+
+    calls = []
+    monkeypatch.setattr(module, "run_one", SimpleNamespace(
+        remote=lambda *job: pytest.fail("Pilot dispatched to the NumPy 1.26.4 worker")))
+    monkeypatch.setattr(module, "run_pilot", SimpleNamespace(
+        remote=lambda *job: calls.append(job) or make_result(*job[:2])))
+    module.main(arm="both", all=True, dataset="numerical_pilot", provider="fireworks",
+                trial="pilot", max_tokens=32768, total_output_tokens=32768)
+    assert len(calls) == 6
+    for job in calls:
+        assert job[7] == "numerical_pilot" and job[10] == 32768
+        assert job[9] == {key: value for key, value in validated[job[0]].items() if key.endswith("sha256")}
+
+
+def test_only_missing_reuses_any_valid_judgment_across_trials_in_target_tree(runner, monkeypatch):
+    module, storage, benchmark = runner
+
+    def previous(case, arm, verdict, *, tree="traces_glm", status="completed", trial="old",
+                 error="", model="z-ai/glm-5.3-flash"):
+        storage.reserve_trace(case, arm, traces_dir=tree, trial=trial,
+                              metadata={"status": status, "model": model, "provider": "openrouter"})
+        storage.write_trace(case, arm, traces_dir=tree, trial=trial,
+                            files={"run.json": json.dumps({"verdict": {"verdict": verdict}}),
+                                   "runner_error.txt": error})
+
+    # Correctness and provider are irrelevant to coverage; abstention is a valid answer.
+    previous("case_a", "solo", "reject", status="historical")
+    previous("case_b", "solo", "needs_more_evidence")
+    # Failed finalization and another model tree must not hide a missing GLM judgment.
+    previous("case_c", "solo", "trust", status="error")
+    previous("case_c", "solo", "trust", tree="traces_opus5", model="claude-opus-5")
+    previous("case_a", "debate", "trust", error="transport failure after verdict")
+    calls = []
+    monkeypatch.setattr(module, "run_one", SimpleNamespace(
+        remote=lambda *job: calls.append(job[:2]) or make_result(*job[:2])))
+    module.main(arm="both", all=True, provider="fireworks", trial="fill", only_missing=True)
+    assert sorted(calls) == [("case_a", "debate"), ("case_b", "debate"),
+                             ("case_c", "debate"), ("case_c", "solo")]
+    assert not (benchmark / "traces_glm/case_a/solo/fill").exists()
+    assert not (benchmark / "traces_glm/case_b/solo/fill").exists()

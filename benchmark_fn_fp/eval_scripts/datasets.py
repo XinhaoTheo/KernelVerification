@@ -10,8 +10,9 @@ try:
 except ImportError:
     from case_registry import validation_path
 
-DATASETS = ("benchmark_fn_fp", "correlation_pair", "numerical_challenges", "evidence_challenges")
-FROZEN_DATASETS = ("correlation_pair", "numerical_challenges", "evidence_challenges")
+DATASETS = ("benchmark_fn_fp", "correlation_pair", "numerical_challenges", "evidence_challenges",
+            "numerical_pilot")
+FROZEN_DATASETS = ("correlation_pair", "numerical_challenges", "evidence_challenges", "numerical_pilot")
 
 
 def cases_dir(repo: Path, dataset: str) -> Path:

@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-9dccffc9e4724ba39edc28db06d6ac59",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run two probes in one batch: c2 decides floor-vs-reference-norm dominance (pure CPU float64 computation of the reference on the exact float32 inputs), and c1 runs the actual Triton kernel on GPU and computes E. They're independent measurements.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b3ce096c035e6b52",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import numpy as np, torch\\nrng = np.random.Generator(np.random.PCG64(812))\\nn, d = 64, 32\\nq = rng.standard_normal(d)\\nk = rng.standard_normal((n, d)) * 0.7\\nv = rng.standard_normal((n, d))\\nq32, k32 = q.astype(np.float32), k.astype(np.float32)\\nz = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\\np = np.exp(z - z.max()); p /= p.sum()\\nv -= 0.5 * (p @ v)[None, :]\\n# float32-rounded inputs exactly as returned by make_inputs\\nq_f = q32.astype(np.float64); k_f = k32.astype(np.float64); v_f = v.astype(np.float32).astype(np.float64)\\n# float64 reference on the rounded inputs\\nz_r = k_f @ q_f / np.sqrt(d)\\np_r = np.exp(z_r - z_r.max()); p_r /= p_r.sum()\\ny_ref = p_r @ v_f\\nref_norm = np.linalg.norm(y_ref)\\nfloor = 0.001 * np.sqrt(d)\\nimport json\\nprint(json.dumps({\\n  \\\"ref_norm\\\": float(ref_norm),\\n  \\\"floor\\\": float(floor),\\n  \\\"dominant\\\": \\\"floor\\\" if floor > ref_norm else \\\"ref_norm\\\",\\n  \\\"ratio_ref_to_floor\\\": float(ref_norm / floor)\\n}))\", \"expected_signal\": \"reference norm below or near 0.00566 floor\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-bb9f1d28dae8aa62",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import numpy as np, torch, json, sys\\nsys.path.insert(0, \\\"/root/pilot_cases/case_99\\\")\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kmod\\\", \\\"/root/pilot_cases/case_99/kernel.py\\\")\\nkmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(kmod)\\nq, k, v = kmod.make_inputs(\\\"cuda\\\")\\nout = kmod.run(q, k, v)\\ntorch.cuda.synchronize()\\ny = out.cpu().numpy().astype(np.float64)\\nqf = q.cpu().numpy().astype(np.float64)\\nkf = k.cpu().numpy().astype(np.float64)\\nvf = v.cpu().numpy().astype(np.float64)\\nz = kf @ qf / np.sqrt(32)\\np = np.exp(z - z.max()); p /= p.sum()\\ny_ref = p @ vf\\nref_norm = np.linalg.norm(y_ref)\\nfloor = 0.001 * np.sqrt(32)\\nE = np.linalg.norm(y - y_ref) / max(ref_norm, floor)\\nprint(json.dumps({\\n  \\\"E\\\": float(E),\\n  \\\"ref_norm\\\": float(ref_norm),\\n  \\\"floor\\\": float(floor),\\n  \\\"abs_err_norm\\\": float(np.linalg.norm(y - y_ref)),\\n  \\\"out_finite\\\": bool(np.isfinite(y).all()),\\n  \\\"budget\\\": 0.001\\n}))\", \"expected_signal\": \"E > 0.001 (fp16 quantization violates budget) or E <= 0.001\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790759189,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 732,
+    "prompt_tokens": 26361,
+    "total_tokens": 27093,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are verifying whether a GPU (Triton) kernel implementation is correct.\n\nYou will be given:\n1. A problem statement describing the operation's contract and its reference behavior.\n2. The kernel implementation under test.\n\nDecide one of:\n- \"reject\": the implementation has a real defect / violates the stated contract.\n- \"trust\": the implementation is correct, or is an equally valid alternative implementation.\n- \"needs_more_evidence\": you genuinely cannot tell.\n\nAnswer with the JSON object required by the output schema.\nOutput schema:\n{\"type\": \"object\", \"required\": [\"verdict\", \"confidence\", \"reason\"], \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": [\"trust\", \"reject\", \"needs_more_evidence\"], \"description\": \"'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell.\"}, \"confidence\": {\"type\": \"number\", \"description\": \"0.0 to 1.0.\"}, \"reason\": {\"type\": \"string\", \"description\": \"One or two sentences.\"}}, \"additionalProperties\": false}"
+    },
+    {
+      "role": "user",
+      "content": "## Problem statement (contract + reference behavior)\n\nOperation: sum of a float32 tensor, partitioned across blocks and combined with\none atomic add per block, the reduction strategy used by split-K GEMM and\nall-reduce kernels.\n\n    out = sum over i of x[i]\n\nThe sum is a per-tensor statistic over an activation buffer carried in full\nfloat32. Every element of x is an ordinary activation value drawn from the\nlayer's own distribution, standard normal in the shipped workload, and x holds\nN = 65536 elements. No quantisation grid, common scale, or shared exponent\napplies to them.\n\nContract: two calls on the same input must return bitwise identical results. The\nstatistic is compared across replicas holding the same shard and is pinned as a\ngolden value in CI, so two runs that disagree in their last bits are not\ninterchangeable. How the sum is partitioned across blocks, and in what order the\npartial sums are combined, are performance choices the contract leaves free; only\nthe returned bits are constrained.\n\nDoes blocked_sum() satisfy this contract?\n\n\n## Kernel implementation under test (kernel.py)\n\n```python\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _blocked_sum_kernel(X, Out, N, BLOCK: tl.constexpr):\n    pid = tl.program_id(0)\n    idx = pid * BLOCK + tl.arange(0, BLOCK)\n    x = tl.load(X + idx, mask=idx < N, other=0.0)\n    tl.atomic_add(Out, tl.sum(x, axis=0))\n\n\ndef blocked_sum(x: torch.Tensor, block: int = 1024) -> torch.Tensor:\n    \"\"\"Sum of a float32 tensor, one atomic accumulation per block.\"\"\"\n    out = torch.zeros(1, device=x.device, dtype=torch.float32)\n    _blocked_sum_kernel[(triton.cdiv(x.numel(), block),)](x, out, x.numel(), BLOCK=block)\n    return out\n\n```\n\nIs this implementation correct?"
+    }
+  ],
+  "response_format": {
+    "type": "json_object"
+  },
+  "reasoning_effort": "low"
+}

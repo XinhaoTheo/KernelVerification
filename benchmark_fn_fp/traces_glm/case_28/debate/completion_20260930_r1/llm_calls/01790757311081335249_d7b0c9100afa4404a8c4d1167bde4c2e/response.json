@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-ad519205a8884babb7350e5cddc6ac8a",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'm launching two independent runtime probes: c1 tests heavy-tailed outlier clamping against the 5% per-row budget, and c2 tests the tied-top-values threshold collapse.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9154eb9948c64daf",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys, os\\nsys.path.insert(0, \\\"/root/cases/case_28\\\")\\nfrom kernel import quant_dequant\\n\\ntorch.manual_seed(0)\\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\\nresults = []\\n# Heavy-tailed rows: bulk ~N(0,1), 2 outlier channels at 50x bulk (in-contract regime)\\nfor ratio in [20, 50, 100]:\\n    x = torch.randn(4, 1024, device=dev)\\n    x[:, 0] = ratio\\n    x[:, 1] = -ratio * 0.9\\n    y = quant_dequant(x)\\n    per_row = ((y - x).norm(dim=1) / x.norm(dim=1))\\n    # identify clamped entries: |y| == 127*scale observed cap\\n    results.append({\\n        \\\"outlier_ratio\\\": ratio,\\n        \\\"per_row_rel_err\\\": [round(v, 4) for v in per_row.tolist()],\\n        \\\"max_row_err\\\": round(per_row.max().item(), 4),\\n        \\\"exceeds_5pct\\\": bool((per_row > 0.05).any()),\\n    })\\nprint(json.dumps({\\\"metric\\\": \\\"per_row_relative_L2_error\\\", \\\"budget\\\": 0.05, \\\"trials\\\": results}))\\n\", \"expected_signal\": \"per-row relative error > 5% for heavy-tailed rows with 50-100x outliers\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-bb419a5c66c3c907",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_28\\\")\\nfrom kernel import quant_dequant\\n\\ntorch.manual_seed(1)\\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\\n# Row where top-3 |x| are tied: bulk small (~0.1 magnitude), three channels tied at 0.5\\nx = torch.full((4, 1024), 0.05, device=dev) + 0.02 * torch.randn(4, 1024, device=dev)\\nx[:, 0] = 0.5; x[:, 1] = -0.5; x[:, 2] = 0.5\\ny = quant_dequant(x)\\nper_row = ((y - x).norm(dim=1) / x.norm(dim=1))\\n# reference: absmax calibration\\ns = x.abs().amax(dim=1, keepdim=True) / 127.0\\nq = torch.clamp(torch.round(x / s), -127, 127)\\ny_ref = q * s\\nref_err = ((y_ref - x).norm(dim=1) / x.norm(dim=1))\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"per_row_relative_L2_error, kernel vs absmax-reference\\\",\\n    \\\"kernel_per_row_err\\\": [round(v, 4) for v in per_row.tolist()],\\n    \\\"max_kernel_err\\\": round(per_row.max().item(), 4),\\n    \\\"absmax_reference_max_err\\\": round(ref_err.max().item(), 4),\\n    \\\"kernel_y_zero_fraction\\\": float((y == 0).float().mean()),\\n    \\\"exceeds_5pct\\\": bool((per_row > 0.05).any()),\\n}))\\n\", \"expected_signal\": \"tied top-3 magnitudes collapse thresh to 0, scale=1.0, per-row error near 100%\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Two independent probes: heavy-tailed outlier clamping (c1) and tie-collapse (c2). Launch both.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757311,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 808,
+    "prompt_tokens": 17341,
+    "total_tokens": 18149,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 24,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 24
+    }
+  }
+}

@@ -1,0 +1,104 @@
+[
+  {
+    "created_at": "2026-09-30T08:34:04Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:34:16Z",
+        "data": {
+          "exit_code": 1,
+          "reason": "probe syntax error, no signal",
+          "tool_event_id": "t7"
+        },
+        "id": "c1.e1",
+        "kind": "tool_error",
+        "summary": "Probe t7 exited with a Python SyntaxError (stray comma before closing brace) and produced no stdout; no signal for or against the claim. Re-running corrected probe.",
+        "supports": "inconclusive",
+        "tool_event_id": "t7"
+      },
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:34:33Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "0b95b49e2e39c22bc6c633430edd495f7d25ded6ecca8c347f1b27d4746e9603"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "e0fb2081152859a8b15a7c2ee8ebea40d588c024b053c928f752a1ae1af753d5"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "0ceed61044fc4a6eeac565d41d908df4ee8cc2f8061934cdbe958f3286c42d60"
+            }
+          ],
+          "duration_s": 5.023958,
+          "exit_code": 0,
+          "expected_output": "all-zero finite row",
+          "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
+          "finite_elsewhere": true,
+          "full_row_isnan": true,
+          "json_parse_error": null,
+          "json_result": {
+            "finite_elsewhere": true,
+            "full_row_isnan": true,
+            "full_row_values": [
+              NaN,
+              NaN,
+              NaN,
+              NaN,
+              NaN,
+              NaN,
+              NaN,
+              NaN
+            ],
+            "nan_count_row1": 8,
+            "nan_count_total": 8
+          },
+          "n_cols": 8,
+          "n_rows": 3,
+          "nan_count_row1": 8,
+          "nan_count_total": 8,
+          "result": "all 8 lanes of fully-masked row are NaN",
+          "stderr": "",
+          "stdout": "{\"full_row_isnan\": true, \"full_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"nan_count_total\": 8, \"finite_elsewhere\": true, \"nan_count_row1\": 8}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e2",
+        "kind": "runtime_probe",
+        "summary": "Probe t9: with mask row 1 fully False (bool mask, float32 x, 3x8 on CUDA), masked_softmax returns all 8 lanes of row 1 as NaN (nan_count_row1=8), violating the contract's all-zero finite row requirement; other rows are finite. This confirms claim c1.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "When every position in a row is masked, all lanes of x become -inf, so tl.max(x) = -inf and x - max = -inf - (-inf) = NaN; additionally e sums to 0, so the final division 0/0 is NaN. The kernel (lines 14-16) has no guard for this case, so every stored lane of a fully-masked row would be NaN rather than the contractually required finite 0.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"a row may keep NO positions at all -- a fully padded query row... the specification requires an all-zero output row\" and \"Every returned value must be finite.\""
+      }
+    ],
+    "scope_rationale": "The problem text explicitly defines the input domain to include rows where the mask keeps no positions, requires the output row to be all zeros, and requires every returned value to be finite.",
+    "statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp).",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:34:33Z"
+  }
+]

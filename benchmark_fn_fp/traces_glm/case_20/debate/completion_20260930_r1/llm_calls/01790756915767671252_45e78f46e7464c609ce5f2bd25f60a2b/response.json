@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-238ef6a7043046148cd7d2c7cbe6f1d8",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll describe the kernel: the eps placement differs from the contract. The contract requires rstd = 1/sqrt(var + eps), while the kernel computes rstd = 1/(sqrt(var) + eps) at line 26. That's the key risk surface.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bfe3c212f85cd205",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Row-wise layer norm: mean = sum(x)/N, var = sum((x-mean)^2)/N, rstd = 1/sqrt(var + eps), y = (x-mean)*rstd*weight + bias\", \"eps must be inside the sqrt so the normalizer stays finite as row variance approaches zero (constant rows must not blow up)\", \"Affine parameters weight and bias are applied per column after normalization\", \"Only the forward layer_norm() output y is contractual; mean/rstd buffers are internal\"], \"kernel_model\": [\"Triton kernel with one program per row (grid = (n_rows,)), BLOCK=256, looped over N in chunks with cols<N masking\", \"Computes mean and variance in float32 with two-pass accumulation; masked lanes contribute 0 to sums, and variance pass zeroes out-of-range lanes via tl.where before squaring\", \"Line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps): eps is added OUTSIDE the sqrt, i.e. to the denominator after sqrt, not as sqrt(var + eps)\", \"Writes mean and rstd to auxiliary float32 tensors Mean/Rstd, though these are not part of the returned output\", \"Output y is stored back in the input tensor's dtype via torch.empty_like(x); (a-mean)*rstd*w+b computed in fp32 then cast on store\", \"Wrapper assumes x is 2D (n_rows, n_cols = x.shape) and passes x.stride(0) as the row stride; weight/bias are assumed length-N, contiguous\"], \"risk_map\": [\"eps placement mismatch: kernel uses 1/(sqrt(var)+eps) vs contract 1/sqrt(var+eps). For normal rows the difference is tiny, but for constant/zero-variance rows: contract gives y = bias exactly (since (x-mean)=0), while kernel also gives (x-mean)=0 so output is still bias -- output equal despite rstd differing numerically; the rstd value itself differs (1/eps vs 1/sqrt(eps)). If tests compare rstd/mean aux outputs or intermediate normalizer, this diverges; also for small nonzero var, kernel's rstd differs at first order in eps\", \"Potential division/variance correctness when N not multiple of BLOCK: masked handling looks correct (other=0 and tl.where), but the mean in the first pass uses other=0.0 so masked lanes don't inflate the sum\", \"Dtype/precision: accumulation in fp32 is fine; output cast to x.dtype could lose precision for fp16/bf16 inputs -- tolerance-dependent\", \"Non-2D input (e.g., 3D or >2D tensor) would break x.shape unpacking in the wrapper\", \"Non-contiguous input with row stride != n_cols uses stride(0) correctly, but assumes stride(1)==1 (cols indexing) -- only row-major contiguous last-dim inputs supported\", \"eps default 1e-5 in wrapper matches typical contract but caller may pass different eps; the eps-outside-sqrt issue scales with eps magnitude\"], \"scope_notes\": \"Problem cites flash-attention/Liger layer_norm formula; scope is the forward layer_norm() function, no backward, no training-mode\\\", \\\"No explicit test code in the artifact (test_code empty), so the operative contract is the problem.txt formula including the eps-inside-sqrt requirement\\\", \\\"Contract wording specifically highlights constant/near-zero-variance rows as the case eps must protect\\\"]\", \"summary\": \"Description of case_20 layer norm forward kernel: math is structurally correct, but eps is added outside the square root (1/(sqrt(var)+eps)) instead of inside (1/sqrt(var+eps)), deviating from the stated contract.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756916,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 854,
+    "prompt_tokens": 4796,
+    "total_tokens": 5650,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 1979,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

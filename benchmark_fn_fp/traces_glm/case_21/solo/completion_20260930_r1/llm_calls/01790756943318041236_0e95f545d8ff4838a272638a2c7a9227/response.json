@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-99a8882cb8754d4abd979f3507425fba",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a runtime probe with a scrambled (non-identity) block table to confirm the kernel produces wrong output versus the contract's reference gather.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-90bb6a98fb4b45c8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_21/kernel.py\\\")\\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\\n\\ntorch.manual_seed(0)\\nnum_pages, page_size, head_dim = 16, 4, 8\\nnum_seqs, max_blocks = 3, 5\\nkv = torch.randn(num_pages, page_size, head_dim, device=\\\"cuda\\\")\\n# permuted (non-identity) block table, distinct pages\\nperm = torch.randperm(num_pages)[:num_seqs*max_blocks] if num_pages >= num_seqs*max_blocks else torch.randperm(num_pages).repeat(2)\\nbt = perm[:num_seqs*max_blocks].reshape(num_seqs, max_blocks).to(torch.int32).cuda()\\nseq_len = 13  # fits within max_blocks pages\\n\\nout = m.paged_gather(kv, bt, seq_len)\\n\\n# contract reference\\nt = torch.arange(seq_len, device=\\\"cuda\\\")\\nphys = bt[:, t // page_size]  # [num_seqs, seq_len]\\nref = kv[phys, t % page_size]\\n\\nmism = (out != ref).any(dim=-1)\\nprint(torch.cuda.is_available())\\nprint({\\\"max_abs_err\\\": (out - ref).abs().max().item(),\\n       \\\"mismatch_frac\\\": mism.float().mean().item()})\\n# also identity-mapping sanity check\\nbt_ident = torch.arange(num_seqs*max_blocks, dtype=torch.int32, device=\\\"cuda\\\").reshape(num_seqs, max_blocks)\\nkv2 = torch.randn(num_seqs*max_blocks, page_size, head_dim, device=\\\"cuda\\\")\\nout2 = m.paged_gather(kv2, bt_ident, seq_len)\\nphys2 = bt_ident[:, t // page_size]\\nref2 = kv2[phys2, t % page_size]\\nprint(\\\"identity_ok\\\", bool(torch.allclose(out2, ref2)))\\n\", \"expected_signal\": \"kernel output mismatches reference under non-identity block mapping\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run a probe: build a non-identity block table, compare kernel output vs reference.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756944,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 491,
+    "prompt_tokens": 8867,
+    "total_tokens": 9358,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 18,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 347,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 18
+    }
+  }
+}

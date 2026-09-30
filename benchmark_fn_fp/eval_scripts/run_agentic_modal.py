@@ -52,29 +52,27 @@ ARMS = {
 
 app = modal.App("kv-fn-fp-agentic-eval")
 
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .pip_install("torch==2.8.0", "triton==3.4.0", "numpy==1.26.4", "anthropic", "openai", "python-dotenv")
-    .add_local_dir(str(REPO_ROOT / "verifier"), "/root/verifier")
-    .add_local_dir(str(CASES_DIR), "/root/cases")
-    .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/correlation_pair/eval_cases"), "/root/correlation_cases")
-    .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/numerical_challenges/eval_cases"), "/root/numerical_cases")
-    .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/evidence_challenges/eval_cases"), "/root/evidence_cases")
-)
+def _make_image(numpy_version: str):
+    return (
+        modal.Image.debian_slim(python_version="3.11")
+        .pip_install("torch==2.8.0", "triton==3.4.0", f"numpy=={numpy_version}",
+                     "anthropic", "openai", "python-dotenv")
+        .add_local_dir(str(REPO_ROOT / "verifier"), "/root/verifier")
+        .add_local_dir(str(CASES_DIR), "/root/cases")
+        .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/correlation_pair/eval_cases"), "/root/correlation_cases")
+        .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/numerical_challenges/eval_cases"), "/root/numerical_cases")
+        .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/evidence_challenges/eval_cases"), "/root/evidence_cases")
+        .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/numerical_pilot/eval_cases"), "/root/pilot_cases")
+    )
 
 
-@app.function(
-    image=image,
-    gpu="T4",
-    timeout=5400,
-    # Each run holds a T4 for minutes and burns real API tokens; cap the fan-out
-    # so an --all run cannot saturate the workspace GPU quota.
-    max_containers=4,
-    secrets=[modal.Secret.from_dotenv(REPO_ROOT)],
-)
-def run_one(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int,
-            provider: str, timeout_s: int, dataset: str = "benchmark_fn_fp", trial: str = "legacy",
-            expected_hashes: dict | None = None, total_output_tokens: int = 0) -> dict:
+image = _make_image("1.26.4")
+pilot_image = _make_image("2.2.6")
+
+
+def _run_one_impl(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int,
+                  provider: str, timeout_s: int, dataset: str = "benchmark_fn_fp", trial: str = "legacy",
+                  expected_hashes: dict | None = None, total_output_tokens: int = 0) -> dict:
     """Run one case under one arm inside this GPU container."""
     import contextlib
     import io
@@ -114,7 +112,8 @@ def run_one(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int,
     agents = ARMS[arm]
     dataset_dir = {"benchmark_fn_fp": "/root/cases", "correlation_pair": "/root/correlation_cases",
                    "numerical_challenges": "/root/numerical_cases",
-                   "evidence_challenges": "/root/evidence_cases"}[dataset]
+                   "evidence_challenges": "/root/evidence_cases",
+                   "numerical_pilot": "/root/pilot_cases"}[dataset]
     if expected_hashes is not None:
         import hashlib
         for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt")):
@@ -188,6 +187,58 @@ def run_one(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int,
     return result
 
 
+def _worker_options(worker_image):
+    return dict(image=worker_image, gpu="T4", timeout=5400, max_containers=4,
+                secrets=[modal.Secret.from_dotenv(REPO_ROOT)])
+
+
+@app.function(**_worker_options(image))
+def run_one(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int,
+            provider: str, timeout_s: int, dataset: str = "benchmark_fn_fp", trial: str = "legacy",
+            expected_hashes: dict | None = None, total_output_tokens: int = 0) -> dict:
+    if dataset == "numerical_pilot":
+        raise ValueError("The numerical pilot requires the NumPy 2.2.6 worker")
+    return _run_one_impl(entry, arm, max_rounds, model, max_tokens, provider, timeout_s,
+                         dataset, trial, expected_hashes, total_output_tokens)
+
+
+@app.function(**_worker_options(pilot_image))
+def run_pilot(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int,
+              provider: str, timeout_s: int, dataset: str = "numerical_pilot", trial: str = "legacy",
+              expected_hashes: dict | None = None, total_output_tokens: int = 0) -> dict:
+    if dataset != "numerical_pilot":
+        raise ValueError("The NumPy 2.2.6 worker is reserved for the numerical pilot")
+    return _run_one_impl(entry, arm, max_rounds, model, max_tokens, provider, timeout_s,
+                         dataset, trial, expected_hashes, total_output_tokens)
+
+
+def existing_valid_slots(benchmark_dir: pathlib.Path, traces_dir: str, dataset: str) -> set[tuple[str, str]]:
+    """Reuse a completed judgment across trials/providers, including wrong answers.
+
+    This is a coverage check, not a same-configuration accuracy comparison.
+    Legacy runs may lack status/raw-call fields; known failures never fill a slot.
+    """
+    from traces import iter_trace_records
+    from summarize_traces import build_report
+
+    benchmark = pathlib.Path(benchmark_dir).resolve()
+    target = benchmark / traces_dir
+    records = [record for record in iter_trace_records(benchmark_dir=benchmark)
+               if record["dataset"] == dataset
+               and pathlib.Path(record["path"]).resolve().is_relative_to(target)]
+    metadata = {str(pathlib.Path(record["path"]).resolve()): record["metadata"] for record in records}
+    report = build_report(records=records, benchmark_dir=benchmark, labels={})
+    slots = set()
+    for group in report["arms"].values():
+        for row in group["per_case"].values():
+            status = metadata[str((benchmark / row["path"]).resolve())].get("status")
+            if status not in {None, "completed", "historical"} or row.get("runner_error"):
+                continue
+            if row.get("verdict") in {"trust", "reject", "needs_more_evidence"} and row["outcome"] != "token_limit":
+                slots.add((row["case"], row["arm"]))
+    return slots
+
+
 def _retain_failed_result(dest: pathlib.Path, error: Exception, *, kind: str,
                           result: dict | None = None) -> dict:
     """Keep a failed collection recoverable without overwriting prior payloads."""
@@ -218,7 +269,7 @@ def _retain_failed_result(dest: pathlib.Path, error: Exception, *, kind: str,
 def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
          provider: str = "anthropic", model: str = "", max_tokens: int = 0,
          skip_existing: bool = False, dataset: str = "benchmark_fn_fp", trial: str = "",
-         total_output_tokens: int = 0):
+         total_output_tokens: int = 0, only_missing: bool = False):
     if total_output_tokens < 0:
         raise ValueError("total_output_tokens must be nonnegative")
     if arm not in (*ARMS, "both"):
@@ -269,10 +320,15 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
         raise ValueError("Duplicate case names")
     # Validate the entire batch before reserving traces or submitting any work.
     source_hashes = {name: checked_case_hashes(REPO_ROOT, dataset, name) for name in names}
+    filled = (existing_valid_slots(REPO_ROOT / "benchmark_fn_fp", profile.traces_dir, dataset)
+              if only_missing else set())
     jobs = []
     for n in names:
         if not (cases_dir/n/"kernel.py").is_file():raise FileNotFoundError(n)
         for selected_arm in selected_arms:
+            if (n, selected_arm) in filled:
+                print(f"skip {n}/{selected_arm}: existing valid judgment in {profile.traces_dir}")
+                continue
             dest = trace_path(n, selected_arm, traces_dir=profile.traces_dir, trial=trial)
             if skip_existing and (dest/"verdict.json").exists():
                 print(f"skip {n}/{selected_arm}/{trial}: completed trace")
@@ -296,8 +352,9 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
     # one remote or local persistence failure cannot discard other paid runs.
     done = 0
     failures = []
+    worker = run_pilot if dataset == "numerical_pilot" else run_one
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(run_one.remote, *job): job for job in jobs}
+        futures = {pool.submit(worker.remote, *job): job for job in jobs}
         for future in as_completed(futures):
             job = futures[future]
             entry, selected_arm = job[:2]

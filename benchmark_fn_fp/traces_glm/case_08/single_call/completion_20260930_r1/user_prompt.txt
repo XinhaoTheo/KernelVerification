@@ -1,0 +1,50 @@
+## Problem statement (contract + reference behavior)
+
+Operation: stochastic rounding of a tensor onto a coarse grid, using Triton's
+counter-based Philox RNG (tl.rand), as used by low-precision training kernels
+when casting high-precision accumulators down to a storage format.
+
+`stochastic_round_to_grid(x, seed)` must round each element to one of the two
+neighbouring multiples of STEP, choosing the upper one with probability equal
+to the element's fractional distance to it:
+
+    lower = floor(x / STEP) * STEP
+    P(out = lower + STEP) = (x - lower) / STEP,   otherwise out = lower
+
+so that E[out] == x. The randomness is drawn from the supplied seed.
+
+Input domain: `x` is a 1-D tensor whose length is a power of two and fits in a
+single block.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+import torch
+import triton
+import triton.language as tl
+
+STEP = 0.05
+
+
+@triton.jit
+def stochastic_round_kernel(x_ptr, out_ptr, seed, N: tl.constexpr, STEP: tl.constexpr):
+    offs = tl.arange(0, N)
+    x = tl.load(x_ptr + offs)
+    lower = tl.floor(x / STEP) * STEP
+    upper = lower + STEP
+    p_up = (x - lower) / STEP
+    r = tl.rand(seed, offs)  # real Triton Philox RNG
+    out = tl.where(r < p_up, upper, lower)
+    tl.store(out_ptr + offs, out)
+
+
+def stochastic_round_to_grid(x: torch.Tensor, seed: int) -> torch.Tensor:
+    N = x.shape[0]
+    out = torch.empty_like(x)
+    stochastic_round_kernel[(1,)](x, out, seed, N=N, STEP=STEP)
+    return out
+
+```
+
+Is this implementation correct?

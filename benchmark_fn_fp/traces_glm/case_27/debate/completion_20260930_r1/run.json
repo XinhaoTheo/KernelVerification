@@ -1,0 +1,1266 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_27",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _masked_softmax_kernel(X, M, Y, stride, N, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < N\n    x = tl.load(X + row * stride + cols, mask=valid, other=-float(\"inf\"))\n    keep = tl.load(M + row * stride + cols, mask=valid, other=0).to(tl.int1)\n    x = tl.where(keep, x, -float(\"inf\"))\n    x = x - tl.max(x, axis=0)\n    e = tl.where(keep, tl.exp(x), 0.0)\n    tl.store(Y + row * stride + cols, e / tl.sum(e, axis=0), mask=valid)\n\n\ndef masked_softmax(x, mask):\n    # Row-wise softmax over the positions the mask keeps.\n    n_rows, n_cols = x.shape\n    y = torch.empty_like(x)\n    _masked_softmax_kernel[(n_rows,)](x, mask, y, x.stride(0), n_cols,\n                                      BLOCK=triton.next_power_of_2(n_cols))\n    return y\n",
+    "passed": null,
+    "problem_text": "Operation: row-wise softmax restricted to the positions a boolean mask keeps,\nthe attention-probability step of any masked or padded attention kernel.\n\n    y[j] = exp(x[j]) / sum over kept k of exp(x[k])     if mask[j]\n    y[j] = 0                                            otherwise\n\nInput domain: the mask is arbitrary. In particular a row may keep NO positions\nat all -- a fully padded query row, or a causal row before its first visible\nkey. For such a row the specification requires an all-zero output row: there is\nno probability mass to distribute, and every downstream consumer treats the row\nas contributing nothing.\n\nEvery returned value must be finite.\n\nDoes masked_softmax() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_27",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:34:04Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:34:16Z",
+          "data": {
+            "exit_code": 1,
+            "reason": "probe syntax error, no signal",
+            "tool_event_id": "t7"
+          },
+          "id": "c1.e1",
+          "kind": "tool_error",
+          "summary": "Probe t7 exited with a Python SyntaxError (stray comma before closing brace) and produced no stdout; no signal for or against the claim. Re-running corrected probe.",
+          "supports": "inconclusive",
+          "tool_event_id": "t7"
+        },
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:34:33Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "0b95b49e2e39c22bc6c633430edd495f7d25ded6ecca8c347f1b27d4746e9603"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "e0fb2081152859a8b15a7c2ee8ebea40d588c024b053c928f752a1ae1af753d5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "0ceed61044fc4a6eeac565d41d908df4ee8cc2f8061934cdbe958f3286c42d60"
+              }
+            ],
+            "duration_s": 5.023958,
+            "exit_code": 0,
+            "expected_output": "all-zero finite row",
+            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
+            "finite_elsewhere": true,
+            "full_row_isnan": true,
+            "json_parse_error": null,
+            "json_result": {
+              "finite_elsewhere": true,
+              "full_row_isnan": true,
+              "full_row_values": [
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN
+              ],
+              "nan_count_row1": 8,
+              "nan_count_total": 8
+            },
+            "n_cols": 8,
+            "n_rows": 3,
+            "nan_count_row1": 8,
+            "nan_count_total": 8,
+            "result": "all 8 lanes of fully-masked row are NaN",
+            "stderr": "",
+            "stdout": "{\"full_row_isnan\": true, \"full_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"nan_count_total\": 8, \"finite_elsewhere\": true, \"nan_count_row1\": 8}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Probe t9: with mask row 1 fully False (bool mask, float32 x, 3x8 on CUDA), masked_softmax returns all 8 lanes of row 1 as NaN (nan_count_row1=8), violating the contract's all-zero finite row requirement; other rows are finite. This confirms claim c1.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "When every position in a row is masked, all lanes of x become -inf, so tl.max(x) = -inf and x - max = -inf - (-inf) = NaN; additionally e sums to 0, so the final division 0/0 is NaN. The kernel (lines 14-16) has no guard for this case, so every stored lane of a fully-masked row would be NaN rather than the contractually required finite 0.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"a row may keep NO positions at all -- a fully padded query row... the specification requires an all-zero output row\" and \"Every returned value must be finite.\""
+        }
+      ],
+      "scope_rationale": "The problem text explicitly defines the input domain to include rows where the mask keeps no positions, requires the output row to be all zeros, and requires every returned value to be finite.",
+      "statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp).",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:34:33Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
+      "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
+      "Fully-masked rows must return an all-zero output row.",
+      "Every returned value must be finite (no NaN/Inf in any row).",
+      "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+    ],
+    "kernel_model": [
+      "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
+      "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
+      "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
+      "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
+      "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
+      "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+    ],
+    "open_questions": [
+      "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
+      "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
+      "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+    ],
+    "risk_map": [
+      "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
+      "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
+      "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
+      "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
+      "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
+      "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+    ],
+    "scope_notes": [
+      "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
+      "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
+      "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
+      "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
+        "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
+        "Fully-masked rows must return an all-zero output row.",
+        "Every returned value must be finite (no NaN/Inf in any row).",
+        "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+      ],
+      "created_at": "2026-09-30T08:33:54Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
+        "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
+        "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
+        "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
+        "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
+        "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+      ],
+      "open_questions": [
+        "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
+        "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
+        "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+      ],
+      "risk_map": [
+        "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
+        "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
+        "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
+        "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
+        "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
+        "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+      ],
+      "scope_notes": [
+        "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
+        "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
+        "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
+        "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+      ],
+      "summary": "Described case_27: masked row-wise softmax with arbitrary mask. Contract requires all-zero, finite output rows even when a row keeps no positions; the kernel divides by tl.sum(e) unconditionally, so an all-masked row produces 0/0 = NaN. This empty-row case is the primary risk surface.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_27",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_27"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_27"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_27"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_27",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 21.254439149999826,
+      "role": "describer",
+      "round": 2,
+      "text": "I have full artifact context. The critical surface: the kernel computes `e / tl.sum(e)` with no guard for rows where no mask positions are kept \u2014 a fully-masked row yields sum 0 and 0/0 = NaN, directly violating the \"all-zero, finite\" contract clause. I'll record the description model now.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
+              "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
+              "Fully-masked rows must return an all-zero output row.",
+              "Every returned value must be finite (no NaN/Inf in any row).",
+              "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+            ],
+            "kernel_model": [
+              "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
+              "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
+              "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
+              "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
+              "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
+              "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+            ],
+            "open_questions": [
+              "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
+              "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
+              "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+            ],
+            "risk_map": [
+              "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
+              "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
+              "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
+              "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
+              "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
+              "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+            ],
+            "scope_notes": [
+              "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
+              "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
+              "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
+              "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+            ],
+            "summary": "Described case_27: masked row-wise softmax with arbitrary mask. Contract requires all-zero, finite output rows even when a row keeps no positions; the kernel divides by tl.sum(e) unconditionally, so an all-masked row produces 0/0 = NaN. This empty-row case is the primary risk surface."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 21.254,
+        "input_tokens": 4127,
+        "output_tokens": 961
+      }
+    },
+    {
+      "duration_s": 10.279029032999915,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The contract explicitly requires finite, all-zero output for fully-masked rows; the kernel divides by `tl.sum(e)` unconditionally and even `x - max(x)` becomes `-inf - (-inf) = NaN` in that case. Recording this as the primary testable claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "When every position in a row is masked, all lanes of x become -inf, so tl.max(x) = -inf and x - max = -inf - (-inf) = NaN; additionally e sums to 0, so the final division 0/0 is NaN. The kernel (lines 14-16) has no guard for this case, so every stored lane of a fully-masked row would be NaN rather than the contractually required finite 0.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"a row may keep NO positions at all -- a fully padded query row... the specification requires an all-zero output row\" and \"Every returned value must be finite.\""
+              }
+            ],
+            "scope_rationale": "The problem text explicitly defines the input domain to include rows where the mask keeps no positions, requires the output row to be all zeros, and requires every returned value to be finite.",
+            "statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.279,
+        "input_tokens": 11227,
+        "output_tokens": 500
+      }
+    },
+    {
+      "duration_s": 5.931172870999944,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'll probe claim c1 directly: run the kernel on an input containing a fully-masked row alongside normal rows and check for NaN.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_27/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nx = torch.randn(3, 8, device=\"cuda\", dtype=torch.float32)\nmask = torch.ones(3, 8, dtype=torch.bool, device=\"cuda\")\nmask[1] = False  # fully masked row\ny = k.masked_softmax(x, mask)\ntorch.cuda.synchronize()\nrow1 = y[1]\nres = {\n  \"full_row_isnan\": bool(torch.isnan(row1).all().item()),\n  \"full_row_values\": row1.tolist(),\n  \"nan_count_total\": int(torch.isnan(y).sum().item()),\n  \"finite_elsewhere\": bool(torch.isfinite(y[[0,2]].all().item()),\n}\nprint(json.dumps(res))\n",
+            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.931,
+        "input_tokens": 12917,
+        "output_tokens": 273
+      }
+    },
+    {
+      "duration_s": 6.2423599369999465,
+      "role": "experimenter",
+      "round": 5,
+      "text": "The previous probe failed with a syntax error (stray comma before the closing paren), so it produced no signal. I'll record it as inconclusive and relaunch a corrected probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "data": {
+              "exit_code": 1,
+              "reason": "probe syntax error, no signal",
+              "tool_event_id": "t7"
+            },
+            "kind": "tool_error",
+            "summary": "Probe t7 exited with a Python SyntaxError (stray comma before closing brace) and produced no stdout; no signal for or against the claim. Re-running corrected probe.",
+            "supports": "inconclusive",
+            "tool_event_id": "t7"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.242,
+        "input_tokens": 14611,
+        "output_tokens": 230
+      }
+    },
+    {
+      "duration_s": 5.482364883999935,
+      "role": "experimenter",
+      "round": 6,
+      "text": "Relaunching the corrected probe for c1 (previous one had a syntax error).",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_27/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\nx = torch.randn(3, 8, device=\"cuda\", dtype=torch.float32)\nmask = torch.ones(3, 8, dtype=torch.bool, device=\"cuda\")\nmask[1] = False  # fully masked row\ny = k.masked_softmax(x, mask)\ntorch.cuda.synchronize()\nrow1 = y[1]\nres = {\n  \"full_row_isnan\": bool(torch.isnan(row1).all().item()),\n  \"full_row_values\": row1.tolist(),\n  \"nan_count_total\": int(torch.isnan(y).sum().item()),\n  \"finite_elsewhere\": bool(torch.isfinite(y[[0, 2]]).all().item()),\n  \"nan_count_row1\": int(torch.isnan(row1).sum().item())\n}\nprint(json.dumps(res))\n",
+            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.482,
+        "input_tokens": 15270,
+        "output_tokens": 279
+      }
+    },
+    {
+      "duration_s": 6.124927581000065,
+      "role": "experimenter",
+      "round": 7,
+      "text": "The corrected probe (t9) succeeded: the fully-masked row returns all NaN lanes while other rows are finite \u2014 exactly the claimed defect. I'll finalize this as confirmed evidence for c1.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "expected_output": "all-zero finite row",
+              "finite_elsewhere": true,
+              "full_row_isnan": true,
+              "n_cols": 8,
+              "n_rows": 3,
+              "nan_count_row1": 8,
+              "nan_count_total": 8,
+              "result": "all 8 lanes of fully-masked row are NaN"
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "Probe t9: with mask row 1 fully False (bool mask, float32 x, 3x8 on CUDA), masked_softmax returns all 8 lanes of row 1 as NaN (nan_count_row1=8), violating the contract's all-zero finite row requirement; other rows are finite. This confirms claim c1.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.125,
+        "input_tokens": 17307,
+        "output_tokens": 236
+      }
+    },
+    {
+      "duration_s": 5.3996596350000345,
+      "role": "skeptic",
+      "round": 8,
+      "text": "The single in-scope claim (c1) is confirmed by a clean runtime probe: the fully-masked row returns all-NaN, violating the contract's explicit all-zero/finite requirement. No other material, in-scope problem is uncovered by the new evidence, so I close the review.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Skeptic final review: claim c1 is confirmed by probe t9 (fully-masked row returns 8 NaN lanes on CUDA with float32 x, bool mask, violating problem.txt's explicit all-zero-row and finiteness requirements). The new evidence exposes no additional material, testable, in-scope problem not already covered by c1; other risk-map items (stride/layout, dtype, n_cols edge cases) are not required by the artifact contract.",
+            "reviewed_claims": [
+              "c1"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.4,
+        "input_tokens": 20259,
+        "output_tokens": 180
+      }
+    },
+    {
+      "duration_s": 10.266427092999947,
+      "role": "judge",
+      "round": 9,
+      "text": "The single in-scope claim c1 is confirmed by a clean runtime probe: a fully-masked row returns all-NaN instead of the contractually required all-zero finite row. The artifact has no test.py/get_inputs, so problem.txt is the operative contract, and it explicitly requires this case. Skeptic signed off with no new claims. Recording a reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Claim c1 is confirmed and in-scope: probe t9 (CUDA, float32 x, bool mask, 3x8 with row 1 fully masked) shows masked_softmax returns NaN in all 8 lanes of the fully-masked row (nan_count_row1=8) while other rows are finite. The artifact provides no test.py/get_inputs, so problem.txt is the operative contract, and it explicitly states the mask is arbitrary, that a row may keep NO positions, that such rows must return an all-zero output row, and that every returned value must be finite. The kernel's unconditional division by tl.sum(e) (kernel.py lines 14-16) produces 0/0 = NaN, a direct violation of an explicitly required behavior \u2014 a defect regardless of typical-input performance. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.266,
+        "input_tokens": 19915,
+        "output_tokens": 319
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-30T08:34:38Z",
+    "decision": "no_new_claims",
+    "reason": "Skeptic final review: claim c1 is confirmed by probe t9 (fully-masked row returns 8 NaN lanes on CUDA with float32 x, bool mask, violating problem.txt's explicit all-zero-row and finiteness requirements). The new evidence exposes no additional material, testable, in-scope problem not already covered by c1; other risk-map items (stride/layout, dtype, n_cols edge cases) are not required by the artifact contract.",
+    "reviewed_claims": [
+      "c1"
+    ],
+    "reviewed_tool_event_count": 10,
+    "tool_event_id": "t11",
+    "turn": 8
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_27"
+      },
+      "created_at": "2026-09-30T08:33:32Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_27",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _masked_softmax_kernel(X, M, Y, stride, N, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < N\n    x = tl.load(X + row * stride + cols, mask=valid, other=-float(\"inf\"))\n    keep = tl.load(M + row * stride + cols, mask=valid, other=0).to(tl.int1)\n    x = tl.where(keep, x, -float(\"inf\"))\n    x = x - tl.max(x, axis=0)\n    e = tl.where(keep, tl.exp(x), 0.0)\n    tl.store(Y + row * stride + cols, e / tl.sum(e, axis=0), mask=valid)\n\n\ndef masked_softmax(x, mask):\n    # Row-wise softmax over the positions the mask keeps.\n    n_rows, n_cols = x.shape\n    y = torch.empty_like(x)\n    _masked_softmax_kernel[(n_rows,)](x, mask, y, x.stride(0), n_cols,\n                                      BLOCK=triton.next_power_of_2(n_cols))\n    return y\n",
+        "passed": null,
+        "problem_text": "Operation: row-wise softmax restricted to the positions a boolean mask keeps,\nthe attention-probability step of any masked or padded attention kernel.\n\n    y[j] = exp(x[j]) / sum over kept k of exp(x[k])     if mask[j]\n    y[j] = 0                                            otherwise\n\nInput domain: the mask is arbitrary. In particular a row may keep NO positions\nat all -- a fully padded query row, or a causal row before its first visible\nkey. For such a row the specification requires an all-zero output row: there is\nno probability mass to distribute, and every downstream consumer treats the row\nas contributing nothing.\n\nEvery returned value must be finite.\n\nDoes masked_softmax() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_27",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_27"
+      },
+      "created_at": "2026-09-30T08:33:32Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: row-wise softmax restricted to the positions a boolean mask keeps,\nthe attention-probability step of any masked or padded attention kernel.\n\n    y[j] = exp(x[j]) / sum over kept k of exp(x[k])     if mask[j]\n    y[j] = 0                                            otherwise\n\nInput domain: the mask is arbitrary. In particular a row may keep NO positions\nat all -- a fully padded query row, or a causal row before its first visible\nkey. For such a row the specification requires an all-zero output row: there is\nno probability mass to distribute, and every downstream consumer treats the row\nas contributing nothing.\n\nEvery returned value must be finite.\n\nDoes masked_softmax() satisfy this contract?\n",
+        "entry": "case_27",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_27"
+      },
+      "created_at": "2026-09-30T08:33:32Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_27",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 858
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 711
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_27",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:33:32Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_27\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_27",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
+          "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
+          "Fully-masked rows must return an all-zero output row.",
+          "Every returned value must be finite (no NaN/Inf in any row).",
+          "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+        ],
+        "kernel_model": [
+          "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
+          "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
+          "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
+          "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
+          "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
+          "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+        ],
+        "open_questions": [
+          "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
+          "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
+          "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+        ],
+        "risk_map": [
+          "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
+          "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
+          "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
+          "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
+          "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
+          "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+        ],
+        "scope_notes": [
+          "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
+          "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
+          "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
+          "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+        ],
+        "summary": "Described case_27: masked row-wise softmax with arbitrary mask. Contract requires all-zero, finite output rows even when a row keeps no positions; the kernel divides by tl.sum(e) unconditionally, so an all-masked row produces 0/0 = NaN. This empty-row case is the primary risk surface."
+      },
+      "created_at": "2026-09-30T08:33:54Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
+            "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
+            "Fully-masked rows must return an all-zero output row.",
+            "Every returned value must be finite (no NaN/Inf in any row).",
+            "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+          ],
+          "kernel_model": [
+            "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
+            "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
+            "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
+            "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
+            "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
+            "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+          ],
+          "open_questions": [
+            "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
+            "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
+            "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+          ],
+          "risk_map": [
+            "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
+            "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
+            "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
+            "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
+            "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
+            "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+          ],
+          "scope_notes": [
+            "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
+            "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
+            "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
+            "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
+            "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
+            "Fully-masked rows must return an all-zero output row.",
+            "Every returned value must be finite (no NaN/Inf in any row).",
+            "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+          ],
+          "created_at": "2026-09-30T08:33:54Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
+            "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
+            "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
+            "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
+            "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
+            "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+          ],
+          "open_questions": [
+            "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
+            "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
+            "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+          ],
+          "risk_map": [
+            "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
+            "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
+            "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
+            "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
+            "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
+            "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+          ],
+          "scope_notes": [
+            "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
+            "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
+            "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
+            "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+          ],
+          "summary": "Described case_27: masked row-wise softmax with arbitrary mask. Contract requires all-zero, finite output rows even when a row keeps no positions; the kernel divides by tl.sum(e) unconditionally, so an all-masked row produces 0/0 = NaN. This empty-row case is the primary risk surface.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "When every position in a row is masked, all lanes of x become -inf, so tl.max(x) = -inf and x - max = -inf - (-inf) = NaN; additionally e sums to 0, so the final division 0/0 is NaN. The kernel (lines 14-16) has no guard for this case, so every stored lane of a fully-masked row would be NaN rather than the contractually required finite 0.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"a row may keep NO positions at all -- a fully padded query row... the specification requires an all-zero output row\" and \"Every returned value must be finite.\""
+          }
+        ],
+        "scope_rationale": "The problem text explicitly defines the input domain to include rows where the mask keeps no positions, requires the output row to be all zeros, and requires every returned value to be finite.",
+        "statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp)."
+      },
+      "created_at": "2026-09-30T08:34:04Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-30T08:34:04Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "When every position in a row is masked, all lanes of x become -inf, so tl.max(x) = -inf and x - max = -inf - (-inf) = NaN; additionally e sums to 0, so the final division 0/0 is NaN. The kernel (lines 14-16) has no guard for this case, so every stored lane of a fully-masked row would be NaN rather than the contractually required finite 0.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"a row may keep NO positions at all -- a fully padded query row... the specification requires an all-zero output row\" and \"Every returned value must be finite.\""
+          }
+        ],
+        "scope_rationale": "The problem text explicitly defines the input domain to include rows where the mask keeps no positions, requires the output row to be all zeros, and requires every returned value to be finite.",
+        "statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp).",
+        "status": "open",
+        "updated_at": "2026-09-30T08:34:04Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_27/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nx = torch.randn(3, 8, device=\"cuda\", dtype=torch.float32)\nmask = torch.ones(3, 8, dtype=torch.bool, device=\"cuda\")\nmask[1] = False  # fully masked row\ny = k.masked_softmax(x, mask)\ntorch.cuda.synchronize()\nrow1 = y[1]\nres = {\n  \"full_row_isnan\": bool(torch.isnan(row1).all().item()),\n  \"full_row_values\": row1.tolist(),\n  \"nan_count_total\": int(torch.isnan(y).sum().item()),\n  \"finite_elsewhere\": bool(torch.isfinite(y[[0,2]].all().item()),\n}\nprint(json.dumps(res))\n",
+        "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite"
+      },
+      "created_at": "2026-09-30T08:34:10Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "733f006ea95b7d5ebed5de3bbf3df9994559b2f6c382da1940aad09d92ea1176"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "7b48c65f49779eef0c8cce98345506f7034a5b6104ffc0583efc62aaccc7f8d4"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp).",
+        "cwd": "/root/cases/case_27",
+        "duration_s": 0.025103,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "733f006ea95b7d5ebed5de3bbf3df9994559b2f6c382da1940aad09d92ea1176"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "7b48c65f49779eef0c8cce98345506f7034a5b6104ffc0583efc62aaccc7f8d4"
+              }
+            ],
+            "duration_s": 0.025103,
+            "exit_code": 1,
+            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_27/debate/probes/t7_probe.py\", line 15\n    }\n    ^\nSyntaxError: closing parenthesis '}' does not match opening parenthesis '(' on line 14\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 1,
+        "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_27/debate/probes/t7_probe.py\", line 15\n    }\n    ^\nSyntaxError: closing parenthesis '}' does not match opening parenthesis '(' on line 14\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "data": {
+          "exit_code": 1,
+          "reason": "probe syntax error, no signal",
+          "tool_event_id": "t7"
+        },
+        "kind": "tool_error",
+        "summary": "Probe t7 exited with a Python SyntaxError (stray comma before closing brace) and produced no stdout; no signal for or against the claim. Re-running corrected probe.",
+        "supports": "inconclusive",
+        "tool_event_id": "t7"
+      },
+      "created_at": "2026-09-30T08:34:16Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:34:16Z",
+        "data": {
+          "exit_code": 1,
+          "reason": "probe syntax error, no signal",
+          "tool_event_id": "t7"
+        },
+        "id": "c1.e1",
+        "kind": "tool_error",
+        "summary": "Probe t7 exited with a Python SyntaxError (stray comma before closing brace) and produced no stdout; no signal for or against the claim. Re-running corrected probe.",
+        "supports": "inconclusive",
+        "tool_event_id": "t7"
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_27/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\nx = torch.randn(3, 8, device=\"cuda\", dtype=torch.float32)\nmask = torch.ones(3, 8, dtype=torch.bool, device=\"cuda\")\nmask[1] = False  # fully masked row\ny = k.masked_softmax(x, mask)\ntorch.cuda.synchronize()\nrow1 = y[1]\nres = {\n  \"full_row_isnan\": bool(torch.isnan(row1).all().item()),\n  \"full_row_values\": row1.tolist(),\n  \"nan_count_total\": int(torch.isnan(y).sum().item()),\n  \"finite_elsewhere\": bool(torch.isfinite(y[[0, 2]]).all().item()),\n  \"nan_count_row1\": int(torch.isnan(row1).sum().item())\n}\nprint(json.dumps(res))\n",
+        "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite"
+      },
+      "created_at": "2026-09-30T08:34:27Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "0b95b49e2e39c22bc6c633430edd495f7d25ded6ecca8c347f1b27d4746e9603"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "e0fb2081152859a8b15a7c2ee8ebea40d588c024b053c928f752a1ae1af753d5"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "0ceed61044fc4a6eeac565d41d908df4ee8cc2f8061934cdbe958f3286c42d60"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp).",
+        "cwd": "/root/cases/case_27",
+        "duration_s": 5.023958,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "0b95b49e2e39c22bc6c633430edd495f7d25ded6ecca8c347f1b27d4746e9603"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "e0fb2081152859a8b15a7c2ee8ebea40d588c024b053c928f752a1ae1af753d5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "0ceed61044fc4a6eeac565d41d908df4ee8cc2f8061934cdbe958f3286c42d60"
+              }
+            ],
+            "duration_s": 5.023958,
+            "exit_code": 0,
+            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
+            "json_parse_error": null,
+            "json_result": {
+              "finite_elsewhere": true,
+              "full_row_isnan": true,
+              "full_row_values": [
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN
+              ],
+              "nan_count_row1": 8,
+              "nan_count_total": 8
+            },
+            "stderr": "",
+            "stdout": "{\"full_row_isnan\": true, \"full_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"nan_count_total\": 8, \"finite_elsewhere\": true, \"nan_count_row1\": 8}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
+        "json_parse_error": null,
+        "json_result": {
+          "finite_elsewhere": true,
+          "full_row_isnan": true,
+          "full_row_values": [
+            NaN,
+            NaN,
+            NaN,
+            NaN,
+            NaN,
+            NaN,
+            NaN,
+            NaN
+          ],
+          "nan_count_row1": 8,
+          "nan_count_total": 8
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"full_row_isnan\": true, \"full_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"nan_count_total\": 8, \"finite_elsewhere\": true, \"nan_count_row1\": 8}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "expected_output": "all-zero finite row",
+          "finite_elsewhere": true,
+          "full_row_isnan": true,
+          "n_cols": 8,
+          "n_rows": 3,
+          "nan_count_row1": 8,
+          "nan_count_total": 8,
+          "result": "all 8 lanes of fully-masked row are NaN"
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "Probe t9: with mask row 1 fully False (bool mask, float32 x, 3x8 on CUDA), masked_softmax returns all 8 lanes of row 1 as NaN (nan_count_row1=8), violating the contract's all-zero finite row requirement; other rows are finite. This confirms claim c1.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:34:33Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:34:04Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:34:16Z",
+              "data": {
+                "exit_code": 1,
+                "reason": "probe syntax error, no signal",
+                "tool_event_id": "t7"
+              },
+              "id": "c1.e1",
+              "kind": "tool_error",
+              "summary": "Probe t7 exited with a Python SyntaxError (stray comma before closing brace) and produced no stdout; no signal for or against the claim. Re-running corrected probe.",
+              "supports": "inconclusive",
+              "tool_event_id": "t7"
+            },
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:34:33Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "0b95b49e2e39c22bc6c633430edd495f7d25ded6ecca8c347f1b27d4746e9603"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "e0fb2081152859a8b15a7c2ee8ebea40d588c024b053c928f752a1ae1af753d5"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "0ceed61044fc4a6eeac565d41d908df4ee8cc2f8061934cdbe958f3286c42d60"
+                  }
+                ],
+                "duration_s": 5.023958,
+                "exit_code": 0,
+                "expected_output": "all-zero finite row",
+                "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
+                "finite_elsewhere": true,
+                "full_row_isnan": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "finite_elsewhere": true,
+                  "full_row_isnan": true,
+                  "full_row_values": [
+                    NaN,
+                    NaN,
+                    NaN,
+                    NaN,
+                    NaN,
+                    NaN,
+                    NaN,
+                    NaN
+                  ],
+                  "nan_count_row1": 8,
+                  "nan_count_total": 8
+                },
+                "n_cols": 8,
+                "n_rows": 3,
+                "nan_count_row1": 8,
+                "nan_count_total": 8,
+                "result": "all 8 lanes of fully-masked row are NaN",
+                "stderr": "",
+                "stdout": "{\"full_row_isnan\": true, \"full_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"nan_count_total\": 8, \"finite_elsewhere\": true, \"nan_count_row1\": 8}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e2",
+              "kind": "runtime_probe",
+              "summary": "Probe t9: with mask row 1 fully False (bool mask, float32 x, 3x8 on CUDA), masked_softmax returns all 8 lanes of row 1 as NaN (nan_count_row1=8), violating the contract's all-zero finite row requirement; other rows are finite. This confirms claim c1.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "When every position in a row is masked, all lanes of x become -inf, so tl.max(x) = -inf and x - max = -inf - (-inf) = NaN; additionally e sums to 0, so the final division 0/0 is NaN. The kernel (lines 14-16) has no guard for this case, so every stored lane of a fully-masked row would be NaN rather than the contractually required finite 0.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"a row may keep NO positions at all -- a fully padded query row... the specification requires an all-zero output row\" and \"Every returned value must be finite.\""
+            }
+          ],
+          "scope_rationale": "The problem text explicitly defines the input domain to include rows where the mask keeps no positions, requires the output row to be all zeros, and requires every returned value to be finite.",
+          "statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp).",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:34:33Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:34:33Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "0b95b49e2e39c22bc6c633430edd495f7d25ded6ecca8c347f1b27d4746e9603"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "e0fb2081152859a8b15a7c2ee8ebea40d588c024b053c928f752a1ae1af753d5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "0ceed61044fc4a6eeac565d41d908df4ee8cc2f8061934cdbe958f3286c42d60"
+              }
+            ],
+            "duration_s": 5.023958,
+            "exit_code": 0,
+            "expected_output": "all-zero finite row",
+            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
+            "finite_elsewhere": true,
+            "full_row_isnan": true,
+            "json_parse_error": null,
+            "json_result": {
+              "finite_elsewhere": true,
+              "full_row_isnan": true,
+              "full_row_values": [
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN,
+                NaN
+              ],
+              "nan_count_row1": 8,
+              "nan_count_total": 8
+            },
+            "n_cols": 8,
+            "n_rows": 3,
+            "nan_count_row1": 8,
+            "nan_count_total": 8,
+            "result": "all 8 lanes of fully-masked row are NaN",
+            "stderr": "",
+            "stdout": "{\"full_row_isnan\": true, \"full_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"nan_count_total\": 8, \"finite_elsewhere\": true, \"nan_count_row1\": 8}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Probe t9: with mask row 1 fully False (bool mask, float32 x, 3x8 on CUDA), masked_softmax returns all 8 lanes of row 1 as NaN (nan_count_row1=8), violating the contract's all-zero finite row requirement; other rows are finite. This confirms claim c1.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Skeptic final review: claim c1 is confirmed by probe t9 (fully-masked row returns 8 NaN lanes on CUDA with float32 x, bool mask, violating problem.txt's explicit all-zero-row and finiteness requirements). The new evidence exposes no additional material, testable, in-scope problem not already covered by c1; other risk-map items (stride/layout, dtype, n_cols edge cases) are not required by the artifact contract.",
+        "reviewed_claims": [
+          "c1"
+        ]
+      },
+      "created_at": "2026-09-30T08:34:38Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-09-30T08:34:38Z",
+        "decision": "no_new_claims",
+        "reason": "Skeptic final review: claim c1 is confirmed by probe t9 (fully-masked row returns 8 NaN lanes on CUDA with float32 x, bool mask, violating problem.txt's explicit all-zero-row and finiteness requirements). The new evidence exposes no additional material, testable, in-scope problem not already covered by c1; other risk-map items (stride/layout, dtype, n_cols edge cases) are not required by the artifact contract.",
+        "reviewed_claims": [
+          "c1"
+        ],
+        "reviewed_tool_event_count": 10,
+        "tool_event_id": "t11",
+        "turn": 8
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 is confirmed and in-scope: probe t9 (CUDA, float32 x, bool mask, 3x8 with row 1 fully masked) shows masked_softmax returns NaN in all 8 lanes of the fully-masked row (nan_count_row1=8) while other rows are finite. The artifact provides no test.py/get_inputs, so problem.txt is the operative contract, and it explicitly states the mask is arbitrary, that a row may keep NO positions, that such rows must return an all-zero output row, and that every returned value must be finite. The kernel's unconditional division by tl.sum(e) (kernel.py lines 14-16) produces 0/0 = NaN, a direct violation of an explicitly required behavior \u2014 a defect regardless of typical-input performance. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:34:48Z",
+      "id": "t12",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-30T08:34:48Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 is confirmed and in-scope: probe t9 (CUDA, float32 x, bool mask, 3x8 with row 1 fully masked) shows masked_softmax returns NaN in all 8 lanes of the fully-masked row (nan_count_row1=8) while other rows are finite. The artifact provides no test.py/get_inputs, so problem.txt is the operative contract, and it explicitly states the mask is arbitrary, that a row may keep NO positions, that such rows must return an all-zero output row, and that every returned value must be finite. The kernel's unconditional division by tl.sum(e) (kernel.py lines 14-16) produces 0/0 = NaN, a direct violation of an explicitly required behavior \u2014 a defect regardless of typical-input performance. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-30T08:34:48Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Claim c1 is confirmed and in-scope: probe t9 (CUDA, float32 x, bool mask, 3x8 with row 1 fully masked) shows masked_softmax returns NaN in all 8 lanes of the fully-masked row (nan_count_row1=8) while other rows are finite. The artifact provides no test.py/get_inputs, so problem.txt is the operative contract, and it explicitly states the mask is arbitrary, that a row may keep NO positions, that such rows must return an all-zero output row, and that every returned value must be finite. The kernel's unconditional division by tl.sum(e) (kernel.py lines 14-16) produces 0/0 = NaN, a direct violation of an explicitly required behavior \u2014 a defect regardless of typical-input performance. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+    "verdict": "reject"
+  }
+}

@@ -1,0 +1,206 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Describer agent in an agentic kernel verification system.\nYour job is to explain what the kernel appears to implement and what assumptions\nare visible in the source or problem statement.\n\nRules:\n- Maintain the shared description model. Your useful output should be structured, not just prose.\n- When enough context is available, call record_description_update with concise entries for contract_model, kernel_model, risk_map, scope_notes, and open_questions. Each of those five takes a JSON array of strings, exactly this shape:\n    {\"summary\": \"...\", \"contract_model\": [\"first point\", \"second point\"], \"risk_map\": [\"...\"]}\n  Do not pass a paragraph, and do not number the points or wrap them in an object -- the array itself is the ordering.\n- contract_model: what the problem/test/benchmark appears to require.\n- kernel_model: what the kernel source appears to implement and assume.\n- risk_map: specific bug surfaces Skeptic should consider, without recording claims yourself.\n- scope_notes: benchmark/test-domain boundaries that matter for in-scope vs out-of-scope reasoning.\n- open_questions: unresolved facts that need more context or later experiments.\n- If open_description_tasks are present, answer the task directly and include task_id or resolved_task_ids in record_description_update.\n- Cite concrete source, problem, test, metadata, or tool-event context when available.\n- Use inspect_problem, inspect_kernel_source, list_artifact_files, or read_artifact_file when more context is needed.\n- Do not record claims. That is the Skeptic agent's job.\n- Do not run experiments. That is the Experimenter agent's job.\n- Do not output a final correctness verdict.\n- If you cannot resolve a description task, record an update explaining what remains unknown in open_questions.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_15\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import torch\\n2: import triton\\n3: import triton.language as tl\\n4: \\n5: \\n6: @triton.jit\\n7: def _group_quant_kernel(X, OUT, stride_xm, stride_om, n_cols, GROUP: tl.constexpr,\\n8:                         BLOCK: tl.constexpr):\\n9:     row = tl.program_id(0)\\n10:     x_row = X + row * stride_xm\\n11:     o_row = OUT + row * stride_om\\n12:     n_groups = n_cols // GROUP\\n13: \\n14:     for g in range(n_groups):\\n15:         cols = g * GROUP + tl.arange(0, BLOCK)\\n16:         in_group = tl.arange(0, BLOCK) < GROUP\\n17:         x = tl.load(x_row + cols, mask=in_group & (cols < n_cols), other=0.0)\\n18:         absmax = tl.max(tl.abs(x), axis=0)\\n19:         scale = tl.where(absmax == 0.0, 1.0, absmax / 127.0)\\n20:         q = tl.floor(x / scale + 0.5).to(tl.int8)\\n21:         deq = q.to(tl.float32) * scale\\n22:         tl.store(o_row + cols, deq, mask=in_group & (cols < n_cols))\\n23: \\n24: \\n25: def group_quant_dequant(x: torch.Tensor, group_size: int = 64) -> torch.Tensor:\\n26:     \\\"\\\"\\\"Symmetric INT8 quantize-dequantize with one scale per group of columns.\\\"\\\"\\\"\\n27:     n_rows, n_cols = x.shape\\n28:     out = torch.zeros_like(x)\\n29:     _group_quant_kernel[(n_rows,)](x, out, x.stride(0), out.stride(0), n_cols,\\n30:                                    GROUP=group_size, BLOCK=group_size)\\n31:     return out\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Operation: symmetric INT8 quantize-dequantize with one scale per group of\\ncolumns, the per-group scaling used by INT8 inference kernels.\\n\\nFor each group of `group_size` consecutive columns of a row:\\n\\n    scale = max(|x|) / 127          over that group\\n    q     = round(x / scale)        clamped into int8\\n    y     = q * scale\\n\\nEvery column of the input must be quantized under the scale of the group it\\nbelongs to.\\n\\nInput domain: `n_cols` may be any positive integer. It is NOT required to be a\\nmultiple of `group_size`; when it is not, the trailing columns form a shorter\\nfinal group, which is still a group with its own scale.\\n\\nDoes group_quant_dequant() satisfy this contract?\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_15\",\n    \"status\": \"under_test\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_15\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_15\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_15\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_15\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_15\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_15\"\n      },\n      \"created_at\": \"2026-09-30T08:24:53Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_15\",\n        \"has_error\": null,\n        \"kernel_code\": \"import torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _group_quant_kernel(X, OUT, stride_xm, stride_om, n_cols, GROUP: tl.constexpr,\\n                        BLOCK: tl.constexpr):\\n    row = tl.program_id(0)\\n    x_row = X + row * stride_xm\\n    o_row = OUT + row * stride_om\\n    n_groups = n_cols // GROUP\\n\\n    for g in range(n_groups):\\n        cols = g * GROUP + tl.arange(0, BLOCK)\\n        in_group = tl.arange(0, BLOCK) < GROUP\\n        x = tl.load(x_row + cols, mask=in_group & (cols < n_cols), other=0.0)\\n        absmax = tl.max(tl.abs(x), axis=0)\\n        scale = tl.where(absmax == 0.0, 1.0, absmax / 127.0)\\n        q = tl.floor(x / scale + 0.5).to(tl.int8)\\n        deq = q.to(tl.float32) * scale\\n        tl.store(o_row + cols, deq, mask=in_group & (cols < n_cols))\\n\\n\\ndef group_quant_dequant(x: torch.Tensor, group_size: int = 64) -> torch.Tensor:\\n    \\\"\\\"\\\"Symmetric INT8 quantize-dequantize with one scale per group of columns.\\\"\\\"\\\"\\n    n_rows, n_cols = x.shape\\n    out = torch.zeros_like(x)\\n    _group_quant_kernel[(n_rows,)](x, out, x.stride(0), out.stride(0), n_cols,\\n                                   GROUP=group_size, BLOCK=group_size)\\n    return out\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Operation: symmetric INT8 quantize-dequantize with one scale per group of\\ncolumns, the per-group scaling used by INT8 inference kernels.\\n\\nFor each group of `group_size` consecutive columns of a row:\\n\\n    scale = max(|x|) / 127          over that group\\n    q     = round(x / scale)        clamped into int8\\n    y     = q * scale\\n\\nEvery column of the input must be quantized under the scale of the group it\\nbelongs to.\\n\\nInput domain: `n_cols` may be any positive integer. It is NOT required to be a\\nmultiple of `group_size`; when it is not, the trailing columns form a shorter\\nfinal group, which is still a group with its own scale.\\n\\nDoes group_quant_dequant() satisfy this contract?\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_15\",\n        \"status\": \"under_test\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_15\"\n      },\n      \"created_at\": \"2026-09-30T08:24:53Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Operation: symmetric INT8 quantize-dequantize with one scale per group of\\ncolumns, the per-group scaling used by INT8 inference kernels.\\n\\nFor each group of `group_size` consecutive columns of a row:\\n\\n    scale = max(|x|) / 127          over that group\\n    q     = round(x / scale)        clamped into int8\\n    y     = q * scale\\n\\nEvery column of the input must be quantized under the scale of the group it\\nbelongs to.\\n\\nInput domain: `n_cols` may be any positive integer. It is NOT required to be a\\nmultiple of `group_size`; when it is not, the trailing columns form a shorter\\nfinal group, which is still a group with its own scale.\\n\\nDoes group_quant_dequant() satisfy this contract?\\n\",\n        \"entry\": \"case_15\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_15\"\n      },\n      \"created_at\": \"2026-09-30T08:24:53Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_15\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 1176\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 68\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 682\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_15\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-30T08:24:53Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_15\\\",\\n  \\\"status\\\": \\\"under_test\\\",\\n  \\\"passed\\\": null\\n}\\n\",\n        \"entry\": \"case_15\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 68,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 32768,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_description_update",
+        "description": "Record a structured Describer update to the shared description model.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resolved_task_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "contract_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "kernel_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "risk_map": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "scope_notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "impact_on_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

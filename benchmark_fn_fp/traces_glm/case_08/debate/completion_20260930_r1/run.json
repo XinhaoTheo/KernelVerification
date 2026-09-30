@@ -1,0 +1,2111 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_08",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\nSTEP = 0.05\n\n\n@triton.jit\ndef stochastic_round_kernel(x_ptr, out_ptr, seed, N: tl.constexpr, STEP: tl.constexpr):\n    offs = tl.arange(0, N)\n    x = tl.load(x_ptr + offs)\n    lower = tl.floor(x / STEP) * STEP\n    upper = lower + STEP\n    p_up = (x - lower) / STEP\n    r = tl.rand(seed, offs)  # real Triton Philox RNG\n    out = tl.where(r < p_up, upper, lower)\n    tl.store(out_ptr + offs, out)\n\n\ndef stochastic_round_to_grid(x: torch.Tensor, seed: int) -> torch.Tensor:\n    N = x.shape[0]\n    out = torch.empty_like(x)\n    stochastic_round_kernel[(1,)](x, out, seed, N=N, STEP=STEP)\n    return out\n",
+    "passed": null,
+    "problem_text": "Operation: stochastic rounding of a tensor onto a coarse grid, using Triton's\ncounter-based Philox RNG (tl.rand), as used by low-precision training kernels\nwhen casting high-precision accumulators down to a storage format.\n\n`stochastic_round_to_grid(x, seed)` must round each element to one of the two\nneighbouring multiples of STEP, choosing the upper one with probability equal\nto the element's fractional distance to it:\n\n    lower = floor(x / STEP) * STEP\n    P(out = lower + STEP) = (x - lower) / STEP,   otherwise out = lower\n\nso that E[out] == x. The randomness is drawn from the supplied seed.\n\nInput domain: `x` is a 1-D tensor whose length is a power of two and fits in a\nsingle block.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_08",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:18:38Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:19:47Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "df2020bdef8ce12d42dfcb01c7ad103a9d2e911b0ab05e9e256774f0d5eafb4a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "53f89cbfa0a4fdebb732c61639a19db9d9323ff00f6315f3783e8af8dd3c2dce"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "eb57ad1d2de04d38acc8f6590afa65a5a3bc710eb0d47edbe9f8dd7e6123ebe8"
+              }
+            ],
+            "bias": -5.251169204711914e-05,
+            "duration_s": 8.54061,
+            "exit_code": 0,
+            "expected_signal": "bias within Monte-Carlo noise of sample mean vs input mean (z < ~4)",
+            "json_parse_error": null,
+            "json_result": {
+              "N": 64,
+              "bias": -5.251169204711914e-05,
+              "mc_std": 0.02519967406988144,
+              "mean_in": -0.17287498712539673,
+              "mean_out": -0.17292749881744385,
+              "metric": "sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant",
+              "seeds": 2000,
+              "z_score": -0.0020838242550875264
+            },
+            "mc_std": 0.02519967406988144,
+            "mean_in": -0.17287498712539673,
+            "mean_out": -0.17292749881744385,
+            "metric": "sample mean vs input mean, Monte-Carlo z-score",
+            "n_elements": 64,
+            "seeds": 2000,
+            "stderr": "",
+            "stdout": "{\"N\": 64, \"seeds\": 2000, \"mean_in\": -0.17287498712539673, \"mean_out\": -0.17292749881744385, \"bias\": -5.251169204711914e-05, \"mc_std\": 0.02519967406988144, \"z_score\": -0.0020838242550875264, \"metric\": \"sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant\"}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "z_score": -0.0020838242550875264
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Over 2000 seeds and 64 repeated elements (mixed signs and fractional distances), sample mean of outputs is -0.172927 vs input mean -0.172875; bias -5.25e-5 is far inside Monte-Carlo noise (z=-0.002). No evidence of E[out] != x.",
+          "supports": "rebutted",
+          "tool_event_id": "t12"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"so that E[out] == x. The randomness is drawn from the supplied seed.\" \u2014 unbiasedness is the explicitly stated invariant of the operation."
+        }
+      ],
+      "scope_rationale": "problem.txt explicitly states the invariant \\\"so that E[out] == x\\\"; inputs are 1-D power-of-two-length tensors per the stated input domain, and repeated samples across seeds are exactly the domain the contract's probabilistic requirement applies to.",
+      "statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x.",
+      "status": "rebutted",
+      "updated_at": "2026-09-30T08:19:47Z"
+    },
+    {
+      "created_at": "2026-09-30T08:18:38Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:19:47Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "69671ab07c26727a55403e040387287e30309173aa98bdda97e931b1823fbc59"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "1f918f4a89d8f7908060a369a0d40c27923adfa1e3e45fa24176069a62c97ad5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "c392d51502cf60848a6379987151b108fbd06bba9fc57355a58980075543394c"
+              }
+            ],
+            "duration_s": 7.893873,
+            "exit_code": 0,
+            "expected_signal": "p_up near 1 (instead of 0) and outputs jumping to next grid point, or outputs off the decimal grid by ~1e-8",
+            "frac_upper_max": 0.0,
+            "json_parse_error": null,
+            "json_result": {
+              "metric": "p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05",
+              "per_value": {
+                "-0.05": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.05000000074505806,
+                  "output_min": -0.05000000074505806,
+                  "p_up_fp32": 0.0
+                },
+                "-0.1": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.10000000149011612,
+                  "output_min": -0.10000000149011612,
+                  "p_up_fp32": 0.0
+                },
+                "-0.25": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.25,
+                  "output_min": -0.25,
+                  "p_up_fp32": 0.0
+                },
+                "-0.55": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.550000011920929,
+                  "output_min": -0.550000011920929,
+                  "p_up_fp32": 0.0
+                },
+                "0.05": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.05000000074505806,
+                  "output_min": 0.05000000074505806,
+                  "p_up_fp32": 0.0
+                },
+                "0.15": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.15000000596046448,
+                  "output_min": 0.15000000596046448,
+                  "p_up_fp32": 0.0
+                },
+                "0.2": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.20000000298023224,
+                  "output_min": 0.20000000298023224,
+                  "p_up_fp32": 0.0
+                },
+                "0.3": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.30000001192092896,
+                  "output_min": 0.30000001192092896,
+                  "p_up_fp32": 0.0
+                },
+                "0.35": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.3499999940395355,
+                  "output_min": 0.3499999940395355,
+                  "p_up_fp32": 0.0
+                },
+                "1.1": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 1.100000023841858,
+                  "output_min": 1.100000023841858,
+                  "p_up_fp32": 0.0
+                }
+              }
+            },
+            "max_resid_from_decimal_grid": 0.0,
+            "p_up_max": 0.0,
+            "stderr": "",
+            "stdout": "{\"per_value\": {\"0.15\": {\"p_up_fp32\": 0.0, \"output_min\": 0.15000000596046448, \"output_max\": 0.15000000596046448, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.25\": {\"p_up_fp32\": 0.0, \"output_min\": -0.25, \"output_max\": -0.25, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.3\": {\"p_up_fp32\": 0.0, \"output_min\": 0.30000001192092896, \"output_max\": 0.30000001192092896, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.55\": {\"p_up_fp32\": 0.0, \"output_min\": -0.550000011920929, \"output_max\": -0.550000011920929, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"1.1\": {\"p_up_fp32\": 0.0, \"output_min\": 1.100000023841858, \"output_max\": 1.100000023841858, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.05\": {\"p_up_fp32\": 0.0, \"output_min\": 0.05000000074505806, \"output_max\": 0.05000000074505806, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.05\": {\"p_up_fp32\": 0.0, \"output_min\": -0.05000000074505806, \"output_max\": -0.05000000074505806, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.2\": {\"p_up_fp32\": 0.0, \"output_min\": 0.20000000298023224, \"output_max\": 0.20000000298023224, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.35\": {\"p_up_fp32\": 0.0, \"output_min\": 0.3499999940395355, \"output_max\": 0.3499999940395355, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.1\": {\"p_up_fp32\": 0.0, \"output_min\": -0.10000000149011612, \"output_max\": -0.10000000149011612, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}}, \"metric\": \"p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05\"}\n",
+            "tested_values": [
+              0.15,
+              -0.25,
+              0.3,
+              -0.55,
+              1.1,
+              0.05,
+              -0.05,
+              0.2,
+              0.35,
+              -0.1
+            ],
+            "timed_out": false,
+            "timeout_s": 60,
+            "wrong_grid_point_count": 0
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "At 10 exact decimal multiples of STEP (positive and negative), fp32 p_up is exactly 0.0 (not ~1), outputs are deterministic (never jump to the next grid point; frac_upper=0 across 100 seeds), and outputs are exactly on the k*STEP grid (max residual vs rounded decimal grid 0.0). The fp32 floor/STEP reconstruction did not select wrong grid points or produce off-grid outputs at these values.",
+          "supports": "rebutted",
+          "tool_event_id": "t13"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP\" \u2014 outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the stated contract and any off-grid or wrong-grid-point output violates it."
+        }
+      ],
+      "scope_rationale": "problem.txt requires outputs to be one of the two neighbouring multiples of STEP computed by the stated floor formula; exact decimal multiples of STEP (e.g. 0.15, -0.25, 0.30) are admitted 1-D inputs, and any off-grid output or wrong neighbouring-pair selection violates the stated formula.",
+      "statement": "At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on the x\u00b10.05 grid, with p_up close to 1 instead of 0 (or vice versa), so the output can sit on the wrong grid point relative to x.",
+      "status": "rebutted",
+      "updated_at": "2026-09-30T08:19:47Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Stochastic rounding of each element to neighboring multiples of STEP=0.05: lower = floor(x/STEP)*STEP, upper = lower + STEP, P(upper) = (x-lower)/STEP, else lower.",
+      "Unbiasedness E[out] == x is the stated invariant.",
+      "Randomness must come from the supplied seed via Triton's counter-based Philox RNG (tl.rand).",
+      "Input domain: 1-D tensor, length a power of two, fits in a single block."
+    ],
+    "kernel_model": [
+      "Single Triton kernel launched on grid (1,) with tl.arange(0, N) covering all elements in one block; N and STEP passed as constexpr.",
+      "Computes lower/upper/p_up exactly per the contract formula and selects via tl.where(r < p_up, upper, lower) with tl.rand(seed, offs) as r.",
+      "seed is passed as a runtime scalar argument (not constexpr); N constexpr implies specialization per length.",
+      "Python wrapper allocates out with torch.empty_like and returns it; no dtype handling beyond inherited dtype.",
+      "kernel.py line 15: r = tl.rand(seed, offs) uses the same Philox seed for every element, with offs (0..N-1) as the counter offset, so outputs are fully deterministic given (x, seed).",
+      "kernel.py line 12-14: lower/p_up are computed in the tensor's native dtype; if x is fp32, x/STEP and floor results inherit fp32 rounding of STEP=0.05 (binary ~0.05000000074505806).",
+      "kernel.py line 23: single launch with grid (1,) and N constexpr; no masking is needed only because every loaded offset is valid, which holds iff x.numel() == N exactly."
+    ],
+    "open_questions": [
+      "What input dtype does the benchmark use (fp32 vs fp64)? This decides whether the fp32 STEP rounding risk in c2 is triggered.",
+      "Does the test compare outputs statistically across seeds, or bit-exactly against a fixed per-seed reference? This decides whether seed-dependent determinism or only distribution matters."
+    ],
+    "risk_map": [
+      "seed handling: tl.rand(seed, offs) treats seed as an offset/counter base; if the test expects each distinct seed to produce independent streams or a specific seed-to-Philox-counter mapping, verify semantics. Also seed=0 vs seed None edge cases.",
+      "tl.rand returns values in [0,1); boundary r < p_up vs r <= p_up is immaterial for continuous p_up but relevant for p_up==0 (always lower, correct) and p_up==1.",
+      "Floating-point grid computation: x/STEP with STEP=0.05 (not exactly representable in binary) may make x - lower/STEP slightly >1 or <0 at exact multiples, producing off-grid outputs or wrong probabilities; exact multiples of STEP are a risk surface.",
+      "tl.floor and division in the kernel's dtype (likely fp32): if x is fp64, empty_like + kernel loads may downcast or mismatch; dtype assumption unverified.",
+      "tl.rand requires the offset arg to be int; offs is int32 arange \u2014 fine, but r's distribution vs p_up comparison precision could interact near ties.",
+      "N as constexpr: different tensor lengths trigger recompilation, fine, but if N is not a power of two tl.arange fails \u2014 contract says power of two so out of scope.",
+      "For c1: since tl.rand(seed, offs) is deterministic per (seed, offset), a bias probe can reuse one tensor across many seeds; a repeated-element tensor (e.g. x_i = 0.375 everywhere) with S seeds gives S*N samples whose empirical upper-round frequency should converge to p_up per element.",
+      "For c2: at exact decimal multiples of STEP, fp32 x/STEP can land epsilon above an integer, making p_up ~1 instead of 0 so the element rounds up to the next grid point with near-certainty across all seeds; conversely epsilon below gives p_up ~0 (correct). A probe should report p_up values and output grid positions at x in {0.15, -0.25, 0.30, -0.55, 1.10} in fp32.",
+      "For c2: the reconstructed lower = floor(x/STEP)*STEP in fp32 yields values like 0.15000000596 rather than exact decimal multiples; whether that counts as 'on the grid' depends on the test's tolerance, so probes should measure the residual against exact decimal multiples, not assume it."
+    ],
+    "scope_notes": [
+      "Single-block, power-of-two-length 1-D tensors only; no multi-block/strided inputs in scope.\", \"Correctness metric is per-element probabilistic rounding plus unbiasedness, so single-run exact-output comparison is not decisive; evidence should use exact-grid checks, statistical frequency, or the contract's seed-determined output if the test is deterministic given seed.\"]",
+      "Claims c1 and c2 cover the two highest-risk surfaces; c2's grid-multiple issue is also a potential contributor to c1's unbiasedness claim, so a single statistical probe at exact multiples can inform both.",
+      "Determinism given seed means single-run output comparison against a reference implementation with identical tl.rand usage IS decisive if such a reference exists in the test; whether the benchmark test does this is an open question."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Stochastic rounding of each element to neighboring multiples of STEP=0.05: lower = floor(x/STEP)*STEP, upper = lower + STEP, P(upper) = (x-lower)/STEP, else lower.",
+        "Unbiasedness E[out] == x is the stated invariant.",
+        "Randomness must come from the supplied seed via Triton's counter-based Philox RNG (tl.rand).",
+        "Input domain: 1-D tensor, length a power of two, fits in a single block."
+      ],
+      "created_at": "2026-09-30T08:18:03Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Single Triton kernel launched on grid (1,) with tl.arange(0, N) covering all elements in one block; N and STEP passed as constexpr.",
+        "Computes lower/upper/p_up exactly per the contract formula and selects via tl.where(r < p_up, upper, lower) with tl.rand(seed, offs) as r.",
+        "seed is passed as a runtime scalar argument (not constexpr); N constexpr implies specialization per length.",
+        "Python wrapper allocates out with torch.empty_like and returns it; no dtype handling beyond inherited dtype."
+      ],
+      "open_questions": [],
+      "risk_map": [
+        "seed handling: tl.rand(seed, offs) treats seed as an offset/counter base; if the test expects each distinct seed to produce independent streams or a specific seed-to-Philox-counter mapping, verify semantics. Also seed=0 vs seed None edge cases.",
+        "tl.rand returns values in [0,1); boundary r < p_up vs r <= p_up is immaterial for continuous p_up but relevant for p_up==0 (always lower, correct) and p_up==1.",
+        "Floating-point grid computation: x/STEP with STEP=0.05 (not exactly representable in binary) may make x - lower/STEP slightly >1 or <0 at exact multiples, producing off-grid outputs or wrong probabilities; exact multiples of STEP are a risk surface.",
+        "tl.floor and division in the kernel's dtype (likely fp32): if x is fp64, empty_like + kernel loads may downcast or mismatch; dtype assumption unverified.",
+        "tl.rand requires the offset arg to be int; offs is int32 arange \u2014 fine, but r's distribution vs p_up comparison precision could interact near ties.",
+        "N as constexpr: different tensor lengths trigger recompilation, fine, but if N is not a power of two tl.arange fails \u2014 contract says power of two so out of scope."
+      ],
+      "scope_notes": [
+        "Single-block, power-of-two-length 1-D tensors only; no multi-block/strided inputs in scope.\", \"Correctness metric is per-element probabilistic rounding plus unbiasedness, so single-run exact-output comparison is not decisive; evidence should use exact-grid checks, statistical frequency, or the contract's seed-determined output if the test is deterministic given seed.\"]"
+      ],
+      "summary": "Described case_08: stochastic rounding to a 0.05 grid via Triton Philox tl.rand; kernel matches the contract formula; main risk surfaces are seed/RNG semantics, grid-multiple floating-point edge cases, and dtype handling.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [],
+      "created_at": "2026-09-30T08:18:55Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "kernel.py line 15: r = tl.rand(seed, offs) uses the same Philox seed for every element, with offs (0..N-1) as the counter offset, so outputs are fully deterministic given (x, seed).",
+        "kernel.py line 12-14: lower/p_up are computed in the tensor's native dtype; if x is fp32, x/STEP and floor results inherit fp32 rounding of STEP=0.05 (binary ~0.05000000074505806).",
+        "kernel.py line 23: single launch with grid (1,) and N constexpr; no masking is needed only because every loaded offset is valid, which holds iff x.numel() == N exactly."
+      ],
+      "open_questions": [
+        "What input dtype does the benchmark use (fp32 vs fp64)? This decides whether the fp32 STEP rounding risk in c2 is triggered.",
+        "Does the test compare outputs statistically across seeds, or bit-exactly against a fixed per-seed reference? This decides whether seed-dependent determinism or only distribution matters."
+      ],
+      "risk_map": [
+        "For c1: since tl.rand(seed, offs) is deterministic per (seed, offset), a bias probe can reuse one tensor across many seeds; a repeated-element tensor (e.g. x_i = 0.375 everywhere) with S seeds gives S*N samples whose empirical upper-round frequency should converge to p_up per element.",
+        "For c2: at exact decimal multiples of STEP, fp32 x/STEP can land epsilon above an integer, making p_up ~1 instead of 0 so the element rounds up to the next grid point with near-certainty across all seeds; conversely epsilon below gives p_up ~0 (correct). A probe should report p_up values and output grid positions at x in {0.15, -0.25, 0.30, -0.55, 1.10} in fp32.",
+        "For c2: the reconstructed lower = floor(x/STEP)*STEP in fp32 yields values like 0.15000000596 rather than exact decimal multiples; whether that counts as 'on the grid' depends on the test's tolerance, so probes should measure the residual against exact decimal multiples, not assume it."
+      ],
+      "scope_notes": [
+        "Claims c1 and c2 cover the two highest-risk surfaces; c2's grid-multiple issue is also a potential contributor to c1's unbiasedness claim, so a single statistical probe at exact multiples can inform both.",
+        "Determinism given seed means single-run output comparison against a reference implementation with identical tl.rand usage IS decisive if such a reference exists in the test; whether the benchmark test does this is an open question."
+      ],
+      "summary": "Refined case_08 description with claim-directed probe guidance for c1 (statistical unbiasedness via deterministic-per-seed Philox sampling) and c2 (fp32 grid-multiple behavior of STEP=0.05), plus open questions on benchmark dtype and test comparison mode.",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_08",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_08"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_08"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_08"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_08",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 11.76079968000002,
+      "role": "describer",
+      "round": 2,
+      "text": "I have full context; recording the description model.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Stochastic rounding of each element to neighboring multiples of STEP=0.05: lower = floor(x/STEP)*STEP, upper = lower + STEP, P(upper) = (x-lower)/STEP, else lower.",
+              "Unbiasedness E[out] == x is the stated invariant.",
+              "Randomness must come from the supplied seed via Triton's counter-based Philox RNG (tl.rand).",
+              "Input domain: 1-D tensor, length a power of two, fits in a single block."
+            ],
+            "kernel_model": [
+              "Single Triton kernel launched on grid (1,) with tl.arange(0, N) covering all elements in one block; N and STEP passed as constexpr.",
+              "Computes lower/upper/p_up exactly per the contract formula and selects via tl.where(r < p_up, upper, lower) with tl.rand(seed, offs) as r.",
+              "seed is passed as a runtime scalar argument (not constexpr); N constexpr implies specialization per length.",
+              "Python wrapper allocates out with torch.empty_like and returns it; no dtype handling beyond inherited dtype."
+            ],
+            "risk_map": [
+              "seed handling: tl.rand(seed, offs) treats seed as an offset/counter base; if the test expects each distinct seed to produce independent streams or a specific seed-to-Philox-counter mapping, verify semantics. Also seed=0 vs seed None edge cases.",
+              "tl.rand returns values in [0,1); boundary r < p_up vs r <= p_up is immaterial for continuous p_up but relevant for p_up==0 (always lower, correct) and p_up==1.",
+              "Floating-point grid computation: x/STEP with STEP=0.05 (not exactly representable in binary) may make x - lower/STEP slightly >1 or <0 at exact multiples, producing off-grid outputs or wrong probabilities; exact multiples of STEP are a risk surface.",
+              "tl.floor and division in the kernel's dtype (likely fp32): if x is fp64, empty_like + kernel loads may downcast or mismatch; dtype assumption unverified.",
+              "tl.rand requires the offset arg to be int; offs is int32 arange \u2014 fine, but r's distribution vs p_up comparison precision could interact near ties.",
+              "N as constexpr: different tensor lengths trigger recompilation, fine, but if N is not a power of two tl.arange fails \u2014 contract says power of two so out of scope."
+            ],
+            "scope_notes": "Single-block, power-of-two-length 1-D tensors only; no multi-block/strided inputs in scope.\", \"Correctness metric is per-element probabilistic rounding plus unbiasedness, so single-run exact-output comparison is not decisive; evidence should use exact-grid checks, statistical frequency, or the contract's seed-determined output if the test is deterministic given seed.\"]",
+            "summary": "Described case_08: stochastic rounding to a 0.05 grid via Triton Philox tl.rand; kernel matches the contract formula; main risk surfaces are seed/RNG semantics, grid-multiple floating-point edge cases, and dtype handling."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.761,
+        "input_tokens": 4050,
+        "output_tokens": 652
+      }
+    },
+    {
+      "duration_s": 23.010367247999994,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The kernel matches the contract formula closely, so I'll focus claims on the two highest-risk, testable surfaces: the E[out]==x unbiasedness invariant and floating-point behavior at exact STEP=0.05 grid multiples (where 0.05 is not binary-representable and the floor/reconstruction can shift the grid point).",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"so that E[out] == x. The randomness is drawn from the supplied seed.\" \u2014 unbiasedness is the explicitly stated invariant of the operation."
+              }
+            ],
+            "statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP\" \u2014 outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the stated contract and any off-grid or wrong-grid-point output violates it."
+              }
+            ],
+            "statement": "At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on the x\u00b10.05 grid, with p_up close to 1 instead of 0 (or vice versa), so the output can sit on the wrong grid point relative to x."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 23.01,
+        "input_tokens": 9886,
+        "output_tokens": 1215
+      }
+    },
+    {
+      "duration_s": 11.372143869000013,
+      "role": "skeptic",
+      "round": 4,
+      "text": "Both prior claim records failed for missing `scope_rationale`; I'm re-sending them with that field filled in.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"so that E[out] == x. The randomness is drawn from the supplied seed.\" \u2014 unbiasedness is the explicitly stated invariant of the operation."
+              }
+            ],
+            "scope_rationale": "problem.txt explicitly states the invariant \\\"so that E[out] == x\\\"; inputs are 1-D power-of-two-length tensors per the stated input domain, and repeated samples across seeds are exactly the domain the contract's probabilistic requirement applies to.",
+            "statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP\" \u2014 outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the stated contract and any off-grid or wrong-grid-point output violates it."
+              }
+            ],
+            "scope_rationale": "problem.txt requires outputs to be one of the two neighbouring multiples of STEP computed by the stated floor formula; exact decimal multiples of STEP (e.g. 0.15, -0.25, 0.30) are admitted 1-D inputs, and any off-grid output or wrong neighbouring-pair selection violates the stated formula.",
+            "statement": "At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on the x\u00b10.05 grid, with p_up close to 1 instead of 0 (or vice versa), so the output can sit on the wrong grid point relative to x."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.372,
+        "input_tokens": 11482,
+        "output_tokens": 689
+      }
+    },
+    {
+      "duration_s": 17.380606458000017,
+      "role": "describer",
+      "round": 5,
+      "text": "Both open claims (c1 unbiasedness, c2 exact-grid-multiple behavior) map directly onto the risk surfaces already in the description model. I'll add targeted scope guidance for the Experimenter on what evidence would decide each claim, without asserting outcomes.",
+      "tool_calls": [
+        {
+          "args": {
+            "kernel_model": [
+              "kernel.py line 15: r = tl.rand(seed, offs) uses the same Philox seed for every element, with offs (0..N-1) as the counter offset, so outputs are fully deterministic given (x, seed).",
+              "kernel.py line 12-14: lower/p_up are computed in the tensor's native dtype; if x is fp32, x/STEP and floor results inherit fp32 rounding of STEP=0.05 (binary ~0.05000000074505806).",
+              "kernel.py line 23: single launch with grid (1,) and N constexpr; no masking is needed only because every loaded offset is valid, which holds iff x.numel() == N exactly."
+            ],
+            "open_questions": [
+              "What input dtype does the benchmark use (fp32 vs fp64)? This decides whether the fp32 STEP rounding risk in c2 is triggered.",
+              "Does the test compare outputs statistically across seeds, or bit-exactly against a fixed per-seed reference? This decides whether seed-dependent determinism or only distribution matters."
+            ],
+            "risk_map": [
+              "For c1: since tl.rand(seed, offs) is deterministic per (seed, offset), a bias probe can reuse one tensor across many seeds; a repeated-element tensor (e.g. x_i = 0.375 everywhere) with S seeds gives S*N samples whose empirical upper-round frequency should converge to p_up per element.",
+              "For c2: at exact decimal multiples of STEP, fp32 x/STEP can land epsilon above an integer, making p_up ~1 instead of 0 so the element rounds up to the next grid point with near-certainty across all seeds; conversely epsilon below gives p_up ~0 (correct). A probe should report p_up values and output grid positions at x in {0.15, -0.25, 0.30, -0.55, 1.10} in fp32.",
+              "For c2: the reconstructed lower = floor(x/STEP)*STEP in fp32 yields values like 0.15000000596 rather than exact decimal multiples; whether that counts as 'on the grid' depends on the test's tolerance, so probes should measure the residual against exact decimal multiples, not assume it."
+            ],
+            "scope_notes": [
+              "Claims c1 and c2 cover the two highest-risk surfaces; c2's grid-multiple issue is also a potential contributor to c1's unbiasedness claim, so a single statistical probe at exact multiples can inform both.",
+              "Determinism given seed means single-run output comparison against a reference implementation with identical tl.rand usage IS decisive if such a reference exists in the test; whether the benchmark test does this is an open question."
+            ],
+            "summary": "Refined case_08 description with claim-directed probe guidance for c1 (statistical unbiasedness via deterministic-per-seed Philox sampling) and c2 (fp32 grid-multiple behavior of STEP=0.05), plus open questions on benchmark dtype and test comparison mode."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.381,
+        "input_tokens": 12950,
+        "output_tokens": 745
+      }
+    },
+    {
+      "duration_s": 9.062146184,
+      "role": "skeptic",
+      "round": 6,
+      "text": "Both high-risk surfaces (unbiasedness invariant c1 and fp32 grid-multiple behavior c2) are already recorded with in-scope evidence and await experimenter probes. The description model already covers remaining minor risks (seed-0 edge, comparison boundary at p_up\u2208{0,1}) as non-decisive, and no new evidence has arrived since the claims were recorded. I'll note that I found no additional in-scope claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The two open in-scope claims (c1 statistical unbiasedness, c2 fp32 behavior at exact STEP=0.05 multiples) cover the highest-risk, testable surfaces, and the description model's remaining notes (p_up==0/1 boundary semantics, seed=0) are either immaterial to the stated formula or lack contract support for a decisive case. No new evidence since these claims were recorded suggests any additional material claim.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.062,
+        "input_tokens": 19267,
+        "output_tokens": 368
+      }
+    },
+    {
+      "duration_s": 15.392582878000013,
+      "role": "experimenter",
+      "round": 7,
+      "text": "Launching both probes together: c1 (statistical unbiasedness over many seeds and repeated elements) and c2 (fp32 behavior at exact decimal multiples of STEP). They are independent, so I'll run both in one batch and finalize next turn.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json\ntorch.manual_seed(0)\nfrom kernel import stochastic_round_to_grid\n\nSTEP = 0.05\nN = 64  # power of two, single block\n# repeated elements with varied fractional distances, incl. negatives\nvals = [0.375, -0.375, 0.0125, -0.0625, 1.234, -2.567, 0.9999, -0.9999] * 8\nx = torch.tensor(vals, dtype=torch.float32, device='cuda')\nS = 2000\nouts = torch.stack([stochastic_round_to_grid(x, s) for s in range(S)])\nmean_out = outs.mean().item()\nmean_in = x.mean().item()\nstd_mc = (outs.std() / (S**0.5)).item()\nbias = mean_out - mean_in\nz = bias / std_mc if std_mc > 0 else 0.0\nprint(json.dumps({\n    \"N\": N, \"seeds\": S, \"mean_in\": mean_in, \"mean_out\": mean_out,\n    \"bias\": bias, \"mc_std\": std_mc, \"z_score\": z,\n    \"metric\": \"sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant\"\n}))\n",
+            "expected_signal": "bias within Monte-Carlo noise of sample mean vs input mean (z < ~4)"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import torch, json\nfrom kernel import stochastic_round_to_grid\nSTEP = 0.05\nvals = [0.15, -0.25, 0.30, -0.55, 1.10, 0.05, -0.05, 0.20, 0.35, -0.10]\nx = torch.tensor(vals, dtype=torch.float32, device='cuda')\nres = {}\nS = 100\nfor v in vals:\n    xi = torch.full((16,), v, dtype=torch.float32, device='cuda')\n    o = torch.stack([stochastic_round_to_grid(xi, s) for s in range(S)])\n    # fp32 grid computation per contract formula\n    lo = (torch.floor(xi / STEP) * STEP)\n    p_up = ((xi - lo) / STEP)\n    out_lo = o.min().item(); out_hi = o.max().item()\n    frac_up = (o > lo[0].item() + STEP/2).float().mean().item()\n    # distance of outputs from exact decimal grid (k*0.05)\n    k = torch.round(o / STEP)\n    resid = (o - k * STEP).abs().max().item()\n    res[repr(v)] = {\n        \"p_up_fp32\": p_up[0].item(),\n        \"output_min\": out_lo, \"output_max\": out_hi,\n        \"frac_upper\": frac_up,\n        \"max_resid_from_decimal_grid\": resid,\n    }\nprint(json.dumps({\n    \"per_value\": res,\n    \"metric\": \"p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05\"\n}))\n",
+            "expected_signal": "p_up near 1 (instead of 0) and outputs jumping to next grid point, or outputs off the decimal grid by ~1e-8"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.393,
+        "input_tokens": 20316,
+        "output_tokens": 834
+      }
+    },
+    {
+      "duration_s": 10.591459789999988,
+      "role": "experimenter",
+      "round": 8,
+      "text": "Both probe results are available and decisive: c1 shows bias well within Monte-Carlo noise (z \u2248 -0.002), and c2 shows p_up exactly 0 with outputs on the grid at all tested exact multiples. I'll finalize both as rebutted.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "bias": -5.251169204711914e-05,
+              "mc_std": 0.02519967406988144,
+              "mean_in": -0.17287498712539673,
+              "mean_out": -0.17292749881744385,
+              "metric": "sample mean vs input mean, Monte-Carlo z-score",
+              "n_elements": 64,
+              "seeds": 2000,
+              "z_score": -0.0020838242550875264
+            },
+            "event_id": "t12",
+            "status": "rebutted",
+            "summary": "Over 2000 seeds and 64 repeated elements (mixed signs and fractional distances), sample mean of outputs is -0.172927 vs input mean -0.172875; bias -5.25e-5 is far inside Monte-Carlo noise (z=-0.002). No evidence of E[out] != x.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "frac_upper_max": 0.0,
+              "max_resid_from_decimal_grid": 0.0,
+              "p_up_max": 0.0,
+              "tested_values": [
+                0.15,
+                -0.25,
+                0.3,
+                -0.55,
+                1.1,
+                0.05,
+                -0.05,
+                0.2,
+                0.35,
+                -0.1
+              ],
+              "wrong_grid_point_count": 0
+            },
+            "event_id": "t13",
+            "status": "rebutted",
+            "summary": "At 10 exact decimal multiples of STEP (positive and negative), fp32 p_up is exactly 0.0 (not ~1), outputs are deterministic (never jump to the next grid point; frac_upper=0 across 100 seeds), and outputs are exactly on the k*STEP grid (max residual vs rounded decimal grid 0.0). The fp32 floor/STEP reconstruction did not select wrong grid points or produce off-grid outputs at these values.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.591,
+        "input_tokens": 27415,
+        "output_tokens": 563
+      }
+    },
+    {
+      "duration_s": 7.993247774000054,
+      "role": "skeptic",
+      "round": 9,
+      "text": "Both in-scope claims (c1 unbiasedness, c2 grid-multiple behavior) are rebutted by decisive probes, and the kernel matches the contract formula directly. No new evidence exposes a material in-scope problem.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Both in-scope claims are decisively rebutted: c1 (E[out]==x) shows bias far within Monte-Carlo noise (z=-0.002 over 2000 seeds), and c2 shows p_up exactly 0 and outputs on the grid at all tested exact STEP multiples. The kernel implements the contract formula directly (floor/STEP grid, p_up via fractional distance, tl.rand comparison), and remaining notes (seed=0 edge, r<p_up boundary at p_up=1) are immaterial given tl.rand returns [0,1). No material, testable, in-scope problem remains uncovered.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.993,
+        "input_tokens": 37590,
+        "output_tokens": 221
+      }
+    },
+    {
+      "duration_s": 8.940017810000029,
+      "role": "judge",
+      "round": 10,
+      "text": "All claims are settled: both in-scope claims (c1 unbiasedness, c2 grid-multiple behavior) are decisively rebutted by runtime probes, the Skeptic signed off with no new claims, and the kernel directly implements the contract formula. Recording a trust verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.9,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The kernel implements the contract formula directly (lower = floor(x/STEP)*STEP, p_up = (x-lower)/STEP, select via tl.rand(seed, offs) comparison). Both in-scope risk claims are decisively rebutted: c1 (unbiasedness E[out]==x) shows bias of -5.25e-5 far within Monte-Carlo noise (z=-0.002) over 2000 seeds and 64 mixed-sign elements (probe t12); c2 (fp32 behavior at exact STEP=0.05 multiples) shows p_up exactly 0.0, deterministic outputs on the correct grid point, and zero residual from the k*STEP grid across 10 positive/negative exact multiples over 100 seeds (probe t13). Residual fp32 representations like 0.150000006 instead of exact 0.15 are consistent with the contract's own floor(x/STEP)*STEP formula computed in the input dtype, and are not a defect. No test.py/get_inputs exists, so problem.txt is the operative contract, and it is satisfied. The Skeptic reviewed the latest evidence (t16) and found no new claims. Minor unresolved notes (benchmark dtype, seed=0 edge, r<p_up boundary at p_up=1) are immaterial: tl.rand returns [0,1) so the boundary is well-defined, and no confirmed in-scope failure remains.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.94,
+        "input_tokens": 37788,
+        "output_tokens": 390
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-30T08:19:55Z",
+    "decision": "no_new_claims",
+    "reason": "Both in-scope claims are decisively rebutted: c1 (E[out]==x) shows bias far within Monte-Carlo noise (z=-0.002 over 2000 seeds), and c2 shows p_up exactly 0 and outputs on the grid at all tested exact STEP multiples. The kernel implements the contract formula directly (floor/STEP grid, p_up via fractional distance, tl.rand comparison), and remaining notes (seed=0 edge, r<p_up boundary at p_up=1) are immaterial given tl.rand returns [0,1). No material, testable, in-scope problem remains uncovered.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 15,
+    "tool_event_id": "t16",
+    "turn": 9
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_08"
+      },
+      "created_at": "2026-09-30T08:17:52Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_08",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\nSTEP = 0.05\n\n\n@triton.jit\ndef stochastic_round_kernel(x_ptr, out_ptr, seed, N: tl.constexpr, STEP: tl.constexpr):\n    offs = tl.arange(0, N)\n    x = tl.load(x_ptr + offs)\n    lower = tl.floor(x / STEP) * STEP\n    upper = lower + STEP\n    p_up = (x - lower) / STEP\n    r = tl.rand(seed, offs)  # real Triton Philox RNG\n    out = tl.where(r < p_up, upper, lower)\n    tl.store(out_ptr + offs, out)\n\n\ndef stochastic_round_to_grid(x: torch.Tensor, seed: int) -> torch.Tensor:\n    N = x.shape[0]\n    out = torch.empty_like(x)\n    stochastic_round_kernel[(1,)](x, out, seed, N=N, STEP=STEP)\n    return out\n",
+        "passed": null,
+        "problem_text": "Operation: stochastic rounding of a tensor onto a coarse grid, using Triton's\ncounter-based Philox RNG (tl.rand), as used by low-precision training kernels\nwhen casting high-precision accumulators down to a storage format.\n\n`stochastic_round_to_grid(x, seed)` must round each element to one of the two\nneighbouring multiples of STEP, choosing the upper one with probability equal\nto the element's fractional distance to it:\n\n    lower = floor(x / STEP) * STEP\n    P(out = lower + STEP) = (x - lower) / STEP,   otherwise out = lower\n\nso that E[out] == x. The randomness is drawn from the supplied seed.\n\nInput domain: `x` is a 1-D tensor whose length is a power of two and fits in a\nsingle block.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_08",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_08"
+      },
+      "created_at": "2026-09-30T08:17:52Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: stochastic rounding of a tensor onto a coarse grid, using Triton's\ncounter-based Philox RNG (tl.rand), as used by low-precision training kernels\nwhen casting high-precision accumulators down to a storage format.\n\n`stochastic_round_to_grid(x, seed)` must round each element to one of the two\nneighbouring multiples of STEP, choosing the upper one with probability equal\nto the element's fractional distance to it:\n\n    lower = floor(x / STEP) * STEP\n    P(out = lower + STEP) = (x - lower) / STEP,   otherwise out = lower\n\nso that E[out] == x. The randomness is drawn from the supplied seed.\n\nInput domain: `x` is a 1-D tensor whose length is a power of two and fits in a\nsingle block.\n",
+        "entry": "case_08",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_08"
+      },
+      "created_at": "2026-09-30T08:17:52Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_08",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 656
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 696
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_08",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:17:52Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_08\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_08",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Stochastic rounding of each element to neighboring multiples of STEP=0.05: lower = floor(x/STEP)*STEP, upper = lower + STEP, P(upper) = (x-lower)/STEP, else lower.",
+          "Unbiasedness E[out] == x is the stated invariant.",
+          "Randomness must come from the supplied seed via Triton's counter-based Philox RNG (tl.rand).",
+          "Input domain: 1-D tensor, length a power of two, fits in a single block."
+        ],
+        "kernel_model": [
+          "Single Triton kernel launched on grid (1,) with tl.arange(0, N) covering all elements in one block; N and STEP passed as constexpr.",
+          "Computes lower/upper/p_up exactly per the contract formula and selects via tl.where(r < p_up, upper, lower) with tl.rand(seed, offs) as r.",
+          "seed is passed as a runtime scalar argument (not constexpr); N constexpr implies specialization per length.",
+          "Python wrapper allocates out with torch.empty_like and returns it; no dtype handling beyond inherited dtype."
+        ],
+        "risk_map": [
+          "seed handling: tl.rand(seed, offs) treats seed as an offset/counter base; if the test expects each distinct seed to produce independent streams or a specific seed-to-Philox-counter mapping, verify semantics. Also seed=0 vs seed None edge cases.",
+          "tl.rand returns values in [0,1); boundary r < p_up vs r <= p_up is immaterial for continuous p_up but relevant for p_up==0 (always lower, correct) and p_up==1.",
+          "Floating-point grid computation: x/STEP with STEP=0.05 (not exactly representable in binary) may make x - lower/STEP slightly >1 or <0 at exact multiples, producing off-grid outputs or wrong probabilities; exact multiples of STEP are a risk surface.",
+          "tl.floor and division in the kernel's dtype (likely fp32): if x is fp64, empty_like + kernel loads may downcast or mismatch; dtype assumption unverified.",
+          "tl.rand requires the offset arg to be int; offs is int32 arange \u2014 fine, but r's distribution vs p_up comparison precision could interact near ties.",
+          "N as constexpr: different tensor lengths trigger recompilation, fine, but if N is not a power of two tl.arange fails \u2014 contract says power of two so out of scope."
+        ],
+        "scope_notes": "Single-block, power-of-two-length 1-D tensors only; no multi-block/strided inputs in scope.\", \"Correctness metric is per-element probabilistic rounding plus unbiasedness, so single-run exact-output comparison is not decisive; evidence should use exact-grid checks, statistical frequency, or the contract's seed-determined output if the test is deterministic given seed.\"]",
+        "summary": "Described case_08: stochastic rounding to a 0.05 grid via Triton Philox tl.rand; kernel matches the contract formula; main risk surfaces are seed/RNG semantics, grid-multiple floating-point edge cases, and dtype handling."
+      },
+      "created_at": "2026-09-30T08:18:03Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Stochastic rounding of each element to neighboring multiples of STEP=0.05: lower = floor(x/STEP)*STEP, upper = lower + STEP, P(upper) = (x-lower)/STEP, else lower.",
+            "Unbiasedness E[out] == x is the stated invariant.",
+            "Randomness must come from the supplied seed via Triton's counter-based Philox RNG (tl.rand).",
+            "Input domain: 1-D tensor, length a power of two, fits in a single block."
+          ],
+          "kernel_model": [
+            "Single Triton kernel launched on grid (1,) with tl.arange(0, N) covering all elements in one block; N and STEP passed as constexpr.",
+            "Computes lower/upper/p_up exactly per the contract formula and selects via tl.where(r < p_up, upper, lower) with tl.rand(seed, offs) as r.",
+            "seed is passed as a runtime scalar argument (not constexpr); N constexpr implies specialization per length.",
+            "Python wrapper allocates out with torch.empty_like and returns it; no dtype handling beyond inherited dtype."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "seed handling: tl.rand(seed, offs) treats seed as an offset/counter base; if the test expects each distinct seed to produce independent streams or a specific seed-to-Philox-counter mapping, verify semantics. Also seed=0 vs seed None edge cases.",
+            "tl.rand returns values in [0,1); boundary r < p_up vs r <= p_up is immaterial for continuous p_up but relevant for p_up==0 (always lower, correct) and p_up==1.",
+            "Floating-point grid computation: x/STEP with STEP=0.05 (not exactly representable in binary) may make x - lower/STEP slightly >1 or <0 at exact multiples, producing off-grid outputs or wrong probabilities; exact multiples of STEP are a risk surface.",
+            "tl.floor and division in the kernel's dtype (likely fp32): if x is fp64, empty_like + kernel loads may downcast or mismatch; dtype assumption unverified.",
+            "tl.rand requires the offset arg to be int; offs is int32 arange \u2014 fine, but r's distribution vs p_up comparison precision could interact near ties.",
+            "N as constexpr: different tensor lengths trigger recompilation, fine, but if N is not a power of two tl.arange fails \u2014 contract says power of two so out of scope."
+          ],
+          "scope_notes": [
+            "Single-block, power-of-two-length 1-D tensors only; no multi-block/strided inputs in scope.\", \"Correctness metric is per-element probabilistic rounding plus unbiasedness, so single-run exact-output comparison is not decisive; evidence should use exact-grid checks, statistical frequency, or the contract's seed-determined output if the test is deterministic given seed.\"]"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Stochastic rounding of each element to neighboring multiples of STEP=0.05: lower = floor(x/STEP)*STEP, upper = lower + STEP, P(upper) = (x-lower)/STEP, else lower.",
+            "Unbiasedness E[out] == x is the stated invariant.",
+            "Randomness must come from the supplied seed via Triton's counter-based Philox RNG (tl.rand).",
+            "Input domain: 1-D tensor, length a power of two, fits in a single block."
+          ],
+          "created_at": "2026-09-30T08:18:03Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Single Triton kernel launched on grid (1,) with tl.arange(0, N) covering all elements in one block; N and STEP passed as constexpr.",
+            "Computes lower/upper/p_up exactly per the contract formula and selects via tl.where(r < p_up, upper, lower) with tl.rand(seed, offs) as r.",
+            "seed is passed as a runtime scalar argument (not constexpr); N constexpr implies specialization per length.",
+            "Python wrapper allocates out with torch.empty_like and returns it; no dtype handling beyond inherited dtype."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "seed handling: tl.rand(seed, offs) treats seed as an offset/counter base; if the test expects each distinct seed to produce independent streams or a specific seed-to-Philox-counter mapping, verify semantics. Also seed=0 vs seed None edge cases.",
+            "tl.rand returns values in [0,1); boundary r < p_up vs r <= p_up is immaterial for continuous p_up but relevant for p_up==0 (always lower, correct) and p_up==1.",
+            "Floating-point grid computation: x/STEP with STEP=0.05 (not exactly representable in binary) may make x - lower/STEP slightly >1 or <0 at exact multiples, producing off-grid outputs or wrong probabilities; exact multiples of STEP are a risk surface.",
+            "tl.floor and division in the kernel's dtype (likely fp32): if x is fp64, empty_like + kernel loads may downcast or mismatch; dtype assumption unverified.",
+            "tl.rand requires the offset arg to be int; offs is int32 arange \u2014 fine, but r's distribution vs p_up comparison precision could interact near ties.",
+            "N as constexpr: different tensor lengths trigger recompilation, fine, but if N is not a power of two tl.arange fails \u2014 contract says power of two so out of scope."
+          ],
+          "scope_notes": [
+            "Single-block, power-of-two-length 1-D tensors only; no multi-block/strided inputs in scope.\", \"Correctness metric is per-element probabilistic rounding plus unbiasedness, so single-run exact-output comparison is not decisive; evidence should use exact-grid checks, statistical frequency, or the contract's seed-determined output if the test is deterministic given seed.\"]"
+          ],
+          "summary": "Described case_08: stochastic rounding to a 0.05 grid via Triton Philox tl.rand; kernel matches the contract formula; main risk surfaces are seed/RNG semantics, grid-multiple floating-point edge cases, and dtype handling.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"so that E[out] == x. The randomness is drawn from the supplied seed.\" \u2014 unbiasedness is the explicitly stated invariant of the operation."
+          }
+        ],
+        "statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x."
+      },
+      "created_at": "2026-09-30T08:18:26Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP\" \u2014 outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the stated contract and any off-grid or wrong-grid-point output violates it."
+          }
+        ],
+        "statement": "At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on the x\u00b10.05 grid, with p_up close to 1 instead of 0 (or vice versa), so the output can sit on the wrong grid point relative to x."
+      },
+      "created_at": "2026-09-30T08:18:26Z",
+      "id": "t7",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t7",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"so that E[out] == x. The randomness is drawn from the supplied seed.\" \u2014 unbiasedness is the explicitly stated invariant of the operation."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly states the invariant \\\"so that E[out] == x\\\"; inputs are 1-D power-of-two-length tensors per the stated input domain, and repeated samples across seeds are exactly the domain the contract's probabilistic requirement applies to.",
+        "statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x."
+      },
+      "created_at": "2026-09-30T08:18:38Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-30T08:18:38Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"so that E[out] == x. The randomness is drawn from the supplied seed.\" \u2014 unbiasedness is the explicitly stated invariant of the operation."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly states the invariant \\\"so that E[out] == x\\\"; inputs are 1-D power-of-two-length tensors per the stated input domain, and repeated samples across seeds are exactly the domain the contract's probabilistic requirement applies to.",
+        "statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:18:38Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP\" \u2014 outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the stated contract and any off-grid or wrong-grid-point output violates it."
+          }
+        ],
+        "scope_rationale": "problem.txt requires outputs to be one of the two neighbouring multiples of STEP computed by the stated floor formula; exact decimal multiples of STEP (e.g. 0.15, -0.25, 0.30) are admitted 1-D inputs, and any off-grid output or wrong neighbouring-pair selection violates the stated formula.",
+        "statement": "At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on the x\u00b10.05 grid, with p_up close to 1 instead of 0 (or vice versa), so the output can sit on the wrong grid point relative to x."
+      },
+      "created_at": "2026-09-30T08:18:38Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-30T08:18:38Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP\" \u2014 outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the stated contract and any off-grid or wrong-grid-point output violates it."
+          }
+        ],
+        "scope_rationale": "problem.txt requires outputs to be one of the two neighbouring multiples of STEP computed by the stated floor formula; exact decimal multiples of STEP (e.g. 0.15, -0.25, 0.30) are admitted 1-D inputs, and any off-grid output or wrong neighbouring-pair selection violates the stated formula.",
+        "statement": "At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on the x\u00b10.05 grid, with p_up close to 1 instead of 0 (or vice versa), so the output can sit on the wrong grid point relative to x.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:18:38Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "kernel_model": [
+          "kernel.py line 15: r = tl.rand(seed, offs) uses the same Philox seed for every element, with offs (0..N-1) as the counter offset, so outputs are fully deterministic given (x, seed).",
+          "kernel.py line 12-14: lower/p_up are computed in the tensor's native dtype; if x is fp32, x/STEP and floor results inherit fp32 rounding of STEP=0.05 (binary ~0.05000000074505806).",
+          "kernel.py line 23: single launch with grid (1,) and N constexpr; no masking is needed only because every loaded offset is valid, which holds iff x.numel() == N exactly."
+        ],
+        "open_questions": [
+          "What input dtype does the benchmark use (fp32 vs fp64)? This decides whether the fp32 STEP rounding risk in c2 is triggered.",
+          "Does the test compare outputs statistically across seeds, or bit-exactly against a fixed per-seed reference? This decides whether seed-dependent determinism or only distribution matters."
+        ],
+        "risk_map": [
+          "For c1: since tl.rand(seed, offs) is deterministic per (seed, offset), a bias probe can reuse one tensor across many seeds; a repeated-element tensor (e.g. x_i = 0.375 everywhere) with S seeds gives S*N samples whose empirical upper-round frequency should converge to p_up per element.",
+          "For c2: at exact decimal multiples of STEP, fp32 x/STEP can land epsilon above an integer, making p_up ~1 instead of 0 so the element rounds up to the next grid point with near-certainty across all seeds; conversely epsilon below gives p_up ~0 (correct). A probe should report p_up values and output grid positions at x in {0.15, -0.25, 0.30, -0.55, 1.10} in fp32.",
+          "For c2: the reconstructed lower = floor(x/STEP)*STEP in fp32 yields values like 0.15000000596 rather than exact decimal multiples; whether that counts as 'on the grid' depends on the test's tolerance, so probes should measure the residual against exact decimal multiples, not assume it."
+        ],
+        "scope_notes": [
+          "Claims c1 and c2 cover the two highest-risk surfaces; c2's grid-multiple issue is also a potential contributor to c1's unbiasedness claim, so a single statistical probe at exact multiples can inform both.",
+          "Determinism given seed means single-run output comparison against a reference implementation with identical tl.rand usage IS decisive if such a reference exists in the test; whether the benchmark test does this is an open question."
+        ],
+        "summary": "Refined case_08 description with claim-directed probe guidance for c1 (statistical unbiasedness via deterministic-per-seed Philox sampling) and c2 (fp32 grid-multiple behavior of STEP=0.05), plus open questions on benchmark dtype and test comparison mode."
+      },
+      "created_at": "2026-09-30T08:18:55Z",
+      "id": "t10",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Stochastic rounding of each element to neighboring multiples of STEP=0.05: lower = floor(x/STEP)*STEP, upper = lower + STEP, P(upper) = (x-lower)/STEP, else lower.",
+            "Unbiasedness E[out] == x is the stated invariant.",
+            "Randomness must come from the supplied seed via Triton's counter-based Philox RNG (tl.rand).",
+            "Input domain: 1-D tensor, length a power of two, fits in a single block."
+          ],
+          "kernel_model": [
+            "Single Triton kernel launched on grid (1,) with tl.arange(0, N) covering all elements in one block; N and STEP passed as constexpr.",
+            "Computes lower/upper/p_up exactly per the contract formula and selects via tl.where(r < p_up, upper, lower) with tl.rand(seed, offs) as r.",
+            "seed is passed as a runtime scalar argument (not constexpr); N constexpr implies specialization per length.",
+            "Python wrapper allocates out with torch.empty_like and returns it; no dtype handling beyond inherited dtype.",
+            "kernel.py line 15: r = tl.rand(seed, offs) uses the same Philox seed for every element, with offs (0..N-1) as the counter offset, so outputs are fully deterministic given (x, seed).",
+            "kernel.py line 12-14: lower/p_up are computed in the tensor's native dtype; if x is fp32, x/STEP and floor results inherit fp32 rounding of STEP=0.05 (binary ~0.05000000074505806).",
+            "kernel.py line 23: single launch with grid (1,) and N constexpr; no masking is needed only because every loaded offset is valid, which holds iff x.numel() == N exactly."
+          ],
+          "open_questions": [
+            "What input dtype does the benchmark use (fp32 vs fp64)? This decides whether the fp32 STEP rounding risk in c2 is triggered.",
+            "Does the test compare outputs statistically across seeds, or bit-exactly against a fixed per-seed reference? This decides whether seed-dependent determinism or only distribution matters."
+          ],
+          "risk_map": [
+            "seed handling: tl.rand(seed, offs) treats seed as an offset/counter base; if the test expects each distinct seed to produce independent streams or a specific seed-to-Philox-counter mapping, verify semantics. Also seed=0 vs seed None edge cases.",
+            "tl.rand returns values in [0,1); boundary r < p_up vs r <= p_up is immaterial for continuous p_up but relevant for p_up==0 (always lower, correct) and p_up==1.",
+            "Floating-point grid computation: x/STEP with STEP=0.05 (not exactly representable in binary) may make x - lower/STEP slightly >1 or <0 at exact multiples, producing off-grid outputs or wrong probabilities; exact multiples of STEP are a risk surface.",
+            "tl.floor and division in the kernel's dtype (likely fp32): if x is fp64, empty_like + kernel loads may downcast or mismatch; dtype assumption unverified.",
+            "tl.rand requires the offset arg to be int; offs is int32 arange \u2014 fine, but r's distribution vs p_up comparison precision could interact near ties.",
+            "N as constexpr: different tensor lengths trigger recompilation, fine, but if N is not a power of two tl.arange fails \u2014 contract says power of two so out of scope.",
+            "For c1: since tl.rand(seed, offs) is deterministic per (seed, offset), a bias probe can reuse one tensor across many seeds; a repeated-element tensor (e.g. x_i = 0.375 everywhere) with S seeds gives S*N samples whose empirical upper-round frequency should converge to p_up per element.",
+            "For c2: at exact decimal multiples of STEP, fp32 x/STEP can land epsilon above an integer, making p_up ~1 instead of 0 so the element rounds up to the next grid point with near-certainty across all seeds; conversely epsilon below gives p_up ~0 (correct). A probe should report p_up values and output grid positions at x in {0.15, -0.25, 0.30, -0.55, 1.10} in fp32.",
+            "For c2: the reconstructed lower = floor(x/STEP)*STEP in fp32 yields values like 0.15000000596 rather than exact decimal multiples; whether that counts as 'on the grid' depends on the test's tolerance, so probes should measure the residual against exact decimal multiples, not assume it."
+          ],
+          "scope_notes": [
+            "Single-block, power-of-two-length 1-D tensors only; no multi-block/strided inputs in scope.\", \"Correctness metric is per-element probabilistic rounding plus unbiasedness, so single-run exact-output comparison is not decisive; evidence should use exact-grid checks, statistical frequency, or the contract's seed-determined output if the test is deterministic given seed.\"]",
+            "Claims c1 and c2 cover the two highest-risk surfaces; c2's grid-multiple issue is also a potential contributor to c1's unbiasedness claim, so a single statistical probe at exact multiples can inform both.",
+            "Determinism given seed means single-run output comparison against a reference implementation with identical tl.rand usage IS decisive if such a reference exists in the test; whether the benchmark test does this is an open question."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [],
+          "created_at": "2026-09-30T08:18:55Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "kernel.py line 15: r = tl.rand(seed, offs) uses the same Philox seed for every element, with offs (0..N-1) as the counter offset, so outputs are fully deterministic given (x, seed).",
+            "kernel.py line 12-14: lower/p_up are computed in the tensor's native dtype; if x is fp32, x/STEP and floor results inherit fp32 rounding of STEP=0.05 (binary ~0.05000000074505806).",
+            "kernel.py line 23: single launch with grid (1,) and N constexpr; no masking is needed only because every loaded offset is valid, which holds iff x.numel() == N exactly."
+          ],
+          "open_questions": [
+            "What input dtype does the benchmark use (fp32 vs fp64)? This decides whether the fp32 STEP rounding risk in c2 is triggered.",
+            "Does the test compare outputs statistically across seeds, or bit-exactly against a fixed per-seed reference? This decides whether seed-dependent determinism or only distribution matters."
+          ],
+          "risk_map": [
+            "For c1: since tl.rand(seed, offs) is deterministic per (seed, offset), a bias probe can reuse one tensor across many seeds; a repeated-element tensor (e.g. x_i = 0.375 everywhere) with S seeds gives S*N samples whose empirical upper-round frequency should converge to p_up per element.",
+            "For c2: at exact decimal multiples of STEP, fp32 x/STEP can land epsilon above an integer, making p_up ~1 instead of 0 so the element rounds up to the next grid point with near-certainty across all seeds; conversely epsilon below gives p_up ~0 (correct). A probe should report p_up values and output grid positions at x in {0.15, -0.25, 0.30, -0.55, 1.10} in fp32.",
+            "For c2: the reconstructed lower = floor(x/STEP)*STEP in fp32 yields values like 0.15000000596 rather than exact decimal multiples; whether that counts as 'on the grid' depends on the test's tolerance, so probes should measure the residual against exact decimal multiples, not assume it."
+          ],
+          "scope_notes": [
+            "Claims c1 and c2 cover the two highest-risk surfaces; c2's grid-multiple issue is also a potential contributor to c1's unbiasedness claim, so a single statistical probe at exact multiples can inform both.",
+            "Determinism given seed means single-run output comparison against a reference implementation with identical tl.rand usage IS decisive if such a reference exists in the test; whether the benchmark test does this is an open question."
+          ],
+          "summary": "Refined case_08 description with claim-directed probe guidance for c1 (statistical unbiasedness via deterministic-per-seed Philox sampling) and c2 (fp32 grid-multiple behavior of STEP=0.05), plus open questions on benchmark dtype and test comparison mode.",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "The two open in-scope claims (c1 statistical unbiasedness, c2 fp32 behavior at exact STEP=0.05 multiples) cover the highest-risk, testable surfaces, and the description model's remaining notes (p_up==0/1 boundary semantics, seed=0) are either immaterial to the stated formula or lack contract support for a decisive case. No new evidence since these claims were recorded suggests any additional material claim.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-30T08:19:04Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-09-30T08:19:04Z",
+        "decision": "no_new_claims",
+        "reason": "The two open in-scope claims (c1 statistical unbiasedness, c2 fp32 behavior at exact STEP=0.05 multiples) cover the highest-risk, testable surfaces, and the description model's remaining notes (p_up==0/1 boundary semantics, seed=0) are either immaterial to the stated formula or lack contract support for a decisive case. No new evidence since these claims were recorded suggests any additional material claim.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 10,
+        "tool_event_id": "t11",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json\ntorch.manual_seed(0)\nfrom kernel import stochastic_round_to_grid\n\nSTEP = 0.05\nN = 64  # power of two, single block\n# repeated elements with varied fractional distances, incl. negatives\nvals = [0.375, -0.375, 0.0125, -0.0625, 1.234, -2.567, 0.9999, -0.9999] * 8\nx = torch.tensor(vals, dtype=torch.float32, device='cuda')\nS = 2000\nouts = torch.stack([stochastic_round_to_grid(x, s) for s in range(S)])\nmean_out = outs.mean().item()\nmean_in = x.mean().item()\nstd_mc = (outs.std() / (S**0.5)).item()\nbias = mean_out - mean_in\nz = bias / std_mc if std_mc > 0 else 0.0\nprint(json.dumps({\n    \"N\": N, \"seeds\": S, \"mean_in\": mean_in, \"mean_out\": mean_out,\n    \"bias\": bias, \"mc_std\": std_mc, \"z_score\": z,\n    \"metric\": \"sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant\"\n}))\n",
+        "expected_signal": "bias within Monte-Carlo noise of sample mean vs input mean (z < ~4)"
+      },
+      "created_at": "2026-09-30T08:19:28Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "df2020bdef8ce12d42dfcb01c7ad103a9d2e911b0ab05e9e256774f0d5eafb4a"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "53f89cbfa0a4fdebb732c61639a19db9d9323ff00f6315f3783e8af8dd3c2dce"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "eb57ad1d2de04d38acc8f6590afa65a5a3bc710eb0d47edbe9f8dd7e6123ebe8"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x.",
+        "cwd": "/root/cases/case_08",
+        "duration_s": 8.54061,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "df2020bdef8ce12d42dfcb01c7ad103a9d2e911b0ab05e9e256774f0d5eafb4a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "53f89cbfa0a4fdebb732c61639a19db9d9323ff00f6315f3783e8af8dd3c2dce"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "eb57ad1d2de04d38acc8f6590afa65a5a3bc710eb0d47edbe9f8dd7e6123ebe8"
+              }
+            ],
+            "duration_s": 8.54061,
+            "exit_code": 0,
+            "expected_signal": "bias within Monte-Carlo noise of sample mean vs input mean (z < ~4)",
+            "json_parse_error": null,
+            "json_result": {
+              "N": 64,
+              "bias": -5.251169204711914e-05,
+              "mc_std": 0.02519967406988144,
+              "mean_in": -0.17287498712539673,
+              "mean_out": -0.17292749881744385,
+              "metric": "sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant",
+              "seeds": 2000,
+              "z_score": -0.0020838242550875264
+            },
+            "stderr": "",
+            "stdout": "{\"N\": 64, \"seeds\": 2000, \"mean_in\": -0.17287498712539673, \"mean_out\": -0.17292749881744385, \"bias\": -5.251169204711914e-05, \"mc_std\": 0.02519967406988144, \"z_score\": -0.0020838242550875264, \"metric\": \"sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant\"}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "bias within Monte-Carlo noise of sample mean vs input mean (z < ~4)",
+        "json_parse_error": null,
+        "json_result": {
+          "N": 64,
+          "bias": -5.251169204711914e-05,
+          "mc_std": 0.02519967406988144,
+          "mean_in": -0.17287498712539673,
+          "mean_out": -0.17292749881744385,
+          "metric": "sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant",
+          "seeds": 2000,
+          "z_score": -0.0020838242550875264
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"N\": 64, \"seeds\": 2000, \"mean_in\": -0.17287498712539673, \"mean_out\": -0.17292749881744385, \"bias\": -5.251169204711914e-05, \"mc_std\": 0.02519967406988144, \"z_score\": -0.0020838242550875264, \"metric\": \"sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant\"}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import torch, json\nfrom kernel import stochastic_round_to_grid\nSTEP = 0.05\nvals = [0.15, -0.25, 0.30, -0.55, 1.10, 0.05, -0.05, 0.20, 0.35, -0.10]\nx = torch.tensor(vals, dtype=torch.float32, device='cuda')\nres = {}\nS = 100\nfor v in vals:\n    xi = torch.full((16,), v, dtype=torch.float32, device='cuda')\n    o = torch.stack([stochastic_round_to_grid(xi, s) for s in range(S)])\n    # fp32 grid computation per contract formula\n    lo = (torch.floor(xi / STEP) * STEP)\n    p_up = ((xi - lo) / STEP)\n    out_lo = o.min().item(); out_hi = o.max().item()\n    frac_up = (o > lo[0].item() + STEP/2).float().mean().item()\n    # distance of outputs from exact decimal grid (k*0.05)\n    k = torch.round(o / STEP)\n    resid = (o - k * STEP).abs().max().item()\n    res[repr(v)] = {\n        \"p_up_fp32\": p_up[0].item(),\n        \"output_min\": out_lo, \"output_max\": out_hi,\n        \"frac_upper\": frac_up,\n        \"max_resid_from_decimal_grid\": resid,\n    }\nprint(json.dumps({\n    \"per_value\": res,\n    \"metric\": \"p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05\"\n}))\n",
+        "expected_signal": "p_up near 1 (instead of 0) and outputs jumping to next grid point, or outputs off the decimal grid by ~1e-8"
+      },
+      "created_at": "2026-09-30T08:19:36Z",
+      "id": "t13",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t13_probe.py",
+            "sha256": "69671ab07c26727a55403e040387287e30309173aa98bdda97e931b1823fbc59"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t13_stdout.txt",
+            "sha256": "1f918f4a89d8f7908060a369a0d40c27923adfa1e3e45fa24176069a62c97ad5"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t13_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t13_json_result.json",
+            "sha256": "c392d51502cf60848a6379987151b108fbd06bba9fc57355a58980075543394c"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on the x\u00b10.05 grid, with p_up close to 1 instead of 0 (or vice versa), so the output can sit on the wrong grid point relative to x.",
+        "cwd": "/root/cases/case_08",
+        "duration_s": 7.893873,
+        "event_id": "t13",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "69671ab07c26727a55403e040387287e30309173aa98bdda97e931b1823fbc59"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "1f918f4a89d8f7908060a369a0d40c27923adfa1e3e45fa24176069a62c97ad5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "c392d51502cf60848a6379987151b108fbd06bba9fc57355a58980075543394c"
+              }
+            ],
+            "duration_s": 7.893873,
+            "exit_code": 0,
+            "expected_signal": "p_up near 1 (instead of 0) and outputs jumping to next grid point, or outputs off the decimal grid by ~1e-8",
+            "json_parse_error": null,
+            "json_result": {
+              "metric": "p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05",
+              "per_value": {
+                "-0.05": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.05000000074505806,
+                  "output_min": -0.05000000074505806,
+                  "p_up_fp32": 0.0
+                },
+                "-0.1": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.10000000149011612,
+                  "output_min": -0.10000000149011612,
+                  "p_up_fp32": 0.0
+                },
+                "-0.25": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.25,
+                  "output_min": -0.25,
+                  "p_up_fp32": 0.0
+                },
+                "-0.55": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.550000011920929,
+                  "output_min": -0.550000011920929,
+                  "p_up_fp32": 0.0
+                },
+                "0.05": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.05000000074505806,
+                  "output_min": 0.05000000074505806,
+                  "p_up_fp32": 0.0
+                },
+                "0.15": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.15000000596046448,
+                  "output_min": 0.15000000596046448,
+                  "p_up_fp32": 0.0
+                },
+                "0.2": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.20000000298023224,
+                  "output_min": 0.20000000298023224,
+                  "p_up_fp32": 0.0
+                },
+                "0.3": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.30000001192092896,
+                  "output_min": 0.30000001192092896,
+                  "p_up_fp32": 0.0
+                },
+                "0.35": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.3499999940395355,
+                  "output_min": 0.3499999940395355,
+                  "p_up_fp32": 0.0
+                },
+                "1.1": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 1.100000023841858,
+                  "output_min": 1.100000023841858,
+                  "p_up_fp32": 0.0
+                }
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"per_value\": {\"0.15\": {\"p_up_fp32\": 0.0, \"output_min\": 0.15000000596046448, \"output_max\": 0.15000000596046448, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.25\": {\"p_up_fp32\": 0.0, \"output_min\": -0.25, \"output_max\": -0.25, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.3\": {\"p_up_fp32\": 0.0, \"output_min\": 0.30000001192092896, \"output_max\": 0.30000001192092896, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.55\": {\"p_up_fp32\": 0.0, \"output_min\": -0.550000011920929, \"output_max\": -0.550000011920929, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"1.1\": {\"p_up_fp32\": 0.0, \"output_min\": 1.100000023841858, \"output_max\": 1.100000023841858, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.05\": {\"p_up_fp32\": 0.0, \"output_min\": 0.05000000074505806, \"output_max\": 0.05000000074505806, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.05\": {\"p_up_fp32\": 0.0, \"output_min\": -0.05000000074505806, \"output_max\": -0.05000000074505806, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.2\": {\"p_up_fp32\": 0.0, \"output_min\": 0.20000000298023224, \"output_max\": 0.20000000298023224, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.35\": {\"p_up_fp32\": 0.0, \"output_min\": 0.3499999940395355, \"output_max\": 0.3499999940395355, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.1\": {\"p_up_fp32\": 0.0, \"output_min\": -0.10000000149011612, \"output_max\": -0.10000000149011612, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}}, \"metric\": \"p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05\"}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t13"
+        },
+        "exit_code": 0,
+        "expected_signal": "p_up near 1 (instead of 0) and outputs jumping to next grid point, or outputs off the decimal grid by ~1e-8",
+        "json_parse_error": null,
+        "json_result": {
+          "metric": "p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05",
+          "per_value": {
+            "-0.05": {
+              "frac_upper": 0.0,
+              "max_resid_from_decimal_grid": 0.0,
+              "output_max": -0.05000000074505806,
+              "output_min": -0.05000000074505806,
+              "p_up_fp32": 0.0
+            },
+            "-0.1": {
+              "frac_upper": 0.0,
+              "max_resid_from_decimal_grid": 0.0,
+              "output_max": -0.10000000149011612,
+              "output_min": -0.10000000149011612,
+              "p_up_fp32": 0.0
+            },
+            "-0.25": {
+              "frac_upper": 0.0,
+              "max_resid_from_decimal_grid": 0.0,
+              "output_max": -0.25,
+              "output_min": -0.25,
+              "p_up_fp32": 0.0
+            },
+            "-0.55": {
+              "frac_upper": 0.0,
+              "max_resid_from_decimal_grid": 0.0,
+              "output_max": -0.550000011920929,
+              "output_min": -0.550000011920929,
+              "p_up_fp32": 0.0
+            },
+            "0.05": {
+              "frac_upper": 0.0,
+              "max_resid_from_decimal_grid": 0.0,
+              "output_max": 0.05000000074505806,
+              "output_min": 0.05000000074505806,
+              "p_up_fp32": 0.0
+            },
+            "0.15": {
+              "frac_upper": 0.0,
+              "max_resid_from_decimal_grid": 0.0,
+              "output_max": 0.15000000596046448,
+              "output_min": 0.15000000596046448,
+              "p_up_fp32": 0.0
+            },
+            "0.2": {
+              "frac_upper": 0.0,
+              "max_resid_from_decimal_grid": 0.0,
+              "output_max": 0.20000000298023224,
+              "output_min": 0.20000000298023224,
+              "p_up_fp32": 0.0
+            },
+            "0.3": {
+              "frac_upper": 0.0,
+              "max_resid_from_decimal_grid": 0.0,
+              "output_max": 0.30000001192092896,
+              "output_min": 0.30000001192092896,
+              "p_up_fp32": 0.0
+            },
+            "0.35": {
+              "frac_upper": 0.0,
+              "max_resid_from_decimal_grid": 0.0,
+              "output_max": 0.3499999940395355,
+              "output_min": 0.3499999940395355,
+              "p_up_fp32": 0.0
+            },
+            "1.1": {
+              "frac_upper": 0.0,
+              "max_resid_from_decimal_grid": 0.0,
+              "output_max": 1.100000023841858,
+              "output_min": 1.100000023841858,
+              "p_up_fp32": 0.0
+            }
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"per_value\": {\"0.15\": {\"p_up_fp32\": 0.0, \"output_min\": 0.15000000596046448, \"output_max\": 0.15000000596046448, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.25\": {\"p_up_fp32\": 0.0, \"output_min\": -0.25, \"output_max\": -0.25, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.3\": {\"p_up_fp32\": 0.0, \"output_min\": 0.30000001192092896, \"output_max\": 0.30000001192092896, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.55\": {\"p_up_fp32\": 0.0, \"output_min\": -0.550000011920929, \"output_max\": -0.550000011920929, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"1.1\": {\"p_up_fp32\": 0.0, \"output_min\": 1.100000023841858, \"output_max\": 1.100000023841858, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.05\": {\"p_up_fp32\": 0.0, \"output_min\": 0.05000000074505806, \"output_max\": 0.05000000074505806, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.05\": {\"p_up_fp32\": 0.0, \"output_min\": -0.05000000074505806, \"output_max\": -0.05000000074505806, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.2\": {\"p_up_fp32\": 0.0, \"output_min\": 0.20000000298023224, \"output_max\": 0.20000000298023224, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.35\": {\"p_up_fp32\": 0.0, \"output_min\": 0.3499999940395355, \"output_max\": 0.3499999940395355, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.1\": {\"p_up_fp32\": 0.0, \"output_min\": -0.10000000149011612, \"output_max\": -0.10000000149011612, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}}, \"metric\": \"p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05\"}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "bias": -5.251169204711914e-05,
+          "mc_std": 0.02519967406988144,
+          "mean_in": -0.17287498712539673,
+          "mean_out": -0.17292749881744385,
+          "metric": "sample mean vs input mean, Monte-Carlo z-score",
+          "n_elements": 64,
+          "seeds": 2000,
+          "z_score": -0.0020838242550875264
+        },
+        "event_id": "t12",
+        "status": "rebutted",
+        "summary": "Over 2000 seeds and 64 repeated elements (mixed signs and fractional distances), sample mean of outputs is -0.172927 vs input mean -0.172875; bias -5.25e-5 is far inside Monte-Carlo noise (z=-0.002). No evidence of E[out] != x.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-30T08:19:47Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:18:38Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:19:47Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "df2020bdef8ce12d42dfcb01c7ad103a9d2e911b0ab05e9e256774f0d5eafb4a"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "53f89cbfa0a4fdebb732c61639a19db9d9323ff00f6315f3783e8af8dd3c2dce"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "eb57ad1d2de04d38acc8f6590afa65a5a3bc710eb0d47edbe9f8dd7e6123ebe8"
+                  }
+                ],
+                "bias": -5.251169204711914e-05,
+                "duration_s": 8.54061,
+                "exit_code": 0,
+                "expected_signal": "bias within Monte-Carlo noise of sample mean vs input mean (z < ~4)",
+                "json_parse_error": null,
+                "json_result": {
+                  "N": 64,
+                  "bias": -5.251169204711914e-05,
+                  "mc_std": 0.02519967406988144,
+                  "mean_in": -0.17287498712539673,
+                  "mean_out": -0.17292749881744385,
+                  "metric": "sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant",
+                  "seeds": 2000,
+                  "z_score": -0.0020838242550875264
+                },
+                "mc_std": 0.02519967406988144,
+                "mean_in": -0.17287498712539673,
+                "mean_out": -0.17292749881744385,
+                "metric": "sample mean vs input mean, Monte-Carlo z-score",
+                "n_elements": 64,
+                "seeds": 2000,
+                "stderr": "",
+                "stdout": "{\"N\": 64, \"seeds\": 2000, \"mean_in\": -0.17287498712539673, \"mean_out\": -0.17292749881744385, \"bias\": -5.251169204711914e-05, \"mc_std\": 0.02519967406988144, \"z_score\": -0.0020838242550875264, \"metric\": \"sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant\"}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "z_score": -0.0020838242550875264
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Over 2000 seeds and 64 repeated elements (mixed signs and fractional distances), sample mean of outputs is -0.172927 vs input mean -0.172875; bias -5.25e-5 is far inside Monte-Carlo noise (z=-0.002). No evidence of E[out] != x.",
+              "supports": "rebutted",
+              "tool_event_id": "t12"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"so that E[out] == x. The randomness is drawn from the supplied seed.\" \u2014 unbiasedness is the explicitly stated invariant of the operation."
+            }
+          ],
+          "scope_rationale": "problem.txt explicitly states the invariant \\\"so that E[out] == x\\\"; inputs are 1-D power-of-two-length tensors per the stated input domain, and repeated samples across seeds are exactly the domain the contract's probabilistic requirement applies to.",
+          "statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x.",
+          "status": "rebutted",
+          "updated_at": "2026-09-30T08:19:47Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:19:47Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "df2020bdef8ce12d42dfcb01c7ad103a9d2e911b0ab05e9e256774f0d5eafb4a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "53f89cbfa0a4fdebb732c61639a19db9d9323ff00f6315f3783e8af8dd3c2dce"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "eb57ad1d2de04d38acc8f6590afa65a5a3bc710eb0d47edbe9f8dd7e6123ebe8"
+              }
+            ],
+            "bias": -5.251169204711914e-05,
+            "duration_s": 8.54061,
+            "exit_code": 0,
+            "expected_signal": "bias within Monte-Carlo noise of sample mean vs input mean (z < ~4)",
+            "json_parse_error": null,
+            "json_result": {
+              "N": 64,
+              "bias": -5.251169204711914e-05,
+              "mc_std": 0.02519967406988144,
+              "mean_in": -0.17287498712539673,
+              "mean_out": -0.17292749881744385,
+              "metric": "sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant",
+              "seeds": 2000,
+              "z_score": -0.0020838242550875264
+            },
+            "mc_std": 0.02519967406988144,
+            "mean_in": -0.17287498712539673,
+            "mean_out": -0.17292749881744385,
+            "metric": "sample mean vs input mean, Monte-Carlo z-score",
+            "n_elements": 64,
+            "seeds": 2000,
+            "stderr": "",
+            "stdout": "{\"N\": 64, \"seeds\": 2000, \"mean_in\": -0.17287498712539673, \"mean_out\": -0.17292749881744385, \"bias\": -5.251169204711914e-05, \"mc_std\": 0.02519967406988144, \"z_score\": -0.0020838242550875264, \"metric\": \"sample mean vs input mean with Monte-Carlo z-score; unbiasedness E[out]==x is the contract invariant\"}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "z_score": -0.0020838242550875264
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Over 2000 seeds and 64 repeated elements (mixed signs and fractional distances), sample mean of outputs is -0.172927 vs input mean -0.172875; bias -5.25e-5 is far inside Monte-Carlo noise (z=-0.002). No evidence of E[out] != x.",
+          "supports": "rebutted",
+          "tool_event_id": "t12"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "frac_upper_max": 0.0,
+          "max_resid_from_decimal_grid": 0.0,
+          "p_up_max": 0.0,
+          "tested_values": [
+            0.15,
+            -0.25,
+            0.3,
+            -0.55,
+            1.1,
+            0.05,
+            -0.05,
+            0.2,
+            0.35,
+            -0.1
+          ],
+          "wrong_grid_point_count": 0
+        },
+        "event_id": "t13",
+        "status": "rebutted",
+        "summary": "At 10 exact decimal multiples of STEP (positive and negative), fp32 p_up is exactly 0.0 (not ~1), outputs are deterministic (never jump to the next grid point; frac_upper=0 across 100 seeds), and outputs are exactly on the k*STEP grid (max residual vs rounded decimal grid 0.0). The fp32 floor/STEP reconstruction did not select wrong grid points or produce off-grid outputs at these values.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-30T08:19:47Z",
+      "id": "t15",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:18:38Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:19:47Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t13_probe.py",
+                    "sha256": "69671ab07c26727a55403e040387287e30309173aa98bdda97e931b1823fbc59"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t13_stdout.txt",
+                    "sha256": "1f918f4a89d8f7908060a369a0d40c27923adfa1e3e45fa24176069a62c97ad5"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t13_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t13_json_result.json",
+                    "sha256": "c392d51502cf60848a6379987151b108fbd06bba9fc57355a58980075543394c"
+                  }
+                ],
+                "duration_s": 7.893873,
+                "exit_code": 0,
+                "expected_signal": "p_up near 1 (instead of 0) and outputs jumping to next grid point, or outputs off the decimal grid by ~1e-8",
+                "frac_upper_max": 0.0,
+                "json_parse_error": null,
+                "json_result": {
+                  "metric": "p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05",
+                  "per_value": {
+                    "-0.05": {
+                      "frac_upper": 0.0,
+                      "max_resid_from_decimal_grid": 0.0,
+                      "output_max": -0.05000000074505806,
+                      "output_min": -0.05000000074505806,
+                      "p_up_fp32": 0.0
+                    },
+                    "-0.1": {
+                      "frac_upper": 0.0,
+                      "max_resid_from_decimal_grid": 0.0,
+                      "output_max": -0.10000000149011612,
+                      "output_min": -0.10000000149011612,
+                      "p_up_fp32": 0.0
+                    },
+                    "-0.25": {
+                      "frac_upper": 0.0,
+                      "max_resid_from_decimal_grid": 0.0,
+                      "output_max": -0.25,
+                      "output_min": -0.25,
+                      "p_up_fp32": 0.0
+                    },
+                    "-0.55": {
+                      "frac_upper": 0.0,
+                      "max_resid_from_decimal_grid": 0.0,
+                      "output_max": -0.550000011920929,
+                      "output_min": -0.550000011920929,
+                      "p_up_fp32": 0.0
+                    },
+                    "0.05": {
+                      "frac_upper": 0.0,
+                      "max_resid_from_decimal_grid": 0.0,
+                      "output_max": 0.05000000074505806,
+                      "output_min": 0.05000000074505806,
+                      "p_up_fp32": 0.0
+                    },
+                    "0.15": {
+                      "frac_upper": 0.0,
+                      "max_resid_from_decimal_grid": 0.0,
+                      "output_max": 0.15000000596046448,
+                      "output_min": 0.15000000596046448,
+                      "p_up_fp32": 0.0
+                    },
+                    "0.2": {
+                      "frac_upper": 0.0,
+                      "max_resid_from_decimal_grid": 0.0,
+                      "output_max": 0.20000000298023224,
+                      "output_min": 0.20000000298023224,
+                      "p_up_fp32": 0.0
+                    },
+                    "0.3": {
+                      "frac_upper": 0.0,
+                      "max_resid_from_decimal_grid": 0.0,
+                      "output_max": 0.30000001192092896,
+                      "output_min": 0.30000001192092896,
+                      "p_up_fp32": 0.0
+                    },
+                    "0.35": {
+                      "frac_upper": 0.0,
+                      "max_resid_from_decimal_grid": 0.0,
+                      "output_max": 0.3499999940395355,
+                      "output_min": 0.3499999940395355,
+                      "p_up_fp32": 0.0
+                    },
+                    "1.1": {
+                      "frac_upper": 0.0,
+                      "max_resid_from_decimal_grid": 0.0,
+                      "output_max": 1.100000023841858,
+                      "output_min": 1.100000023841858,
+                      "p_up_fp32": 0.0
+                    }
+                  }
+                },
+                "max_resid_from_decimal_grid": 0.0,
+                "p_up_max": 0.0,
+                "stderr": "",
+                "stdout": "{\"per_value\": {\"0.15\": {\"p_up_fp32\": 0.0, \"output_min\": 0.15000000596046448, \"output_max\": 0.15000000596046448, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.25\": {\"p_up_fp32\": 0.0, \"output_min\": -0.25, \"output_max\": -0.25, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.3\": {\"p_up_fp32\": 0.0, \"output_min\": 0.30000001192092896, \"output_max\": 0.30000001192092896, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.55\": {\"p_up_fp32\": 0.0, \"output_min\": -0.550000011920929, \"output_max\": -0.550000011920929, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"1.1\": {\"p_up_fp32\": 0.0, \"output_min\": 1.100000023841858, \"output_max\": 1.100000023841858, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.05\": {\"p_up_fp32\": 0.0, \"output_min\": 0.05000000074505806, \"output_max\": 0.05000000074505806, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.05\": {\"p_up_fp32\": 0.0, \"output_min\": -0.05000000074505806, \"output_max\": -0.05000000074505806, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.2\": {\"p_up_fp32\": 0.0, \"output_min\": 0.20000000298023224, \"output_max\": 0.20000000298023224, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.35\": {\"p_up_fp32\": 0.0, \"output_min\": 0.3499999940395355, \"output_max\": 0.3499999940395355, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.1\": {\"p_up_fp32\": 0.0, \"output_min\": -0.10000000149011612, \"output_max\": -0.10000000149011612, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}}, \"metric\": \"p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05\"}\n",
+                "tested_values": [
+                  0.15,
+                  -0.25,
+                  0.3,
+                  -0.55,
+                  1.1,
+                  0.05,
+                  -0.05,
+                  0.2,
+                  0.35,
+                  -0.1
+                ],
+                "timed_out": false,
+                "timeout_s": 60,
+                "wrong_grid_point_count": 0
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "At 10 exact decimal multiples of STEP (positive and negative), fp32 p_up is exactly 0.0 (not ~1), outputs are deterministic (never jump to the next grid point; frac_upper=0 across 100 seeds), and outputs are exactly on the k*STEP grid (max residual vs rounded decimal grid 0.0). The fp32 floor/STEP reconstruction did not select wrong grid points or produce off-grid outputs at these values.",
+              "supports": "rebutted",
+              "tool_event_id": "t13"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP\" \u2014 outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the stated contract and any off-grid or wrong-grid-point output violates it."
+            }
+          ],
+          "scope_rationale": "problem.txt requires outputs to be one of the two neighbouring multiples of STEP computed by the stated floor formula; exact decimal multiples of STEP (e.g. 0.15, -0.25, 0.30) are admitted 1-D inputs, and any off-grid output or wrong neighbouring-pair selection violates the stated formula.",
+          "statement": "At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on the x\u00b10.05 grid, with p_up close to 1 instead of 0 (or vice versa), so the output can sit on the wrong grid point relative to x.",
+          "status": "rebutted",
+          "updated_at": "2026-09-30T08:19:47Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:19:47Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "69671ab07c26727a55403e040387287e30309173aa98bdda97e931b1823fbc59"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "1f918f4a89d8f7908060a369a0d40c27923adfa1e3e45fa24176069a62c97ad5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "c392d51502cf60848a6379987151b108fbd06bba9fc57355a58980075543394c"
+              }
+            ],
+            "duration_s": 7.893873,
+            "exit_code": 0,
+            "expected_signal": "p_up near 1 (instead of 0) and outputs jumping to next grid point, or outputs off the decimal grid by ~1e-8",
+            "frac_upper_max": 0.0,
+            "json_parse_error": null,
+            "json_result": {
+              "metric": "p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05",
+              "per_value": {
+                "-0.05": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.05000000074505806,
+                  "output_min": -0.05000000074505806,
+                  "p_up_fp32": 0.0
+                },
+                "-0.1": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.10000000149011612,
+                  "output_min": -0.10000000149011612,
+                  "p_up_fp32": 0.0
+                },
+                "-0.25": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.25,
+                  "output_min": -0.25,
+                  "p_up_fp32": 0.0
+                },
+                "-0.55": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": -0.550000011920929,
+                  "output_min": -0.550000011920929,
+                  "p_up_fp32": 0.0
+                },
+                "0.05": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.05000000074505806,
+                  "output_min": 0.05000000074505806,
+                  "p_up_fp32": 0.0
+                },
+                "0.15": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.15000000596046448,
+                  "output_min": 0.15000000596046448,
+                  "p_up_fp32": 0.0
+                },
+                "0.2": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.20000000298023224,
+                  "output_min": 0.20000000298023224,
+                  "p_up_fp32": 0.0
+                },
+                "0.3": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.30000001192092896,
+                  "output_min": 0.30000001192092896,
+                  "p_up_fp32": 0.0
+                },
+                "0.35": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 0.3499999940395355,
+                  "output_min": 0.3499999940395355,
+                  "p_up_fp32": 0.0
+                },
+                "1.1": {
+                  "frac_upper": 0.0,
+                  "max_resid_from_decimal_grid": 0.0,
+                  "output_max": 1.100000023841858,
+                  "output_min": 1.100000023841858,
+                  "p_up_fp32": 0.0
+                }
+              }
+            },
+            "max_resid_from_decimal_grid": 0.0,
+            "p_up_max": 0.0,
+            "stderr": "",
+            "stdout": "{\"per_value\": {\"0.15\": {\"p_up_fp32\": 0.0, \"output_min\": 0.15000000596046448, \"output_max\": 0.15000000596046448, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.25\": {\"p_up_fp32\": 0.0, \"output_min\": -0.25, \"output_max\": -0.25, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.3\": {\"p_up_fp32\": 0.0, \"output_min\": 0.30000001192092896, \"output_max\": 0.30000001192092896, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.55\": {\"p_up_fp32\": 0.0, \"output_min\": -0.550000011920929, \"output_max\": -0.550000011920929, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"1.1\": {\"p_up_fp32\": 0.0, \"output_min\": 1.100000023841858, \"output_max\": 1.100000023841858, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.05\": {\"p_up_fp32\": 0.0, \"output_min\": 0.05000000074505806, \"output_max\": 0.05000000074505806, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.05\": {\"p_up_fp32\": 0.0, \"output_min\": -0.05000000074505806, \"output_max\": -0.05000000074505806, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.2\": {\"p_up_fp32\": 0.0, \"output_min\": 0.20000000298023224, \"output_max\": 0.20000000298023224, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"0.35\": {\"p_up_fp32\": 0.0, \"output_min\": 0.3499999940395355, \"output_max\": 0.3499999940395355, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}, \"-0.1\": {\"p_up_fp32\": 0.0, \"output_min\": -0.10000000149011612, \"output_max\": -0.10000000149011612, \"frac_upper\": 0.0, \"max_resid_from_decimal_grid\": 0.0}}, \"metric\": \"p_up (should be 0 at exact multiples) and output distance from exact decimal grid k*0.05; wrong-grid-point means output differs from input by ~0.05\"}\n",
+            "tested_values": [
+              0.15,
+              -0.25,
+              0.3,
+              -0.55,
+              1.1,
+              0.05,
+              -0.05,
+              0.2,
+              0.35,
+              -0.1
+            ],
+            "timed_out": false,
+            "timeout_s": 60,
+            "wrong_grid_point_count": 0
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "At 10 exact decimal multiples of STEP (positive and negative), fp32 p_up is exactly 0.0 (not ~1), outputs are deterministic (never jump to the next grid point; frac_upper=0 across 100 seeds), and outputs are exactly on the k*STEP grid (max residual vs rounded decimal grid 0.0). The fp32 floor/STEP reconstruction did not select wrong grid points or produce off-grid outputs at these values.",
+          "supports": "rebutted",
+          "tool_event_id": "t13"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Both in-scope claims are decisively rebutted: c1 (E[out]==x) shows bias far within Monte-Carlo noise (z=-0.002 over 2000 seeds), and c2 shows p_up exactly 0 and outputs on the grid at all tested exact STEP multiples. The kernel implements the contract formula directly (floor/STEP grid, p_up via fractional distance, tl.rand comparison), and remaining notes (seed=0 edge, r<p_up boundary at p_up=1) are immaterial given tl.rand returns [0,1). No material, testable, in-scope problem remains uncovered.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-30T08:19:55Z",
+      "id": "t16",
+      "output": {
+        "created_at": "2026-09-30T08:19:55Z",
+        "decision": "no_new_claims",
+        "reason": "Both in-scope claims are decisively rebutted: c1 (E[out]==x) shows bias far within Monte-Carlo noise (z=-0.002 over 2000 seeds), and c2 shows p_up exactly 0 and outputs on the grid at all tested exact STEP multiples. The kernel implements the contract formula directly (floor/STEP grid, p_up via fractional distance, tl.rand comparison), and remaining notes (seed=0 edge, r<p_up boundary at p_up=1) are immaterial given tl.rand returns [0,1). No material, testable, in-scope problem remains uncovered.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 15,
+        "tool_event_id": "t16",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.9,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The kernel implements the contract formula directly (lower = floor(x/STEP)*STEP, p_up = (x-lower)/STEP, select via tl.rand(seed, offs) comparison). Both in-scope risk claims are decisively rebutted: c1 (unbiasedness E[out]==x) shows bias of -5.25e-5 far within Monte-Carlo noise (z=-0.002) over 2000 seeds and 64 mixed-sign elements (probe t12); c2 (fp32 behavior at exact STEP=0.05 multiples) shows p_up exactly 0.0, deterministic outputs on the correct grid point, and zero residual from the k*STEP grid across 10 positive/negative exact multiples over 100 seeds (probe t13). Residual fp32 representations like 0.150000006 instead of exact 0.15 are consistent with the contract's own floor(x/STEP)*STEP formula computed in the input dtype, and are not a defect. No test.py/get_inputs exists, so problem.txt is the operative contract, and it is satisfied. The Skeptic reviewed the latest evidence (t16) and found no new claims. Minor unresolved notes (benchmark dtype, seed=0 edge, r<p_up boundary at p_up=1) are immaterial: tl.rand returns [0,1) so the boundary is well-defined, and no confirmed in-scope failure remains.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-30T08:20:04Z",
+      "id": "t17",
+      "output": {
+        "confidence": 0.9,
+        "created_at": "2026-09-30T08:20:04Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The kernel implements the contract formula directly (lower = floor(x/STEP)*STEP, p_up = (x-lower)/STEP, select via tl.rand(seed, offs) comparison). Both in-scope risk claims are decisively rebutted: c1 (unbiasedness E[out]==x) shows bias of -5.25e-5 far within Monte-Carlo noise (z=-0.002) over 2000 seeds and 64 mixed-sign elements (probe t12); c2 (fp32 behavior at exact STEP=0.05 multiples) shows p_up exactly 0.0, deterministic outputs on the correct grid point, and zero residual from the k*STEP grid across 10 positive/negative exact multiples over 100 seeds (probe t13). Residual fp32 representations like 0.150000006 instead of exact 0.15 are consistent with the contract's own floor(x/STEP)*STEP formula computed in the input dtype, and are not a defect. No test.py/get_inputs exists, so problem.txt is the operative contract, and it is satisfied. The Skeptic reviewed the latest evidence (t16) and found no new claims. Minor unresolved notes (benchmark dtype, seed=0 edge, r<p_up boundary at p_up=1) are immaterial: tl.rand returns [0,1) so the boundary is well-defined, and no confirmed in-scope failure remains.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.9,
+    "created_at": "2026-09-30T08:20:04Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The kernel implements the contract formula directly (lower = floor(x/STEP)*STEP, p_up = (x-lower)/STEP, select via tl.rand(seed, offs) comparison). Both in-scope risk claims are decisively rebutted: c1 (unbiasedness E[out]==x) shows bias of -5.25e-5 far within Monte-Carlo noise (z=-0.002) over 2000 seeds and 64 mixed-sign elements (probe t12); c2 (fp32 behavior at exact STEP=0.05 multiples) shows p_up exactly 0.0, deterministic outputs on the correct grid point, and zero residual from the k*STEP grid across 10 positive/negative exact multiples over 100 seeds (probe t13). Residual fp32 representations like 0.150000006 instead of exact 0.15 are consistent with the contract's own floor(x/STEP)*STEP formula computed in the input dtype, and are not a defect. No test.py/get_inputs exists, so problem.txt is the operative contract, and it is satisfied. The Skeptic reviewed the latest evidence (t16) and found no new claims. Minor unresolved notes (benchmark dtype, seed=0 edge, r<p_up boundary at p_up=1) are immaterial: tl.rand returns [0,1) so the boundary is well-defined, and no confirmed in-scope failure remains.",
+    "verdict": "trust"
+  }
+}

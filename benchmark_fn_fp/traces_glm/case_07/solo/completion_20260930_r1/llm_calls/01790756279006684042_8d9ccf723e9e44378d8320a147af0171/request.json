@@ -1,0 +1,469 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_07\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import torch\\n2: import triton\\n3: import triton.language as tl\\n4: \\n5: \\n6: @triton.jit\\n7: def quant_matmul_248_kernel(\\n8:     a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\\n9:     M, N, K, bits, maxq,\\n10:     stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\\n11:     stride_scales, stride_zeros,\\n12:     BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\\n13:     GROUP_SIZE_M: tl.constexpr,\\n14: ):\\n15:     infearure_per_bits = 32 // bits\\n16:     pid = tl.program_id(axis=0)\\n17:     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\\n18:     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\\n19:     num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\\n20:     num_pid_in_group = GROUP_SIZE_M * num_pid_n\\n21:     group_id = pid // num_pid_in_group\\n22:     first_pid_m = group_id * GROUP_SIZE_M\\n23:     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\\n24:     pid_m = first_pid_m + (pid % group_size_m)\\n25:     pid_n = (pid % num_pid_in_group) // group_size_m\\n26: \\n27:     offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\\n28:     offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\\n29:     offs_k = tl.arange(0, BLOCK_SIZE_K)\\n30:     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\\n31:     a_mask = offs_am[:, None] < M\\n32:     b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\\n33:     g_ptrs = g_ptr + offs_k\\n34:     scales_ptrs = scales_ptr + offs_bn[None, :]\\n35:     zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\\n36: \\n37:     shifter = (offs_k % infearure_per_bits) * bits\\n38:     zeros_shifter = (offs_bn % infearure_per_bits) * bits\\n39:     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\\n40: \\n41:     for k in range(0, num_pid_k):\\n42:         g_idx = tl.load(g_ptrs)\\n43:         scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\\n44:         zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\\n45:         zeros = (zeros >> zeros_shifter[None, :]) & maxq\\n46:         zeros = zeros + 1\\n47:         a = tl.load(a_ptrs, mask=a_mask, other=0.0)\\n48:         b = tl.load(b_ptrs)\\n49:         b = (b >> shifter[:, None]) & maxq\\n50:         b = (b - zeros) * scales\\n51:         accumulator += tl.dot(a, b)\\n52:         a_ptrs += BLOCK_SIZE_K\\n53:         b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\\n54:         g_ptrs += BLOCK_SIZE_K\\n55: \\n56:     c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\\n57:     c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\\n58:     tl.store(c_ptrs, accumulator, mask=c_mask)\\n59: \\n60: \\n61: def gptq_matmul(a, b_packed, scales, zeros, g_idx, bits=4):\\n62:     M, K = a.shape\\n63:     N = b_packed.shape[1]\\n64:     maxq = 2 ** bits - 1\\n65:     c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\\n66:     BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\\n67:     grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\\n68:     quant_matmul_248_kernel[grid](\\n69:         a, b_packed, c, scales, zeros, g_idx,\\n70:         M, N, K, bits, maxq,\\n71:         a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\\n72:         scales.stride(0), zeros.stride(0),\\n73:         BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\\n74:         GROUP_SIZE_M=GROUP_SIZE_M,\\n75:     )\\n76:     return c\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Operation: grouped INT4 dequantization fused with a matrix multiply\\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\\n\\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\\ninto int32 words with a per-(group, column) scale and zero-point, and\\n\\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\\n\\nThe declared numeric format of the weights is 4-bit: the weight values it\\nconsumes were produced by quantizing continuous weights onto 16 levels per\\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\\ndeclared format.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_07\",\n    \"status\": \"under_test\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-09-30T08:17:34Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"rationale\": \"The kernel indexes packed b by k//8, g_idx by k, scales/zeros by group and column, and adds +1 to the zero point, matching the AutoGPTQ convention; a numerical mismatch against an independent dequant reference would indicate an indexing or packing error.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]; kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format.\"\n        }\n      ],\n      \"scope_rationale\": \"The contract requires C = A @ dequant(B) with the exact dequantization formula per (group, column); any deviation that changes C on inputs the contract admits is a defect.\",\n      \"statement\": \"gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-09-30T08:17:34Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_07\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_07\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_07\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_07\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_07\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"This kernel appears to be a near-copy of the original AutoGPTQ `quant_matmul_248` kernel. I'll verify it numerically against a reference dequantize+matmul on representative shapes.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id</arg_value><arg_value>c1</arg_value><arg_key>rationale\": \"The kernel indexes packed b by k//8, g_idx by k, scales/zeros by group and column, and adds +1 to the zero point, matching the AutoGPTQ convention; a numerical mismatch against an independent dequant reference would indicate an indexing or packing error.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]; kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires C = A @ dequant(B) with the exact dequantization formula per (group, column); any deviation in indexing/packing that changes C on inputs the contract admits is a defect.\",\n            \"statement\": \"gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"I'll record the claim (the previous call failed due to a malformed argument) and then run a numerical probe comparing the kernel against an independent dequantization + matmul reference.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The kernel indexes packed b by k//8, g_idx by k, scales/zeros by group and column, and adds +1 to the zero point, matching the AutoGPTQ convention; a numerical mismatch against an independent dequant reference would indicate an indexing or packing error.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]; kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires C = A @ dequant(B) with the exact dequantization formula per (group, column); any deviation that changes C on inputs the contract admits is a defect.\",\n            \"statement\": \"gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 4,\n      \"text\": \"I'll run a numerical probe comparing the kernel to an independent dequantization + matmul reference, using the AutoGPTQ packing convention (zero effective = unpacked zero + 1) on representative shapes.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, '/root/cases/case_07')\\nfrom kernel import gptq_matmul\\n\\ntorch.manual_seed(0)\\ndev = 'cuda'\\nM, K, N = 64, 256, 128\\nbits = 4\\nmaxq = 15\\ngroupsize = 32\\nn_groups = K // groupsize\\n\\na = torch.randn(M, K, device=dev, dtype=torch.float16)\\nq = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\\n# pack 8 values per int32 along K (little-endian nibbles)\\nb_packed = torch.zeros((K // 8, N), device=dev, dtype=torch.int32)\\nfor k in range(K):\\n    word, off = k // 8, k % 8\\n    b_packed[word, :] |= q[k, :] << (off * bits)\\nscales = (torch.randn(n_groups, N, device=dev, dtype=torch.float16).abs() * 0.01 + 0.001)\\nzeros = torch.randint(0, 16, (n_groups, N), device=dev, dtype=torch.int32)  # packed zeros along N\\ng_idx = (torch.arange(K, device=dev) // groupsize).to(torch.int32)\\n\\nc = gptq_matmul(a, b_packed, scales, zeros, g_idx, bits=4)\\n\\n# reference: unpack zeros along N (8 per word), effective zero = unpacked + 1 (AutoGPTQ convention)\\nq_f = q.float()\\nzero_eff = torch.zeros_like(q_f)\\nfor n in range(N):\\n    word, off = n // 8, n % 8\\n    z_un = ((zeros[word, :] >> (off * bits)) & maxq).float()  # per column? careful\\n# do it vectorized: zero value for column n of group g\\nz_unpacked = ((zeros[:, (torch.arange(N, device=dev) // 8)] >> ((torch.arange(N, device=dev) % 8) * bits).unsqueeze(0)) & maxq).float()  # (n_groups, N)\\ndeq = torch.zeros(K, N, device=dev)\\nfor k in range(K):\\n    g = g_idx[k].item()\\n    deq[k] = (q_f[k] - (z_unpacked[g] + 1)) * scales[g].float()\\nref = (a.float() @ deq)\\n\\nerr = (c - ref).abs()\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"max abs error vs independent dequant reference (zero_eff = unpacked_zero + 1)\\\",\\n    \\\"max_abs_err\\\": float(err.max()),\\n    \\\"mean_abs_err\\\": float(err.mean()),\\n    \\\"shape\\\": [M, N],\\n    \\\"c_dtype\\\": str(c.dtype),\\n    \\\"allclose\\\": bool(torch.allclose(c, ref, atol=1e-2, rtol=1e-2)),\\n}))\\n\",\n            \"expected_signal\": \"max abs err near float16 matmul rounding (~<0.1 for these scales)\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_07\"\n      },\n      \"created_at\": \"2026-09-30T08:17:04Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_07\",\n        \"has_error\": null,\n        \"kernel_code\": \"import torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef quant_matmul_248_kernel(\\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\\n    M, N, K, bits, maxq,\\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\\n    stride_scales, stride_zeros,\\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\\n    GROUP_SIZE_M: tl.constexpr,\\n):\\n    infearure_per_bits = 32 // bits\\n    pid = tl.program_id(axis=0)\\n    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\\n    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\\n    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\\n    num_pid_in_group = GROUP_SIZE_M * num_pid_n\\n    group_id = pid // num_pid_in_group\\n    first_pid_m = group_id * GROUP_SIZE_M\\n    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\\n    pid_m = first_pid_m + (pid % group_size_m)\\n    pid_n = (pid % num_pid_in_group) // group_size_m\\n\\n    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\\n    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\\n    offs_k = tl.arange(0, BLOCK_SIZE_K)\\n    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\\n    a_mask = offs_am[:, None] < M\\n    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\\n    g_ptrs = g_ptr + offs_k\\n    scales_ptrs = scales_ptr + offs_bn[None, :]\\n    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\\n\\n    shifter = (offs_k % infearure_per_bits) * bits\\n    zeros_shifter = (offs_bn % infearure_per_bits) * bits\\n    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\\n\\n    for k in range(0, num_pid_k):\\n        g_idx = tl.load(g_ptrs)\\n        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\\n        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\\n        zeros = (zeros >> zeros_shifter[None, :]) & maxq\\n        zeros = zeros + 1\\n        a = tl.load(a_ptrs, mask=a_mask, other=0.0)\\n        b = tl.load(b_ptrs)\\n        b = (b >> shifter[:, None]) & maxq\\n        b = (b - zeros) * scales\\n        accumulator += tl.dot(a, b)\\n        a_ptrs += BLOCK_SIZE_K\\n        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\\n        g_ptrs += BLOCK_SIZE_K\\n\\n    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\\n    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\\n    tl.store(c_ptrs, accumulator, mask=c_mask)\\n\\n\\ndef gptq_matmul(a, b_packed, scales, zeros, g_idx, bits=4):\\n    M, K = a.shape\\n    N = b_packed.shape[1]\\n    maxq = 2 ** bits - 1\\n    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\\n    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\\n    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\\n    quant_matmul_248_kernel[grid](\\n        a, b_packed, c, scales, zeros, g_idx,\\n        M, N, K, bits, maxq,\\n        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\\n        scales.stride(0), zeros.stride(0),\\n        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\\n        GROUP_SIZE_M=GROUP_SIZE_M,\\n    )\\n    return c\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Operation: grouped INT4 dequantization fused with a matrix multiply\\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\\n\\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\\ninto int32 words with a per-(group, column) scale and zero-point, and\\n\\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\\n\\nThe declared numeric format of the weights is 4-bit: the weight values it\\nconsumes were produced by quantizing continuous weights onto 16 levels per\\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\\ndeclared format.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_07\",\n        \"status\": \"under_test\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_07\"\n      },\n      \"created_at\": \"2026-09-30T08:17:04Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Operation: grouped INT4 dequantization fused with a matrix multiply\\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\\n\\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\\ninto int32 words with a per-(group, column) scale and zero-point, and\\n\\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\\n\\nThe declared numeric format of the weights is 4-bit: the weight values it\\nconsumes were produced by quantizing continuous weights onto 16 levels per\\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\\ndeclared format.\\n\",\n        \"entry\": \"case_07\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_07\"\n      },\n      \"created_at\": \"2026-09-30T08:17:04Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_07\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 3152\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 68\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 628\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_07\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-30T08:17:04Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_07\\\",\\n  \\\"status\\\": \\\"under_test\\\",\\n  \\\"passed\\\": null\\n}\\n\",\n        \"entry\": \"case_07\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 68,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"claim_id</arg_value><arg_value>c1</arg_value><arg_key>rationale\": \"The kernel indexes packed b by k//8, g_idx by k, scales/zeros by group and column, and adds +1 to the zero point, matching the AutoGPTQ convention; a numerical mismatch against an independent dequant reference would indicate an indexing or packing error.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]; kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires C = A @ dequant(B) with the exact dequantization formula per (group, column); any deviation in indexing/packing that changes C on inputs the contract admits is a defect.\",\n        \"statement\": \"gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.\"\n      },\n      \"created_at\": \"2026-09-30T08:17:29Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"error\": {\n          \"message\": \"tool record_claim missing required arg: rationale\",\n          \"recoverable\": true,\n          \"type\": \"ToolRegistryError\"\n        },\n        \"error_type\": \"ToolRegistryError\",\n        \"event_id\": \"t5\",\n        \"message\": \"tool record_claim missing required arg: rationale\",\n        \"ok\": false\n      },\n      \"status\": \"error\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The kernel indexes packed b by k//8, g_idx by k, scales/zeros by group and column, and adds +1 to the zero point, matching the AutoGPTQ convention; a numerical mismatch against an independent dequant reference would indicate an indexing or packing error.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]; kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires C = A @ dequant(B) with the exact dequantization formula per (group, column); any deviation that changes C on inputs the contract admits is a defect.\",\n        \"statement\": \"gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.\"\n      },\n      \"created_at\": \"2026-09-30T08:17:34Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"created_at\": \"2026-09-30T08:17:34Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"The kernel indexes packed b by k//8, g_idx by k, scales/zeros by group and column, and adds +1 to the zero point, matching the AutoGPTQ convention; a numerical mismatch against an independent dequant reference would indicate an indexing or packing error.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]; kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires C = A @ dequant(B) with the exact dequantization formula per (group, column); any deviation that changes C on inputs the contract admits is a defect.\",\n        \"statement\": \"gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-09-30T08:17:34Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, '/root/cases/case_07')\\nfrom kernel import gptq_matmul\\n\\ntorch.manual_seed(0)\\ndev = 'cuda'\\nM, K, N = 64, 256, 128\\nbits = 4\\nmaxq = 15\\ngroupsize = 32\\nn_groups = K // groupsize\\n\\na = torch.randn(M, K, device=dev, dtype=torch.float16)\\nq = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\\n# pack 8 values per int32 along K (little-endian nibbles)\\nb_packed = torch.zeros((K // 8, N), device=dev, dtype=torch.int32)\\nfor k in range(K):\\n    word, off = k // 8, k % 8\\n    b_packed[word, :] |= q[k, :] << (off * bits)\\nscales = (torch.randn(n_groups, N, device=dev, dtype=torch.float16).abs() * 0.01 + 0.001)\\nzeros = torch.randint(0, 16, (n_groups, N), device=dev, dtype=torch.int32)  # packed zeros along N\\ng_idx = (torch.arange(K, device=dev) // groupsize).to(torch.int32)\\n\\nc = gptq_matmul(a, b_packed, scales, zeros, g_idx, bits=4)\\n\\n# reference: unpack zeros along N (8 per word), effective zero = unpacked + 1 (AutoGPTQ convention)\\nq_f = q.float()\\nzero_eff = torch.zeros_like(q_f)\\nfor n in range(N):\\n    word, off = n // 8, n % 8\\n    z_un = ((zeros[word, :] >> (off * bits)) & maxq).float()  # per column? careful\\n# do it vectorized: zero value for column n of group g\\nz_unpacked = ((zeros[:, (torch.arange(N, device=dev) // 8)] >> ((torch.arange(N, device=dev) % 8) * bits).unsqueeze(0)) & maxq).float()  # (n_groups, N)\\ndeq = torch.zeros(K, N, device=dev)\\nfor k in range(K):\\n    g = g_idx[k].item()\\n    deq[k] = (q_f[k] - (z_unpacked[g] + 1)) * scales[g].float()\\nref = (a.float() @ deq)\\n\\nerr = (c - ref).abs()\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"max abs error vs independent dequant reference (zero_eff = unpacked_zero + 1)\\\",\\n    \\\"max_abs_err\\\": float(err.max()),\\n    \\\"mean_abs_err\\\": float(err.mean()),\\n    \\\"shape\\\": [M, N],\\n    \\\"c_dtype\\\": str(c.dtype),\\n    \\\"allclose\\\": bool(torch.allclose(c, ref, atol=1e-2, rtol=1e-2)),\\n}))\\n\",\n        \"expected_signal\": \"max abs err near float16 matmul rounding (~<0.1 for these scales)\"\n      },\n      \"created_at\": \"2026-09-30T08:17:59Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t7_probe.py\",\n            \"sha256\": \"7cb9a9f78155139da9557ec68d3f09f831b9f295646bde9c084d1af5495ba844\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t7_stdout.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t7_stderr.txt\",\n            \"sha256\": \"a798b590ce108d51f73d6d2ecca1a1da844e0c15bc32ef1eccad95ade3428602\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.\",\n        \"cwd\": \"/root/cases/case_07\",\n        \"duration_s\": 5.552807,\n        \"event_id\": \"t7\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t7_probe.py\",\n                \"sha256\": \"7cb9a9f78155139da9557ec68d3f09f831b9f295646bde9c084d1af5495ba844\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t7_stdout.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t7_stderr.txt\",\n                \"sha256\": \"a798b590ce108d51f73d6d2ecca1a1da844e0c15bc32ef1eccad95ade3428602\"\n              }\n            ],\n            \"duration_s\": 5.552807,\n            \"exit_code\": 1,\n            \"expected_signal\": \"max abs err near float16 matmul rounding (~<0.1 for these scales)\",\n            \"json_parse_error\": \"stdout has no non-empty lines\",\n            \"json_result\": null,\n            \"stderr\": \"Traceback (most recent call last):\\n  File \\\"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/solo/probes/t7_probe.py\\\", line 32, in <module>\\n    z_un = ((zeros[word, :] >> (off * bits)) & maxq).float()  # per column? careful\\n             ~~~~~^^^^^^^^^\\nIndexError: index 8 is out of bounds for dimension 0 with size 8\\n\",\n            \"stdout\": \"\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe failed or produced nonzero exit and needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t7\"\n        },\n        \"exit_code\": 1,\n        \"expected_signal\": \"max abs err near float16 matmul rounding (~<0.1 for these scales)\",\n        \"json_parse_error\": \"stdout has no non-empty lines\",\n        \"json_result\": null,\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"Traceback (most recent call last):\\n  File \\\"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/solo/probes/t7_probe.py\\\", line 32, in <module>\\n    z_un = ((zeros[word, :] >> (off * bits)) & maxq).float()  # per column? careful\\n             ~~~~~^^^^^^^^^\\nIndexError: index 8 is out of bounds for dimension 0 with size 8\\n\",\n        \"stdout\": \"\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 30040,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Leave it unset if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Required when scope is in_scope: which contract requirement this claim would violate."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Required when scope is in_scope: at least one quote from the contract, each with its source."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

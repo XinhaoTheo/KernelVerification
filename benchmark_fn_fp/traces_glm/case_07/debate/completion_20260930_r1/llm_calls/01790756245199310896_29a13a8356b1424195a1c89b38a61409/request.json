@@ -1,0 +1,206 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Describer agent in an agentic kernel verification system.\nYour job is to explain what the kernel appears to implement and what assumptions\nare visible in the source or problem statement.\n\nRules:\n- Maintain the shared description model. Your useful output should be structured, not just prose.\n- When enough context is available, call record_description_update with concise entries for contract_model, kernel_model, risk_map, scope_notes, and open_questions. Each of those five takes a JSON array of strings, exactly this shape:\n    {\"summary\": \"...\", \"contract_model\": [\"first point\", \"second point\"], \"risk_map\": [\"...\"]}\n  Do not pass a paragraph, and do not number the points or wrap them in an object -- the array itself is the ordering.\n- contract_model: what the problem/test/benchmark appears to require.\n- kernel_model: what the kernel source appears to implement and assume.\n- risk_map: specific bug surfaces Skeptic should consider, without recording claims yourself.\n- scope_notes: benchmark/test-domain boundaries that matter for in-scope vs out-of-scope reasoning.\n- open_questions: unresolved facts that need more context or later experiments.\n- If open_description_tasks are present, answer the task directly and include task_id or resolved_task_ids in record_description_update.\n- Cite concrete source, problem, test, metadata, or tool-event context when available.\n- Use inspect_problem, inspect_kernel_source, list_artifact_files, or read_artifact_file when more context is needed.\n- Do not record claims. That is the Skeptic agent's job.\n- Do not run experiments. That is the Experimenter agent's job.\n- Do not output a final correctness verdict.\n- If you cannot resolve a description task, record an update explaining what remains unknown in open_questions.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_07\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import torch\\n2: import triton\\n3: import triton.language as tl\\n4: \\n5: \\n6: @triton.jit\\n7: def quant_matmul_248_kernel(\\n8:     a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\\n9:     M, N, K, bits, maxq,\\n10:     stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\\n11:     stride_scales, stride_zeros,\\n12:     BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\\n13:     GROUP_SIZE_M: tl.constexpr,\\n14: ):\\n15:     infearure_per_bits = 32 // bits\\n16:     pid = tl.program_id(axis=0)\\n17:     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\\n18:     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\\n19:     num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\\n20:     num_pid_in_group = GROUP_SIZE_M * num_pid_n\\n21:     group_id = pid // num_pid_in_group\\n22:     first_pid_m = group_id * GROUP_SIZE_M\\n23:     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\\n24:     pid_m = first_pid_m + (pid % group_size_m)\\n25:     pid_n = (pid % num_pid_in_group) // group_size_m\\n26: \\n27:     offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\\n28:     offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\\n29:     offs_k = tl.arange(0, BLOCK_SIZE_K)\\n30:     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\\n31:     a_mask = offs_am[:, None] < M\\n32:     b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\\n33:     g_ptrs = g_ptr + offs_k\\n34:     scales_ptrs = scales_ptr + offs_bn[None, :]\\n35:     zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\\n36: \\n37:     shifter = (offs_k % infearure_per_bits) * bits\\n38:     zeros_shifter = (offs_bn % infearure_per_bits) * bits\\n39:     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\\n40: \\n41:     for k in range(0, num_pid_k):\\n42:         g_idx = tl.load(g_ptrs)\\n43:         scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\\n44:         zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\\n45:         zeros = (zeros >> zeros_shifter[None, :]) & maxq\\n46:         zeros = zeros + 1\\n47:         a = tl.load(a_ptrs, mask=a_mask, other=0.0)\\n48:         b = tl.load(b_ptrs)\\n49:         b = (b >> shifter[:, None]) & maxq\\n50:         b = (b - zeros) * scales\\n51:         accumulator += tl.dot(a, b)\\n52:         a_ptrs += BLOCK_SIZE_K\\n53:         b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\\n54:         g_ptrs += BLOCK_SIZE_K\\n55: \\n56:     c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\\n57:     c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\\n58:     tl.store(c_ptrs, accumulator, mask=c_mask)\\n59: \\n60: \\n61: def gptq_matmul(a, b_packed, scales, zeros, g_idx, bits=4):\\n62:     M, K = a.shape\\n63:     N = b_packed.shape[1]\\n64:     maxq = 2 ** bits - 1\\n65:     c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\\n66:     BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\\n67:     grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\\n68:     quant_matmul_248_kernel[grid](\\n69:         a, b_packed, c, scales, zeros, g_idx,\\n70:         M, N, K, bits, maxq,\\n71:         a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\\n72:         scales.stride(0), zeros.stride(0),\\n73:         BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\\n74:         GROUP_SIZE_M=GROUP_SIZE_M,\\n75:     )\\n76:     return c\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Operation: grouped INT4 dequantization fused with a matrix multiply\\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\\n\\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\\ninto int32 words with a per-(group, column) scale and zero-point, and\\n\\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\\n\\nThe declared numeric format of the weights is 4-bit: the weight values it\\nconsumes were produced by quantizing continuous weights onto 16 levels per\\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\\ndeclared format.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_07\",\n    \"status\": \"under_test\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_07\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_07\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_07\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_07\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_07\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_07\"\n      },\n      \"created_at\": \"2026-09-30T08:17:25Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_07\",\n        \"has_error\": null,\n        \"kernel_code\": \"import torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef quant_matmul_248_kernel(\\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\\n    M, N, K, bits, maxq,\\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\\n    stride_scales, stride_zeros,\\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\\n    GROUP_SIZE_M: tl.constexpr,\\n):\\n    infearure_per_bits = 32 // bits\\n    pid = tl.program_id(axis=0)\\n    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\\n    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\\n    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\\n    num_pid_in_group = GROUP_SIZE_M * num_pid_n\\n    group_id = pid // num_pid_in_group\\n    first_pid_m = group_id * GROUP_SIZE_M\\n    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\\n    pid_m = first_pid_m + (pid % group_size_m)\\n    pid_n = (pid % num_pid_in_group) // group_size_m\\n\\n    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\\n    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\\n    offs_k = tl.arange(0, BLOCK_SIZE_K)\\n    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\\n    a_mask = offs_am[:, None] < M\\n    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\\n    g_ptrs = g_ptr + offs_k\\n    scales_ptrs = scales_ptr + offs_bn[None, :]\\n    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\\n\\n    shifter = (offs_k % infearure_per_bits) * bits\\n    zeros_shifter = (offs_bn % infearure_per_bits) * bits\\n    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\\n\\n    for k in range(0, num_pid_k):\\n        g_idx = tl.load(g_ptrs)\\n        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\\n        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\\n        zeros = (zeros >> zeros_shifter[None, :]) & maxq\\n        zeros = zeros + 1\\n        a = tl.load(a_ptrs, mask=a_mask, other=0.0)\\n        b = tl.load(b_ptrs)\\n        b = (b >> shifter[:, None]) & maxq\\n        b = (b - zeros) * scales\\n        accumulator += tl.dot(a, b)\\n        a_ptrs += BLOCK_SIZE_K\\n        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\\n        g_ptrs += BLOCK_SIZE_K\\n\\n    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\\n    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\\n    tl.store(c_ptrs, accumulator, mask=c_mask)\\n\\n\\ndef gptq_matmul(a, b_packed, scales, zeros, g_idx, bits=4):\\n    M, K = a.shape\\n    N = b_packed.shape[1]\\n    maxq = 2 ** bits - 1\\n    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\\n    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\\n    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\\n    quant_matmul_248_kernel[grid](\\n        a, b_packed, c, scales, zeros, g_idx,\\n        M, N, K, bits, maxq,\\n        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\\n        scales.stride(0), zeros.stride(0),\\n        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\\n        GROUP_SIZE_M=GROUP_SIZE_M,\\n    )\\n    return c\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Operation: grouped INT4 dequantization fused with a matrix multiply\\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\\n\\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\\ninto int32 words with a per-(group, column) scale and zero-point, and\\n\\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\\n\\nThe declared numeric format of the weights is 4-bit: the weight values it\\nconsumes were produced by quantizing continuous weights onto 16 levels per\\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\\ndeclared format.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_07\",\n        \"status\": \"under_test\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_07\"\n      },\n      \"created_at\": \"2026-09-30T08:17:25Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Operation: grouped INT4 dequantization fused with a matrix multiply\\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\\n\\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\\ninto int32 words with a per-(group, column) scale and zero-point, and\\n\\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\\n\\nThe declared numeric format of the weights is 4-bit: the weight values it\\nconsumes were produced by quantizing continuous weights onto 16 levels per\\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\\ndeclared format.\\n\",\n        \"entry\": \"case_07\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_07\"\n      },\n      \"created_at\": \"2026-09-30T08:17:25Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_07\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 3152\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 68\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 628\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_07\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-30T08:17:25Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_07\\\",\\n  \\\"status\\\": \\\"under_test\\\",\\n  \\\"passed\\\": null\\n}\\n\",\n        \"entry\": \"case_07\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 68,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 32768,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_description_update",
+        "description": "Record a structured Describer update to the shared description model.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resolved_task_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "contract_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "kernel_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "risk_map": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "scope_notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "impact_on_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

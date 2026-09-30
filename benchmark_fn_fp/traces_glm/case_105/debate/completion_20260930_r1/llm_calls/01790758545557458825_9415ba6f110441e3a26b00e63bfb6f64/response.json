@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-8b0735a6e64e49a58875f83850fb9b55",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run two independent probes: c1 replicates the exact workload, runs the actual Triton kernel (if GPU is present) plus a float64 quantization model, and computes E against the 0.12 budget; c2 counts near-boundary weights and compares float32 vs float64 quantization levels.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b8306c05967e27cb",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import numpy as np, json, torch\\nCONFIG = {'family': 'quantization', 'seed': 1221, 'm': 32, 'k': 128, 'mix': 0.9, 'residual': 0.5}\\nrng = np.random.Generator(np.random.PCG64(CONFIG[\\\"seed\\\"]))\\nm, k = CONFIG[\\\"m\\\"], CONFIG[\\\"k\\\"]\\nw = rng.standard_normal((m, k)).astype(np.float32)\\nx = rng.standard_normal(k)\\ndirection = w.astype(np.float64).sum(axis=0); direction /= np.linalg.norm(direction)\\nx /= np.linalg.norm(x)\\nx = CONFIG[\\\"mix\\\"]*direction + (1-CONFIG[\\\"mix\\\"])*x\\nwf = w.astype(np.float64)\\nscale = np.max(np.abs(wf), axis=1, keepdims=True)/7.0\\nresidual = (np.clip(np.floor(wf/scale+0.5), -7, 7)*scale - wf).sum(axis=0)\\nresidual /= np.linalg.norm(residual)\\nx += CONFIG[\\\"residual\\\"]*residual\\nx32 = x.astype(np.float32); w32 = w  # rounded once to binary32\\nref = w32.astype(np.float64) @ x32.astype(np.float64)\\n# float64 quantization model (what make_inputs' residual assumed)\\nwq = np.clip(np.floor(w32.astype(np.float64)/scale+0.5), -7, 7)*scale\\nyq = wq @ x32.astype(np.float64)\\nE_model = np.linalg.norm(yq-ref)/max(np.linalg.norm(ref), 0.001*np.sqrt(m))\\nout = None; E_kernel = None; finite = None\\ntry:\\n    xt = torch.from_numpy(x32.copy()).to(\\\"cuda\\\"); wt = torch.from_numpy(w32.copy()).to(\\\"cuda\\\")\\n    import kernel as K  # not available; inline instead\\nexcept Exception:\\n    pass\\ntry:\\n    import triton, triton.language as tl\\n    @triton.jit\\n    def _kernel(X, W, O, K_: tl.constexpr):\\n        row = tl.program_id(0)\\n        j = tl.arange(0, K_)\\n        x_ = tl.load(X + j)\\n        w_ = tl.load(W + row * K_ + j)\\n        sc = tl.max(tl.abs(w_), 0) / 7.0\\n        qi = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(w_ / sc + 0.5)))\\n        y = tl.sum(x_ * (qi * sc), 0)\\n        tl.store(O + row, y)\\n    def run(x, w):\\n        mm, kk = w.shape\\n        o = torch.empty(mm, dtype=torch.float32, device=x.device)\\n        _kernel[(mm,)](x, w, o, kk, enable_fp_fusion=False)\\n        return o\\n    if torch.cuda.is_available():\\n        xt = torch.from_numpy(x32.copy()).to(\\\"cuda\\\")\\n        wt = torch.from_numpy(w32.copy()).to(\\\"cuda\\\")\\n        out = run(xt, wt).cpu().numpy().astype(np.float64)\\n        E_kernel = np.linalg.norm(out-ref)/max(np.linalg.norm(ref), 0.001*np.sqrt(m))\\n        finite = bool(np.all(np.isfinite(out)))\\nexcept Exception as e:\\n    out = str(e)\\nprint(json.dumps({\\\"E_fp64_model\\\": float(E_model), \\\"E_kernel_gpu\\\": None if E_kernel is None else float(E_kernel),\\n  \\\"finite\\\": finite, \\\"ref_norm\\\": float(np.linalg.norm(ref)),\\n  \\\"norm_thresh\\\": float(0.001*np.sqrt(m)), \\\"out\\\": out if isinstance(out, str) else None,\\n  \\\"gpu_available\\\": torch.cuda.is_available()}))\", \"expected_signal\": \"E on the exact workload vs 0.12 budget\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-90221fbc01e47aef",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import numpy as np, json\\nrng = np.random.Generator(np.random.PCG64(1221))\\nm, k = 32, 128\\nw = rng.standard_normal((m, k)).astype(np.float32)\\n# consume x draws to keep stream identical (not needed for W but harmless)\\n_ = rng.standard_normal(k)\\nwf = w.astype(np.float64)\\nscale64 = np.max(np.abs(wf), axis=1, keepdims=True)/7.0\\nqi64 = np.clip(np.floor(wf/scale64+0.5), -7, 7)\\n# kernel arithmetic: float32 scale, float32 division/add, then floor\\nwf32 = w.astype(np.float32)\\nscale32 = (np.max(np.abs(wf32), axis=1, keepdims=True)/np.float32(7.0)).astype(np.float32)\\nt32 = (wf32/scale32 + np.float32(0.5)).astype(np.float32)\\nqi32 = np.clip(np.floor(t32), -7, 7).astype(np.float32)\\ndiff = (qi32.astype(np.float64) - qi64)\\nn_diff = int(np.count_nonzero(diff))\\n# distance of each weight from half-level boundary in fp32 ulp-ish terms\\nu = (wf/scale64 + 0.5)\\ndist_int = np.abs(u - np.round(u))\\nn_close_1e_3 = int(np.count_nonzero(dist_int < 1e-3))\\nn_close_1e_5 = int(np.count_nonzero(dist_int < 1e-5))\\n# E impact: use the actual x from make_inputs; if level shifts exist, quantify\\nrng2 = np.random.Generator(np.random.PCG64(1221))\\nw2 = rng2.standard_normal((m, k)).astype(np.float32)\\nx = rng2.standard_normal(k)\\ndirection = w2.astype(np.float64).sum(axis=0); direction/=np.linalg.norm(direction)\\nx/=np.linalg.norm(x); x = 0.9*direction + 0.1*x\\nres = (np.clip(np.floor(wf/scale64+0.5), -7, 7)*scale64 - wf).sum(axis=0); res/=np.linalg.norm(res)\\nx += 0.5*res\\nx32 = x.astype(np.float32)\\nref = wf @ x32.astype(np.float64)\\ny64 = (qi64*scale64) @ x32.astype(np.float64)\\ny32 = (qi32.astype(np.float64)*scale64) @ x32.astype(np.float64)\\nE64 = np.linalg.norm(y64-ref)/max(np.linalg.norm(ref), 0.001*np.sqrt(m))\\nE32 = np.linalg.norm(y32-ref)/max(np.linalg.norm(ref), 0.001*np.sqrt(m))\\nprint(json.dumps({\\\"n_qi_level_shifts\\\": n_diff, \\\"n_boundary_dist_lt_1e-3\\\": n_close_1e_3,\\n \\\"n_boundary_dist_lt_1e-5\\\": n_close_1e_5, \\\"E_fp64_qi\\\": float(E64), \\\"E_fp32_qi\\\": float(E32),\\n \\\"E_delta\\\": float(E32-E64), \\\"weights_total\\\": m*k}))\", \"expected_signal\": \"count of fp32 vs fp64 quantization level disagreements and their E contribution\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Both claims testable on CPU. Also could run GPU kernel if available — probe with GPU. Let's do two run_claim_probe calls in one batch: c1 replicate make_inputs on CPU, compute E with fp64 quantization model AND (if cuda available) actual kernel run. Actually include both in one probe for c1. c2 probe counts boundary-proximate weights and compares fp32 vs fp64 qi.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790758546,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1709,
+    "prompt_tokens": 25433,
+    "total_tokens": 27142,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 85,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 540,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 85
+    }
+  }
+}

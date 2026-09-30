@@ -1,0 +1,2141 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_07",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef quant_matmul_248_kernel(\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\n    M, N, K, bits, maxq,\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\n    stride_scales, stride_zeros,\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\n    GROUP_SIZE_M: tl.constexpr,\n):\n    infearure_per_bits = 32 // bits\n    pid = tl.program_id(axis=0)\n    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\n    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\n    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\n    num_pid_in_group = GROUP_SIZE_M * num_pid_n\n    group_id = pid // num_pid_in_group\n    first_pid_m = group_id * GROUP_SIZE_M\n    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\n    pid_m = first_pid_m + (pid % group_size_m)\n    pid_n = (pid % num_pid_in_group) // group_size_m\n\n    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\n    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\n    offs_k = tl.arange(0, BLOCK_SIZE_K)\n    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\n    a_mask = offs_am[:, None] < M\n    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\n    g_ptrs = g_ptr + offs_k\n    scales_ptrs = scales_ptr + offs_bn[None, :]\n    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\n\n    shifter = (offs_k % infearure_per_bits) * bits\n    zeros_shifter = (offs_bn % infearure_per_bits) * bits\n    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\n\n    for k in range(0, num_pid_k):\n        g_idx = tl.load(g_ptrs)\n        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\n        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\n        zeros = (zeros >> zeros_shifter[None, :]) & maxq\n        zeros = zeros + 1\n        a = tl.load(a_ptrs, mask=a_mask, other=0.0)\n        b = tl.load(b_ptrs)\n        b = (b >> shifter[:, None]) & maxq\n        b = (b - zeros) * scales\n        accumulator += tl.dot(a, b)\n        a_ptrs += BLOCK_SIZE_K\n        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\n        g_ptrs += BLOCK_SIZE_K\n\n    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\n    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\n    tl.store(c_ptrs, accumulator, mask=c_mask)\n\n\ndef gptq_matmul(a, b_packed, scales, zeros, g_idx, bits=4):\n    M, K = a.shape\n    N = b_packed.shape[1]\n    maxq = 2 ** bits - 1\n    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\n    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\n    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\n    quant_matmul_248_kernel[grid](\n        a, b_packed, c, scales, zeros, g_idx,\n        M, N, K, bits, maxq,\n        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\n        scales.stride(0), zeros.stride(0),\n        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\n        GROUP_SIZE_M=GROUP_SIZE_M,\n    )\n    return c\n",
+    "passed": null,
+    "problem_text": "Operation: grouped INT4 dequantization fused with a matrix multiply\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\n\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\ninto int32 words with a per-(group, column) scale and zero-point, and\n\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\n\nThe declared numeric format of the weights is 4-bit: the weight values it\nconsumes were produced by quantizing continuous weights onto 16 levels per\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\ndeclared format.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_07",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:18:52Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:20:39Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "10658294dbafe9fa37d52f1c2b5cb3e1334726eb7255fcadbd0de1e1849bba4d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "64561f04bfa148a7dba66b1ce7dc241f9011031be598e6687f01025f3b204f61"
+              }
+            ],
+            "duration_s": 4.866047,
+            "exit_code": 1,
+            "expected_signal": "kernel output matches (q - zero - 1)*scale but deviates from contract formula (q - zero)*scale, confirming the +1 zero-point offset",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 36, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 32, in pack\n    packed[i // vals_per_word, :] |= (x[i, :] & 15) << ((i % vals_per_word) * bits)\n    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe bug: pack() built zeros_packed with 0 rows because it packed z_vals (shape (groups,N)) along dim0/8. No kernel output obtained; not evidence for or against c1. Relaunching corrected probe.",
+          "supports": "inconclusive",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no +1 offset, but kernel line 46 unconditionally does `zeros = zeros + 1` before subtracting, so every column whose stored zero-point is nonzero gets a systematically wrong dequantized weight.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "The contract formula is 'dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 adjustment to the zero-point appears anywhere in the stated contract."
+        }
+      ],
+      "scope_rationale": "The stated contract in problem.txt defines the exact dequantization formula; the kernel deviates from it by adding +1 to the zero-point, so for any stored zero != 0 the output C differs from the contracted C = A @ dequant(B). This is a deviation from a stated required behavior, in-scope even without a test file.",
+      "statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+      "status": "inconclusive",
+      "updated_at": "2026-09-30T08:20:39Z"
+    },
+    {
+      "created_at": "2026-09-30T08:18:52Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:20:39Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "d70999cf8c633a3aa25c623faf1efbc5ac2b55c7814f13680a35fd8ee9c25ad6"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "3a80e2b0a44668a42b27eee3c481dd964c8925b655a050775b3d49cb98aa2892"
+              }
+            ],
+            "duration_s": 3.903096,
+            "exit_code": 1,
+            "expected_signal": "K=56 (K%16!=0) produces wrong C or a crash due to unmasked out-of-bounds tail loads",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c2. Relaunching corrected probe.",
+          "supports": "inconclusive",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "The K-loop iterates cdiv(K, BLOCK_SIZE_K) times but never masks loads on offs_k < K, so the last block only contributes its first K % 16... actually the loop covers all of K only because cdiv rounds up; the real hazard is out-of-bounds reads of a, b, g for offs_k >= K in the final iteration when K % 16 != 0, which can read garbage (or crash) into the accumulator for in-bounds m,n outputs.",
+      "scope": "unknown",
+      "scope_evidence": [],
+      "scope_rationale": "problem.txt does not state shape constraints (K multiple of 16 or of the 8-values-per-word packing), and no test/get_inputs is provided, so whether non-multiple-of-16 K is in the verification domain cannot be determined from the artifact.",
+      "statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
+      "status": "inconclusive",
+      "updated_at": "2026-09-30T08:20:39Z"
+    },
+    {
+      "created_at": "2026-09-30T08:18:52Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:20:39Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "2e2af86ebe515839f92b0d4b06e1ac11092461dc2930f4645b1b325806401b88"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "22c6f967d2d260dcaaccfe353aba298336e73522b4f5aaca0b42046d6d594e17"
+              }
+            ],
+            "duration_s": 3.903301,
+            "exit_code": 1,
+            "expected_signal": "N=40 (N%32!=0) produces wrong C or a crash due to unmasked N-dimension loads",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c3. Relaunching corrected probe.",
+          "supports": "inconclusive",
+          "tool_event_id": "t11"
+        }
+      ],
+      "id": "c3",
+      "raised_by": "skeptic",
+      "rationale": "All N-dimension loads (b, scales, zeros) lack offs_bn < N masks, unlike the final store which is masked; garbage scales/zeros values would be multiplied into lanes that do get stored for offs_bn < N when the block straddles N.",
+      "scope": "unknown",
+      "scope_evidence": [],
+      "scope_rationale": "No test harness or get_inputs exists in the artifact and problem.txt does not constrain N, so whether N % 32 != 0 inputs are in the verification domain is unknown.",
+      "statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
+      "status": "inconclusive",
+      "updated_at": "2026-09-30T08:20:39Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Contract is C = A @ dequant(B) where B is INT4 weights packed into int32 words (8 values per word for bits=4), with per-(group, column) scale and zero-point: dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+      "Grouping along K is given by g_idx (length K), so scale/zero lookup is per-k-element via g_idx, and scales has layout (num_groups, N) while zeros are packed like B (num_groups, N/8 int32 words).",
+      "Correctness must be judged against the declared 4-bit format (quantized reference), not a continuous-weight FP32 reference with a loose tolerance.",
+      "Output is expected in float32 (kernel allocates fp32 C).",
+      "Contract: C = A @ dequant(B), INT4 weights packed 8-per-int32-word, dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] per problem.txt, with NO +1 adjustment.",
+      "Tensor layouts implied by kernel indexing: b_packed shape (K//8, N) packed along K; scales shape (num_groups, N); zeros packed shape (num_groups, N//8) packed along N; g_idx int32 length K."
+    ],
+    "kernel_model": [
+      "Faithful-looking port of AutoGPTQ quant_matmul_248: unpack b words via shifter=(k%8)*4 and mask maxq=15; zeros unpacked via zeros_shifter=(n%8)*4 and offset by +1 (GPTQ zero-point convention: effective zero is stored zero + 1).",
+      "scales_ptrs indexes scales as (groups, N) using stride_scales = scales.stride(0) with column offset offs_bn; zeros_ptrs indexes packed zeros as (groups, N/8) using offs_bn // infearure_per_bits * stride_zeros then adds g_idx * stride along groups \u2014 both match the standard GPTQ layout.",
+      "K-loop iterates num_pid_k = cdiv(K, 16) times but pointer arithmetic advances full BLOCK_SIZE_K each step; loads of a, b, and g are unmasked in K, so any K not a multiple of BLOCK_SIZE_K=16 silently drops the tail K elements (and may read out of bounds).",
+      "b and zeros/scales loads are unmasked in N; only the C store is masked with offs_am<M & offs_bn<N, so N (and K) not multiples of BLOCK_SIZE_N=32 (16) risk out-of-bounds reads or garbage in accumulation, though garbage lanes are masked out at the store.",
+      "A loads are masked only on rows (offs_am<M), other=0.0; assumes a row-major with stride_am/stride_ak passed correctly.",
+      "Grid swizzle uses GROUP_SIZE_M=1, block sizes 32/32/16; with GROUP_SIZE_M=1 the pid decomposition reduces to pid_m=pid//num_pid_n, pid_n=pid%num_pid_n, which is valid.",
+      "Wrapper gptq_matmul assumes N = b_packed.shape[1] (i.e., b_packed is (K/8, N)), passes contiguous strides, allocates fp32 output; bits default 4, maxq=15.",
+      "Kernel line 46 does zeros = zeros + 1, i.e. it computes (q - (zero_unpacked + 1)) * scale, which is the upstream AutoGPTQ GPTQ convention but deviates from the literal problem.txt formula unless the test's zeros follow the +1 convention."
+    ],
+    "open_questions": [
+      "Does the test harness guarantee K and N are multiples of the block sizes (16/32), and K a multiple of 8 packing words? No test_code is provided in the artifact.",
+      "What zeros convention does the test's reference dequant use (GPTQ +1 or raw zero-point)?",
+      "What are the exact expected shapes/strides of b_packed, scales, zeros, and g_idx in the test, and is a's dtype fp16/fp32?",
+      "Is bits always 4 in the tests, or can bits=2/8 paths matter (infearure_per_bits changes to 16/4 and the k//infearure mapping must still divide BLOCK_SIZE_K=16 evenly \u2014 bits=2 gives 16 values/word, BLOCK_SIZE_K=16 still divides; bits=8 gives 4 values/word, 16/4=4 rows, fine)",
+      "c1 remains undecided pending a working probe: does the test/reference use raw zero-point (contract literal) or GPTQ +1 convention? The probe should compare kernel output against BOTH references.",
+      "c2/c3 remain undecided: any corrected probe should also run K%16!=0 and N%32!=0 shapes against the +1-convention reference."
+    ],
+    "risk_map": [
+      "K not a multiple of BLOCK_SIZE_K=16: the K-loop bound cdiv(K,16) times a full 16-step advance drops the remaining K%16 columns of the contraction entirely (wrong result, silent); verify whether the test contract guarantees K % 16 == 0.",
+      "K not a multiple of 8 (packing granularity) would make the k//8 word mapping and b pointer advance misaligned; likewise b_packed row count must equal K/8.",
+      "Out-of-bounds unmasked loads: b/g/scales/zeros loads lack masks for offs_bn >= N and offs_k >= K; benign only if N%32==0 and K%16==0. Under-sized tensors could crash or read garbage.",
+      "The +1 zero-point offset: correct only if the test's zeros use the GPTQ convention (stored zero such that effective zero-point = stored + 1); a reference built with a different convention would show a systematic bias.",
+      "Grouping: scales/zeros lookup uses g_idx per k-element, not a fixed group width of 128; if the test builds groups implicitly (e.g., groupsize=K) with a trivial g_idx this is fine, but nonuniform g_idx must match the reference dequant.",
+      "Accumulation in fp32 tl.dot with a possibly fp16 a: minor rounding differences vs an fp32 reference dequant matmul \u2014 tolerance question, not a structural bug.",
+      "stride_bk = b_packed.stride(0) used with (k//8)*stride_bk: correct only if b_packed rows are the packed-K dimension (shape (K/8, N)); if the test packs B transposed (N rows), indexing is wrong.",
+      "Probe-correctness risk (not a kernel bug): every failed probe unpacked packed zeros with a shape mismatch. The safe reference dequant is column-wise: for column n, word = zeros_packed[g, n // 8] >> ((n % 8) * 4) & 15 (and optionally +1); build a full (G,N) zeros matrix this way before the outer-product accumulation.",
+      "Probe risk: do not index z_vals per k; zero lookup is per (group g_idx[k], column n), not per k row.",
+      "Kernel risks unchanged: +1 zero-point vs contract formula (c1), unmasked K-tail loads for K%16!=0 (c2), unmasked N loads for N%32!=0 (c3)."
+    ],
+    "scope_notes": [
+      "Artifact contains only kernel.py, problem.txt, and meta.json; no test code or reference is available, so correctness boundaries (shape guarantees, tolerance, reference dequant convention) are unknown from source alone.",
+      "Problem scope is the quantized-weight matmul in the declared 4-bit format; comparisons should be against dequantized-B reference products, not the original continuous weights.",
+      "bits parameter is runtime (default 4) but the kernel's arithmetic is generic; only the layout assumptions tied to packing granularity depend on it.",
+      "For the corrected probe: unpack zeros as zrow[n] = (zeros_packed[g, n//8] >> ((n%8)*4)) & 15 \u2014 zeros_packed has N/8 columns, so indexing per column n requires n//8, then optionally +1 for the GPTQ convention; both conventions should be reported so c1 is decidable.",
+      "Probe scope reminder: judge kernel output against the dequantized-INT4 reference (both zero conventions), not continuous weights; report max abs err and reference magnitude so tolerance context is visible.",
+      "Sizes for c2/c3 probes must keep K%8==0 and N%8==0 (packing granularity) while violating only the block-size multiples (K%16, N%32), e.g. K=56, N=40 as already attempted."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Contract is C = A @ dequant(B) where B is INT4 weights packed into int32 words (8 values per word for bits=4), with per-(group, column) scale and zero-point: dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+        "Grouping along K is given by g_idx (length K), so scale/zero lookup is per-k-element via g_idx, and scales has layout (num_groups, N) while zeros are packed like B (num_groups, N/8 int32 words).",
+        "Correctness must be judged against the declared 4-bit format (quantized reference), not a continuous-weight FP32 reference with a loose tolerance.",
+        "Output is expected in float32 (kernel allocates fp32 C)."
+      ],
+      "created_at": "2026-09-30T08:18:30Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Faithful-looking port of AutoGPTQ quant_matmul_248: unpack b words via shifter=(k%8)*4 and mask maxq=15; zeros unpacked via zeros_shifter=(n%8)*4 and offset by +1 (GPTQ zero-point convention: effective zero is stored zero + 1).",
+        "scales_ptrs indexes scales as (groups, N) using stride_scales = scales.stride(0) with column offset offs_bn; zeros_ptrs indexes packed zeros as (groups, N/8) using offs_bn // infearure_per_bits * stride_zeros then adds g_idx * stride along groups \u2014 both match the standard GPTQ layout.",
+        "K-loop iterates num_pid_k = cdiv(K, 16) times but pointer arithmetic advances full BLOCK_SIZE_K each step; loads of a, b, and g are unmasked in K, so any K not a multiple of BLOCK_SIZE_K=16 silently drops the tail K elements (and may read out of bounds).",
+        "b and zeros/scales loads are unmasked in N; only the C store is masked with offs_am<M & offs_bn<N, so N (and K) not multiples of BLOCK_SIZE_N=32 (16) risk out-of-bounds reads or garbage in accumulation, though garbage lanes are masked out at the store.",
+        "A loads are masked only on rows (offs_am<M), other=0.0; assumes a row-major with stride_am/stride_ak passed correctly.",
+        "Grid swizzle uses GROUP_SIZE_M=1, block sizes 32/32/16; with GROUP_SIZE_M=1 the pid decomposition reduces to pid_m=pid//num_pid_n, pid_n=pid%num_pid_n, which is valid.",
+        "Wrapper gptq_matmul assumes N = b_packed.shape[1] (i.e., b_packed is (K/8, N)), passes contiguous strides, allocates fp32 output; bits default 4, maxq=15."
+      ],
+      "open_questions": [
+        "Does the test harness guarantee K and N are multiples of the block sizes (16/32), and K a multiple of 8 packing words? No test_code is provided in the artifact.",
+        "What zeros convention does the test's reference dequant use (GPTQ +1 or raw zero-point)?",
+        "What are the exact expected shapes/strides of b_packed, scales, zeros, and g_idx in the test, and is a's dtype fp16/fp32?",
+        "Is bits always 4 in the tests, or can bits=2/8 paths matter (infearure_per_bits changes to 16/4 and the k//infearure mapping must still divide BLOCK_SIZE_K=16 evenly \u2014 bits=2 gives 16 values/word, BLOCK_SIZE_K=16 still divides; bits=8 gives 4 values/word, 16/4=4 rows, fine)"
+      ],
+      "risk_map": [
+        "K not a multiple of BLOCK_SIZE_K=16: the K-loop bound cdiv(K,16) times a full 16-step advance drops the remaining K%16 columns of the contraction entirely (wrong result, silent); verify whether the test contract guarantees K % 16 == 0.",
+        "K not a multiple of 8 (packing granularity) would make the k//8 word mapping and b pointer advance misaligned; likewise b_packed row count must equal K/8.",
+        "Out-of-bounds unmasked loads: b/g/scales/zeros loads lack masks for offs_bn >= N and offs_k >= K; benign only if N%32==0 and K%16==0. Under-sized tensors could crash or read garbage.",
+        "The +1 zero-point offset: correct only if the test's zeros use the GPTQ convention (stored zero such that effective zero-point = stored + 1); a reference built with a different convention would show a systematic bias.",
+        "Grouping: scales/zeros lookup uses g_idx per k-element, not a fixed group width of 128; if the test builds groups implicitly (e.g., groupsize=K) with a trivial g_idx this is fine, but nonuniform g_idx must match the reference dequant.",
+        "Accumulation in fp32 tl.dot with a possibly fp16 a: minor rounding differences vs an fp32 reference dequant matmul \u2014 tolerance question, not a structural bug.",
+        "stride_bk = b_packed.stride(0) used with (k//8)*stride_bk: correct only if b_packed rows are the packed-K dimension (shape (K/8, N)); if the test packs B transposed (N rows), indexing is wrong."
+      ],
+      "scope_notes": [
+        "Artifact contains only kernel.py, problem.txt, and meta.json; no test code or reference is available, so correctness boundaries (shape guarantees, tolerance, reference dequant convention) are unknown from source alone.",
+        "Problem scope is the quantized-weight matmul in the declared 4-bit format; comparisons should be against dequantized-B reference products, not the original continuous weights.",
+        "bits parameter is runtime (default 4) but the kernel's arithmetic is generic; only the layout assumptions tied to packing granularity depend on it."
+      ],
+      "summary": "Described case_07: an INT4 GPTQ-style packed dequant-matmul Triton kernel; contract is C = A @ dequant(B) with per-(group,column) scale and packed zero-point; kernel mirrors AutoGPTQ quant_matmul_248 layout and zero-point+1 convention, but has no masking on the K/N loads and truncates a non-multiple-of-16 K tail.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [
+        "Contract: C = A @ dequant(B), INT4 weights packed 8-per-int32-word, dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] per problem.txt, with NO +1 adjustment.",
+        "Tensor layouts implied by kernel indexing: b_packed shape (K//8, N) packed along K; scales shape (num_groups, N); zeros packed shape (num_groups, N//8) packed along N; g_idx int32 length K."
+      ],
+      "created_at": "2026-09-30T08:21:34Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Kernel line 46 does zeros = zeros + 1, i.e. it computes (q - (zero_unpacked + 1)) * scale, which is the upstream AutoGPTQ GPTQ convention but deviates from the literal problem.txt formula unless the test's zeros follow the +1 convention."
+      ],
+      "open_questions": [
+        "c1 remains undecided pending a working probe: does the test/reference use raw zero-point (contract literal) or GPTQ +1 convention? The probe should compare kernel output against BOTH references.",
+        "c2/c3 remain undecided: any corrected probe should also run K%16!=0 and N%32!=0 shapes against the +1-convention reference."
+      ],
+      "risk_map": [
+        "Probe-correctness risk (not a kernel bug): every failed probe unpacked packed zeros with a shape mismatch. The safe reference dequant is column-wise: for column n, word = zeros_packed[g, n // 8] >> ((n % 8) * 4) & 15 (and optionally +1); build a full (G,N) zeros matrix this way before the outer-product accumulation.",
+        "Probe risk: do not index z_vals per k; zero lookup is per (group g_idx[k], column n), not per k row.",
+        "Kernel risks unchanged: +1 zero-point vs contract formula (c1), unmasked K-tail loads for K%16!=0 (c2), unmasked N loads for N%32!=0 (c3)."
+      ],
+      "scope_notes": [
+        "For the corrected probe: unpack zeros as zrow[n] = (zeros_packed[g, n//8] >> ((n%8)*4)) & 15 \u2014 zeros_packed has N/8 columns, so indexing per column n requires n//8, then optionally +1 for the GPTQ convention; both conventions should be reported so c1 is decidable.",
+        "Probe scope reminder: judge kernel output against the dequantized-INT4 reference (both zero conventions), not continuous weights; report max abs err and reference magnitude so tolerance context is visible.",
+        "Sizes for c2/c3 probes must keep K%8==0 and N%8==0 (packing granularity) while violating only the block-size multiples (K%16, N%32), e.g. K=56, N=40 as already attempted."
+      ],
+      "summary": "Probe-fix guidance for case_07: describe the exact reference-dequant layout so the Experimenter's next probe executes \u2014 packed zeros are (groups, N/8) packed along N, so per-column unpacking must use word n//8; claims c1/c2/c3 remain untested because all six probes crashed in the probe's own packing/unpacking code.",
+      "task_ids": [],
+      "turn": 8
+    }
+  ],
+  "entry": "case_07",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_07"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_07"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_07"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_07",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 65.43940686600001,
+      "role": "describer",
+      "round": 2,
+      "text": "Analyze kernel and record description update.\n\nKey observations:\n- GPTQ reference: b_ptrs uses (offs_k[:, None] // infearure_per_bits) * stride_bk, scales stride_bk is K // infearure_per_bits. In reference AutoGPTQ, b_ptrs built with stride_bk = K // infearure_per_bits and g_ptrs stride g = K. Here kernel passes b_packed.stride(0) \u2014 b_packed shape presumably (K//8, N), stride(0)=N. Reference passes stride_bk = K // infearure_per_bits, which assumes N == that... Actually in AutoGPTQ reference, they pass K // infearure_per_bits as stride for b, exploiting that b is (K/8, N) contiguous with row stride N. Only correct if N == K//8, a known quirk? Actually the reference passes b.stride(0) I think. In the real kernel: \"b.stride(0), b.stride(1), b.stride(2)\"... The real quant_matmul_248 passes stride_bk = K // infearure_per_bits? Let me recall: gptq_matmul sets strides via b.stride(0) etc. In original: `a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), ...`? Original b is (K//inf, N). They use (offs_k // infearure_per_bits) * stride_bk \u2014 with stride_bk=b.stride(0)=N this is correct. But original code actually uses `offs_k // infearure_per_bits` times... Actually original uses offs_k[:, None] * stride_bk where stride_bk = 1/infearure... hmm not important.\n\nKey bugs here vs original: zeros indexing. Original: zeros_ptrs = zeros_ptr + offs_bn, then zeros_ptrs += g_idx * stride_zeros, and zeros = (zeros >> zeros_shifter) & maxq; zeros += 1. Here zeros_ptrs = zeros_ptr + (offs_bn // infearure_per_bits) * stride_zeros \u2014 treating packed zeros? If zeros are packed like b (b_packed shape (K//8, N)), then zeros shape (num_groups, N//8)? In AutoGPTQ, zeros are packed int32 of shape (groups, N/8), with stride_zeros = zeros.stride(0). Original code: zeros_ptrs = zeros_ptr + (offs_bn // infearure_per_bits) * stride_zeros then += g_idx[:, None] * 1? Original:\n\n```\nshifter = (offs_k % infearure_per_bits) * bits\nzeros_shifter = (offs_bn % infearure_per_bits) * bits\n...\nzeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits) * stride_zeros\n```\nand scales_ptrs = scales_ptr + offs_bn, with scale stride_scales added as g_idx[:, None]*stride_scales. So scales is (groups, N) with stride(0)=N; zeros is (groups, N/8) with stride(0)=N/8. That matches this kernel. So this looks like a faithful port. Difference: original loop uses `for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)*BLOCK_SIZE_K, BLOCK_SIZE_K)`? No\u2014original `for k in range(0, tl.cdiv(K, BLOCK_SIZE_K) * BLOCK_SIZE_K, BLOCK_SIZE_K)`. This kernel loops num_pid_k times, which drops the remainder if K not divisible by BLOCK_SIZE_K \u2014 partial K blocks truncated. Also requires K % BLOCK_SIZE_K == 0 else misses tail K elements. Original handles via full iteration with... actually original also just iterates and loads without masking b for out-of-range? Original expects K multiple of BLOCK_SIZE_K typically. Hmm original loop is up to cdiv*BLOCK_SIZE_K, going one extra padded iteration; loads could go out of bounds but with other=0.0? Not certain. Risk: K not multiple of 16.\n\nAlso b load has no mask; if N not multiple of BLOCK_SIZE_N, b_ptrs offs_bn >= N load out-of-bounds \u2014 but stores masked. Original also unmasked? Original stores masked but b loads unmasked too I think... Actually original masks b? Original: `b = tl.load(b_ptrs, mask=...`? I don't remember. Risk point regardless.\n\nAlso zeros \"+1\": matches GPTQ convention where zero stored as packed zero and effective zero-point is zero+1. Fine.\n\nGrid swizzle: pid_n = (pid % num_pid_in_group) // group_size_m \u2014 with GROUP_SIZE_M=1, group_size_m=1, pid_m = group_id, pid_n = pid % num_pid_n. Fine.\n\nAlso num_pid_in_group uses GROUP_SIZE_M*num_pid_n but group_size_m may be < GROUP_SIZE_M at edge; standard pattern okay for GROUP_SIZE_M=1.\n\nAlso a load masked only rows, no k mask \u2014 a_ptrs offs_k beyond K if K%16\u22600. b_ptrs likewise, and b pointer arithmetic for last k block out of bounds.\n\nAlso requires K % (BLOCK_SIZE_K) == 0 and infearure_per_bits=8 for bits=4: b word covers 8 k values; BLOCK_SIZE_K=16 = 2 words, fine; b_ptrs advance (16//8)*stride = 2 rows. Good if K multiple of 16.\n\nAlso g_ptrs assumed contiguous length K with stride 1; g_idx passed stride not used \u2014 g is (K,) tensor? In AutoGPTQ g_idx is (K,) 1-D, fine.\n\nAlso b_ptrs k-index mapping: k // 8 row of packed B requires b packed along K within each int32 \u2014 standard.\n\nAlso dtype: b loaded as int32; c float32. a dtype arbitrary.\n\nRecord update.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Contract is C = A @ dequant(B) where B is INT4 weights packed into int32 words (8 values per word for bits=4), with per-(group, column) scale and zero-point: dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+              "Grouping along K is given by g_idx (length K), so scale/zero lookup is per-k-element via g_idx, and scales has layout (num_groups, N) while zeros are packed like B (num_groups, N/8 int32 words).",
+              "Correctness must be judged against the declared 4-bit format (quantized reference), not a continuous-weight FP32 reference with a loose tolerance.",
+              "Output is expected in float32 (kernel allocates fp32 C)."
+            ],
+            "kernel_model": [
+              "Faithful-looking port of AutoGPTQ quant_matmul_248: unpack b words via shifter=(k%8)*4 and mask maxq=15; zeros unpacked via zeros_shifter=(n%8)*4 and offset by +1 (GPTQ zero-point convention: effective zero is stored zero + 1).",
+              "scales_ptrs indexes scales as (groups, N) using stride_scales = scales.stride(0) with column offset offs_bn; zeros_ptrs indexes packed zeros as (groups, N/8) using offs_bn // infearure_per_bits * stride_zeros then adds g_idx * stride along groups \u2014 both match the standard GPTQ layout.",
+              "K-loop iterates num_pid_k = cdiv(K, 16) times but pointer arithmetic advances full BLOCK_SIZE_K each step; loads of a, b, and g are unmasked in K, so any K not a multiple of BLOCK_SIZE_K=16 silently drops the tail K elements (and may read out of bounds).",
+              "b and zeros/scales loads are unmasked in N; only the C store is masked with offs_am<M & offs_bn<N, so N (and K) not multiples of BLOCK_SIZE_N=32 (16) risk out-of-bounds reads or garbage in accumulation, though garbage lanes are masked out at the store.",
+              "A loads are masked only on rows (offs_am<M), other=0.0; assumes a row-major with stride_am/stride_ak passed correctly.",
+              "Grid swizzle uses GROUP_SIZE_M=1, block sizes 32/32/16; with GROUP_SIZE_M=1 the pid decomposition reduces to pid_m=pid//num_pid_n, pid_n=pid%num_pid_n, which is valid.",
+              "Wrapper gptq_matmul assumes N = b_packed.shape[1] (i.e., b_packed is (K/8, N)), passes contiguous strides, allocates fp32 output; bits default 4, maxq=15."
+            ],
+            "open_questions": [
+              "Does the test harness guarantee K and N are multiples of the block sizes (16/32), and K a multiple of 8 packing words? No test_code is provided in the artifact.",
+              "What zeros convention does the test's reference dequant use (GPTQ +1 or raw zero-point)?",
+              "What are the exact expected shapes/strides of b_packed, scales, zeros, and g_idx in the test, and is a's dtype fp16/fp32?",
+              "Is bits always 4 in the tests, or can bits=2/8 paths matter (infearure_per_bits changes to 16/4 and the k//infearure mapping must still divide BLOCK_SIZE_K=16 evenly \u2014 bits=2 gives 16 values/word, BLOCK_SIZE_K=16 still divides; bits=8 gives 4 values/word, 16/4=4 rows, fine)"
+            ],
+            "risk_map": [
+              "K not a multiple of BLOCK_SIZE_K=16: the K-loop bound cdiv(K,16) times a full 16-step advance drops the remaining K%16 columns of the contraction entirely (wrong result, silent); verify whether the test contract guarantees K % 16 == 0.",
+              "K not a multiple of 8 (packing granularity) would make the k//8 word mapping and b pointer advance misaligned; likewise b_packed row count must equal K/8.",
+              "Out-of-bounds unmasked loads: b/g/scales/zeros loads lack masks for offs_bn >= N and offs_k >= K; benign only if N%32==0 and K%16==0. Under-sized tensors could crash or read garbage.",
+              "The +1 zero-point offset: correct only if the test's zeros use the GPTQ convention (stored zero such that effective zero-point = stored + 1); a reference built with a different convention would show a systematic bias.",
+              "Grouping: scales/zeros lookup uses g_idx per k-element, not a fixed group width of 128; if the test builds groups implicitly (e.g., groupsize=K) with a trivial g_idx this is fine, but nonuniform g_idx must match the reference dequant.",
+              "Accumulation in fp32 tl.dot with a possibly fp16 a: minor rounding differences vs an fp32 reference dequant matmul \u2014 tolerance question, not a structural bug.",
+              "stride_bk = b_packed.stride(0) used with (k//8)*stride_bk: correct only if b_packed rows are the packed-K dimension (shape (K/8, N)); if the test packs B transposed (N rows), indexing is wrong."
+            ],
+            "scope_notes": [
+              "Artifact contains only kernel.py, problem.txt, and meta.json; no test code or reference is available, so correctness boundaries (shape guarantees, tolerance, reference dequant convention) are unknown from source alone.",
+              "Problem scope is the quantized-weight matmul in the declared 4-bit format; comparisons should be against dequantized-B reference products, not the original continuous weights.",
+              "bits parameter is runtime (default 4) but the kernel's arithmetic is generic; only the layout assumptions tied to packing granularity depend on it."
+            ],
+            "summary": "Described case_07: an INT4 GPTQ-style packed dequant-matmul Triton kernel; contract is C = A @ dequant(B) with per-(group,column) scale and packed zero-point; kernel mirrors AutoGPTQ quant_matmul_248 layout and zero-point+1 convention, but has no masking on the K/N loads and truncates a non-multiple-of-16 K tail."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 65.439,
+        "input_tokens": 5826,
+        "output_tokens": 2615
+      }
+    },
+    {
+      "duration_s": 21.607006401999996,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The description is thorough. The most contract-relevant suspicion is the kernel's `zeros + 1` step: problem.txt states the dequantization formula as `(unpacked_q - zero) * scale` with no +1 offset, yet line 46 unconditionally adds 1 to the unpacked zero-point, so on any input where the stored zero-point is nonzero the kernel computes a systematically biased product. That's directly testable against the stated formula. I'll also record the K-tail truncation and unmasked-N load risks (scope unknown since no test harness is available).",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no +1 offset, but kernel line 46 unconditionally does `zeros = zeros + 1` before subtracting, so every column whose stored zero-point is nonzero gets a systematically wrong dequantized weight.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The contract formula is 'dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 adjustment to the zero-point appears anywhere in the stated contract."
+              }
+            ],
+            "scope_rationale": "The stated contract in problem.txt defines the exact dequantization formula; the kernel deviates from it by adding +1 to the zero-point, so for any stored zero != 0 the output C differs from the contracted C = A @ dequant(B). This is a deviation from a stated required behavior, in-scope even without a test file.",
+            "statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The K-loop iterates cdiv(K, BLOCK_SIZE_K) times but never masks loads on offs_k < K, so the last block only contributes its first K % 16... actually the loop covers all of K only because cdiv rounds up; the real hazard is out-of-bounds reads of a, b, g for offs_k >= K in the final iteration when K % 16 != 0, which can read garbage (or crash) into the accumulator for in-bounds m,n outputs.",
+            "scope": "unknown",
+            "scope_rationale": "problem.txt does not state shape constraints (K multiple of 16 or of the 8-values-per-word packing), and no test/get_inputs is provided, so whether non-multiple-of-16 K is in the verification domain cannot be determined from the artifact.",
+            "statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "All N-dimension loads (b, scales, zeros) lack offs_bn < N masks, unlike the final store which is masked; garbage scales/zeros values would be multiplied into lanes that do get stored for offs_bn < N when the block straddles N.",
+            "scope": "unknown",
+            "scope_rationale": "No test harness or get_inputs exists in the artifact and problem.txt does not constrain N, so whether N % 32 != 0 inputs are in the verification domain is unknown.",
+            "statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 21.607,
+        "input_tokens": 16395,
+        "output_tokens": 1152
+      }
+    },
+    {
+      "duration_s": 42.051997469000014,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'll run runtime probes for all three open claims in parallel: c1 (zero-point +1 bias vs the stated contract formula), c2 (K not a multiple of BLOCK_SIZE_K=16 \u2192 unmasked out-of-bounds tail loads), and c3 (N not a multiple of BLOCK_SIZE_N=32 \u2192 unmasked N loads). Each probe builds a quantized-reference comparison per the contract.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, sys\n\nsys.path.insert(0, '/root/cases/case_07')\ntry:\n    from kernel import gptq_matmul\nexcept Exception as e:\n    try:\n        import importlib.util\n        spec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\n        m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n        gptq_matmul = m.gptq_matmul\n    except Exception as e2:\n        print(json.dumps({\"error\": str(e2)})); sys.exit(0)\n\ntorch.manual_seed(0)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nM, K, N = 16, 64, 64\nnum_groups = 4\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\n\n# random scales and nonzero zero-points\nscales = (torch.rand(num_groups, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(1, 16, (num_groups, N), device=dev, dtype=torch.int32)  # nonzero zeros\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef pack(x, bits=4):\n    vals_per_word = 32 // bits\n    Kd, Nd = x.shape\n    packed = torch.zeros((Kd // vals_per_word, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        packed[i // vals_per_word, :] |= (x[i, :] & 15) << ((i % vals_per_word) * bits)\n    return packed\n\nb_packed = pack(q_vals)\nzeros_packed = pack(z_vals)\n\na = torch.randn(M, K, device=dev).half() if dev=='cuda' else torch.randn(M, K).float()\n\n# reference per contract formula: (q - zero) * scale, zero unpacked raw (NO +1)\nref = torch.zeros(M, N, device=dev)\nfor k in range(K):\n    g = int(g_idx[k]); z = int(z_vals[g])  # z_vals indexed [group, n]\n    # unpack zero word\n    zero_word = zeros_packed[g, :].long()\n    zrow = (zero_word >> ((torch.arange(N, device=dev) % 8) * 4)) & 15\n    dq = (q_vals[k, :].float() - zrow.float()) * scales[g]\n    ref[:, :] += a[:, k:k+1].float() * dq[None, :]\n\ntry:\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\n    max_abs = (c - ref).abs().max().item()\n    # also compare against GPTQ +1 convention\n    ref_plus1 = torch.zeros(M, N, device=dev)\n    for k in range(K):\n        g = int(g_idx[k])\n        zero_word = zeros_packed[g, :].long()\n        zrow = (zero_word >> ((torch.arange(N, device=dev) % 8) * 4)) & 15\n        dq = (q_vals[k, :].float() - (zrow.float() + 1)) * scales[g]\n        ref_plus1[:, :] += a[:, k:k+1].float() * dq[None, :]\n    max_abs_plus1 = (c - ref_plus1).abs().max().item()\n    print(json.dumps({\"metric\": \"max_abs_err vs contract (q-zero)*scale and vs (q-zero-1)*scale\",\n                      \"max_abs_err_contract\": max_abs,\n                      \"max_abs_err_plus1_convention\": max_abs_plus1,\n                      \"M\": M, \"K\": K, \"N\": N, \"bits\": 4,\n                      \"note\": \"if kernel matches +1 convention but not contract formula, +1 offset confirmed\"}))\nexcept Exception as e:\n    print(json.dumps({\"error\": repr(e)}))\n",
+            "expected_signal": "kernel output matches (q - zero - 1)*scale but deviates from contract formula (q - zero)*scale, confirming the +1 zero-point offset"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(1)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA, cannot run triton kernel\"})); sys.exit(0)\n\nM, K, N = 16, 56, 64   # K = 56 = 3*16 + 8, multiple of 8 (packing OK) but not of 16\nnum_groups = 4\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(num_groups, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(0, 16, (num_groups, N), device=dev, dtype=torch.int32)\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef pack(x, bits=4):\n    vpw = 32 // bits\n    Kd, Nd = x.shape\n    packed = torch.zeros((Kd // vpw, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    return packed\n\nb_packed = pack(q_vals)\nzeros_packed = pack(z_vals)\na = torch.randn(M, K, device=dev).half()\n\ndef reference(use_plus1):\n    ref = torch.zeros(M, N, device=dev)\n    ar = torch.arange(N, device=dev)\n    for k in range(K):\n        g = int(g_idx[k])\n        zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float()\n        if use_plus1: zrow = zrow + 1\n        dq = (q_vals[k, :].float() - zrow) * scales[g]\n        ref += a[:, k:k+1].float() * dq[None, :]\n    return ref\n\nref0, ref1 = reference(False), reference(True)\ntry:\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\n    torch.cuda.synchronize()\n    err0 = (c - ref0).abs().max().item()\n    err1 = (c - ref1).abs().max().item()\n    print(json.dumps({\"metric\": \"max_abs_err for K=56 (K%16=8) vs both zero conventions\",\n                      \"K\": K, \"M\": M, \"N\": N,\n                      \"max_abs_err_contract\": err0,\n                      \"max_abs_err_plus1\": err1,\n                      \"note\": \"large error vs both conventions implies out-of-bounds/garbage tail accumulation (c2 confirmed); match implies tail handled or OOB read benign\"}))\nexcept Exception as e:\n    torch.cuda.synchronize()\n    print(json.dumps({\"metric\": \"kernel_exception\", \"K\": K, \"error\": repr(e),\n                      \"note\": \"crash on K%16!=0 supports c2 out-of-bounds\"}))\n",
+            "expected_signal": "K=56 (K%16!=0) produces wrong C or a crash due to unmasked out-of-bounds tail loads"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c3",
+            "code": "\nimport torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(2)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA, cannot run triton kernel\"})); sys.exit(0)\n\nM, K, N = 16, 64, 40   # N = 40: multiple of 8 (zeros word n//8=5 valid up to 39) but not multiple of 32\nnum_groups = 4\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(num_groups, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(0, 16, (num_groups, N), device=dev, dtype=torch.int32)\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef pack(x, bits=4):\n    vpw = 32 // bits\n    Kd, Nd = x.shape\n    packed = torch.zeros((Kd // vpw, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    return packed\n\nb_packed = pack(q_vals)\nzeros_packed = pack(z_vals)\na = torch.randn(M, K, device=dev).half()\n\ndef reference(use_plus1):\n    ref = torch.zeros(M, N, device=dev)\n    ar = torch.arange(N, device=dev)\n    for k in range(K):\n        g = int(g_idx[k])\n        zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float()\n        if use_plus1: zrow = zrow + 1\n        dq = (q_vals[k, :].float() - zrow) * scales[g]\n        ref += a[:, k:k+1].float() * dq[None, :]\n    return ref\n\nref1 = reference(True)  # kernel convention (zeros+1)\ntry:\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\n    torch.cuda.synchronize()\n    err1 = (c - ref1).abs().max().item()\n    print(json.dumps({\"metric\": \"max_abs_err for N=40 (N%32=8) vs kernel-convention reference\",\n                      \"M\": M, \"K\": K, \"N\": N,\n                      \"max_abs_err\": err1,\n                      \"note\": \"error or crash implies unmasked N-dim loads corrupt valid outputs (c3 confirmed); ~0 implies OOB reads happen but do not affect stored lanes\"}))\nexcept Exception as e:\n    print(json.dumps({\"metric\": \"kernel_exception\", \"N\": N, \"error\": repr(e),\n                      \"note\": \"crash on N%32!=0 supports c3 out-of-bounds load\"}))\n",
+            "expected_signal": "N=40 (N%32!=0) produces wrong C or a crash due to unmasked N-dimension loads"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 42.052,
+        "input_tokens": 20750,
+        "output_tokens": 2966
+      }
+    },
+    {
+      "duration_s": 52.74197542999997,
+      "role": "experimenter",
+      "round": 5,
+      "text": "The three prior probes all crashed in my own packing helper (I packed zeros along the wrong dimension, creating a zero-row tensor) \u2014 a probe bug, not kernel evidence. I'll record those as inconclusive and immediately relaunch corrected probes for all three claims with proper GPTQ packing (zeros packed along N: shape (groups, N/8); b packed along K: shape (K/8, N)).",
+      "tool_calls": [
+        {
+          "args": {
+            "event_id": "t9",
+            "status": null,
+            "summary": "Probe bug: pack() built zeros_packed with 0 rows because it packed z_vals (shape (groups,N)) along dim0/8. No kernel output obtained; not evidence for or against c1. Relaunching corrected probe.",
+            "supports": "inconclusive"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "event_id": "t10",
+            "status": null,
+            "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c2. Relaunching corrected probe.",
+            "supports": "inconclusive"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "event_id": "t11",
+            "status": null,
+            "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c3. Relaunching corrected probe.",
+            "supports": "inconclusive"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA\"})); sys.exit(0)\n\nM, K, N, G = 16, 64, 64, 4\ng_idx = torch.randint(0, G, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(G, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(1, 16, (G, N), device=dev, dtype=torch.int32)  # nonzero zeros\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef packK(x):  # (K,N) -> (K/8, N), pack along dim0\n    Kd, Nd = x.shape\n    p = torch.zeros((Kd // 8, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        p[i // 8, :] |= (x[i, :] & 15) << ((i % 8) * 4)\n    return p\n\ndef packN(x):  # (G,N) -> (G, N/8), pack along dim1\n    Gd, Nd = x.shape\n    p = torch.zeros((Gd, Nd // 8), device=x.device, dtype=torch.int32)\n    for j in range(Nd):\n        p[:, j // 8] |= (x[:, j] & 15) << ((j % 8) * 4)\n    return p\n\nb_packed = packK(q_vals)\nzeros_packed = packN(z_vals)\na = torch.randn(M, K, device=dev).half()\n\nar = torch.arange(N, device=dev)\ndef reference(use_plus1):\n    ref = torch.zeros(M, N, device=dev)\n    for k in range(K):\n        g = int(g_idx[k])\n        zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float()\n        if use_plus1: zrow = zrow + 1\n        dq = (q_vals[k, :].float() - zrow) * scales[g]\n        ref += a[:, k:k+1].float() * dq[None, :]\n    return ref\n\nref0, ref1 = reference(False), reference(True)\nc = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\ntorch.cuda.synchronize()\nerr0 = (c - ref0).abs().max().item()\nerr1 = (c - ref1).abs().max().item()\nscale_ref = ref0.abs().max().item()\nprint(json.dumps({\"metric\": \"max_abs_err vs contract formula (q-zero)*scale vs GPTQ (q-zero-1)*scale\",\n                  \"M\": M, \"K\": K, \"N\": N, \"bits\": 4,\n                  \"max_abs_err_contract_formula\": err0,\n                  \"max_abs_err_plus1_convention\": err1,\n                  \"ref_magnitude\": scale_ref,\n                  \"note\": \"if err1<<err0, kernel uses zero+1 and deviates from the stated contract formula (c1 confirmed); if err0 small, c1 rebutted\"}))\n",
+            "expected_signal": "err vs contract formula is large while err vs (zero+1) convention is ~0, confirming +1 offset"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(1)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA\"})); sys.exit(0)\n\nM, K, N, G = 16, 56, 64, 4   # K=56: multiple of 8, not of 16\ng_idx = torch.randint(0, G, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(G, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(1, 16, (G, N), device=dev, dtype=torch.int32)\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef packK(x):\n    Kd, Nd = x.shape\n    p = torch.zeros((Kd // 8, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        p[i // 8, :] |= (x[i, :] & 15) << ((i % 8) * 4)\n    return p\n\ndef packN(x):\n    Gd, Nd = x.shape\n    p = torch.zeros((Gd, Nd // 8), device=x.device, dtype=torch.int32)\n    for j in range(Nd):\n        p[:, j // 8] |= (x[:, j] & 15) << ((j % 8) * 4)\n    return p\n\nb_packed = packK(q_vals)     # (7, 64)\nzeros_packed = packN(z_vals)\na = torch.randn(M, K, device=dev).half()\n\nar = torch.arange(N, device=dev)\nref = torch.zeros(M, N, device=dev)  # GPTQ +1 convention reference\nfor k in range(K):\n    g = int(g_idx[k])\n    zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float() + 1\n    dq = (q_vals[k, :].float() - zrow) * scales[g]\n    ref += a[:, k:k+1].float() * dq[None, :]\n\ntry:\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\n    torch.cuda.synchronize()\n    err = (c - ref).abs().max().item()\n    print(json.dumps({\"metric\": \"max_abs_err for K=56 (K%16=8) vs kernel-convention reference\",\n                      \"M\": M, \"K\": K, \"N\": N,\n                      \"b_packed_rows\": b_packed.shape[0],\n                      \"max_abs_err\": err, \"ref_magnitude\": ref.abs().max().item(),\n                      \"note\": \"nonzero err or crash implies the final K-block unmasked loads corrupt valid outputs (c2 confirmed); ~0 (fp rounding only) implies tail handled/benign\"}))\nexcept Exception as e:\n    print(json.dumps({\"metric\": \"kernel_exception\", \"K\": K, \"error\": repr(e),\n                      \"note\": \"crash on K%16!=0 supports c2 out-of-bounds tail loads\"}))\n",
+            "expected_signal": "K=56 produces wrong C or a crash due to unmasked tail loads"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c3",
+            "code": "import torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(2)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA\"})); sys.exit(0)\n\nM, K, N, G = 16, 64, 40, 4   # N=40: multiple of 8, not of 32\ng_idx = torch.randint(0, G, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(G, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(1, 16, (G, N), device=dev, dtype=torch.int32)\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef packK(x):\n    Kd, Nd = x.shape\n    p = torch.zeros((Kd // 8, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        p[i // 8, :] |= (x[i, :] & 15) << ((i % 8) * 4)\n    return p\n\ndef packN(x):\n    Gd, Nd = x.shape\n    p = torch.zeros((Gd, Nd // 8), device=x.device, dtype=torch.int32)\n    for j in range(Nd):\n        p[:, j // 8] |= (x[:, j] & 15) << ((j % 8) * 4)\n    return p\n\nb_packed = packK(q_vals)     # (8, 40)\nzeros_packed = packN(z_vals) # (4, 5)\na = torch.randn(M, K, device=dev).half()\n\nar = torch.arange(N, device=dev)\nref = torch.zeros(M, N, device=dev)\nfor k in range(K):\n    g = int(g_idx[k])\n    zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float() + 1\n    dq = (q_vals[k, :].float() - zrow) * scales[g]\n    ref += a[:, k:k+1].float() * dq[None, :]\n\ntry:\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\n    torch.cuda.synchronize()\n    err = (c - ref).abs().max().item()\n    print(json.dumps({\"metric\": \"max_abs_err for N=40 (N%32=8) vs kernel-convention reference\",\n                      \"M\": M, \"K\": K, \"N\": N,\n                      \"b_packed_shape\": list(b_packed.shape),\n                      \"zeros_packed_shape\": list(zeros_packed.shape),\n                      \"max_abs_err\": err, \"ref_magnitude\": ref.abs().max().item(),\n                      \"note\": \"nonzero err or crash implies unmasked N-dim loads corrupt valid outputs (c3 confirmed); ~0 (fp rounding) implies OOB lanes do not affect stored outputs\"}))\nexcept Exception as e:\n    print(json.dumps({\"metric\": \"kernel_exception\", \"N\": N, \"error\": repr(e),\n                      \"note\": \"crash on N%32!=0 supports c3 unmasked N-dimension loads\"}))\n",
+            "expected_signal": "N=40 produces wrong C or a crash due to unmasked N-dimension loads"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 52.742,
+        "input_tokens": 30020,
+        "output_tokens": 3661
+      }
+    },
+    {
+      "duration_s": 8.422715646000029,
+      "role": "skeptic",
+      "round": 6,
+      "text": "This is the final review turn. All probes so far crashed due to the Experimenter's own packing/unpacking bugs, so no new kernel evidence exists; the three existing claims (zero-point +1, K-tail, N-tail) already cover the material hypotheses, and nothing new from the latest events warrants additional claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the latest probe events (t15\u2013t17) all failed in the probe's own reference-unpacking code (shape mismatch in unpacking packed zeros), so they provide no new kernel evidence. The three recorded claims (c1 zero-point +1 offset vs contract formula, c2 K%16 unmasked tail, c3 N%32 unmasked loads) already cover all material, testable hypotheses raised in this run; no additional in-scope claims are warranted.",
+            "reviewed_claims": [
+              "c1: kernel adds +1 to unpacked zero-point, deviating from the contract formula (q - zero)*scale",
+              "c2: K not multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
+              "c3: N not multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.423,
+        "input_tokens": 40310,
+        "output_tokens": 301
+      }
+    },
+    {
+      "duration_s": 14.741337875,
+      "role": "judge",
+      "round": 7,
+      "text": "The decisive claim (c1: zero-point +1 vs the stated contract formula) remains inconclusive \u2014 all six probes failed in the Experimenter's own packing/unpacking code, not the kernel. A working probe could settle it, so I'm asking for one more debate round focused on correctly-executed probes.",
+      "tool_calls": [
+        {
+          "args": {
+            "focus_claims": [
+              "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
+              "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
+              "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+            ],
+            "reason": "Every probe so far (t9-t11, t15-t17) crashed in the Experimenter's own reference code (wrong packing dimension, then a broadcast shape mismatch unpacking zeros), so no runtime evidence exists for any claim. The in-scope claim c1 (zero-point +1 vs the contract formula) is directly decidable by a corrected probe: the t15 code only needs the zeros unpacking fixed to broadcast word j//8 over columns. One more round with a corrected, executing probe would convert c1 (and possibly c2/c3) from inconclusive to confirmed/rebutted before the verdict."
+          },
+          "tool": "request_more_debate"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 14.741,
+        "input_tokens": 40375,
+        "output_tokens": 430
+      }
+    },
+    {
+      "duration_s": 17.878342099000008,
+      "role": "describer",
+      "round": 8,
+      "text": "The description model is already complete for case_07; the only thing missing is a corrected, executing probe. I'll record a targeted update giving the Experimenter the exact reference-dequant layout (which every failed probe got wrong), so the next probe can settle c1\u2013c3 rather than crash again.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Contract: C = A @ dequant(B), INT4 weights packed 8-per-int32-word, dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] per problem.txt, with NO +1 adjustment.",
+              "Tensor layouts implied by kernel indexing: b_packed shape (K//8, N) packed along K; scales shape (num_groups, N); zeros packed shape (num_groups, N//8) packed along N; g_idx int32 length K."
+            ],
+            "kernel_model": [
+              "Kernel line 46 does zeros = zeros + 1, i.e. it computes (q - (zero_unpacked + 1)) * scale, which is the upstream AutoGPTQ GPTQ convention but deviates from the literal problem.txt formula unless the test's zeros follow the +1 convention."
+            ],
+            "open_questions": [
+              "c1 remains undecided pending a working probe: does the test/reference use raw zero-point (contract literal) or GPTQ +1 convention? The probe should compare kernel output against BOTH references.",
+              "c2/c3 remain undecided: any corrected probe should also run K%16!=0 and N%32!=0 shapes against the +1-convention reference."
+            ],
+            "risk_map": [
+              "Probe-correctness risk (not a kernel bug): every failed probe unpacked packed zeros with a shape mismatch. The safe reference dequant is column-wise: for column n, word = zeros_packed[g, n // 8] >> ((n % 8) * 4) & 15 (and optionally +1); build a full (G,N) zeros matrix this way before the outer-product accumulation.",
+              "Probe risk: do not index z_vals per k; zero lookup is per (group g_idx[k], column n), not per k row.",
+              "Kernel risks unchanged: +1 zero-point vs contract formula (c1), unmasked K-tail loads for K%16!=0 (c2), unmasked N loads for N%32!=0 (c3)."
+            ],
+            "scope_notes": [
+              "For the corrected probe: unpack zeros as zrow[n] = (zeros_packed[g, n//8] >> ((n%8)*4)) & 15 \u2014 zeros_packed has N/8 columns, so indexing per column n requires n//8, then optionally +1 for the GPTQ convention; both conventions should be reported so c1 is decidable.",
+              "Probe scope reminder: judge kernel output against the dequantized-INT4 reference (both zero conventions), not continuous weights; report max abs err and reference magnitude so tolerance context is visible.",
+              "Sizes for c2/c3 probes must keep K%8==0 and N%8==0 (packing granularity) while violating only the block-size multiples (K%16, N%32), e.g. K=56, N=40 as already attempted."
+            ],
+            "summary": "Probe-fix guidance for case_07: describe the exact reference-dequant layout so the Experimenter's next probe executes \u2014 packed zeros are (groups, N/8) packed along N, so per-column unpacking must use word n//8; claims c1/c2/c3 remain untested because all six probes crashed in the probe's own packing/unpacking code."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.878,
+        "input_tokens": 39144,
+        "output_tokens": 863
+      }
+    },
+    {
+      "duration_s": 15.637966149000022,
+      "role": "skeptic",
+      "round": 9,
+      "text": "This is a new debate round, but nothing new has emerged since my review: the description update (du2) only confirms the existing claim structure (zero-point +1, K-tail, N-tail) and provides probe-fix guidance for the Experimenter. No new claims are warranted.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The description update (du2) confirms the existing claim structure and only adds probe-correctness guidance (packed zeros are (groups, N/8) packed along N, unpack via word n//8) for the Experimenter's next round; it raises no new kernel risks beyond the three recorded claims (c1 zero-point +1 vs contract formula, c2 K%16 unmasked tail loads, c3 N%32 unmasked N loads). No additional in-scope, testable hypotheses are warranted from the current evidence.",
+            "reviewed_claims": [
+              "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
+              "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
+              "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.638,
+        "input_tokens": 44169,
+        "output_tokens": 359
+      }
+    },
+    {
+      "duration_s": 12.563398417999963,
+      "role": "judge",
+      "round": 10,
+      "text": "All three claims remain inconclusive: every probe (t9\u2013t11, t15\u2013t17) crashed in the probe's own reference code, so no runtime evidence exists. The decisive in-scope claim c1 (kernel adds +1 to the zero-point vs the literal contract formula) is untested, and c2/c3 are unknown-scope. With no confirmed evidence either way, the honest verdict is needs_more_evidence.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.8,
+            "decisive_claims": [
+              "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
+              "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
+              "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+            ],
+            "reason": "No runtime evidence exists for any claim: all six probes (t9-t11, t15-t17) crashed in the Experimenter's own packing/unpacking code before invoking the kernel, so none are kernel evidence. The decisive claim c1 (kernel.py line 46 unconditionally does `zeros = zeros + 1`, deviating from the literal problem.txt formula dequant = (q - zero)*scale) is in-scope but remains inconclusive \u2014 it is directly decidable by a corrected probe comparing kernel output against both zero conventions, and such a probe was never successfully executed despite two rounds and explicit describer guidance (du2). c2/c3 are unknown-scope (no test harness or shape constraints in the artifact) and also lack any executed probe. Since the in-scope claim c1 cannot be confirmed or rebutted with the available evidence, needs_more_evidence is the correct verdict; a single executing probe against both zero-convention references would settle it.",
+            "verdict": "needs_more_evidence"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.563,
+        "input_tokens": 41296,
+        "output_tokens": 550
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-30T08:21:49Z",
+    "decision": "no_new_claims",
+    "reason": "The description update (du2) confirms the existing claim structure and only adds probe-correctness guidance (packed zeros are (groups, N/8) packed along N, unpack via word n//8) for the Experimenter's next round; it raises no new kernel risks beyond the three recorded claims (c1 zero-point +1 vs contract formula, c2 K%16 unmasked tail loads, c3 N%32 unmasked N loads). No additional in-scope, testable hypotheses are warranted from the current evidence.",
+    "reviewed_claims": [
+      "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
+      "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
+      "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
+    ],
+    "reviewed_tool_event_count": 20,
+    "tool_event_id": "t21",
+    "turn": 9
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_07"
+      },
+      "created_at": "2026-09-30T08:17:25Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_07",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef quant_matmul_248_kernel(\n    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,\n    M, N, K, bits, maxq,\n    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,\n    stride_scales, stride_zeros,\n    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,\n    GROUP_SIZE_M: tl.constexpr,\n):\n    infearure_per_bits = 32 // bits\n    pid = tl.program_id(axis=0)\n    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\n    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\n    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)\n    num_pid_in_group = GROUP_SIZE_M * num_pid_n\n    group_id = pid // num_pid_in_group\n    first_pid_m = group_id * GROUP_SIZE_M\n    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\n    pid_m = first_pid_m + (pid % group_size_m)\n    pid_n = (pid % num_pid_in_group) // group_size_m\n\n    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)\n    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)\n    offs_k = tl.arange(0, BLOCK_SIZE_K)\n    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)\n    a_mask = offs_am[:, None] < M\n    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)\n    g_ptrs = g_ptr + offs_k\n    scales_ptrs = scales_ptr + offs_bn[None, :]\n    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)\n\n    shifter = (offs_k % infearure_per_bits) * bits\n    zeros_shifter = (offs_bn % infearure_per_bits) * bits\n    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)\n\n    for k in range(0, num_pid_k):\n        g_idx = tl.load(g_ptrs)\n        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)\n        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)\n        zeros = (zeros >> zeros_shifter[None, :]) & maxq\n        zeros = zeros + 1\n        a = tl.load(a_ptrs, mask=a_mask, other=0.0)\n        b = tl.load(b_ptrs)\n        b = (b >> shifter[:, None]) & maxq\n        b = (b - zeros) * scales\n        accumulator += tl.dot(a, b)\n        a_ptrs += BLOCK_SIZE_K\n        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk\n        g_ptrs += BLOCK_SIZE_K\n\n    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]\n    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)\n    tl.store(c_ptrs, accumulator, mask=c_mask)\n\n\ndef gptq_matmul(a, b_packed, scales, zeros, g_idx, bits=4):\n    M, K = a.shape\n    N = b_packed.shape[1]\n    maxq = 2 ** bits - 1\n    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)\n    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1\n    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)\n    quant_matmul_248_kernel[grid](\n        a, b_packed, c, scales, zeros, g_idx,\n        M, N, K, bits, maxq,\n        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),\n        scales.stride(0), zeros.stride(0),\n        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,\n        GROUP_SIZE_M=GROUP_SIZE_M,\n    )\n    return c\n",
+        "passed": null,
+        "problem_text": "Operation: grouped INT4 dequantization fused with a matrix multiply\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\n\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\ninto int32 words with a per-(group, column) scale and zero-point, and\n\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\n\nThe declared numeric format of the weights is 4-bit: the weight values it\nconsumes were produced by quantizing continuous weights onto 16 levels per\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\ndeclared format.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_07",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_07"
+      },
+      "created_at": "2026-09-30T08:17:25Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: grouped INT4 dequantization fused with a matrix multiply\n(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).\n\nThe kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed\ninto int32 words with a per-(group, column) scale and zero-point, and\n\n    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]\n\nThe declared numeric format of the weights is 4-bit: the weight values it\nconsumes were produced by quantizing continuous weights onto 16 levels per\ngroup, and the kernel's job is to evaluate the matmul faithfully in that\ndeclared format.\n",
+        "entry": "case_07",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_07"
+      },
+      "created_at": "2026-09-30T08:17:25Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_07",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3152
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 628
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_07",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:17:25Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_07\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_07",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Contract is C = A @ dequant(B) where B is INT4 weights packed into int32 words (8 values per word for bits=4), with per-(group, column) scale and zero-point: dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+          "Grouping along K is given by g_idx (length K), so scale/zero lookup is per-k-element via g_idx, and scales has layout (num_groups, N) while zeros are packed like B (num_groups, N/8 int32 words).",
+          "Correctness must be judged against the declared 4-bit format (quantized reference), not a continuous-weight FP32 reference with a loose tolerance.",
+          "Output is expected in float32 (kernel allocates fp32 C)."
+        ],
+        "kernel_model": [
+          "Faithful-looking port of AutoGPTQ quant_matmul_248: unpack b words via shifter=(k%8)*4 and mask maxq=15; zeros unpacked via zeros_shifter=(n%8)*4 and offset by +1 (GPTQ zero-point convention: effective zero is stored zero + 1).",
+          "scales_ptrs indexes scales as (groups, N) using stride_scales = scales.stride(0) with column offset offs_bn; zeros_ptrs indexes packed zeros as (groups, N/8) using offs_bn // infearure_per_bits * stride_zeros then adds g_idx * stride along groups \u2014 both match the standard GPTQ layout.",
+          "K-loop iterates num_pid_k = cdiv(K, 16) times but pointer arithmetic advances full BLOCK_SIZE_K each step; loads of a, b, and g are unmasked in K, so any K not a multiple of BLOCK_SIZE_K=16 silently drops the tail K elements (and may read out of bounds).",
+          "b and zeros/scales loads are unmasked in N; only the C store is masked with offs_am<M & offs_bn<N, so N (and K) not multiples of BLOCK_SIZE_N=32 (16) risk out-of-bounds reads or garbage in accumulation, though garbage lanes are masked out at the store.",
+          "A loads are masked only on rows (offs_am<M), other=0.0; assumes a row-major with stride_am/stride_ak passed correctly.",
+          "Grid swizzle uses GROUP_SIZE_M=1, block sizes 32/32/16; with GROUP_SIZE_M=1 the pid decomposition reduces to pid_m=pid//num_pid_n, pid_n=pid%num_pid_n, which is valid.",
+          "Wrapper gptq_matmul assumes N = b_packed.shape[1] (i.e., b_packed is (K/8, N)), passes contiguous strides, allocates fp32 output; bits default 4, maxq=15."
+        ],
+        "open_questions": [
+          "Does the test harness guarantee K and N are multiples of the block sizes (16/32), and K a multiple of 8 packing words? No test_code is provided in the artifact.",
+          "What zeros convention does the test's reference dequant use (GPTQ +1 or raw zero-point)?",
+          "What are the exact expected shapes/strides of b_packed, scales, zeros, and g_idx in the test, and is a's dtype fp16/fp32?",
+          "Is bits always 4 in the tests, or can bits=2/8 paths matter (infearure_per_bits changes to 16/4 and the k//infearure mapping must still divide BLOCK_SIZE_K=16 evenly \u2014 bits=2 gives 16 values/word, BLOCK_SIZE_K=16 still divides; bits=8 gives 4 values/word, 16/4=4 rows, fine)"
+        ],
+        "risk_map": [
+          "K not a multiple of BLOCK_SIZE_K=16: the K-loop bound cdiv(K,16) times a full 16-step advance drops the remaining K%16 columns of the contraction entirely (wrong result, silent); verify whether the test contract guarantees K % 16 == 0.",
+          "K not a multiple of 8 (packing granularity) would make the k//8 word mapping and b pointer advance misaligned; likewise b_packed row count must equal K/8.",
+          "Out-of-bounds unmasked loads: b/g/scales/zeros loads lack masks for offs_bn >= N and offs_k >= K; benign only if N%32==0 and K%16==0. Under-sized tensors could crash or read garbage.",
+          "The +1 zero-point offset: correct only if the test's zeros use the GPTQ convention (stored zero such that effective zero-point = stored + 1); a reference built with a different convention would show a systematic bias.",
+          "Grouping: scales/zeros lookup uses g_idx per k-element, not a fixed group width of 128; if the test builds groups implicitly (e.g., groupsize=K) with a trivial g_idx this is fine, but nonuniform g_idx must match the reference dequant.",
+          "Accumulation in fp32 tl.dot with a possibly fp16 a: minor rounding differences vs an fp32 reference dequant matmul \u2014 tolerance question, not a structural bug.",
+          "stride_bk = b_packed.stride(0) used with (k//8)*stride_bk: correct only if b_packed rows are the packed-K dimension (shape (K/8, N)); if the test packs B transposed (N rows), indexing is wrong."
+        ],
+        "scope_notes": [
+          "Artifact contains only kernel.py, problem.txt, and meta.json; no test code or reference is available, so correctness boundaries (shape guarantees, tolerance, reference dequant convention) are unknown from source alone.",
+          "Problem scope is the quantized-weight matmul in the declared 4-bit format; comparisons should be against dequantized-B reference products, not the original continuous weights.",
+          "bits parameter is runtime (default 4) but the kernel's arithmetic is generic; only the layout assumptions tied to packing granularity depend on it."
+        ],
+        "summary": "Described case_07: an INT4 GPTQ-style packed dequant-matmul Triton kernel; contract is C = A @ dequant(B) with per-(group,column) scale and packed zero-point; kernel mirrors AutoGPTQ quant_matmul_248 layout and zero-point+1 convention, but has no masking on the K/N loads and truncates a non-multiple-of-16 K tail."
+      },
+      "created_at": "2026-09-30T08:18:30Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Contract is C = A @ dequant(B) where B is INT4 weights packed into int32 words (8 values per word for bits=4), with per-(group, column) scale and zero-point: dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+            "Grouping along K is given by g_idx (length K), so scale/zero lookup is per-k-element via g_idx, and scales has layout (num_groups, N) while zeros are packed like B (num_groups, N/8 int32 words).",
+            "Correctness must be judged against the declared 4-bit format (quantized reference), not a continuous-weight FP32 reference with a loose tolerance.",
+            "Output is expected in float32 (kernel allocates fp32 C)."
+          ],
+          "kernel_model": [
+            "Faithful-looking port of AutoGPTQ quant_matmul_248: unpack b words via shifter=(k%8)*4 and mask maxq=15; zeros unpacked via zeros_shifter=(n%8)*4 and offset by +1 (GPTQ zero-point convention: effective zero is stored zero + 1).",
+            "scales_ptrs indexes scales as (groups, N) using stride_scales = scales.stride(0) with column offset offs_bn; zeros_ptrs indexes packed zeros as (groups, N/8) using offs_bn // infearure_per_bits * stride_zeros then adds g_idx * stride along groups \u2014 both match the standard GPTQ layout.",
+            "K-loop iterates num_pid_k = cdiv(K, 16) times but pointer arithmetic advances full BLOCK_SIZE_K each step; loads of a, b, and g are unmasked in K, so any K not a multiple of BLOCK_SIZE_K=16 silently drops the tail K elements (and may read out of bounds).",
+            "b and zeros/scales loads are unmasked in N; only the C store is masked with offs_am<M & offs_bn<N, so N (and K) not multiples of BLOCK_SIZE_N=32 (16) risk out-of-bounds reads or garbage in accumulation, though garbage lanes are masked out at the store.",
+            "A loads are masked only on rows (offs_am<M), other=0.0; assumes a row-major with stride_am/stride_ak passed correctly.",
+            "Grid swizzle uses GROUP_SIZE_M=1, block sizes 32/32/16; with GROUP_SIZE_M=1 the pid decomposition reduces to pid_m=pid//num_pid_n, pid_n=pid%num_pid_n, which is valid.",
+            "Wrapper gptq_matmul assumes N = b_packed.shape[1] (i.e., b_packed is (K/8, N)), passes contiguous strides, allocates fp32 output; bits default 4, maxq=15."
+          ],
+          "open_questions": [
+            "Does the test harness guarantee K and N are multiples of the block sizes (16/32), and K a multiple of 8 packing words? No test_code is provided in the artifact.",
+            "What zeros convention does the test's reference dequant use (GPTQ +1 or raw zero-point)?",
+            "What are the exact expected shapes/strides of b_packed, scales, zeros, and g_idx in the test, and is a's dtype fp16/fp32?",
+            "Is bits always 4 in the tests, or can bits=2/8 paths matter (infearure_per_bits changes to 16/4 and the k//infearure mapping must still divide BLOCK_SIZE_K=16 evenly \u2014 bits=2 gives 16 values/word, BLOCK_SIZE_K=16 still divides; bits=8 gives 4 values/word, 16/4=4 rows, fine)"
+          ],
+          "risk_map": [
+            "K not a multiple of BLOCK_SIZE_K=16: the K-loop bound cdiv(K,16) times a full 16-step advance drops the remaining K%16 columns of the contraction entirely (wrong result, silent); verify whether the test contract guarantees K % 16 == 0.",
+            "K not a multiple of 8 (packing granularity) would make the k//8 word mapping and b pointer advance misaligned; likewise b_packed row count must equal K/8.",
+            "Out-of-bounds unmasked loads: b/g/scales/zeros loads lack masks for offs_bn >= N and offs_k >= K; benign only if N%32==0 and K%16==0. Under-sized tensors could crash or read garbage.",
+            "The +1 zero-point offset: correct only if the test's zeros use the GPTQ convention (stored zero such that effective zero-point = stored + 1); a reference built with a different convention would show a systematic bias.",
+            "Grouping: scales/zeros lookup uses g_idx per k-element, not a fixed group width of 128; if the test builds groups implicitly (e.g., groupsize=K) with a trivial g_idx this is fine, but nonuniform g_idx must match the reference dequant.",
+            "Accumulation in fp32 tl.dot with a possibly fp16 a: minor rounding differences vs an fp32 reference dequant matmul \u2014 tolerance question, not a structural bug.",
+            "stride_bk = b_packed.stride(0) used with (k//8)*stride_bk: correct only if b_packed rows are the packed-K dimension (shape (K/8, N)); if the test packs B transposed (N rows), indexing is wrong."
+          ],
+          "scope_notes": [
+            "Artifact contains only kernel.py, problem.txt, and meta.json; no test code or reference is available, so correctness boundaries (shape guarantees, tolerance, reference dequant convention) are unknown from source alone.",
+            "Problem scope is the quantized-weight matmul in the declared 4-bit format; comparisons should be against dequantized-B reference products, not the original continuous weights.",
+            "bits parameter is runtime (default 4) but the kernel's arithmetic is generic; only the layout assumptions tied to packing granularity depend on it."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Contract is C = A @ dequant(B) where B is INT4 weights packed into int32 words (8 values per word for bits=4), with per-(group, column) scale and zero-point: dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+            "Grouping along K is given by g_idx (length K), so scale/zero lookup is per-k-element via g_idx, and scales has layout (num_groups, N) while zeros are packed like B (num_groups, N/8 int32 words).",
+            "Correctness must be judged against the declared 4-bit format (quantized reference), not a continuous-weight FP32 reference with a loose tolerance.",
+            "Output is expected in float32 (kernel allocates fp32 C)."
+          ],
+          "created_at": "2026-09-30T08:18:30Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Faithful-looking port of AutoGPTQ quant_matmul_248: unpack b words via shifter=(k%8)*4 and mask maxq=15; zeros unpacked via zeros_shifter=(n%8)*4 and offset by +1 (GPTQ zero-point convention: effective zero is stored zero + 1).",
+            "scales_ptrs indexes scales as (groups, N) using stride_scales = scales.stride(0) with column offset offs_bn; zeros_ptrs indexes packed zeros as (groups, N/8) using offs_bn // infearure_per_bits * stride_zeros then adds g_idx * stride along groups \u2014 both match the standard GPTQ layout.",
+            "K-loop iterates num_pid_k = cdiv(K, 16) times but pointer arithmetic advances full BLOCK_SIZE_K each step; loads of a, b, and g are unmasked in K, so any K not a multiple of BLOCK_SIZE_K=16 silently drops the tail K elements (and may read out of bounds).",
+            "b and zeros/scales loads are unmasked in N; only the C store is masked with offs_am<M & offs_bn<N, so N (and K) not multiples of BLOCK_SIZE_N=32 (16) risk out-of-bounds reads or garbage in accumulation, though garbage lanes are masked out at the store.",
+            "A loads are masked only on rows (offs_am<M), other=0.0; assumes a row-major with stride_am/stride_ak passed correctly.",
+            "Grid swizzle uses GROUP_SIZE_M=1, block sizes 32/32/16; with GROUP_SIZE_M=1 the pid decomposition reduces to pid_m=pid//num_pid_n, pid_n=pid%num_pid_n, which is valid.",
+            "Wrapper gptq_matmul assumes N = b_packed.shape[1] (i.e., b_packed is (K/8, N)), passes contiguous strides, allocates fp32 output; bits default 4, maxq=15."
+          ],
+          "open_questions": [
+            "Does the test harness guarantee K and N are multiples of the block sizes (16/32), and K a multiple of 8 packing words? No test_code is provided in the artifact.",
+            "What zeros convention does the test's reference dequant use (GPTQ +1 or raw zero-point)?",
+            "What are the exact expected shapes/strides of b_packed, scales, zeros, and g_idx in the test, and is a's dtype fp16/fp32?",
+            "Is bits always 4 in the tests, or can bits=2/8 paths matter (infearure_per_bits changes to 16/4 and the k//infearure mapping must still divide BLOCK_SIZE_K=16 evenly \u2014 bits=2 gives 16 values/word, BLOCK_SIZE_K=16 still divides; bits=8 gives 4 values/word, 16/4=4 rows, fine)"
+          ],
+          "risk_map": [
+            "K not a multiple of BLOCK_SIZE_K=16: the K-loop bound cdiv(K,16) times a full 16-step advance drops the remaining K%16 columns of the contraction entirely (wrong result, silent); verify whether the test contract guarantees K % 16 == 0.",
+            "K not a multiple of 8 (packing granularity) would make the k//8 word mapping and b pointer advance misaligned; likewise b_packed row count must equal K/8.",
+            "Out-of-bounds unmasked loads: b/g/scales/zeros loads lack masks for offs_bn >= N and offs_k >= K; benign only if N%32==0 and K%16==0. Under-sized tensors could crash or read garbage.",
+            "The +1 zero-point offset: correct only if the test's zeros use the GPTQ convention (stored zero such that effective zero-point = stored + 1); a reference built with a different convention would show a systematic bias.",
+            "Grouping: scales/zeros lookup uses g_idx per k-element, not a fixed group width of 128; if the test builds groups implicitly (e.g., groupsize=K) with a trivial g_idx this is fine, but nonuniform g_idx must match the reference dequant.",
+            "Accumulation in fp32 tl.dot with a possibly fp16 a: minor rounding differences vs an fp32 reference dequant matmul \u2014 tolerance question, not a structural bug.",
+            "stride_bk = b_packed.stride(0) used with (k//8)*stride_bk: correct only if b_packed rows are the packed-K dimension (shape (K/8, N)); if the test packs B transposed (N rows), indexing is wrong."
+          ],
+          "scope_notes": [
+            "Artifact contains only kernel.py, problem.txt, and meta.json; no test code or reference is available, so correctness boundaries (shape guarantees, tolerance, reference dequant convention) are unknown from source alone.",
+            "Problem scope is the quantized-weight matmul in the declared 4-bit format; comparisons should be against dequantized-B reference products, not the original continuous weights.",
+            "bits parameter is runtime (default 4) but the kernel's arithmetic is generic; only the layout assumptions tied to packing granularity depend on it."
+          ],
+          "summary": "Described case_07: an INT4 GPTQ-style packed dequant-matmul Triton kernel; contract is C = A @ dequant(B) with per-(group,column) scale and packed zero-point; kernel mirrors AutoGPTQ quant_matmul_248 layout and zero-point+1 convention, but has no masking on the K/N loads and truncates a non-multiple-of-16 K tail.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no +1 offset, but kernel line 46 unconditionally does `zeros = zeros + 1` before subtracting, so every column whose stored zero-point is nonzero gets a systematically wrong dequantized weight.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The contract formula is 'dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 adjustment to the zero-point appears anywhere in the stated contract."
+          }
+        ],
+        "scope_rationale": "The stated contract in problem.txt defines the exact dequantization formula; the kernel deviates from it by adding +1 to the zero-point, so for any stored zero != 0 the output C differs from the contracted C = A @ dequant(B). This is a deviation from a stated required behavior, in-scope even without a test file.",
+        "statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]."
+      },
+      "created_at": "2026-09-30T08:18:52Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-30T08:18:52Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no +1 offset, but kernel line 46 unconditionally does `zeros = zeros + 1` before subtracting, so every column whose stored zero-point is nonzero gets a systematically wrong dequantized weight.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The contract formula is 'dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 adjustment to the zero-point appears anywhere in the stated contract."
+          }
+        ],
+        "scope_rationale": "The stated contract in problem.txt defines the exact dequantization formula; the kernel deviates from it by adding +1 to the zero-point, so for any stored zero != 0 the output C differs from the contracted C = A @ dequant(B). This is a deviation from a stated required behavior, in-scope even without a test file.",
+        "statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+        "status": "open",
+        "updated_at": "2026-09-30T08:18:52Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The K-loop iterates cdiv(K, BLOCK_SIZE_K) times but never masks loads on offs_k < K, so the last block only contributes its first K % 16... actually the loop covers all of K only because cdiv rounds up; the real hazard is out-of-bounds reads of a, b, g for offs_k >= K in the final iteration when K % 16 != 0, which can read garbage (or crash) into the accumulator for in-bounds m,n outputs.",
+        "scope": "unknown",
+        "scope_rationale": "problem.txt does not state shape constraints (K multiple of 16 or of the 8-values-per-word packing), and no test/get_inputs is provided, so whether non-multiple-of-16 K is in the verification domain cannot be determined from the artifact.",
+        "statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash."
+      },
+      "created_at": "2026-09-30T08:18:52Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-30T08:18:52Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "The K-loop iterates cdiv(K, BLOCK_SIZE_K) times but never masks loads on offs_k < K, so the last block only contributes its first K % 16... actually the loop covers all of K only because cdiv rounds up; the real hazard is out-of-bounds reads of a, b, g for offs_k >= K in the final iteration when K % 16 != 0, which can read garbage (or crash) into the accumulator for in-bounds m,n outputs.",
+        "scope": "unknown",
+        "scope_evidence": [],
+        "scope_rationale": "problem.txt does not state shape constraints (K multiple of 16 or of the 8-values-per-word packing), and no test/get_inputs is provided, so whether non-multiple-of-16 K is in the verification domain cannot be determined from the artifact.",
+        "statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:18:52Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "All N-dimension loads (b, scales, zeros) lack offs_bn < N masks, unlike the final store which is masked; garbage scales/zeros values would be multiplied into lanes that do get stored for offs_bn < N when the block straddles N.",
+        "scope": "unknown",
+        "scope_rationale": "No test harness or get_inputs exists in the artifact and problem.txt does not constrain N, so whether N % 32 != 0 inputs are in the verification domain is unknown.",
+        "statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked."
+      },
+      "created_at": "2026-09-30T08:18:52Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-30T08:18:52Z",
+        "evidence": [],
+        "id": "c3",
+        "raised_by": "skeptic",
+        "rationale": "All N-dimension loads (b, scales, zeros) lack offs_bn < N masks, unlike the final store which is masked; garbage scales/zeros values would be multiplied into lanes that do get stored for offs_bn < N when the block straddles N.",
+        "scope": "unknown",
+        "scope_evidence": [],
+        "scope_rationale": "No test harness or get_inputs exists in the artifact and problem.txt does not constrain N, so whether N % 32 != 0 inputs are in the verification domain is unknown.",
+        "statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:18:52Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, sys\n\nsys.path.insert(0, '/root/cases/case_07')\ntry:\n    from kernel import gptq_matmul\nexcept Exception as e:\n    try:\n        import importlib.util\n        spec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\n        m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n        gptq_matmul = m.gptq_matmul\n    except Exception as e2:\n        print(json.dumps({\"error\": str(e2)})); sys.exit(0)\n\ntorch.manual_seed(0)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nM, K, N = 16, 64, 64\nnum_groups = 4\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\n\n# random scales and nonzero zero-points\nscales = (torch.rand(num_groups, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(1, 16, (num_groups, N), device=dev, dtype=torch.int32)  # nonzero zeros\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef pack(x, bits=4):\n    vals_per_word = 32 // bits\n    Kd, Nd = x.shape\n    packed = torch.zeros((Kd // vals_per_word, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        packed[i // vals_per_word, :] |= (x[i, :] & 15) << ((i % vals_per_word) * bits)\n    return packed\n\nb_packed = pack(q_vals)\nzeros_packed = pack(z_vals)\n\na = torch.randn(M, K, device=dev).half() if dev=='cuda' else torch.randn(M, K).float()\n\n# reference per contract formula: (q - zero) * scale, zero unpacked raw (NO +1)\nref = torch.zeros(M, N, device=dev)\nfor k in range(K):\n    g = int(g_idx[k]); z = int(z_vals[g])  # z_vals indexed [group, n]\n    # unpack zero word\n    zero_word = zeros_packed[g, :].long()\n    zrow = (zero_word >> ((torch.arange(N, device=dev) % 8) * 4)) & 15\n    dq = (q_vals[k, :].float() - zrow.float()) * scales[g]\n    ref[:, :] += a[:, k:k+1].float() * dq[None, :]\n\ntry:\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\n    max_abs = (c - ref).abs().max().item()\n    # also compare against GPTQ +1 convention\n    ref_plus1 = torch.zeros(M, N, device=dev)\n    for k in range(K):\n        g = int(g_idx[k])\n        zero_word = zeros_packed[g, :].long()\n        zrow = (zero_word >> ((torch.arange(N, device=dev) % 8) * 4)) & 15\n        dq = (q_vals[k, :].float() - (zrow.float() + 1)) * scales[g]\n        ref_plus1[:, :] += a[:, k:k+1].float() * dq[None, :]\n    max_abs_plus1 = (c - ref_plus1).abs().max().item()\n    print(json.dumps({\"metric\": \"max_abs_err vs contract (q-zero)*scale and vs (q-zero-1)*scale\",\n                      \"max_abs_err_contract\": max_abs,\n                      \"max_abs_err_plus1_convention\": max_abs_plus1,\n                      \"M\": M, \"K\": K, \"N\": N, \"bits\": 4,\n                      \"note\": \"if kernel matches +1 convention but not contract formula, +1 offset confirmed\"}))\nexcept Exception as e:\n    print(json.dumps({\"error\": repr(e)}))\n",
+        "expected_signal": "kernel output matches (q - zero - 1)*scale but deviates from contract formula (q - zero)*scale, confirming the +1 zero-point offset"
+      },
+      "created_at": "2026-09-30T08:19:39Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "10658294dbafe9fa37d52f1c2b5cb3e1334726eb7255fcadbd0de1e1849bba4d"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "64561f04bfa148a7dba66b1ce7dc241f9011031be598e6687f01025f3b204f61"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+        "cwd": "/root/cases/case_07",
+        "duration_s": 4.866047,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "10658294dbafe9fa37d52f1c2b5cb3e1334726eb7255fcadbd0de1e1849bba4d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "64561f04bfa148a7dba66b1ce7dc241f9011031be598e6687f01025f3b204f61"
+              }
+            ],
+            "duration_s": 4.866047,
+            "exit_code": 1,
+            "expected_signal": "kernel output matches (q - zero - 1)*scale but deviates from contract formula (q - zero)*scale, confirming the +1 zero-point offset",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 36, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 32, in pack\n    packed[i // vals_per_word, :] |= (x[i, :] & 15) << ((i % vals_per_word) * bits)\n    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 1,
+        "expected_signal": "kernel output matches (q - zero - 1)*scale but deviates from contract formula (q - zero)*scale, confirming the +1 zero-point offset",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 36, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 32, in pack\n    packed[i // vals_per_word, :] |= (x[i, :] & 15) << ((i % vals_per_word) * bits)\n    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(1)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA, cannot run triton kernel\"})); sys.exit(0)\n\nM, K, N = 16, 56, 64   # K = 56 = 3*16 + 8, multiple of 8 (packing OK) but not of 16\nnum_groups = 4\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(num_groups, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(0, 16, (num_groups, N), device=dev, dtype=torch.int32)\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef pack(x, bits=4):\n    vpw = 32 // bits\n    Kd, Nd = x.shape\n    packed = torch.zeros((Kd // vpw, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    return packed\n\nb_packed = pack(q_vals)\nzeros_packed = pack(z_vals)\na = torch.randn(M, K, device=dev).half()\n\ndef reference(use_plus1):\n    ref = torch.zeros(M, N, device=dev)\n    ar = torch.arange(N, device=dev)\n    for k in range(K):\n        g = int(g_idx[k])\n        zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float()\n        if use_plus1: zrow = zrow + 1\n        dq = (q_vals[k, :].float() - zrow) * scales[g]\n        ref += a[:, k:k+1].float() * dq[None, :]\n    return ref\n\nref0, ref1 = reference(False), reference(True)\ntry:\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\n    torch.cuda.synchronize()\n    err0 = (c - ref0).abs().max().item()\n    err1 = (c - ref1).abs().max().item()\n    print(json.dumps({\"metric\": \"max_abs_err for K=56 (K%16=8) vs both zero conventions\",\n                      \"K\": K, \"M\": M, \"N\": N,\n                      \"max_abs_err_contract\": err0,\n                      \"max_abs_err_plus1\": err1,\n                      \"note\": \"large error vs both conventions implies out-of-bounds/garbage tail accumulation (c2 confirmed); match implies tail handled or OOB read benign\"}))\nexcept Exception as e:\n    torch.cuda.synchronize()\n    print(json.dumps({\"metric\": \"kernel_exception\", \"K\": K, \"error\": repr(e),\n                      \"note\": \"crash on K%16!=0 supports c2 out-of-bounds\"}))\n",
+        "expected_signal": "K=56 (K%16!=0) produces wrong C or a crash due to unmasked out-of-bounds tail loads"
+      },
+      "created_at": "2026-09-30T08:19:43Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "d70999cf8c633a3aa25c623faf1efbc5ac2b55c7814f13680a35fd8ee9c25ad6"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "3a80e2b0a44668a42b27eee3c481dd964c8925b655a050775b3d49cb98aa2892"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
+        "cwd": "/root/cases/case_07",
+        "duration_s": 3.903096,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "d70999cf8c633a3aa25c623faf1efbc5ac2b55c7814f13680a35fd8ee9c25ad6"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "3a80e2b0a44668a42b27eee3c481dd964c8925b655a050775b3d49cb98aa2892"
+              }
+            ],
+            "duration_s": 3.903096,
+            "exit_code": 1,
+            "expected_signal": "K=56 (K%16!=0) produces wrong C or a crash due to unmasked out-of-bounds tail loads",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 1,
+        "expected_signal": "K=56 (K%16!=0) produces wrong C or a crash due to unmasked out-of-bounds tail loads",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c3",
+        "code": "\nimport torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(2)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA, cannot run triton kernel\"})); sys.exit(0)\n\nM, K, N = 16, 64, 40   # N = 40: multiple of 8 (zeros word n//8=5 valid up to 39) but not multiple of 32\nnum_groups = 4\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(num_groups, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(0, 16, (num_groups, N), device=dev, dtype=torch.int32)\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef pack(x, bits=4):\n    vpw = 32 // bits\n    Kd, Nd = x.shape\n    packed = torch.zeros((Kd // vpw, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    return packed\n\nb_packed = pack(q_vals)\nzeros_packed = pack(z_vals)\na = torch.randn(M, K, device=dev).half()\n\ndef reference(use_plus1):\n    ref = torch.zeros(M, N, device=dev)\n    ar = torch.arange(N, device=dev)\n    for k in range(K):\n        g = int(g_idx[k])\n        zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float()\n        if use_plus1: zrow = zrow + 1\n        dq = (q_vals[k, :].float() - zrow) * scales[g]\n        ref += a[:, k:k+1].float() * dq[None, :]\n    return ref\n\nref1 = reference(True)  # kernel convention (zeros+1)\ntry:\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\n    torch.cuda.synchronize()\n    err1 = (c - ref1).abs().max().item()\n    print(json.dumps({\"metric\": \"max_abs_err for N=40 (N%32=8) vs kernel-convention reference\",\n                      \"M\": M, \"K\": K, \"N\": N,\n                      \"max_abs_err\": err1,\n                      \"note\": \"error or crash implies unmasked N-dim loads corrupt valid outputs (c3 confirmed); ~0 implies OOB reads happen but do not affect stored lanes\"}))\nexcept Exception as e:\n    print(json.dumps({\"metric\": \"kernel_exception\", \"N\": N, \"error\": repr(e),\n                      \"note\": \"crash on N%32!=0 supports c3 out-of-bounds load\"}))\n",
+        "expected_signal": "N=40 (N%32!=0) produces wrong C or a crash due to unmasked N-dimension loads"
+      },
+      "created_at": "2026-09-30T08:19:47Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t11_probe.py",
+            "sha256": "2e2af86ebe515839f92b0d4b06e1ac11092461dc2930f4645b1b325806401b88"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t11_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t11_stderr.txt",
+            "sha256": "22c6f967d2d260dcaaccfe353aba298336e73522b4f5aaca0b42046d6d594e17"
+          }
+        ],
+        "claim_id": "c3",
+        "claim_statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
+        "cwd": "/root/cases/case_07",
+        "duration_s": 3.903301,
+        "event_id": "t11",
+        "evidence_draft": {
+          "claim_id": "c3",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "2e2af86ebe515839f92b0d4b06e1ac11092461dc2930f4645b1b325806401b88"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "22c6f967d2d260dcaaccfe353aba298336e73522b4f5aaca0b42046d6d594e17"
+              }
+            ],
+            "duration_s": 3.903301,
+            "exit_code": 1,
+            "expected_signal": "N=40 (N%32!=0) produces wrong C or a crash due to unmasked N-dimension loads",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t11"
+        },
+        "exit_code": 1,
+        "expected_signal": "N=40 (N%32!=0) produces wrong C or a crash due to unmasked N-dimension loads",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "event_id": "t9",
+        "status": null,
+        "summary": "Probe bug: pack() built zeros_packed with 0 rows because it packed z_vals (shape (groups,N)) along dim0/8. No kernel output obtained; not evidence for or against c1. Relaunching corrected probe.",
+        "supports": "inconclusive"
+      },
+      "created_at": "2026-09-30T08:20:39Z",
+      "id": "t12",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:18:52Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:20:39Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "10658294dbafe9fa37d52f1c2b5cb3e1334726eb7255fcadbd0de1e1849bba4d"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "64561f04bfa148a7dba66b1ce7dc241f9011031be598e6687f01025f3b204f61"
+                  }
+                ],
+                "duration_s": 4.866047,
+                "exit_code": 1,
+                "expected_signal": "kernel output matches (q - zero - 1)*scale but deviates from contract formula (q - zero)*scale, confirming the +1 zero-point offset",
+                "json_parse_error": "stdout has no non-empty lines",
+                "json_result": null,
+                "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 36, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 32, in pack\n    packed[i // vals_per_word, :] |= (x[i, :] & 15) << ((i % vals_per_word) * bits)\n    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+                "stdout": "",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Probe bug: pack() built zeros_packed with 0 rows because it packed z_vals (shape (groups,N)) along dim0/8. No kernel output obtained; not evidence for or against c1. Relaunching corrected probe.",
+              "supports": "inconclusive",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no +1 offset, but kernel line 46 unconditionally does `zeros = zeros + 1` before subtracting, so every column whose stored zero-point is nonzero gets a systematically wrong dequantized weight.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "The contract formula is 'dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 adjustment to the zero-point appears anywhere in the stated contract."
+            }
+          ],
+          "scope_rationale": "The stated contract in problem.txt defines the exact dequantization formula; the kernel deviates from it by adding +1 to the zero-point, so for any stored zero != 0 the output C differs from the contracted C = A @ dequant(B). This is a deviation from a stated required behavior, in-scope even without a test file.",
+          "statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+          "status": "inconclusive",
+          "updated_at": "2026-09-30T08:20:39Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:20:39Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "10658294dbafe9fa37d52f1c2b5cb3e1334726eb7255fcadbd0de1e1849bba4d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "64561f04bfa148a7dba66b1ce7dc241f9011031be598e6687f01025f3b204f61"
+              }
+            ],
+            "duration_s": 4.866047,
+            "exit_code": 1,
+            "expected_signal": "kernel output matches (q - zero - 1)*scale but deviates from contract formula (q - zero)*scale, confirming the +1 zero-point offset",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 36, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 32, in pack\n    packed[i // vals_per_word, :] |= (x[i, :] & 15) << ((i % vals_per_word) * bits)\n    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe bug: pack() built zeros_packed with 0 rows because it packed z_vals (shape (groups,N)) along dim0/8. No kernel output obtained; not evidence for or against c1. Relaunching corrected probe.",
+          "supports": "inconclusive",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "event_id": "t10",
+        "status": null,
+        "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c2. Relaunching corrected probe.",
+        "supports": "inconclusive"
+      },
+      "created_at": "2026-09-30T08:20:39Z",
+      "id": "t13",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:18:52Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:20:39Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "d70999cf8c633a3aa25c623faf1efbc5ac2b55c7814f13680a35fd8ee9c25ad6"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "3a80e2b0a44668a42b27eee3c481dd964c8925b655a050775b3d49cb98aa2892"
+                  }
+                ],
+                "duration_s": 3.903096,
+                "exit_code": 1,
+                "expected_signal": "K=56 (K%16!=0) produces wrong C or a crash due to unmasked out-of-bounds tail loads",
+                "json_parse_error": "stdout has no non-empty lines",
+                "json_result": null,
+                "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+                "stdout": "",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c2. Relaunching corrected probe.",
+              "supports": "inconclusive",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "The K-loop iterates cdiv(K, BLOCK_SIZE_K) times but never masks loads on offs_k < K, so the last block only contributes its first K % 16... actually the loop covers all of K only because cdiv rounds up; the real hazard is out-of-bounds reads of a, b, g for offs_k >= K in the final iteration when K % 16 != 0, which can read garbage (or crash) into the accumulator for in-bounds m,n outputs.",
+          "scope": "unknown",
+          "scope_evidence": [],
+          "scope_rationale": "problem.txt does not state shape constraints (K multiple of 16 or of the 8-values-per-word packing), and no test/get_inputs is provided, so whether non-multiple-of-16 K is in the verification domain cannot be determined from the artifact.",
+          "statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
+          "status": "inconclusive",
+          "updated_at": "2026-09-30T08:20:39Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:20:39Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "d70999cf8c633a3aa25c623faf1efbc5ac2b55c7814f13680a35fd8ee9c25ad6"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "3a80e2b0a44668a42b27eee3c481dd964c8925b655a050775b3d49cb98aa2892"
+              }
+            ],
+            "duration_s": 3.903096,
+            "exit_code": 1,
+            "expected_signal": "K=56 (K%16!=0) produces wrong C or a crash due to unmasked out-of-bounds tail loads",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c2. Relaunching corrected probe.",
+          "supports": "inconclusive",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "event_id": "t11",
+        "status": null,
+        "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c3. Relaunching corrected probe.",
+        "supports": "inconclusive"
+      },
+      "created_at": "2026-09-30T08:20:39Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:18:52Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:20:39Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t11_probe.py",
+                    "sha256": "2e2af86ebe515839f92b0d4b06e1ac11092461dc2930f4645b1b325806401b88"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t11_stdout.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t11_stderr.txt",
+                    "sha256": "22c6f967d2d260dcaaccfe353aba298336e73522b4f5aaca0b42046d6d594e17"
+                  }
+                ],
+                "duration_s": 3.903301,
+                "exit_code": 1,
+                "expected_signal": "N=40 (N%32!=0) produces wrong C or a crash due to unmasked N-dimension loads",
+                "json_parse_error": "stdout has no non-empty lines",
+                "json_result": null,
+                "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+                "stdout": "",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c3.e1",
+              "kind": "runtime_probe",
+              "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c3. Relaunching corrected probe.",
+              "supports": "inconclusive",
+              "tool_event_id": "t11"
+            }
+          ],
+          "id": "c3",
+          "raised_by": "skeptic",
+          "rationale": "All N-dimension loads (b, scales, zeros) lack offs_bn < N masks, unlike the final store which is masked; garbage scales/zeros values would be multiplied into lanes that do get stored for offs_bn < N when the block straddles N.",
+          "scope": "unknown",
+          "scope_evidence": [],
+          "scope_rationale": "No test harness or get_inputs exists in the artifact and problem.txt does not constrain N, so whether N % 32 != 0 inputs are in the verification domain is unknown.",
+          "statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
+          "status": "inconclusive",
+          "updated_at": "2026-09-30T08:20:39Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:20:39Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "2e2af86ebe515839f92b0d4b06e1ac11092461dc2930f4645b1b325806401b88"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "22c6f967d2d260dcaaccfe353aba298336e73522b4f5aaca0b42046d6d594e17"
+              }
+            ],
+            "duration_s": 3.903301,
+            "exit_code": 1,
+            "expected_signal": "N=40 (N%32!=0) produces wrong C or a crash due to unmasked N-dimension loads",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c3. Relaunching corrected probe.",
+          "supports": "inconclusive",
+          "tool_event_id": "t11"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA\"})); sys.exit(0)\n\nM, K, N, G = 16, 64, 64, 4\ng_idx = torch.randint(0, G, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(G, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(1, 16, (G, N), device=dev, dtype=torch.int32)  # nonzero zeros\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef packK(x):  # (K,N) -> (K/8, N), pack along dim0\n    Kd, Nd = x.shape\n    p = torch.zeros((Kd // 8, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        p[i // 8, :] |= (x[i, :] & 15) << ((i % 8) * 4)\n    return p\n\ndef packN(x):  # (G,N) -> (G, N/8), pack along dim1\n    Gd, Nd = x.shape\n    p = torch.zeros((Gd, Nd // 8), device=x.device, dtype=torch.int32)\n    for j in range(Nd):\n        p[:, j // 8] |= (x[:, j] & 15) << ((j % 8) * 4)\n    return p\n\nb_packed = packK(q_vals)\nzeros_packed = packN(z_vals)\na = torch.randn(M, K, device=dev).half()\n\nar = torch.arange(N, device=dev)\ndef reference(use_plus1):\n    ref = torch.zeros(M, N, device=dev)\n    for k in range(K):\n        g = int(g_idx[k])\n        zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float()\n        if use_plus1: zrow = zrow + 1\n        dq = (q_vals[k, :].float() - zrow) * scales[g]\n        ref += a[:, k:k+1].float() * dq[None, :]\n    return ref\n\nref0, ref1 = reference(False), reference(True)\nc = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\ntorch.cuda.synchronize()\nerr0 = (c - ref0).abs().max().item()\nerr1 = (c - ref1).abs().max().item()\nscale_ref = ref0.abs().max().item()\nprint(json.dumps({\"metric\": \"max_abs_err vs contract formula (q-zero)*scale vs GPTQ (q-zero-1)*scale\",\n                  \"M\": M, \"K\": K, \"N\": N, \"bits\": 4,\n                  \"max_abs_err_contract_formula\": err0,\n                  \"max_abs_err_plus1_convention\": err1,\n                  \"ref_magnitude\": scale_ref,\n                  \"note\": \"if err1<<err0, kernel uses zero+1 and deviates from the stated contract formula (c1 confirmed); if err0 small, c1 rebutted\"}))\n",
+        "expected_signal": "err vs contract formula is large while err vs (zero+1) convention is ~0, confirming +1 offset"
+      },
+      "created_at": "2026-09-30T08:20:44Z",
+      "id": "t15",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t15_probe.py",
+            "sha256": "4ed7b538d59e39048385c584da5ebd29ba5fc5e32526d2b45b2a19757b469d23"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t15_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t15_stderr.txt",
+            "sha256": "e20d549e23caf4df83a351924bef2750e9d9e65a553768266177d4e9f2772eaa"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+        "cwd": "/root/cases/case_07",
+        "duration_s": 4.873874,
+        "event_id": "t15",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t15_probe.py",
+                "sha256": "4ed7b538d59e39048385c584da5ebd29ba5fc5e32526d2b45b2a19757b469d23"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t15_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t15_stderr.txt",
+                "sha256": "e20d549e23caf4df83a351924bef2750e9d9e65a553768266177d4e9f2772eaa"
+              }
+            ],
+            "duration_s": 4.873874,
+            "exit_code": 1,
+            "expected_signal": "err vs contract formula is large while err vs (zero+1) convention is ~0, confirming +1 offset",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t15_probe.py\", line 47, in <module>\n    ref0, ref1 = reference(False), reference(True)\n                 ^^^^^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t15_probe.py\", line 41, in reference\n    zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float()\n             ~~~~~~~~~~~~~~~~~~~~~~~~~~^^~~~~~~~~~~~~~~~\nRuntimeError: The size of tensor a (8) must match the size of tensor b (64) at non-singleton dimension 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t15"
+        },
+        "exit_code": 1,
+        "expected_signal": "err vs contract formula is large while err vs (zero+1) convention is ~0, confirming +1 offset",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t15_probe.py\", line 47, in <module>\n    ref0, ref1 = reference(False), reference(True)\n                 ^^^^^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t15_probe.py\", line 41, in reference\n    zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float()\n             ~~~~~~~~~~~~~~~~~~~~~~~~~~^^~~~~~~~~~~~~~~~\nRuntimeError: The size of tensor a (8) must match the size of tensor b (64) at non-singleton dimension 0\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(1)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA\"})); sys.exit(0)\n\nM, K, N, G = 16, 56, 64, 4   # K=56: multiple of 8, not of 16\ng_idx = torch.randint(0, G, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(G, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(1, 16, (G, N), device=dev, dtype=torch.int32)\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef packK(x):\n    Kd, Nd = x.shape\n    p = torch.zeros((Kd // 8, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        p[i // 8, :] |= (x[i, :] & 15) << ((i % 8) * 4)\n    return p\n\ndef packN(x):\n    Gd, Nd = x.shape\n    p = torch.zeros((Gd, Nd // 8), device=x.device, dtype=torch.int32)\n    for j in range(Nd):\n        p[:, j // 8] |= (x[:, j] & 15) << ((j % 8) * 4)\n    return p\n\nb_packed = packK(q_vals)     # (7, 64)\nzeros_packed = packN(z_vals)\na = torch.randn(M, K, device=dev).half()\n\nar = torch.arange(N, device=dev)\nref = torch.zeros(M, N, device=dev)  # GPTQ +1 convention reference\nfor k in range(K):\n    g = int(g_idx[k])\n    zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float() + 1\n    dq = (q_vals[k, :].float() - zrow) * scales[g]\n    ref += a[:, k:k+1].float() * dq[None, :]\n\ntry:\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\n    torch.cuda.synchronize()\n    err = (c - ref).abs().max().item()\n    print(json.dumps({\"metric\": \"max_abs_err for K=56 (K%16=8) vs kernel-convention reference\",\n                      \"M\": M, \"K\": K, \"N\": N,\n                      \"b_packed_rows\": b_packed.shape[0],\n                      \"max_abs_err\": err, \"ref_magnitude\": ref.abs().max().item(),\n                      \"note\": \"nonzero err or crash implies the final K-block unmasked loads corrupt valid outputs (c2 confirmed); ~0 (fp rounding only) implies tail handled/benign\"}))\nexcept Exception as e:\n    print(json.dumps({\"metric\": \"kernel_exception\", \"K\": K, \"error\": repr(e),\n                      \"note\": \"crash on K%16!=0 supports c2 out-of-bounds tail loads\"}))\n",
+        "expected_signal": "K=56 produces wrong C or a crash due to unmasked tail loads"
+      },
+      "created_at": "2026-09-30T08:20:49Z",
+      "id": "t16",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t16_probe.py",
+            "sha256": "524bafb5bb90c7cd4c09837b5f3ed3c25cdbcf4a665186c335b003f23625da9e"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t16_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t16_stderr.txt",
+            "sha256": "33447075f85a3cf8d9170159b5c9f1c03c5afac7651eb75b7178d87f6ec677ce"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
+        "cwd": "/root/cases/case_07",
+        "duration_s": 4.460732,
+        "event_id": "t16",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t16_probe.py",
+                "sha256": "524bafb5bb90c7cd4c09837b5f3ed3c25cdbcf4a665186c335b003f23625da9e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t16_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t16_stderr.txt",
+                "sha256": "33447075f85a3cf8d9170159b5c9f1c03c5afac7651eb75b7178d87f6ec677ce"
+              }
+            ],
+            "duration_s": 4.460732,
+            "exit_code": 1,
+            "expected_signal": "K=56 produces wrong C or a crash due to unmasked tail loads",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t16_probe.py\", line 40, in <module>\n    zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float() + 1\n             ~~~~~~~~~~~~~~~~~~~~~~~~~~^^~~~~~~~~~~~~~~~\nRuntimeError: The size of tensor a (8) must match the size of tensor b (64) at non-singleton dimension 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t16"
+        },
+        "exit_code": 1,
+        "expected_signal": "K=56 produces wrong C or a crash due to unmasked tail loads",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t16_probe.py\", line 40, in <module>\n    zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float() + 1\n             ~~~~~~~~~~~~~~~~~~~~~~~~~~^^~~~~~~~~~~~~~~~\nRuntimeError: The size of tensor a (8) must match the size of tensor b (64) at non-singleton dimension 0\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c3",
+        "code": "import torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(2)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA\"})); sys.exit(0)\n\nM, K, N, G = 16, 64, 40, 4   # N=40: multiple of 8, not of 32\ng_idx = torch.randint(0, G, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(G, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(1, 16, (G, N), device=dev, dtype=torch.int32)\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef packK(x):\n    Kd, Nd = x.shape\n    p = torch.zeros((Kd // 8, Nd), device=x.device, dtype=torch.int32)\n    for i in range(Kd):\n        p[i // 8, :] |= (x[i, :] & 15) << ((i % 8) * 4)\n    return p\n\ndef packN(x):\n    Gd, Nd = x.shape\n    p = torch.zeros((Gd, Nd // 8), device=x.device, dtype=torch.int32)\n    for j in range(Nd):\n        p[:, j // 8] |= (x[:, j] & 15) << ((j % 8) * 4)\n    return p\n\nb_packed = packK(q_vals)     # (8, 40)\nzeros_packed = packN(z_vals) # (4, 5)\na = torch.randn(M, K, device=dev).half()\n\nar = torch.arange(N, device=dev)\nref = torch.zeros(M, N, device=dev)\nfor k in range(K):\n    g = int(g_idx[k])\n    zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float() + 1\n    dq = (q_vals[k, :].float() - zrow) * scales[g]\n    ref += a[:, k:k+1].float() * dq[None, :]\n\ntry:\n    c = gptq_matmul(a, b_packed, scales, zeros_packed, g_idx, bits=4)\n    torch.cuda.synchronize()\n    err = (c - ref).abs().max().item()\n    print(json.dumps({\"metric\": \"max_abs_err for N=40 (N%32=8) vs kernel-convention reference\",\n                      \"M\": M, \"K\": K, \"N\": N,\n                      \"b_packed_shape\": list(b_packed.shape),\n                      \"zeros_packed_shape\": list(zeros_packed.shape),\n                      \"max_abs_err\": err, \"ref_magnitude\": ref.abs().max().item(),\n                      \"note\": \"nonzero err or crash implies unmasked N-dim loads corrupt valid outputs (c3 confirmed); ~0 (fp rounding) implies OOB lanes do not affect stored outputs\"}))\nexcept Exception as e:\n    print(json.dumps({\"metric\": \"kernel_exception\", \"N\": N, \"error\": repr(e),\n                      \"note\": \"crash on N%32!=0 supports c3 unmasked N-dimension loads\"}))\n",
+        "expected_signal": "N=40 produces wrong C or a crash due to unmasked N-dimension loads"
+      },
+      "created_at": "2026-09-30T08:20:53Z",
+      "id": "t17",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t17_probe.py",
+            "sha256": "747ca8a4a71fa9a4aa1c3097294de1cb8736834f775490358513a96ef0e4d95a"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t17_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t17_stderr.txt",
+            "sha256": "d5d42091380f09bafc8d726c23484a9de4e277dd09e16b41e948df24f981099c"
+          }
+        ],
+        "claim_id": "c3",
+        "claim_statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
+        "cwd": "/root/cases/case_07",
+        "duration_s": 4.02419,
+        "event_id": "t17",
+        "evidence_draft": {
+          "claim_id": "c3",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t17_probe.py",
+                "sha256": "747ca8a4a71fa9a4aa1c3097294de1cb8736834f775490358513a96ef0e4d95a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t17_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t17_stderr.txt",
+                "sha256": "d5d42091380f09bafc8d726c23484a9de4e277dd09e16b41e948df24f981099c"
+              }
+            ],
+            "duration_s": 4.02419,
+            "exit_code": 1,
+            "expected_signal": "N=40 produces wrong C or a crash due to unmasked N-dimension loads",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t17_probe.py\", line 40, in <module>\n    zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float() + 1\n             ~~~~~~~~~~~~~~~~~~~~~~~~~~^^~~~~~~~~~~~~~~~\nRuntimeError: The size of tensor a (5) must match the size of tensor b (40) at non-singleton dimension 0\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t17"
+        },
+        "exit_code": 1,
+        "expected_signal": "N=40 produces wrong C or a crash due to unmasked N-dimension loads",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t17_probe.py\", line 40, in <module>\n    zrow = ((zeros_packed[g, :].long() >> ((ar % 8) * 4)) & 15).float() + 1\n             ~~~~~~~~~~~~~~~~~~~~~~~~~~^^~~~~~~~~~~~~~~~\nRuntimeError: The size of tensor a (5) must match the size of tensor b (40) at non-singleton dimension 0\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "reason": "Final review: the latest probe events (t15\u2013t17) all failed in the probe's own reference-unpacking code (shape mismatch in unpacking packed zeros), so they provide no new kernel evidence. The three recorded claims (c1 zero-point +1 offset vs contract formula, c2 K%16 unmasked tail, c3 N%32 unmasked loads) already cover all material, testable hypotheses raised in this run; no additional in-scope claims are warranted.",
+        "reviewed_claims": [
+          "c1: kernel adds +1 to unpacked zero-point, deviating from the contract formula (q - zero)*scale",
+          "c2: K not multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
+          "c3: N not multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
+        ]
+      },
+      "created_at": "2026-09-30T08:21:01Z",
+      "id": "t18",
+      "output": {
+        "created_at": "2026-09-30T08:21:01Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the latest probe events (t15\u2013t17) all failed in the probe's own reference-unpacking code (shape mismatch in unpacking packed zeros), so they provide no new kernel evidence. The three recorded claims (c1 zero-point +1 offset vs contract formula, c2 K%16 unmasked tail, c3 N%32 unmasked loads) already cover all material, testable hypotheses raised in this run; no additional in-scope claims are warranted.",
+        "reviewed_claims": [
+          "c1: kernel adds +1 to unpacked zero-point, deviating from the contract formula (q - zero)*scale",
+          "c2: K not multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
+          "c3: N not multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
+        ],
+        "reviewed_tool_event_count": 17,
+        "tool_event_id": "t18",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "focus_claims": [
+          "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
+          "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
+          "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+        ],
+        "reason": "Every probe so far (t9-t11, t15-t17) crashed in the Experimenter's own reference code (wrong packing dimension, then a broadcast shape mismatch unpacking zeros), so no runtime evidence exists for any claim. The in-scope claim c1 (zero-point +1 vs the contract formula) is directly decidable by a corrected probe: the t15 code only needs the zeros unpacking fixed to broadcast word j//8 over columns. One more round with a corrected, executing probe would convert c1 (and possibly c2/c3) from inconclusive to confirmed/rebutted before the verdict."
+      },
+      "created_at": "2026-09-30T08:21:16Z",
+      "id": "t19",
+      "output": {
+        "created_at": "2026-09-30T08:21:16Z",
+        "focus_claims": [
+          "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
+          "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
+          "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+        ],
+        "reason": "Every probe so far (t9-t11, t15-t17) crashed in the Experimenter's own reference code (wrong packing dimension, then a broadcast shape mismatch unpacking zeros), so no runtime evidence exists for any claim. The in-scope claim c1 (zero-point +1 vs the contract formula) is directly decidable by a corrected probe: the t15 code only needs the zeros unpacking fixed to broadcast word j//8 over columns. One more round with a corrected, executing probe would convert c1 (and possibly c2/c3) from inconclusive to confirmed/rebutted before the verdict.",
+        "request": "more_debate"
+      },
+      "status": "ok",
+      "tool": "request_more_debate"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Contract: C = A @ dequant(B), INT4 weights packed 8-per-int32-word, dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] per problem.txt, with NO +1 adjustment.",
+          "Tensor layouts implied by kernel indexing: b_packed shape (K//8, N) packed along K; scales shape (num_groups, N); zeros packed shape (num_groups, N//8) packed along N; g_idx int32 length K."
+        ],
+        "kernel_model": [
+          "Kernel line 46 does zeros = zeros + 1, i.e. it computes (q - (zero_unpacked + 1)) * scale, which is the upstream AutoGPTQ GPTQ convention but deviates from the literal problem.txt formula unless the test's zeros follow the +1 convention."
+        ],
+        "open_questions": [
+          "c1 remains undecided pending a working probe: does the test/reference use raw zero-point (contract literal) or GPTQ +1 convention? The probe should compare kernel output against BOTH references.",
+          "c2/c3 remain undecided: any corrected probe should also run K%16!=0 and N%32!=0 shapes against the +1-convention reference."
+        ],
+        "risk_map": [
+          "Probe-correctness risk (not a kernel bug): every failed probe unpacked packed zeros with a shape mismatch. The safe reference dequant is column-wise: for column n, word = zeros_packed[g, n // 8] >> ((n % 8) * 4) & 15 (and optionally +1); build a full (G,N) zeros matrix this way before the outer-product accumulation.",
+          "Probe risk: do not index z_vals per k; zero lookup is per (group g_idx[k], column n), not per k row.",
+          "Kernel risks unchanged: +1 zero-point vs contract formula (c1), unmasked K-tail loads for K%16!=0 (c2), unmasked N loads for N%32!=0 (c3)."
+        ],
+        "scope_notes": [
+          "For the corrected probe: unpack zeros as zrow[n] = (zeros_packed[g, n//8] >> ((n%8)*4)) & 15 \u2014 zeros_packed has N/8 columns, so indexing per column n requires n//8, then optionally +1 for the GPTQ convention; both conventions should be reported so c1 is decidable.",
+          "Probe scope reminder: judge kernel output against the dequantized-INT4 reference (both zero conventions), not continuous weights; report max abs err and reference magnitude so tolerance context is visible.",
+          "Sizes for c2/c3 probes must keep K%8==0 and N%8==0 (packing granularity) while violating only the block-size multiples (K%16, N%32), e.g. K=56, N=40 as already attempted."
+        ],
+        "summary": "Probe-fix guidance for case_07: describe the exact reference-dequant layout so the Experimenter's next probe executes \u2014 packed zeros are (groups, N/8) packed along N, so per-column unpacking must use word n//8; claims c1/c2/c3 remain untested because all six probes crashed in the probe's own packing/unpacking code."
+      },
+      "created_at": "2026-09-30T08:21:34Z",
+      "id": "t20",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Contract is C = A @ dequant(B) where B is INT4 weights packed into int32 words (8 values per word for bits=4), with per-(group, column) scale and zero-point: dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+            "Grouping along K is given by g_idx (length K), so scale/zero lookup is per-k-element via g_idx, and scales has layout (num_groups, N) while zeros are packed like B (num_groups, N/8 int32 words).",
+            "Correctness must be judged against the declared 4-bit format (quantized reference), not a continuous-weight FP32 reference with a loose tolerance.",
+            "Output is expected in float32 (kernel allocates fp32 C).",
+            "Contract: C = A @ dequant(B), INT4 weights packed 8-per-int32-word, dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] per problem.txt, with NO +1 adjustment.",
+            "Tensor layouts implied by kernel indexing: b_packed shape (K//8, N) packed along K; scales shape (num_groups, N); zeros packed shape (num_groups, N//8) packed along N; g_idx int32 length K."
+          ],
+          "kernel_model": [
+            "Faithful-looking port of AutoGPTQ quant_matmul_248: unpack b words via shifter=(k%8)*4 and mask maxq=15; zeros unpacked via zeros_shifter=(n%8)*4 and offset by +1 (GPTQ zero-point convention: effective zero is stored zero + 1).",
+            "scales_ptrs indexes scales as (groups, N) using stride_scales = scales.stride(0) with column offset offs_bn; zeros_ptrs indexes packed zeros as (groups, N/8) using offs_bn // infearure_per_bits * stride_zeros then adds g_idx * stride along groups \u2014 both match the standard GPTQ layout.",
+            "K-loop iterates num_pid_k = cdiv(K, 16) times but pointer arithmetic advances full BLOCK_SIZE_K each step; loads of a, b, and g are unmasked in K, so any K not a multiple of BLOCK_SIZE_K=16 silently drops the tail K elements (and may read out of bounds).",
+            "b and zeros/scales loads are unmasked in N; only the C store is masked with offs_am<M & offs_bn<N, so N (and K) not multiples of BLOCK_SIZE_N=32 (16) risk out-of-bounds reads or garbage in accumulation, though garbage lanes are masked out at the store.",
+            "A loads are masked only on rows (offs_am<M), other=0.0; assumes a row-major with stride_am/stride_ak passed correctly.",
+            "Grid swizzle uses GROUP_SIZE_M=1, block sizes 32/32/16; with GROUP_SIZE_M=1 the pid decomposition reduces to pid_m=pid//num_pid_n, pid_n=pid%num_pid_n, which is valid.",
+            "Wrapper gptq_matmul assumes N = b_packed.shape[1] (i.e., b_packed is (K/8, N)), passes contiguous strides, allocates fp32 output; bits default 4, maxq=15.",
+            "Kernel line 46 does zeros = zeros + 1, i.e. it computes (q - (zero_unpacked + 1)) * scale, which is the upstream AutoGPTQ GPTQ convention but deviates from the literal problem.txt formula unless the test's zeros follow the +1 convention."
+          ],
+          "open_questions": [
+            "Does the test harness guarantee K and N are multiples of the block sizes (16/32), and K a multiple of 8 packing words? No test_code is provided in the artifact.",
+            "What zeros convention does the test's reference dequant use (GPTQ +1 or raw zero-point)?",
+            "What are the exact expected shapes/strides of b_packed, scales, zeros, and g_idx in the test, and is a's dtype fp16/fp32?",
+            "Is bits always 4 in the tests, or can bits=2/8 paths matter (infearure_per_bits changes to 16/4 and the k//infearure mapping must still divide BLOCK_SIZE_K=16 evenly \u2014 bits=2 gives 16 values/word, BLOCK_SIZE_K=16 still divides; bits=8 gives 4 values/word, 16/4=4 rows, fine)",
+            "c1 remains undecided pending a working probe: does the test/reference use raw zero-point (contract literal) or GPTQ +1 convention? The probe should compare kernel output against BOTH references.",
+            "c2/c3 remain undecided: any corrected probe should also run K%16!=0 and N%32!=0 shapes against the +1-convention reference."
+          ],
+          "risk_map": [
+            "K not a multiple of BLOCK_SIZE_K=16: the K-loop bound cdiv(K,16) times a full 16-step advance drops the remaining K%16 columns of the contraction entirely (wrong result, silent); verify whether the test contract guarantees K % 16 == 0.",
+            "K not a multiple of 8 (packing granularity) would make the k//8 word mapping and b pointer advance misaligned; likewise b_packed row count must equal K/8.",
+            "Out-of-bounds unmasked loads: b/g/scales/zeros loads lack masks for offs_bn >= N and offs_k >= K; benign only if N%32==0 and K%16==0. Under-sized tensors could crash or read garbage.",
+            "The +1 zero-point offset: correct only if the test's zeros use the GPTQ convention (stored zero such that effective zero-point = stored + 1); a reference built with a different convention would show a systematic bias.",
+            "Grouping: scales/zeros lookup uses g_idx per k-element, not a fixed group width of 128; if the test builds groups implicitly (e.g., groupsize=K) with a trivial g_idx this is fine, but nonuniform g_idx must match the reference dequant.",
+            "Accumulation in fp32 tl.dot with a possibly fp16 a: minor rounding differences vs an fp32 reference dequant matmul \u2014 tolerance question, not a structural bug.",
+            "stride_bk = b_packed.stride(0) used with (k//8)*stride_bk: correct only if b_packed rows are the packed-K dimension (shape (K/8, N)); if the test packs B transposed (N rows), indexing is wrong.",
+            "Probe-correctness risk (not a kernel bug): every failed probe unpacked packed zeros with a shape mismatch. The safe reference dequant is column-wise: for column n, word = zeros_packed[g, n // 8] >> ((n % 8) * 4) & 15 (and optionally +1); build a full (G,N) zeros matrix this way before the outer-product accumulation.",
+            "Probe risk: do not index z_vals per k; zero lookup is per (group g_idx[k], column n), not per k row.",
+            "Kernel risks unchanged: +1 zero-point vs contract formula (c1), unmasked K-tail loads for K%16!=0 (c2), unmasked N loads for N%32!=0 (c3)."
+          ],
+          "scope_notes": [
+            "Artifact contains only kernel.py, problem.txt, and meta.json; no test code or reference is available, so correctness boundaries (shape guarantees, tolerance, reference dequant convention) are unknown from source alone.",
+            "Problem scope is the quantized-weight matmul in the declared 4-bit format; comparisons should be against dequantized-B reference products, not the original continuous weights.",
+            "bits parameter is runtime (default 4) but the kernel's arithmetic is generic; only the layout assumptions tied to packing granularity depend on it.",
+            "For the corrected probe: unpack zeros as zrow[n] = (zeros_packed[g, n//8] >> ((n%8)*4)) & 15 \u2014 zeros_packed has N/8 columns, so indexing per column n requires n//8, then optionally +1 for the GPTQ convention; both conventions should be reported so c1 is decidable.",
+            "Probe scope reminder: judge kernel output against the dequantized-INT4 reference (both zero conventions), not continuous weights; report max abs err and reference magnitude so tolerance context is visible.",
+            "Sizes for c2/c3 probes must keep K%8==0 and N%8==0 (packing granularity) while violating only the block-size multiples (K%16, N%32), e.g. K=56, N=40 as already attempted."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Contract: C = A @ dequant(B), INT4 weights packed 8-per-int32-word, dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] per problem.txt, with NO +1 adjustment.",
+            "Tensor layouts implied by kernel indexing: b_packed shape (K//8, N) packed along K; scales shape (num_groups, N); zeros packed shape (num_groups, N//8) packed along N; g_idx int32 length K."
+          ],
+          "created_at": "2026-09-30T08:21:34Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Kernel line 46 does zeros = zeros + 1, i.e. it computes (q - (zero_unpacked + 1)) * scale, which is the upstream AutoGPTQ GPTQ convention but deviates from the literal problem.txt formula unless the test's zeros follow the +1 convention."
+          ],
+          "open_questions": [
+            "c1 remains undecided pending a working probe: does the test/reference use raw zero-point (contract literal) or GPTQ +1 convention? The probe should compare kernel output against BOTH references.",
+            "c2/c3 remain undecided: any corrected probe should also run K%16!=0 and N%32!=0 shapes against the +1-convention reference."
+          ],
+          "risk_map": [
+            "Probe-correctness risk (not a kernel bug): every failed probe unpacked packed zeros with a shape mismatch. The safe reference dequant is column-wise: for column n, word = zeros_packed[g, n // 8] >> ((n % 8) * 4) & 15 (and optionally +1); build a full (G,N) zeros matrix this way before the outer-product accumulation.",
+            "Probe risk: do not index z_vals per k; zero lookup is per (group g_idx[k], column n), not per k row.",
+            "Kernel risks unchanged: +1 zero-point vs contract formula (c1), unmasked K-tail loads for K%16!=0 (c2), unmasked N loads for N%32!=0 (c3)."
+          ],
+          "scope_notes": [
+            "For the corrected probe: unpack zeros as zrow[n] = (zeros_packed[g, n//8] >> ((n%8)*4)) & 15 \u2014 zeros_packed has N/8 columns, so indexing per column n requires n//8, then optionally +1 for the GPTQ convention; both conventions should be reported so c1 is decidable.",
+            "Probe scope reminder: judge kernel output against the dequantized-INT4 reference (both zero conventions), not continuous weights; report max abs err and reference magnitude so tolerance context is visible.",
+            "Sizes for c2/c3 probes must keep K%8==0 and N%8==0 (packing granularity) while violating only the block-size multiples (K%16, N%32), e.g. K=56, N=40 as already attempted."
+          ],
+          "summary": "Probe-fix guidance for case_07: describe the exact reference-dequant layout so the Experimenter's next probe executes \u2014 packed zeros are (groups, N/8) packed along N, so per-column unpacking must use word n//8; claims c1/c2/c3 remain untested because all six probes crashed in the probe's own packing/unpacking code.",
+          "task_ids": [],
+          "turn": 8
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "The description update (du2) confirms the existing claim structure and only adds probe-correctness guidance (packed zeros are (groups, N/8) packed along N, unpack via word n//8) for the Experimenter's next round; it raises no new kernel risks beyond the three recorded claims (c1 zero-point +1 vs contract formula, c2 K%16 unmasked tail loads, c3 N%32 unmasked N loads). No additional in-scope, testable hypotheses are warranted from the current evidence.",
+        "reviewed_claims": [
+          "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
+          "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
+          "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
+        ]
+      },
+      "created_at": "2026-09-30T08:21:49Z",
+      "id": "t21",
+      "output": {
+        "created_at": "2026-09-30T08:21:49Z",
+        "decision": "no_new_claims",
+        "reason": "The description update (du2) confirms the existing claim structure and only adds probe-correctness guidance (packed zeros are (groups, N/8) packed along N, unpack via word n//8) for the Experimenter's next round; it raises no new kernel risks beyond the three recorded claims (c1 zero-point +1 vs contract formula, c2 K%16 unmasked tail loads, c3 N%32 unmasked N loads). No additional in-scope, testable hypotheses are warranted from the current evidence.",
+        "reviewed_claims": [
+          "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
+          "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
+          "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
+        ],
+        "reviewed_tool_event_count": 20,
+        "tool_event_id": "t21",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.8,
+        "decisive_claims": [
+          "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
+          "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
+          "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+        ],
+        "reason": "No runtime evidence exists for any claim: all six probes (t9-t11, t15-t17) crashed in the Experimenter's own packing/unpacking code before invoking the kernel, so none are kernel evidence. The decisive claim c1 (kernel.py line 46 unconditionally does `zeros = zeros + 1`, deviating from the literal problem.txt formula dequant = (q - zero)*scale) is in-scope but remains inconclusive \u2014 it is directly decidable by a corrected probe comparing kernel output against both zero conventions, and such a probe was never successfully executed despite two rounds and explicit describer guidance (du2). c2/c3 are unknown-scope (no test harness or shape constraints in the artifact) and also lack any executed probe. Since the in-scope claim c1 cannot be confirmed or rebutted with the available evidence, needs_more_evidence is the correct verdict; a single executing probe against both zero-convention references would settle it.",
+        "verdict": "needs_more_evidence"
+      },
+      "created_at": "2026-09-30T08:22:02Z",
+      "id": "t22",
+      "output": {
+        "confidence": 0.8,
+        "created_at": "2026-09-30T08:22:02Z",
+        "decisive_claims": [
+          "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
+          "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
+          "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+        ],
+        "reason": "No runtime evidence exists for any claim: all six probes (t9-t11, t15-t17) crashed in the Experimenter's own packing/unpacking code before invoking the kernel, so none are kernel evidence. The decisive claim c1 (kernel.py line 46 unconditionally does `zeros = zeros + 1`, deviating from the literal problem.txt formula dequant = (q - zero)*scale) is in-scope but remains inconclusive \u2014 it is directly decidable by a corrected probe comparing kernel output against both zero conventions, and such a probe was never successfully executed despite two rounds and explicit describer guidance (du2). c2/c3 are unknown-scope (no test harness or shape constraints in the artifact) and also lack any executed probe. Since the in-scope claim c1 cannot be confirmed or rebutted with the available evidence, needs_more_evidence is the correct verdict; a single executing probe against both zero-convention references would settle it.",
+        "verdict": "needs_more_evidence"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.8,
+    "created_at": "2026-09-30T08:22:02Z",
+    "decisive_claims": [
+      "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
+      "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
+      "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+    ],
+    "reason": "No runtime evidence exists for any claim: all six probes (t9-t11, t15-t17) crashed in the Experimenter's own packing/unpacking code before invoking the kernel, so none are kernel evidence. The decisive claim c1 (kernel.py line 46 unconditionally does `zeros = zeros + 1`, deviating from the literal problem.txt formula dequant = (q - zero)*scale) is in-scope but remains inconclusive \u2014 it is directly decidable by a corrected probe comparing kernel output against both zero conventions, and such a probe was never successfully executed despite two rounds and explicit describer guidance (du2). c2/c3 are unknown-scope (no test harness or shape constraints in the artifact) and also lack any executed probe. Since the in-scope claim c1 cannot be confirmed or rebutted with the available evidence, needs_more_evidence is the correct verdict; a single executing probe against both zero-convention references would settle it.",
+    "verdict": "needs_more_evidence"
+  }
+}

@@ -1,0 +1,69 @@
+[
+  {
+    "created_at": "2026-09-30T08:42:52Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:43:12Z",
+        "data": {
+          "all_modes_match_ref": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "5f33d86de8348f553b8b1378884b0fe2f3b39fe941814579c16ff8c061755a69"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "40d700b8861666cc7c3dbc37dc748a9d1809bb75d6cfe83af4bedec4f04e11e8"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "distinct_bit_patterns_per_mode": {
+            "allmax": 1,
+            "mixmax": 1,
+            "randint": 1
+          },
+          "duration_s": 6.719495,
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "max_abs_diff_from_ref": 0.0,
+          "runs_per_mode": 200,
+          "stderr": "",
+          "stdout": "{\n  \"randint\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 176.3828125,\n    \"distinct_values\": [\n      176.3828125\n    ],\n    \"ref_fp64\": 176.3828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"allmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 65024.0,\n    \"distinct_values\": [\n      65024.0\n    ],\n    \"ref_fp64\": 65024.0,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"mixmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 148.828125,\n    \"distinct_values\": [\n      148.828125\n    ],\n    \"ref_fp64\": 148.828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  }\n}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On three representative dequantization-grid inputs (random k, all +127, mixed \u00b1127 with N=65536), 200 consecutive calls of blocked_sum each produced exactly one distinct value (num_distinct_bit_patterns=1) and every result bitwise-matched the fp64 reference (max_abs_diff 0.0). The atomic-order nondeterminism cannot bite: all partial and total sums are integer multiples of 2^-7 bounded by 65024 = 254*256, far below fp32's 2^17 exact-integer-multiple-of-2^-7 range, so every float addition is exact and order-independent. The claim of run-to-run bit-level nondeterminism is rebutted.",
+        "supports": "rebutted",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "tl.atomic_add to a single float32 output combines partials in nondeterministic order; if intermediate rounding occurs, two calls can differ in last bits. However, on the declared grid (k*2^-7, |k|<=127, N=65536) all partial and total sums are integer multiples of 2^-7 with magnitude <= 65024 << 2^17, exactly representable in fp32, so every addition should be exact and order-independent.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: 'two calls on the same input must return bitwise identical results ... two runs that disagree in their last bits are not interchangeable.' Input domain: every element is k*2^-7 with |k|<=127, N=65536."
+      }
+    ],
+    "scope_rationale": "The contract explicitly requires bitwise-identical results across two calls on the same input; any nondeterminism from atomic-add ordering on the declared dequantization-grid inputs (k*2^-7, |k|<=127, N=65536) violates it.",
+    "statement": "blocked_sum is nondeterministic across calls because the final combination uses atomic adds whose ordering varies run to run, so two calls on the same input can produce different last bits.",
+    "status": "rebutted",
+    "updated_at": "2026-09-30T08:43:12Z"
+  }
+]

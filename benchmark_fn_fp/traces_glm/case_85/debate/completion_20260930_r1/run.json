@@ -1,0 +1,1834 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_85",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(X, W, O, K: tl.constexpr):\n    row = tl.program_id(0)\n    j = tl.arange(0, K)\n    x = tl.load(X + j)\n    w = tl.load(W + row * K + j)\n    scale = tl.max(tl.abs(w), 0) / 7.0\n    qi = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(w / scale + 0.5)))\n    y = tl.sum(x * (qi * scale), 0)\n    tl.store(O + row, y)\n\ndef run(x, w):\n    m, k = w.shape\n    out = torch.empty(m, dtype=torch.float32, device=x.device)\n    _kernel[(m,)](x, w, out, k, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'quantization', 'seed': 1221, 'm': 32, 'k': 128, 'mix': 0.0, 'residual': 0.5}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+    "passed": null,
+    "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = W @ x, using the original binary32 weights as real values.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.12.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+    "rounds": null,
+    "session_dir": "/root/pilot_cases/case_85",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:56:49Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:57:57Z",
+          "data": {
+            "E_exceeds_budget": true,
+            "E_fp64_sim_of_quantizer": 0.16230056135138632,
+            "E_kernel": 0.1623005732699385,
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "ed9662ac270d7ba9d20096a8cc30d190b835a9906e69a9f9b183d75b510d43da"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "d653fbd8771a93772b6122f40ae59806189b237f251acd34b3b7d39b04bfbfec"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "51f8065f8ce6ff34f074d03f72fa6d4b9b0e437097729fce3e87ba291ef5819e"
+              }
+            ],
+            "budget": 0.12,
+            "duration_s": 4.385988,
+            "err_norm": 1.172982813035686,
+            "exit_code": 0,
+            "expected_signal": "E_kernel > 0.12 on the fixed workload (claim c1) or E_kernel <= 0.12",
+            "json_parse_error": null,
+            "json_result": {
+              "E_exceeds_budget": true,
+              "E_fp64_sim_of_quantizer": 0.16230056135138632,
+              "E_kernel": 0.1623005732699385,
+              "all_finite": true,
+              "budget": 0.12,
+              "err_norm": 1.172982813035686,
+              "metric": "contract E on exact make_inputs workload",
+              "ref_norm": 7.227225322764448
+            },
+            "ref_norm": 7.227225322764448,
+            "stderr": "",
+            "stdout": "{\"metric\": \"contract E on exact make_inputs workload\", \"E_kernel\": 0.1623005732699385, \"E_fp64_sim_of_quantizer\": 0.16230056135138632, \"budget\": 0.12, \"all_finite\": true, \"ref_norm\": 7.227225322764448, \"err_norm\": 1.172982813035686, \"E_exceeds_budget\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact make_inputs() workload (seed 1221, m=32, k=128, residual=0.5), the Triton kernel measured on GPU gives E = 0.16230 vs the float64 reference, exceeding the 0.12 budget (ref_norm 7.227, err_norm 1.173, outputs all finite). An fp64 simulation of the identical 7-level quantizer reproduces E = 0.16230, confirming the excess comes from the quantization error aligned with the residual-injected x, not from kernel arithmetic artifacts.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "make_inputs deliberately adds 0.5 * the normalized summed per-row quantization residual to x, so the kernel's per-row 7-level quantization error is correlated with x; whether this alignment drives E over the 0.12 budget is the central compliance question and is directly measurable on the fixed workload.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Compliance metric E = ||output - float64 reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff finite and E <= 0.12 on the exact make_inputs() workload."
+        },
+        {
+          "source": "kernel.py make_inputs",
+          "summary": "x is norm-1 random plus 0.5 * normalized per-row quantization-residual direction (residual=0.5), aligning x with the quantization error the kernel introduces."
+        }
+      ],
+      "scope_rationale": "The claim concerns the exact single workload make_inputs() defines (m=32, k=128, residual=0.5); the contract requires E <= 0.12 on that workload, so a measured E > 0.12 on it is a direct budget violation.",
+      "statement": "On the fixed make_inputs() workload (m=32, k=128, residual=0.5), the per-row 7-level quantization error correlated with the residual-aligned x yields E > 0.12, violating the budget.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:57:57Z"
+    },
+    {
+      "created_at": "2026-09-30T08:56:49Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:57:57Z",
+          "data": {
+            "E_budget": 0.12,
+            "E_fp32_quantized_matvec": 0.16230056559349976,
+            "E_fp64_quantized_matvec": 0.16230056135138632,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "a07155b39bc9de7e7a62067d38f600b3e753ea3ab3bd49ae47f1e3d582a5df0a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "9f63b37eeba5a422abf6a8a2e25b974ffaaaf4b97b2de3e01dc761ebd7fbff99"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "ea8c11c23f7b7b64ab2ddabbd736a2f47127a3e57876e164995ddce4f442cada"
+              }
+            ],
+            "duration_s": 3.219762,
+            "exit_code": 0,
+            "expected_signal": "count of qi level flips between fp32-simulated kernel quantizer and fp64 quantizer; 0 flips means no mismatch",
+            "json_parse_error": null,
+            "json_result": {
+              "E_budget": 0.12,
+              "E_fp32_quantized_matvec": 0.16230056559349976,
+              "E_fp64_quantized_matvec": 0.16230056135138632,
+              "metric": "fp32 vs fp64 quantizer level flips on fixed W (4096 elems)",
+              "min_distance_to_.5_boundary_fp32": 0.0,
+              "num_elements": 4096,
+              "qi_level_flips": 0,
+              "scale_mismatches_rows": 0
+            },
+            "min_distance_to_.5_boundary_fp32": 0.0,
+            "num_elements": 4096,
+            "qi_level_flips": 0,
+            "scale_mismatches_rows": 0,
+            "stderr": "",
+            "stdout": "{\"metric\": \"fp32 vs fp64 quantizer level flips on fixed W (4096 elems)\", \"num_elements\": 4096, \"qi_level_flips\": 0, \"scale_mismatches_rows\": 0, \"min_distance_to_.5_boundary_fp32\": 0.0, \"E_fp32_quantized_matvec\": 0.16230056559349976, \"E_fp64_quantized_matvec\": 0.16230056135138632, \"E_budget\": 0.12}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Across all 4096 weight elements of the fixed workload, the fp32-simulated kernel quantizer produces exactly the same qi levels and scales as the fp64 quantizer used to construct x's residual direction: 0 level flips, 0 scale mismatches. The resulting E values are essentially identical (fp32 0.16230057 vs fp64 0.16230056). The proposed fp32-vs-fp64 quantizer divergence does not occur on this workload; the budget violation is attributable purely to the quantization error itself (c1), not to rounding-mode mismatch.",
+          "supports": "rebutted",
+          "tool_event_id": "t13"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "The residual direction is computed with np.floor in float64, while Triton computes floor(w/scale+0.5) in float32 with a float32 scale; if w/scale lands within one fp32 ulp of a .5 boundary or fp32 scale differs from fp64 scale, qi flips a level for some elements, changing the error vector and potentially E.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Reference is the float64 mathematical operation on the SAME float32 input values; only the exact make_inputs() workload (whose residual direction is computed in float64) is in scope."
+        },
+        {
+          "source": "kernel.py",
+          "summary": "Kernel computes scale = tl.max(tl.abs(w))/7 and qi = clip(floor(w/scale+0.5),-7,7) in float32, while make_inputs computes the residual with float64 wf and float64 scale."
+        }
+      ],
+      "scope_rationale": "The claim compares the kernel's fp32 quantizer against the fp64 quantizer used to build the in-scope workload's x direction; on the fixed workload this changes the actual quantization error relative to what fp64 simulation predicts, directly affecting the contract metric E.",
+      "statement": "Float32 computation of scale and qi in the kernel may differ from the float64 quantizer used to construct x's residual direction, flipping quantization levels at .5 boundaries and changing the error vector, potentially pushing E above or below what an fp64 simulation predicts.",
+      "status": "rebutted",
+      "updated_at": "2026-09-30T08:57:57Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Single fixed workload: make_inputs() in kernel.py, quantization family, m=32, k=128, seed 1221, mix=0.0, residual=0.5, generated with NumPy PCG64 on CPU then rounded once to float32 before transfer.",
+      "Operation is y = W @ x with the ORIGINAL binary32 weights treated as real values; reference is float64 evaluation on the same float32 inputs.",
+      "Compliance metric E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff all outputs finite and E <= 0.12.",
+      "Reduced/quantized arithmetic is explicitly permitted as long as the budget is met; finite-workload compliance only, not universal correctness.",
+      "Input construction deliberately aligns x (norm-1 random) plus 0.5 * normalized summed per-row quantization residual direction, i.e. x partially aligns with the error direction of symmetric 7-level per-row max-abs quantization."
+    ],
+    "kernel_model": [
+      "Triton kernel, one program per output row (grid m=32); each program loads full x (K=128) and one weight row.",
+      "Per-row quantization: scale = max|w_row|/7 in float32; qi = clip(floor(w/scale + 0.5), -7, 7) (round-half-up after scaling); reconstruct wq = qi*scale and compute y_row = sum(x * wq) in float32, stored to float32 output.",
+      "This reproduces the same quantizer assumed by make_inputs' residual computation (same scale rule and rounding), so the per-element weight error equals the reference quantization residual.",
+      "run() assumes W is (m,k) contiguous row-major, x length k, fp32; output allocated as fp32; enable_fp_fusion=False to avoid fma/rounding reassociation.",
+      "No guard against scale=0 (all-zero row would divide by zero), but workload is standard-normal weights so max|w|>0.",
+      "For c1, the decisive quantity is aggregate: y_kernel - y_ref = sum over rows r of ( (wq_r - w_r) . x ); x = u + 0.5*r_hat where r_hat is the normalized column-sum of per-row residuals (wq_r - w_r), so the aligned term contributes 0.5*sum_r (wq_r - w_r).r_hat plus the random u . (wq_r - w_r) terms; both fp64 simulation and on-device runtime measurement of E are feasible evidence paths.",
+      "For c2, the decisive evidence is an elementwise comparison of the kernel's fp32 qi/scale against make_inputs' fp64 quantizer on the same float32 W; a CPU simulation replicating fp32 arithmetic (float32 scale = fp32(max|w|)/7, fp32 division and floor) predicts which elements, if any, flip a level.",
+      "Note: the residual direction uses the fp64 quantizer's residual, but x is rounded once to float32 before transfer, so even a perfectly matching fp32 quantizer still yields a slightly different effective residual than the workload's construction assumed."
+    ],
+    "open_questions": [
+      "Actual numeric value of E for this exact workload (needs runtime or careful simulation) - the description cannot settle compliance.",
+      "Whether Triton 3.4.0 fp32 reduction order on T4 changes the result enough to matter (expected negligible vs quantization error, but unverified).",
+      "Measured value of E on-device (T4, Triton 3.4.0) vs an fp64 simulation of the same quantizer - do they agree, and is E <= 0.12?",
+      "Does any element's fp32 w/scale land on a .5 rounding boundary differently than fp64 (c2)?",
+      "Whether the float32 rounding of x (after adding 0.5*residual in float64) measurably decorrelates the injected alignment - relevant only to margin size, not to the contract metric."
+    ],
+    "risk_map": [
+      "Quantization-induced error vs 0.12 budget: per-row 7-level quantization with scale=max|w|/7 leaves relative error up to ~1/14 per element; whether the x-residual alignment (residual=0.5) pushes E over 0.12 is the central question.",
+      "Float32 compute of scale, qi, and the dot product vs the float64-defined reference error norm; fp32 accumulation over k=128 is unlikely to dominate, but should be measured.",
+      "Rounding rule: tl.floor(w/scale+0.5) is round-half-up, which may differ from numpy's clip(floor(wf/scale+0.5)) only through fp32 vs fp64 scale/rounding; boundary ties at exactly .5 could flip a level for some elements.",
+      "Potential edge behavior if a row's max|w| makes scale rounding in fp32 differ from the fp64 scale used in make_inputs' residual definition, slightly changing which quantization error the workload expects.",
+      "Output finiteness: safe unless scale underflows (max|w|=0), not expected for seed-1221 standard normal data.",
+      "Aggregate-error risk (c1): the workload concentrates per-row random quantization residuals into one coherent direction aligned with x; a pure per-element 1/14 error bound understates E - the coherent dot of 0.5*r_hat with sum_r residuals could dominate the error norm relative to ||W@x||.",
+      "Quantizer mismatch risk (c2): fp32 scale = max|w|/7 may round differently than fp64, shifting every w/scale by an ulp and flipping floor(t+0.5) at boundaries; with 32*128=4096 elements, a few flips are plausible but each flip changes that element's residual by one scale step."
+    ],
+    "scope_notes": [
+      "Only this single (m=32, k=128) workload is in scope; no other shapes, seeds, or distributions count for or against compliance.\", \"Reference must be computed in float64 from the exact float32 input tensors; tolerance E uses flattened L2 norms with the 0.001*sqrt(32) floor.\", \"Environment pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0, NumPy 2.2.6 PCG64; generator usage order in make_inputs (w drawn first, then x) is part of the fixed workload.\"]",
+      "The reference for E is the unquantized float64 W@x, not a quantized simulation; a quantized-reference comparison is useful diagnosis for c2 but does not itself decide compliance.",
+      "Both c1 and c2 are answerable on this single workload with no additional inputs; any probe must reproduce make_inputs exactly (PCG64(1221), w drawn before x, single float32 rounding)."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Single fixed workload: make_inputs() in kernel.py, quantization family, m=32, k=128, seed 1221, mix=0.0, residual=0.5, generated with NumPy PCG64 on CPU then rounded once to float32 before transfer.",
+        "Operation is y = W @ x with the ORIGINAL binary32 weights treated as real values; reference is float64 evaluation on the same float32 inputs.",
+        "Compliance metric E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff all outputs finite and E <= 0.12.",
+        "Reduced/quantized arithmetic is explicitly permitted as long as the budget is met; finite-workload compliance only, not universal correctness.",
+        "Input construction deliberately aligns x (norm-1 random) plus 0.5 * normalized summed per-row quantization residual direction, i.e. x partially aligns with the error direction of symmetric 7-level per-row max-abs quantization."
+      ],
+      "created_at": "2026-09-30T08:56:28Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel, one program per output row (grid m=32); each program loads full x (K=128) and one weight row.",
+        "Per-row quantization: scale = max|w_row|/7 in float32; qi = clip(floor(w/scale + 0.5), -7, 7) (round-half-up after scaling); reconstruct wq = qi*scale and compute y_row = sum(x * wq) in float32, stored to float32 output.",
+        "This reproduces the same quantizer assumed by make_inputs' residual computation (same scale rule and rounding), so the per-element weight error equals the reference quantization residual.",
+        "run() assumes W is (m,k) contiguous row-major, x length k, fp32; output allocated as fp32; enable_fp_fusion=False to avoid fma/rounding reassociation.",
+        "No guard against scale=0 (all-zero row would divide by zero), but workload is standard-normal weights so max|w|>0."
+      ],
+      "open_questions": [
+        "Actual numeric value of E for this exact workload (needs runtime or careful simulation) - the description cannot settle compliance.",
+        "Whether Triton 3.4.0 fp32 reduction order on T4 changes the result enough to matter (expected negligible vs quantization error, but unverified)."
+      ],
+      "risk_map": [
+        "Quantization-induced error vs 0.12 budget: per-row 7-level quantization with scale=max|w|/7 leaves relative error up to ~1/14 per element; whether the x-residual alignment (residual=0.5) pushes E over 0.12 is the central question.",
+        "Float32 compute of scale, qi, and the dot product vs the float64-defined reference error norm; fp32 accumulation over k=128 is unlikely to dominate, but should be measured.",
+        "Rounding rule: tl.floor(w/scale+0.5) is round-half-up, which may differ from numpy's clip(floor(wf/scale+0.5)) only through fp32 vs fp64 scale/rounding; boundary ties at exactly .5 could flip a level for some elements.",
+        "Potential edge behavior if a row's max|w| makes scale rounding in fp32 differ from the fp64 scale used in make_inputs' residual definition, slightly changing which quantization error the workload expects.",
+        "Output finiteness: safe unless scale underflows (max|w|=0), not expected for seed-1221 standard normal data."
+      ],
+      "scope_notes": [
+        "Only this single (m=32, k=128) workload is in scope; no other shapes, seeds, or distributions count for or against compliance.\", \"Reference must be computed in float64 from the exact float32 input tensors; tolerance E uses flattened L2 norms with the 0.001*sqrt(32) floor.\", \"Environment pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0, NumPy 2.2.6 PCG64; generator usage order in make_inputs (w drawn first, then x) is part of the fixed workload.\"]"
+      ],
+      "summary": "Described case_85: W@x matvec with per-row 7-level symmetric quantization in Triton; contract is a single fixed quantization-family workload (m=32, k=128, residual=0.5) with float64 reference and E<=0.12 budget, where reduced precision is permitted if budget is met.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [],
+      "created_at": "2026-09-30T08:57:08Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [
+        "c1 is decided only by measuring E on the exact make_inputs() workload (kernel output vs float64 W@x on the same float32 inputs); an analytic per-element 1/14 bound is not evidence of the correlated aggregate error.",
+        "c2 is decided by comparing the kernel's fp32 quantizer (scale, qi) elementwise against the fp64 quantizer used to build x's residual direction, on the fixed float32 W; if levels match everywhere, fp64 simulation is a faithful predictor of kernel error."
+      ],
+      "kernel_model": [
+        "For c1, the decisive quantity is aggregate: y_kernel - y_ref = sum over rows r of ( (wq_r - w_r) . x ); x = u + 0.5*r_hat where r_hat is the normalized column-sum of per-row residuals (wq_r - w_r), so the aligned term contributes 0.5*sum_r (wq_r - w_r).r_hat plus the random u . (wq_r - w_r) terms; both fp64 simulation and on-device runtime measurement of E are feasible evidence paths.",
+        "For c2, the decisive evidence is an elementwise comparison of the kernel's fp32 qi/scale against make_inputs' fp64 quantizer on the same float32 W; a CPU simulation replicating fp32 arithmetic (float32 scale = fp32(max|w|)/7, fp32 division and floor) predicts which elements, if any, flip a level.",
+        "Note: the residual direction uses the fp64 quantizer's residual, but x is rounded once to float32 before transfer, so even a perfectly matching fp32 quantizer still yields a slightly different effective residual than the workload's construction assumed."
+      ],
+      "open_questions": [
+        "Measured value of E on-device (T4, Triton 3.4.0) vs an fp64 simulation of the same quantizer - do they agree, and is E <= 0.12?",
+        "Does any element's fp32 w/scale land on a .5 rounding boundary differently than fp64 (c2)?",
+        "Whether the float32 rounding of x (after adding 0.5*residual in float64) measurably decorrelates the injected alignment - relevant only to margin size, not to the contract metric."
+      ],
+      "risk_map": [
+        "Aggregate-error risk (c1): the workload concentrates per-row random quantization residuals into one coherent direction aligned with x; a pure per-element 1/14 error bound understates E - the coherent dot of 0.5*r_hat with sum_r residuals could dominate the error norm relative to ||W@x||.",
+        "Quantizer mismatch risk (c2): fp32 scale = max|w|/7 may round differently than fp64, shifting every w/scale by an ulp and flipping floor(t+0.5) at boundaries; with 32*128=4096 elements, a few flips are plausible but each flip changes that element's residual by one scale step."
+      ],
+      "scope_notes": [
+        "The reference for E is the unquantized float64 W@x, not a quantized simulation; a quantized-reference comparison is useful diagnosis for c2 but does not itself decide compliance.",
+        "Both c1 and c2 are answerable on this single workload with no additional inputs; any probe must reproduce make_inputs exactly (PCG64(1221), w drawn before x, single float32 rounding)."
+      ],
+      "summary": "Refined case_85 description: mapped open claims c1 (residual-aligned quantization error vs E<=0.12 budget) and c2 (fp32 vs fp64 quantizer mismatch) to the concrete quantities and evidence paths that decide them on the fixed workload.",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_85",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_85"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_85"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_85"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_85",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 19.116737567,
+      "role": "describer",
+      "round": 2,
+      "text": "I have full context already. The kernel quantizes each weight row to ~7-level symmetric uniform (step = max|w|/7, round-half-away via floor(w/scale+0.5), clip [-7,7]), then does the matvec against exact x. The workload injects x with 0.5 weight along the summed quantization-residual direction, which stresses how the row-wise quantization error correlates with x. The contract allows reduced precision within E \u2264 0.12 on this one workload. I'll record the description model.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Single fixed workload: make_inputs() in kernel.py, quantization family, m=32, k=128, seed 1221, mix=0.0, residual=0.5, generated with NumPy PCG64 on CPU then rounded once to float32 before transfer.",
+              "Operation is y = W @ x with the ORIGINAL binary32 weights treated as real values; reference is float64 evaluation on the same float32 inputs.",
+              "Compliance metric E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff all outputs finite and E <= 0.12.",
+              "Reduced/quantized arithmetic is explicitly permitted as long as the budget is met; finite-workload compliance only, not universal correctness.",
+              "Input construction deliberately aligns x (norm-1 random) plus 0.5 * normalized summed per-row quantization residual direction, i.e. x partially aligns with the error direction of symmetric 7-level per-row max-abs quantization."
+            ],
+            "kernel_model": [
+              "Triton kernel, one program per output row (grid m=32); each program loads full x (K=128) and one weight row.",
+              "Per-row quantization: scale = max|w_row|/7 in float32; qi = clip(floor(w/scale + 0.5), -7, 7) (round-half-up after scaling); reconstruct wq = qi*scale and compute y_row = sum(x * wq) in float32, stored to float32 output.",
+              "This reproduces the same quantizer assumed by make_inputs' residual computation (same scale rule and rounding), so the per-element weight error equals the reference quantization residual.",
+              "run() assumes W is (m,k) contiguous row-major, x length k, fp32; output allocated as fp32; enable_fp_fusion=False to avoid fma/rounding reassociation.",
+              "No guard against scale=0 (all-zero row would divide by zero), but workload is standard-normal weights so max|w|>0."
+            ],
+            "open_questions": [
+              "Actual numeric value of E for this exact workload (needs runtime or careful simulation) - the description cannot settle compliance.",
+              "Whether Triton 3.4.0 fp32 reduction order on T4 changes the result enough to matter (expected negligible vs quantization error, but unverified)."
+            ],
+            "risk_map": [
+              "Quantization-induced error vs 0.12 budget: per-row 7-level quantization with scale=max|w|/7 leaves relative error up to ~1/14 per element; whether the x-residual alignment (residual=0.5) pushes E over 0.12 is the central question.",
+              "Float32 compute of scale, qi, and the dot product vs the float64-defined reference error norm; fp32 accumulation over k=128 is unlikely to dominate, but should be measured.",
+              "Rounding rule: tl.floor(w/scale+0.5) is round-half-up, which may differ from numpy's clip(floor(wf/scale+0.5)) only through fp32 vs fp64 scale/rounding; boundary ties at exactly .5 could flip a level for some elements.",
+              "Potential edge behavior if a row's max|w| makes scale rounding in fp32 differ from the fp64 scale used in make_inputs' residual definition, slightly changing which quantization error the workload expects.",
+              "Output finiteness: safe unless scale underflows (max|w|=0), not expected for seed-1221 standard normal data."
+            ],
+            "scope_notes": "Only this single (m=32, k=128) workload is in scope; no other shapes, seeds, or distributions count for or against compliance.\", \"Reference must be computed in float64 from the exact float32 input tensors; tolerance E uses flattened L2 norms with the 0.001*sqrt(32) floor.\", \"Environment pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0, NumPy 2.2.6 PCG64; generator usage order in make_inputs (w drawn first, then x) is part of the fixed workload.\"]",
+            "summary": "Described case_85: W@x matvec with per-row 7-level symmetric quantization in Triton; contract is a single fixed quantization-family workload (m=32, k=128, residual=0.5) with float64 reference and E<=0.12 budget, where reduced precision is permitted if budget is met."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 19.117,
+        "input_tokens": 5562,
+        "output_tokens": 1078
+      }
+    },
+    {
+      "duration_s": 10.763768142999993,
+      "role": "skeptic",
+      "round": 3,
+      "text": "I'll record the highest-risk, directly testable claims tied to the single fixed workload contract.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "make_inputs deliberately adds 0.5 * the normalized summed per-row quantization residual to x, so the error of the kernel's per-row 7-level quantization is correlated with x; whether this alignment drives E over the 0.12 budget is the central compliance question and is directly measurable.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Compliance metric E = ||output - float64 reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff finite and E <= 0.12 on the exact make_inputs() workload."
+              },
+              {
+                "source": "kernel.py make_inputs",
+                "summary": "x is norm-1 random plus 0.5 * normalized per-row quantization-residual direction (residual=0.5), aligning x with the quantization error the kernel introduces."
+              }
+            ],
+            "statement": "On the fixed make_inputs() workload (m=32, k=128, residual=0.5), the per-row 7-level quantization error correlated with the residual-aligned x yields E > 0.12, violating the budget."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The residual direction is computed with np.floor in float64, while Triton computes floor(w/scale+0.5) in float32 with a float32 scale; if w/scale lands within one fp32 ulp of a .5 boundary or fp32 scale differs from fp64 scale, qi differs by one level for some elements, making the kernel's actual error deviate from the workload's assumed residual direction and possibly increasing E.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference is the float64 mathematical operation on the SAME float32 input values; only the exact make_inputs() workload (which computes the residual direction in float64) is in scope."
+              },
+              {
+                "source": "kernel.py",
+                "summary": "Kernel computes scale = tl.max(tl.abs(w))/7 and qi = clip(floor(w/scale+0.5),-7,7) in float32, while make_inputs computes the residual with float64 wf and float64 scale."
+              }
+            ],
+            "statement": "Float32 computation of scale and qi in the kernel may differ from the float64 quantizer used to construct x's residual direction, flipping quantization levels at .5 boundaries and changing the error vector, potentially pushing E above or below what fp64 simulation predicts."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.764,
+        "input_tokens": 13350,
+        "output_tokens": 614
+      }
+    },
+    {
+      "duration_s": 10.208302419000006,
+      "role": "skeptic",
+      "round": 4,
+      "text": "My two claim attempts were rejected for missing `scope_rationale` \u2014 I'll re-send them now with that field filled in.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "make_inputs deliberately adds 0.5 * the normalized summed per-row quantization residual to x, so the kernel's per-row 7-level quantization error is correlated with x; whether this alignment drives E over the 0.12 budget is the central compliance question and is directly measurable on the fixed workload.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Compliance metric E = ||output - float64 reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff finite and E <= 0.12 on the exact make_inputs() workload."
+              },
+              {
+                "source": "kernel.py make_inputs",
+                "summary": "x is norm-1 random plus 0.5 * normalized per-row quantization-residual direction (residual=0.5), aligning x with the quantization error the kernel introduces."
+              }
+            ],
+            "scope_rationale": "The claim concerns the exact single workload make_inputs() defines (m=32, k=128, residual=0.5); the contract requires E <= 0.12 on that workload, so a measured E > 0.12 on it is a direct budget violation.",
+            "statement": "On the fixed make_inputs() workload (m=32, k=128, residual=0.5), the per-row 7-level quantization error correlated with the residual-aligned x yields E > 0.12, violating the budget."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The residual direction is computed with np.floor in float64, while Triton computes floor(w/scale+0.5) in float32 with a float32 scale; if w/scale lands within one fp32 ulp of a .5 boundary or fp32 scale differs from fp64 scale, qi flips a level for some elements, changing the error vector and potentially E.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference is the float64 mathematical operation on the SAME float32 input values; only the exact make_inputs() workload (whose residual direction is computed in float64) is in scope."
+              },
+              {
+                "source": "kernel.py",
+                "summary": "Kernel computes scale = tl.max(tl.abs(w))/7 and qi = clip(floor(w/scale+0.5),-7,7) in float32, while make_inputs computes the residual with float64 wf and float64 scale."
+              }
+            ],
+            "scope_rationale": "The claim compares the kernel's fp32 quantizer against the fp64 quantizer used to build the in-scope workload's x direction; on the fixed workload this changes the actual quantization error relative to what fp64 simulation predicts, directly affecting the contract metric E.",
+            "statement": "Float32 computation of scale and qi in the kernel may differ from the float64 quantizer used to construct x's residual direction, flipping quantization levels at .5 boundaries and changing the error vector, potentially pushing E above or below what an fp64 simulation predicts."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.208,
+        "input_tokens": 14951,
+        "output_tokens": 699
+      }
+    },
+    {
+      "duration_s": 18.749806018000015,
+      "role": "describer",
+      "round": 5,
+      "text": "The description model is already complete and accurate. The two open claims (c1, c2) now need evidence, so I'll record a targeted refinement that sharpens what evidence decides each claim and flags the adversarial-precision angle (quantized reference behavior vs FP32 reference).",
+      "tool_calls": [
+        {
+          "args": {
+            "impact_on_claims": [
+              "c1 is decided only by measuring E on the exact make_inputs() workload (kernel output vs float64 W@x on the same float32 inputs); an analytic per-element 1/14 bound is not evidence of the correlated aggregate error.",
+              "c2 is decided by comparing the kernel's fp32 quantizer (scale, qi) elementwise against the fp64 quantizer used to build x's residual direction, on the fixed float32 W; if levels match everywhere, fp64 simulation is a faithful predictor of kernel error."
+            ],
+            "kernel_model": [
+              "For c1, the decisive quantity is aggregate: y_kernel - y_ref = sum over rows r of ( (wq_r - w_r) . x ); x = u + 0.5*r_hat where r_hat is the normalized column-sum of per-row residuals (wq_r - w_r), so the aligned term contributes 0.5*sum_r (wq_r - w_r).r_hat plus the random u . (wq_r - w_r) terms; both fp64 simulation and on-device runtime measurement of E are feasible evidence paths.",
+              "For c2, the decisive evidence is an elementwise comparison of the kernel's fp32 qi/scale against make_inputs' fp64 quantizer on the same float32 W; a CPU simulation replicating fp32 arithmetic (float32 scale = fp32(max|w|)/7, fp32 division and floor) predicts which elements, if any, flip a level.",
+              "Note: the residual direction uses the fp64 quantizer's residual, but x is rounded once to float32 before transfer, so even a perfectly matching fp32 quantizer still yields a slightly different effective residual than the workload's construction assumed."
+            ],
+            "open_questions": [
+              "Measured value of E on-device (T4, Triton 3.4.0) vs an fp64 simulation of the same quantizer - do they agree, and is E <= 0.12?",
+              "Does any element's fp32 w/scale land on a .5 rounding boundary differently than fp64 (c2)?",
+              "Whether the float32 rounding of x (after adding 0.5*residual in float64) measurably decorrelates the injected alignment - relevant only to margin size, not to the contract metric."
+            ],
+            "risk_map": [
+              "Aggregate-error risk (c1): the workload concentrates per-row random quantization residuals into one coherent direction aligned with x; a pure per-element 1/14 error bound understates E - the coherent dot of 0.5*r_hat with sum_r residuals could dominate the error norm relative to ||W@x||.",
+              "Quantizer mismatch risk (c2): fp32 scale = max|w|/7 may round differently than fp64, shifting every w/scale by an ulp and flipping floor(t+0.5) at boundaries; with 32*128=4096 elements, a few flips are plausible but each flip changes that element's residual by one scale step."
+            ],
+            "scope_notes": [
+              "The reference for E is the unquantized float64 W@x, not a quantized simulation; a quantized-reference comparison is useful diagnosis for c2 but does not itself decide compliance.",
+              "Both c1 and c2 are answerable on this single workload with no additional inputs; any probe must reproduce make_inputs exactly (PCG64(1221), w drawn before x, single float32 rounding)."
+            ],
+            "summary": "Refined case_85 description: mapped open claims c1 (residual-aligned quantization error vs E<=0.12 budget) and c2 (fp32 vs fp64 quantizer mismatch) to the concrete quantities and evidence paths that decide them on the fixed workload."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.75,
+        "input_tokens": 16452,
+        "output_tokens": 928
+      }
+    },
+    {
+      "duration_s": 6.4576338030000215,
+      "role": "skeptic",
+      "round": 6,
+      "text": "Both central compliance risks (aggregate residual-aligned quantization error vs the E budget, and fp32-vs-fp64 quantizer mismatch) are already recorded as c1 and c2 with full scope evidence. The description model maps concrete evidence paths for each; no additional distinct, testable in-scope hypothesis remains.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Reviewed the complete kernel source, contract, and description model. The only decisive in-scope risks on this single fixed workload are already captured by c1 (residual-aligned 7-level quantization error vs E<=0.12 budget) and c2 (fp32 vs fp64 quantizer boundary flips). Other potential issues (scale=0 division, non-contiguous inputs, alternative shapes/dtypes) are outside the fixed make_inputs() workload contract. Both open claims now need evidence via runtime/simulation probes, not further claims.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.458,
+        "input_tokens": 23763,
+        "output_tokens": 248
+      }
+    },
+    {
+      "duration_s": 22.944789671999956,
+      "role": "experimenter",
+      "round": 7,
+      "text": "I'm launching two independent probes: c1 measures the actual E on the exact workload by running the Triton kernel on GPU vs the float64 reference; c2 compares the kernel's fp32 quantizer (simulated in fp32) against the fp64 quantizer used in make_inputs, counting level flips. Neither probe's design depends on the other's result.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json\nimport numpy as np, torch\nsys.path.insert(0, \"/root/pilot_cases/case_85\")\nimport kernel\n\nx, w = kernel.make_inputs(\"cuda\")\nout = kernel.run(x, w)\ntorch.cuda.synchronize()\nref = w.double() @ x.double()\nerr = out.double() - ref\nE = err.norm().item() / max(ref.norm().item(), 0.001 * np.sqrt(32))\n# fp64 simulation of same quantizer for comparison\nwf = w.double().cpu().numpy()\nxf = x.double().cpu().numpy()\nscale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\nwq = np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale\nsim = wq @ xf\nE_sim = np.linalg.norm(sim - wf @ xf) / max(np.linalg.norm(wf @ xf), 0.001*np.sqrt(32))\nprint(json.dumps({\n    \"metric\": \"contract E on exact make_inputs workload\",\n    \"E_kernel\": E,\n    \"E_fp64_sim_of_quantizer\": float(E_sim),\n    \"budget\": 0.12,\n    \"all_finite\": bool(torch.isfinite(out).all().item()),\n    \"ref_norm\": ref.norm().item(),\n    \"err_norm\": err.norm().item(),\n    \"E_exceeds_budget\": bool(E > 0.12),\n}))",
+            "expected_signal": "E_kernel > 0.12 on the fixed workload (claim c1) or E_kernel <= 0.12",
+            "use_gpu": true
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import sys, json\nimport numpy as np, torch\nsys.path.insert(0, \"/root/pilot_cases/case_85\")\nimport kernel\n\nx, w = kernel.make_inputs(\"cuda\")\nwf64 = w.double().cpu().numpy()          # exact float32 weights as reals\nw32 = w.cpu().numpy()                    # float32\n\n# fp64 quantizer (as used in make_inputs' residual construction)\ns64 = np.max(np.abs(wf64), axis=1, keepdims=True) / 7.0\nqi64 = np.clip(np.floor(wf64 / s64 + 0.5), -7, 7)\n\n# simulate kernel's fp32 quantizer exactly\ns32 = (np.float32(np.max(np.abs(w32), axis=1, keepdims=True)) / np.float32(7.0))\nt32 = w32 / s32 + np.float32(0.5)\nqi32 = np.clip(np.floor(t32), np.float32(-7), np.float32(7)).astype(np.float32)\n\nflips = int((qi64.astype(np.float32) != qi32).sum())\ns_mismatch = int((s64.astype(np.float32) != s32).sum())\n\n# does flipping change the error vector vs fp64 sim? compare reconstructed weights\nwq32 = qi32 * s32\nwq64 = qi64 * s64\nxf = x.double().cpu().numpy()\nref = wf64 @ xf\nE32 = np.linalg.norm(wq32 @ xf - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\nE64 = np.linalg.norm(wq64 @ xf - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\n\n# distance of any element to a .5 boundary in fp32\ndist_to_boundary = np.abs((t32 - np.floor(t32)) - np.float32(0.5))\nmin_dist = float(dist_to_boundary.min())\n\nprint(json.dumps({\n    \"metric\": \"fp32 vs fp64 quantizer level flips on fixed W (4096 elems)\",\n    \"num_elements\": int(wf64.size),\n    \"qi_level_flips\": flips,\n    \"scale_mismatches_rows\": s_mismatch,\n    \"min_distance_to_.5_boundary_fp32\": min_dist,\n    \"E_fp32_quantized_matvec\": float(E32),\n    \"E_fp64_quantized_matvec\": float(E64),\n    \"E_budget\": 0.12,\n}))",
+            "expected_signal": "count of qi level flips between fp32-simulated kernel quantizer and fp64 quantizer; 0 flips means no mismatch",
+            "use_gpu": true
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 22.945,
+        "input_tokens": 24853,
+        "output_tokens": 1362
+      }
+    },
+    {
+      "duration_s": 12.305277336000017,
+      "role": "experimenter",
+      "round": 8,
+      "text": "Both probes completed. c1's on-device E is 0.1623 > 0.12 budget \u2014 confirmed. c2 found zero quantizer level flips and no scale mismatch between fp32 and fp64 on the fixed W \u2014 the suspected mismatch does not occur on this workload, so I'm recording that as rebutting the fp32-vs-fp64 divergence hypothesis.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "E_exceeds_budget": true,
+              "E_fp64_sim_of_quantizer": 0.16230056135138632,
+              "E_kernel": 0.1623005732699385,
+              "all_finite": true,
+              "budget": 0.12,
+              "err_norm": 1.172982813035686,
+              "ref_norm": 7.227225322764448
+            },
+            "event_id": "t12",
+            "status": "confirmed",
+            "summary": "On the exact make_inputs() workload (seed 1221, m=32, k=128, residual=0.5), the Triton kernel measured on GPU gives E = 0.16230 vs the float64 reference, exceeding the 0.12 budget (ref_norm 7.227, err_norm 1.173, outputs all finite). An fp64 simulation of the identical 7-level quantizer reproduces E = 0.16230, confirming the excess comes from the quantization error aligned with the residual-injected x, not from kernel arithmetic artifacts.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "E_budget": 0.12,
+              "E_fp32_quantized_matvec": 0.16230056559349976,
+              "E_fp64_quantized_matvec": 0.16230056135138632,
+              "min_distance_to_.5_boundary_fp32": 0.0,
+              "num_elements": 4096,
+              "qi_level_flips": 0,
+              "scale_mismatches_rows": 0
+            },
+            "event_id": "t13",
+            "status": "rebutted",
+            "summary": "Across all 4096 weight elements of the fixed workload, the fp32-simulated kernel quantizer produces exactly the same qi levels and scales as the fp64 quantizer used to construct x's residual direction: 0 level flips, 0 scale mismatches. The resulting E values are essentially identical (fp32 0.16230057 vs fp64 0.16230056). The proposed fp32-vs-fp64 quantizer divergence does not occur on this workload; the budget violation is attributable purely to the quantization error itself (c1), not to rounding-mode mismatch.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.305,
+        "input_tokens": 28959,
+        "output_tokens": 660
+      }
+    },
+    {
+      "duration_s": 6.778431061000049,
+      "role": "skeptic",
+      "round": 9,
+      "text": "The decisive evidence is in: c1 is confirmed (measured E = 0.1623 > 0.12 budget on the exact in-scope workload, outputs finite), and c2 is cleanly rebutted (zero quantizer level flips). No new material in-scope problem is exposed.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: c1 is confirmed with direct on-device evidence \u2014 E = 0.1623 > 0.12 on the exact make_inputs() workload (m=32, k=128, residual=0.5), all outputs finite, and an fp64 simulation of the identical quantizer reproduces the same E, isolating the cause as the quantization error itself. c2 is rebutted: the kernel's fp32 quantizer matches the fp64 quantizer exactly (0 level flips, 0 scale mismatches over all 4096 elements). No remaining claim covers an untested in-scope risk; all other potential issues (scale=0, alternative shapes/dtypes, strides) are outside the single fixed workload contract.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.778,
+        "input_tokens": 34880,
+        "output_tokens": 260
+      }
+    },
+    {
+      "duration_s": 8.227289436999968,
+      "role": "judge",
+      "round": 10,
+      "text": "The decisive evidence is in: on the exact contract workload, the kernel's measured E = 0.1623 exceeds the 0.12 budget, and the excess is attributable to the quantization error itself (c2's fp32-vs-fp64 mismatch was rebutted with zero level flips). All claims have evidence and the Skeptic signed off. I'm recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Claim c1 is confirmed and in-scope: a GPU probe on the exact make_inputs() workload (seed 1221, m=32, k=128, residual=0.5) measured E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.16230 > 0.12 budget (ref_norm 7.227, err_norm 1.173, all outputs finite). The contract explicitly requires E <= 0.12 and states reduced precision is permitted only if the budget is met; this measured violation on the single fixed workload is decisive. An fp64 simulation of the identical quantizer reproduces E = 0.16230, and claim c2's alternative explanation (fp32-vs-fp64 quantizer level flips) is rebutted with 0 flips and 0 scale mismatches over all 4096 weights, isolating the cause as the kernel's 7-level per-row quantization error aligned with the residual-injected x. Skeptic reviewed the latest evidence and recorded no new claims.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.227,
+        "input_tokens": 35055,
+        "output_tokens": 372
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-30T08:58:04Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: c1 is confirmed with direct on-device evidence \u2014 E = 0.1623 > 0.12 on the exact make_inputs() workload (m=32, k=128, residual=0.5), all outputs finite, and an fp64 simulation of the identical quantizer reproduces the same E, isolating the cause as the quantization error itself. c2 is rebutted: the kernel's fp32 quantizer matches the fp64 quantizer exactly (0 level flips, 0 scale mismatches over all 4096 elements). No remaining claim covers an untested in-scope risk; all other potential issues (scale=0, alternative shapes/dtypes, strides) are outside the single fixed workload contract.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 15,
+    "tool_event_id": "t16",
+    "turn": 9
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_85"
+      },
+      "created_at": "2026-09-30T08:56:09Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_85",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(X, W, O, K: tl.constexpr):\n    row = tl.program_id(0)\n    j = tl.arange(0, K)\n    x = tl.load(X + j)\n    w = tl.load(W + row * K + j)\n    scale = tl.max(tl.abs(w), 0) / 7.0\n    qi = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(w / scale + 0.5)))\n    y = tl.sum(x * (qi * scale), 0)\n    tl.store(O + row, y)\n\ndef run(x, w):\n    m, k = w.shape\n    out = torch.empty(m, dtype=torch.float32, device=x.device)\n    _kernel[(m,)](x, w, out, k, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'quantization', 'seed': 1221, 'm': 32, 'k': 128, 'mix': 0.0, 'residual': 0.5}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+        "passed": null,
+        "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = W @ x, using the original binary32 weights as real values.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.12.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "rounds": null,
+        "session_dir": "/root/pilot_cases/case_85",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_85"
+      },
+      "created_at": "2026-09-30T08:56:09Z",
+      "id": "t2",
+      "output": {
+        "content": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\ny = W @ x, using the original binary32 weights as real values.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.12.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "entry": "case_85",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_85"
+      },
+      "created_at": "2026-09-30T08:56:09Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_85",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2438
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1055
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_85",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:56:09Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_85\",\n  \"status\": \"unverified\",\n  \"passed\": null\n}\n",
+        "entry": "case_85",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Single fixed workload: make_inputs() in kernel.py, quantization family, m=32, k=128, seed 1221, mix=0.0, residual=0.5, generated with NumPy PCG64 on CPU then rounded once to float32 before transfer.",
+          "Operation is y = W @ x with the ORIGINAL binary32 weights treated as real values; reference is float64 evaluation on the same float32 inputs.",
+          "Compliance metric E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff all outputs finite and E <= 0.12.",
+          "Reduced/quantized arithmetic is explicitly permitted as long as the budget is met; finite-workload compliance only, not universal correctness.",
+          "Input construction deliberately aligns x (norm-1 random) plus 0.5 * normalized summed per-row quantization residual direction, i.e. x partially aligns with the error direction of symmetric 7-level per-row max-abs quantization."
+        ],
+        "kernel_model": [
+          "Triton kernel, one program per output row (grid m=32); each program loads full x (K=128) and one weight row.",
+          "Per-row quantization: scale = max|w_row|/7 in float32; qi = clip(floor(w/scale + 0.5), -7, 7) (round-half-up after scaling); reconstruct wq = qi*scale and compute y_row = sum(x * wq) in float32, stored to float32 output.",
+          "This reproduces the same quantizer assumed by make_inputs' residual computation (same scale rule and rounding), so the per-element weight error equals the reference quantization residual.",
+          "run() assumes W is (m,k) contiguous row-major, x length k, fp32; output allocated as fp32; enable_fp_fusion=False to avoid fma/rounding reassociation.",
+          "No guard against scale=0 (all-zero row would divide by zero), but workload is standard-normal weights so max|w|>0."
+        ],
+        "open_questions": [
+          "Actual numeric value of E for this exact workload (needs runtime or careful simulation) - the description cannot settle compliance.",
+          "Whether Triton 3.4.0 fp32 reduction order on T4 changes the result enough to matter (expected negligible vs quantization error, but unverified)."
+        ],
+        "risk_map": [
+          "Quantization-induced error vs 0.12 budget: per-row 7-level quantization with scale=max|w|/7 leaves relative error up to ~1/14 per element; whether the x-residual alignment (residual=0.5) pushes E over 0.12 is the central question.",
+          "Float32 compute of scale, qi, and the dot product vs the float64-defined reference error norm; fp32 accumulation over k=128 is unlikely to dominate, but should be measured.",
+          "Rounding rule: tl.floor(w/scale+0.5) is round-half-up, which may differ from numpy's clip(floor(wf/scale+0.5)) only through fp32 vs fp64 scale/rounding; boundary ties at exactly .5 could flip a level for some elements.",
+          "Potential edge behavior if a row's max|w| makes scale rounding in fp32 differ from the fp64 scale used in make_inputs' residual definition, slightly changing which quantization error the workload expects.",
+          "Output finiteness: safe unless scale underflows (max|w|=0), not expected for seed-1221 standard normal data."
+        ],
+        "scope_notes": "Only this single (m=32, k=128) workload is in scope; no other shapes, seeds, or distributions count for or against compliance.\", \"Reference must be computed in float64 from the exact float32 input tensors; tolerance E uses flattened L2 norms with the 0.001*sqrt(32) floor.\", \"Environment pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0, NumPy 2.2.6 PCG64; generator usage order in make_inputs (w drawn first, then x) is part of the fixed workload.\"]",
+        "summary": "Described case_85: W@x matvec with per-row 7-level symmetric quantization in Triton; contract is a single fixed quantization-family workload (m=32, k=128, residual=0.5) with float64 reference and E<=0.12 budget, where reduced precision is permitted if budget is met."
+      },
+      "created_at": "2026-09-30T08:56:28Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Single fixed workload: make_inputs() in kernel.py, quantization family, m=32, k=128, seed 1221, mix=0.0, residual=0.5, generated with NumPy PCG64 on CPU then rounded once to float32 before transfer.",
+            "Operation is y = W @ x with the ORIGINAL binary32 weights treated as real values; reference is float64 evaluation on the same float32 inputs.",
+            "Compliance metric E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff all outputs finite and E <= 0.12.",
+            "Reduced/quantized arithmetic is explicitly permitted as long as the budget is met; finite-workload compliance only, not universal correctness.",
+            "Input construction deliberately aligns x (norm-1 random) plus 0.5 * normalized summed per-row quantization residual direction, i.e. x partially aligns with the error direction of symmetric 7-level per-row max-abs quantization."
+          ],
+          "kernel_model": [
+            "Triton kernel, one program per output row (grid m=32); each program loads full x (K=128) and one weight row.",
+            "Per-row quantization: scale = max|w_row|/7 in float32; qi = clip(floor(w/scale + 0.5), -7, 7) (round-half-up after scaling); reconstruct wq = qi*scale and compute y_row = sum(x * wq) in float32, stored to float32 output.",
+            "This reproduces the same quantizer assumed by make_inputs' residual computation (same scale rule and rounding), so the per-element weight error equals the reference quantization residual.",
+            "run() assumes W is (m,k) contiguous row-major, x length k, fp32; output allocated as fp32; enable_fp_fusion=False to avoid fma/rounding reassociation.",
+            "No guard against scale=0 (all-zero row would divide by zero), but workload is standard-normal weights so max|w|>0."
+          ],
+          "open_questions": [
+            "Actual numeric value of E for this exact workload (needs runtime or careful simulation) - the description cannot settle compliance.",
+            "Whether Triton 3.4.0 fp32 reduction order on T4 changes the result enough to matter (expected negligible vs quantization error, but unverified)."
+          ],
+          "risk_map": [
+            "Quantization-induced error vs 0.12 budget: per-row 7-level quantization with scale=max|w|/7 leaves relative error up to ~1/14 per element; whether the x-residual alignment (residual=0.5) pushes E over 0.12 is the central question.",
+            "Float32 compute of scale, qi, and the dot product vs the float64-defined reference error norm; fp32 accumulation over k=128 is unlikely to dominate, but should be measured.",
+            "Rounding rule: tl.floor(w/scale+0.5) is round-half-up, which may differ from numpy's clip(floor(wf/scale+0.5)) only through fp32 vs fp64 scale/rounding; boundary ties at exactly .5 could flip a level for some elements.",
+            "Potential edge behavior if a row's max|w| makes scale rounding in fp32 differ from the fp64 scale used in make_inputs' residual definition, slightly changing which quantization error the workload expects.",
+            "Output finiteness: safe unless scale underflows (max|w|=0), not expected for seed-1221 standard normal data."
+          ],
+          "scope_notes": [
+            "Only this single (m=32, k=128) workload is in scope; no other shapes, seeds, or distributions count for or against compliance.\", \"Reference must be computed in float64 from the exact float32 input tensors; tolerance E uses flattened L2 norms with the 0.001*sqrt(32) floor.\", \"Environment pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0, NumPy 2.2.6 PCG64; generator usage order in make_inputs (w drawn first, then x) is part of the fixed workload.\"]"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Single fixed workload: make_inputs() in kernel.py, quantization family, m=32, k=128, seed 1221, mix=0.0, residual=0.5, generated with NumPy PCG64 on CPU then rounded once to float32 before transfer.",
+            "Operation is y = W @ x with the ORIGINAL binary32 weights treated as real values; reference is float64 evaluation on the same float32 inputs.",
+            "Compliance metric E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff all outputs finite and E <= 0.12.",
+            "Reduced/quantized arithmetic is explicitly permitted as long as the budget is met; finite-workload compliance only, not universal correctness.",
+            "Input construction deliberately aligns x (norm-1 random) plus 0.5 * normalized summed per-row quantization residual direction, i.e. x partially aligns with the error direction of symmetric 7-level per-row max-abs quantization."
+          ],
+          "created_at": "2026-09-30T08:56:28Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel, one program per output row (grid m=32); each program loads full x (K=128) and one weight row.",
+            "Per-row quantization: scale = max|w_row|/7 in float32; qi = clip(floor(w/scale + 0.5), -7, 7) (round-half-up after scaling); reconstruct wq = qi*scale and compute y_row = sum(x * wq) in float32, stored to float32 output.",
+            "This reproduces the same quantizer assumed by make_inputs' residual computation (same scale rule and rounding), so the per-element weight error equals the reference quantization residual.",
+            "run() assumes W is (m,k) contiguous row-major, x length k, fp32; output allocated as fp32; enable_fp_fusion=False to avoid fma/rounding reassociation.",
+            "No guard against scale=0 (all-zero row would divide by zero), but workload is standard-normal weights so max|w|>0."
+          ],
+          "open_questions": [
+            "Actual numeric value of E for this exact workload (needs runtime or careful simulation) - the description cannot settle compliance.",
+            "Whether Triton 3.4.0 fp32 reduction order on T4 changes the result enough to matter (expected negligible vs quantization error, but unverified)."
+          ],
+          "risk_map": [
+            "Quantization-induced error vs 0.12 budget: per-row 7-level quantization with scale=max|w|/7 leaves relative error up to ~1/14 per element; whether the x-residual alignment (residual=0.5) pushes E over 0.12 is the central question.",
+            "Float32 compute of scale, qi, and the dot product vs the float64-defined reference error norm; fp32 accumulation over k=128 is unlikely to dominate, but should be measured.",
+            "Rounding rule: tl.floor(w/scale+0.5) is round-half-up, which may differ from numpy's clip(floor(wf/scale+0.5)) only through fp32 vs fp64 scale/rounding; boundary ties at exactly .5 could flip a level for some elements.",
+            "Potential edge behavior if a row's max|w| makes scale rounding in fp32 differ from the fp64 scale used in make_inputs' residual definition, slightly changing which quantization error the workload expects.",
+            "Output finiteness: safe unless scale underflows (max|w|=0), not expected for seed-1221 standard normal data."
+          ],
+          "scope_notes": [
+            "Only this single (m=32, k=128) workload is in scope; no other shapes, seeds, or distributions count for or against compliance.\", \"Reference must be computed in float64 from the exact float32 input tensors; tolerance E uses flattened L2 norms with the 0.001*sqrt(32) floor.\", \"Environment pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0, NumPy 2.2.6 PCG64; generator usage order in make_inputs (w drawn first, then x) is part of the fixed workload.\"]"
+          ],
+          "summary": "Described case_85: W@x matvec with per-row 7-level symmetric quantization in Triton; contract is a single fixed quantization-family workload (m=32, k=128, residual=0.5) with float64 reference and E<=0.12 budget, where reduced precision is permitted if budget is met.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "make_inputs deliberately adds 0.5 * the normalized summed per-row quantization residual to x, so the error of the kernel's per-row 7-level quantization is correlated with x; whether this alignment drives E over the 0.12 budget is the central compliance question and is directly measurable.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Compliance metric E = ||output - float64 reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff finite and E <= 0.12 on the exact make_inputs() workload."
+          },
+          {
+            "source": "kernel.py make_inputs",
+            "summary": "x is norm-1 random plus 0.5 * normalized per-row quantization-residual direction (residual=0.5), aligning x with the quantization error the kernel introduces."
+          }
+        ],
+        "statement": "On the fixed make_inputs() workload (m=32, k=128, residual=0.5), the per-row 7-level quantization error correlated with the residual-aligned x yields E > 0.12, violating the budget."
+      },
+      "created_at": "2026-09-30T08:56:39Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The residual direction is computed with np.floor in float64, while Triton computes floor(w/scale+0.5) in float32 with a float32 scale; if w/scale lands within one fp32 ulp of a .5 boundary or fp32 scale differs from fp64 scale, qi differs by one level for some elements, making the kernel's actual error deviate from the workload's assumed residual direction and possibly increasing E.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is the float64 mathematical operation on the SAME float32 input values; only the exact make_inputs() workload (which computes the residual direction in float64) is in scope."
+          },
+          {
+            "source": "kernel.py",
+            "summary": "Kernel computes scale = tl.max(tl.abs(w))/7 and qi = clip(floor(w/scale+0.5),-7,7) in float32, while make_inputs computes the residual with float64 wf and float64 scale."
+          }
+        ],
+        "statement": "Float32 computation of scale and qi in the kernel may differ from the float64 quantizer used to construct x's residual direction, flipping quantization levels at .5 boundaries and changing the error vector, potentially pushing E above or below what fp64 simulation predicts."
+      },
+      "created_at": "2026-09-30T08:56:39Z",
+      "id": "t7",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t7",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "make_inputs deliberately adds 0.5 * the normalized summed per-row quantization residual to x, so the kernel's per-row 7-level quantization error is correlated with x; whether this alignment drives E over the 0.12 budget is the central compliance question and is directly measurable on the fixed workload.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Compliance metric E = ||output - float64 reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff finite and E <= 0.12 on the exact make_inputs() workload."
+          },
+          {
+            "source": "kernel.py make_inputs",
+            "summary": "x is norm-1 random plus 0.5 * normalized per-row quantization-residual direction (residual=0.5), aligning x with the quantization error the kernel introduces."
+          }
+        ],
+        "scope_rationale": "The claim concerns the exact single workload make_inputs() defines (m=32, k=128, residual=0.5); the contract requires E <= 0.12 on that workload, so a measured E > 0.12 on it is a direct budget violation.",
+        "statement": "On the fixed make_inputs() workload (m=32, k=128, residual=0.5), the per-row 7-level quantization error correlated with the residual-aligned x yields E > 0.12, violating the budget."
+      },
+      "created_at": "2026-09-30T08:56:49Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-30T08:56:49Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "make_inputs deliberately adds 0.5 * the normalized summed per-row quantization residual to x, so the kernel's per-row 7-level quantization error is correlated with x; whether this alignment drives E over the 0.12 budget is the central compliance question and is directly measurable on the fixed workload.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Compliance metric E = ||output - float64 reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff finite and E <= 0.12 on the exact make_inputs() workload."
+          },
+          {
+            "source": "kernel.py make_inputs",
+            "summary": "x is norm-1 random plus 0.5 * normalized per-row quantization-residual direction (residual=0.5), aligning x with the quantization error the kernel introduces."
+          }
+        ],
+        "scope_rationale": "The claim concerns the exact single workload make_inputs() defines (m=32, k=128, residual=0.5); the contract requires E <= 0.12 on that workload, so a measured E > 0.12 on it is a direct budget violation.",
+        "statement": "On the fixed make_inputs() workload (m=32, k=128, residual=0.5), the per-row 7-level quantization error correlated with the residual-aligned x yields E > 0.12, violating the budget.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:56:49Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The residual direction is computed with np.floor in float64, while Triton computes floor(w/scale+0.5) in float32 with a float32 scale; if w/scale lands within one fp32 ulp of a .5 boundary or fp32 scale differs from fp64 scale, qi flips a level for some elements, changing the error vector and potentially E.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is the float64 mathematical operation on the SAME float32 input values; only the exact make_inputs() workload (whose residual direction is computed in float64) is in scope."
+          },
+          {
+            "source": "kernel.py",
+            "summary": "Kernel computes scale = tl.max(tl.abs(w))/7 and qi = clip(floor(w/scale+0.5),-7,7) in float32, while make_inputs computes the residual with float64 wf and float64 scale."
+          }
+        ],
+        "scope_rationale": "The claim compares the kernel's fp32 quantizer against the fp64 quantizer used to build the in-scope workload's x direction; on the fixed workload this changes the actual quantization error relative to what fp64 simulation predicts, directly affecting the contract metric E.",
+        "statement": "Float32 computation of scale and qi in the kernel may differ from the float64 quantizer used to construct x's residual direction, flipping quantization levels at .5 boundaries and changing the error vector, potentially pushing E above or below what an fp64 simulation predicts."
+      },
+      "created_at": "2026-09-30T08:56:49Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-30T08:56:49Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "The residual direction is computed with np.floor in float64, while Triton computes floor(w/scale+0.5) in float32 with a float32 scale; if w/scale lands within one fp32 ulp of a .5 boundary or fp32 scale differs from fp64 scale, qi flips a level for some elements, changing the error vector and potentially E.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is the float64 mathematical operation on the SAME float32 input values; only the exact make_inputs() workload (whose residual direction is computed in float64) is in scope."
+          },
+          {
+            "source": "kernel.py",
+            "summary": "Kernel computes scale = tl.max(tl.abs(w))/7 and qi = clip(floor(w/scale+0.5),-7,7) in float32, while make_inputs computes the residual with float64 wf and float64 scale."
+          }
+        ],
+        "scope_rationale": "The claim compares the kernel's fp32 quantizer against the fp64 quantizer used to build the in-scope workload's x direction; on the fixed workload this changes the actual quantization error relative to what fp64 simulation predicts, directly affecting the contract metric E.",
+        "statement": "Float32 computation of scale and qi in the kernel may differ from the float64 quantizer used to construct x's residual direction, flipping quantization levels at .5 boundaries and changing the error vector, potentially pushing E above or below what an fp64 simulation predicts.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:56:49Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "impact_on_claims": [
+          "c1 is decided only by measuring E on the exact make_inputs() workload (kernel output vs float64 W@x on the same float32 inputs); an analytic per-element 1/14 bound is not evidence of the correlated aggregate error.",
+          "c2 is decided by comparing the kernel's fp32 quantizer (scale, qi) elementwise against the fp64 quantizer used to build x's residual direction, on the fixed float32 W; if levels match everywhere, fp64 simulation is a faithful predictor of kernel error."
+        ],
+        "kernel_model": [
+          "For c1, the decisive quantity is aggregate: y_kernel - y_ref = sum over rows r of ( (wq_r - w_r) . x ); x = u + 0.5*r_hat where r_hat is the normalized column-sum of per-row residuals (wq_r - w_r), so the aligned term contributes 0.5*sum_r (wq_r - w_r).r_hat plus the random u . (wq_r - w_r) terms; both fp64 simulation and on-device runtime measurement of E are feasible evidence paths.",
+          "For c2, the decisive evidence is an elementwise comparison of the kernel's fp32 qi/scale against make_inputs' fp64 quantizer on the same float32 W; a CPU simulation replicating fp32 arithmetic (float32 scale = fp32(max|w|)/7, fp32 division and floor) predicts which elements, if any, flip a level.",
+          "Note: the residual direction uses the fp64 quantizer's residual, but x is rounded once to float32 before transfer, so even a perfectly matching fp32 quantizer still yields a slightly different effective residual than the workload's construction assumed."
+        ],
+        "open_questions": [
+          "Measured value of E on-device (T4, Triton 3.4.0) vs an fp64 simulation of the same quantizer - do they agree, and is E <= 0.12?",
+          "Does any element's fp32 w/scale land on a .5 rounding boundary differently than fp64 (c2)?",
+          "Whether the float32 rounding of x (after adding 0.5*residual in float64) measurably decorrelates the injected alignment - relevant only to margin size, not to the contract metric."
+        ],
+        "risk_map": [
+          "Aggregate-error risk (c1): the workload concentrates per-row random quantization residuals into one coherent direction aligned with x; a pure per-element 1/14 error bound understates E - the coherent dot of 0.5*r_hat with sum_r residuals could dominate the error norm relative to ||W@x||.",
+          "Quantizer mismatch risk (c2): fp32 scale = max|w|/7 may round differently than fp64, shifting every w/scale by an ulp and flipping floor(t+0.5) at boundaries; with 32*128=4096 elements, a few flips are plausible but each flip changes that element's residual by one scale step."
+        ],
+        "scope_notes": [
+          "The reference for E is the unquantized float64 W@x, not a quantized simulation; a quantized-reference comparison is useful diagnosis for c2 but does not itself decide compliance.",
+          "Both c1 and c2 are answerable on this single workload with no additional inputs; any probe must reproduce make_inputs exactly (PCG64(1221), w drawn before x, single float32 rounding)."
+        ],
+        "summary": "Refined case_85 description: mapped open claims c1 (residual-aligned quantization error vs E<=0.12 budget) and c2 (fp32 vs fp64 quantizer mismatch) to the concrete quantities and evidence paths that decide them on the fixed workload."
+      },
+      "created_at": "2026-09-30T08:57:08Z",
+      "id": "t10",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Single fixed workload: make_inputs() in kernel.py, quantization family, m=32, k=128, seed 1221, mix=0.0, residual=0.5, generated with NumPy PCG64 on CPU then rounded once to float32 before transfer.",
+            "Operation is y = W @ x with the ORIGINAL binary32 weights treated as real values; reference is float64 evaluation on the same float32 inputs.",
+            "Compliance metric E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff all outputs finite and E <= 0.12.",
+            "Reduced/quantized arithmetic is explicitly permitted as long as the budget is met; finite-workload compliance only, not universal correctness.",
+            "Input construction deliberately aligns x (norm-1 random) plus 0.5 * normalized summed per-row quantization residual direction, i.e. x partially aligns with the error direction of symmetric 7-level per-row max-abs quantization."
+          ],
+          "kernel_model": [
+            "Triton kernel, one program per output row (grid m=32); each program loads full x (K=128) and one weight row.",
+            "Per-row quantization: scale = max|w_row|/7 in float32; qi = clip(floor(w/scale + 0.5), -7, 7) (round-half-up after scaling); reconstruct wq = qi*scale and compute y_row = sum(x * wq) in float32, stored to float32 output.",
+            "This reproduces the same quantizer assumed by make_inputs' residual computation (same scale rule and rounding), so the per-element weight error equals the reference quantization residual.",
+            "run() assumes W is (m,k) contiguous row-major, x length k, fp32; output allocated as fp32; enable_fp_fusion=False to avoid fma/rounding reassociation.",
+            "No guard against scale=0 (all-zero row would divide by zero), but workload is standard-normal weights so max|w|>0.",
+            "For c1, the decisive quantity is aggregate: y_kernel - y_ref = sum over rows r of ( (wq_r - w_r) . x ); x = u + 0.5*r_hat where r_hat is the normalized column-sum of per-row residuals (wq_r - w_r), so the aligned term contributes 0.5*sum_r (wq_r - w_r).r_hat plus the random u . (wq_r - w_r) terms; both fp64 simulation and on-device runtime measurement of E are feasible evidence paths.",
+            "For c2, the decisive evidence is an elementwise comparison of the kernel's fp32 qi/scale against make_inputs' fp64 quantizer on the same float32 W; a CPU simulation replicating fp32 arithmetic (float32 scale = fp32(max|w|)/7, fp32 division and floor) predicts which elements, if any, flip a level.",
+            "Note: the residual direction uses the fp64 quantizer's residual, but x is rounded once to float32 before transfer, so even a perfectly matching fp32 quantizer still yields a slightly different effective residual than the workload's construction assumed."
+          ],
+          "open_questions": [
+            "Actual numeric value of E for this exact workload (needs runtime or careful simulation) - the description cannot settle compliance.",
+            "Whether Triton 3.4.0 fp32 reduction order on T4 changes the result enough to matter (expected negligible vs quantization error, but unverified).",
+            "Measured value of E on-device (T4, Triton 3.4.0) vs an fp64 simulation of the same quantizer - do they agree, and is E <= 0.12?",
+            "Does any element's fp32 w/scale land on a .5 rounding boundary differently than fp64 (c2)?",
+            "Whether the float32 rounding of x (after adding 0.5*residual in float64) measurably decorrelates the injected alignment - relevant only to margin size, not to the contract metric."
+          ],
+          "risk_map": [
+            "Quantization-induced error vs 0.12 budget: per-row 7-level quantization with scale=max|w|/7 leaves relative error up to ~1/14 per element; whether the x-residual alignment (residual=0.5) pushes E over 0.12 is the central question.",
+            "Float32 compute of scale, qi, and the dot product vs the float64-defined reference error norm; fp32 accumulation over k=128 is unlikely to dominate, but should be measured.",
+            "Rounding rule: tl.floor(w/scale+0.5) is round-half-up, which may differ from numpy's clip(floor(wf/scale+0.5)) only through fp32 vs fp64 scale/rounding; boundary ties at exactly .5 could flip a level for some elements.",
+            "Potential edge behavior if a row's max|w| makes scale rounding in fp32 differ from the fp64 scale used in make_inputs' residual definition, slightly changing which quantization error the workload expects.",
+            "Output finiteness: safe unless scale underflows (max|w|=0), not expected for seed-1221 standard normal data.",
+            "Aggregate-error risk (c1): the workload concentrates per-row random quantization residuals into one coherent direction aligned with x; a pure per-element 1/14 error bound understates E - the coherent dot of 0.5*r_hat with sum_r residuals could dominate the error norm relative to ||W@x||.",
+            "Quantizer mismatch risk (c2): fp32 scale = max|w|/7 may round differently than fp64, shifting every w/scale by an ulp and flipping floor(t+0.5) at boundaries; with 32*128=4096 elements, a few flips are plausible but each flip changes that element's residual by one scale step."
+          ],
+          "scope_notes": [
+            "Only this single (m=32, k=128) workload is in scope; no other shapes, seeds, or distributions count for or against compliance.\", \"Reference must be computed in float64 from the exact float32 input tensors; tolerance E uses flattened L2 norms with the 0.001*sqrt(32) floor.\", \"Environment pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0, NumPy 2.2.6 PCG64; generator usage order in make_inputs (w drawn first, then x) is part of the fixed workload.\"]",
+            "The reference for E is the unquantized float64 W@x, not a quantized simulation; a quantized-reference comparison is useful diagnosis for c2 but does not itself decide compliance.",
+            "Both c1 and c2 are answerable on this single workload with no additional inputs; any probe must reproduce make_inputs exactly (PCG64(1221), w drawn before x, single float32 rounding)."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [],
+          "created_at": "2026-09-30T08:57:08Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [
+            "c1 is decided only by measuring E on the exact make_inputs() workload (kernel output vs float64 W@x on the same float32 inputs); an analytic per-element 1/14 bound is not evidence of the correlated aggregate error.",
+            "c2 is decided by comparing the kernel's fp32 quantizer (scale, qi) elementwise against the fp64 quantizer used to build x's residual direction, on the fixed float32 W; if levels match everywhere, fp64 simulation is a faithful predictor of kernel error."
+          ],
+          "kernel_model": [
+            "For c1, the decisive quantity is aggregate: y_kernel - y_ref = sum over rows r of ( (wq_r - w_r) . x ); x = u + 0.5*r_hat where r_hat is the normalized column-sum of per-row residuals (wq_r - w_r), so the aligned term contributes 0.5*sum_r (wq_r - w_r).r_hat plus the random u . (wq_r - w_r) terms; both fp64 simulation and on-device runtime measurement of E are feasible evidence paths.",
+            "For c2, the decisive evidence is an elementwise comparison of the kernel's fp32 qi/scale against make_inputs' fp64 quantizer on the same float32 W; a CPU simulation replicating fp32 arithmetic (float32 scale = fp32(max|w|)/7, fp32 division and floor) predicts which elements, if any, flip a level.",
+            "Note: the residual direction uses the fp64 quantizer's residual, but x is rounded once to float32 before transfer, so even a perfectly matching fp32 quantizer still yields a slightly different effective residual than the workload's construction assumed."
+          ],
+          "open_questions": [
+            "Measured value of E on-device (T4, Triton 3.4.0) vs an fp64 simulation of the same quantizer - do they agree, and is E <= 0.12?",
+            "Does any element's fp32 w/scale land on a .5 rounding boundary differently than fp64 (c2)?",
+            "Whether the float32 rounding of x (after adding 0.5*residual in float64) measurably decorrelates the injected alignment - relevant only to margin size, not to the contract metric."
+          ],
+          "risk_map": [
+            "Aggregate-error risk (c1): the workload concentrates per-row random quantization residuals into one coherent direction aligned with x; a pure per-element 1/14 error bound understates E - the coherent dot of 0.5*r_hat with sum_r residuals could dominate the error norm relative to ||W@x||.",
+            "Quantizer mismatch risk (c2): fp32 scale = max|w|/7 may round differently than fp64, shifting every w/scale by an ulp and flipping floor(t+0.5) at boundaries; with 32*128=4096 elements, a few flips are plausible but each flip changes that element's residual by one scale step."
+          ],
+          "scope_notes": [
+            "The reference for E is the unquantized float64 W@x, not a quantized simulation; a quantized-reference comparison is useful diagnosis for c2 but does not itself decide compliance.",
+            "Both c1 and c2 are answerable on this single workload with no additional inputs; any probe must reproduce make_inputs exactly (PCG64(1221), w drawn before x, single float32 rounding)."
+          ],
+          "summary": "Refined case_85 description: mapped open claims c1 (residual-aligned quantization error vs E<=0.12 budget) and c2 (fp32 vs fp64 quantizer mismatch) to the concrete quantities and evidence paths that decide them on the fixed workload.",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "Reviewed the complete kernel source, contract, and description model. The only decisive in-scope risks on this single fixed workload are already captured by c1 (residual-aligned 7-level quantization error vs E<=0.12 budget) and c2 (fp32 vs fp64 quantizer boundary flips). Other potential issues (scale=0 division, non-contiguous inputs, alternative shapes/dtypes) are outside the fixed make_inputs() workload contract. Both open claims now need evidence via runtime/simulation probes, not further claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-30T08:57:14Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-09-30T08:57:14Z",
+        "decision": "no_new_claims",
+        "reason": "Reviewed the complete kernel source, contract, and description model. The only decisive in-scope risks on this single fixed workload are already captured by c1 (residual-aligned 7-level quantization error vs E<=0.12 budget) and c2 (fp32 vs fp64 quantizer boundary flips). Other potential issues (scale=0 division, non-contiguous inputs, alternative shapes/dtypes) are outside the fixed make_inputs() workload contract. Both open claims now need evidence via runtime/simulation probes, not further claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 10,
+        "tool_event_id": "t11",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json\nimport numpy as np, torch\nsys.path.insert(0, \"/root/pilot_cases/case_85\")\nimport kernel\n\nx, w = kernel.make_inputs(\"cuda\")\nout = kernel.run(x, w)\ntorch.cuda.synchronize()\nref = w.double() @ x.double()\nerr = out.double() - ref\nE = err.norm().item() / max(ref.norm().item(), 0.001 * np.sqrt(32))\n# fp64 simulation of same quantizer for comparison\nwf = w.double().cpu().numpy()\nxf = x.double().cpu().numpy()\nscale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\nwq = np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale\nsim = wq @ xf\nE_sim = np.linalg.norm(sim - wf @ xf) / max(np.linalg.norm(wf @ xf), 0.001*np.sqrt(32))\nprint(json.dumps({\n    \"metric\": \"contract E on exact make_inputs workload\",\n    \"E_kernel\": E,\n    \"E_fp64_sim_of_quantizer\": float(E_sim),\n    \"budget\": 0.12,\n    \"all_finite\": bool(torch.isfinite(out).all().item()),\n    \"ref_norm\": ref.norm().item(),\n    \"err_norm\": err.norm().item(),\n    \"E_exceeds_budget\": bool(E > 0.12),\n}))",
+        "expected_signal": "E_kernel > 0.12 on the fixed workload (claim c1) or E_kernel <= 0.12",
+        "use_gpu": true
+      },
+      "created_at": "2026-09-30T08:57:42Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "ed9662ac270d7ba9d20096a8cc30d190b835a9906e69a9f9b183d75b510d43da"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "d653fbd8771a93772b6122f40ae59806189b237f251acd34b3b7d39b04bfbfec"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "51f8065f8ce6ff34f074d03f72fa6d4b9b0e437097729fce3e87ba291ef5819e"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On the fixed make_inputs() workload (m=32, k=128, residual=0.5), the per-row 7-level quantization error correlated with the residual-aligned x yields E > 0.12, violating the budget.",
+        "cwd": "/root/pilot_cases/case_85",
+        "duration_s": 4.385988,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "ed9662ac270d7ba9d20096a8cc30d190b835a9906e69a9f9b183d75b510d43da"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "d653fbd8771a93772b6122f40ae59806189b237f251acd34b3b7d39b04bfbfec"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "51f8065f8ce6ff34f074d03f72fa6d4b9b0e437097729fce3e87ba291ef5819e"
+              }
+            ],
+            "duration_s": 4.385988,
+            "exit_code": 0,
+            "expected_signal": "E_kernel > 0.12 on the fixed workload (claim c1) or E_kernel <= 0.12",
+            "json_parse_error": null,
+            "json_result": {
+              "E_exceeds_budget": true,
+              "E_fp64_sim_of_quantizer": 0.16230056135138632,
+              "E_kernel": 0.1623005732699385,
+              "all_finite": true,
+              "budget": 0.12,
+              "err_norm": 1.172982813035686,
+              "metric": "contract E on exact make_inputs workload",
+              "ref_norm": 7.227225322764448
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"contract E on exact make_inputs workload\", \"E_kernel\": 0.1623005732699385, \"E_fp64_sim_of_quantizer\": 0.16230056135138632, \"budget\": 0.12, \"all_finite\": true, \"ref_norm\": 7.227225322764448, \"err_norm\": 1.172982813035686, \"E_exceeds_budget\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "E_kernel > 0.12 on the fixed workload (claim c1) or E_kernel <= 0.12",
+        "json_parse_error": null,
+        "json_result": {
+          "E_exceeds_budget": true,
+          "E_fp64_sim_of_quantizer": 0.16230056135138632,
+          "E_kernel": 0.1623005732699385,
+          "all_finite": true,
+          "budget": 0.12,
+          "err_norm": 1.172982813035686,
+          "metric": "contract E on exact make_inputs workload",
+          "ref_norm": 7.227225322764448
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"contract E on exact make_inputs workload\", \"E_kernel\": 0.1623005732699385, \"E_fp64_sim_of_quantizer\": 0.16230056135138632, \"budget\": 0.12, \"all_finite\": true, \"ref_norm\": 7.227225322764448, \"err_norm\": 1.172982813035686, \"E_exceeds_budget\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import sys, json\nimport numpy as np, torch\nsys.path.insert(0, \"/root/pilot_cases/case_85\")\nimport kernel\n\nx, w = kernel.make_inputs(\"cuda\")\nwf64 = w.double().cpu().numpy()          # exact float32 weights as reals\nw32 = w.cpu().numpy()                    # float32\n\n# fp64 quantizer (as used in make_inputs' residual construction)\ns64 = np.max(np.abs(wf64), axis=1, keepdims=True) / 7.0\nqi64 = np.clip(np.floor(wf64 / s64 + 0.5), -7, 7)\n\n# simulate kernel's fp32 quantizer exactly\ns32 = (np.float32(np.max(np.abs(w32), axis=1, keepdims=True)) / np.float32(7.0))\nt32 = w32 / s32 + np.float32(0.5)\nqi32 = np.clip(np.floor(t32), np.float32(-7), np.float32(7)).astype(np.float32)\n\nflips = int((qi64.astype(np.float32) != qi32).sum())\ns_mismatch = int((s64.astype(np.float32) != s32).sum())\n\n# does flipping change the error vector vs fp64 sim? compare reconstructed weights\nwq32 = qi32 * s32\nwq64 = qi64 * s64\nxf = x.double().cpu().numpy()\nref = wf64 @ xf\nE32 = np.linalg.norm(wq32 @ xf - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\nE64 = np.linalg.norm(wq64 @ xf - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(32))\n\n# distance of any element to a .5 boundary in fp32\ndist_to_boundary = np.abs((t32 - np.floor(t32)) - np.float32(0.5))\nmin_dist = float(dist_to_boundary.min())\n\nprint(json.dumps({\n    \"metric\": \"fp32 vs fp64 quantizer level flips on fixed W (4096 elems)\",\n    \"num_elements\": int(wf64.size),\n    \"qi_level_flips\": flips,\n    \"scale_mismatches_rows\": s_mismatch,\n    \"min_distance_to_.5_boundary_fp32\": min_dist,\n    \"E_fp32_quantized_matvec\": float(E32),\n    \"E_fp64_quantized_matvec\": float(E64),\n    \"E_budget\": 0.12,\n}))",
+        "expected_signal": "count of qi level flips between fp32-simulated kernel quantizer and fp64 quantizer; 0 flips means no mismatch",
+        "use_gpu": true
+      },
+      "created_at": "2026-09-30T08:57:45Z",
+      "id": "t13",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t13_probe.py",
+            "sha256": "a07155b39bc9de7e7a62067d38f600b3e753ea3ab3bd49ae47f1e3d582a5df0a"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t13_stdout.txt",
+            "sha256": "9f63b37eeba5a422abf6a8a2e25b974ffaaaf4b97b2de3e01dc761ebd7fbff99"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t13_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t13_json_result.json",
+            "sha256": "ea8c11c23f7b7b64ab2ddabbd736a2f47127a3e57876e164995ddce4f442cada"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "Float32 computation of scale and qi in the kernel may differ from the float64 quantizer used to construct x's residual direction, flipping quantization levels at .5 boundaries and changing the error vector, potentially pushing E above or below what an fp64 simulation predicts.",
+        "cwd": "/root/pilot_cases/case_85",
+        "duration_s": 3.219762,
+        "event_id": "t13",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "a07155b39bc9de7e7a62067d38f600b3e753ea3ab3bd49ae47f1e3d582a5df0a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "9f63b37eeba5a422abf6a8a2e25b974ffaaaf4b97b2de3e01dc761ebd7fbff99"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "ea8c11c23f7b7b64ab2ddabbd736a2f47127a3e57876e164995ddce4f442cada"
+              }
+            ],
+            "duration_s": 3.219762,
+            "exit_code": 0,
+            "expected_signal": "count of qi level flips between fp32-simulated kernel quantizer and fp64 quantizer; 0 flips means no mismatch",
+            "json_parse_error": null,
+            "json_result": {
+              "E_budget": 0.12,
+              "E_fp32_quantized_matvec": 0.16230056559349976,
+              "E_fp64_quantized_matvec": 0.16230056135138632,
+              "metric": "fp32 vs fp64 quantizer level flips on fixed W (4096 elems)",
+              "min_distance_to_.5_boundary_fp32": 0.0,
+              "num_elements": 4096,
+              "qi_level_flips": 0,
+              "scale_mismatches_rows": 0
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"fp32 vs fp64 quantizer level flips on fixed W (4096 elems)\", \"num_elements\": 4096, \"qi_level_flips\": 0, \"scale_mismatches_rows\": 0, \"min_distance_to_.5_boundary_fp32\": 0.0, \"E_fp32_quantized_matvec\": 0.16230056559349976, \"E_fp64_quantized_matvec\": 0.16230056135138632, \"E_budget\": 0.12}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t13"
+        },
+        "exit_code": 0,
+        "expected_signal": "count of qi level flips between fp32-simulated kernel quantizer and fp64 quantizer; 0 flips means no mismatch",
+        "json_parse_error": null,
+        "json_result": {
+          "E_budget": 0.12,
+          "E_fp32_quantized_matvec": 0.16230056559349976,
+          "E_fp64_quantized_matvec": 0.16230056135138632,
+          "metric": "fp32 vs fp64 quantizer level flips on fixed W (4096 elems)",
+          "min_distance_to_.5_boundary_fp32": 0.0,
+          "num_elements": 4096,
+          "qi_level_flips": 0,
+          "scale_mismatches_rows": 0
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"fp32 vs fp64 quantizer level flips on fixed W (4096 elems)\", \"num_elements\": 4096, \"qi_level_flips\": 0, \"scale_mismatches_rows\": 0, \"min_distance_to_.5_boundary_fp32\": 0.0, \"E_fp32_quantized_matvec\": 0.16230056559349976, \"E_fp64_quantized_matvec\": 0.16230056135138632, \"E_budget\": 0.12}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "E_exceeds_budget": true,
+          "E_fp64_sim_of_quantizer": 0.16230056135138632,
+          "E_kernel": 0.1623005732699385,
+          "all_finite": true,
+          "budget": 0.12,
+          "err_norm": 1.172982813035686,
+          "ref_norm": 7.227225322764448
+        },
+        "event_id": "t12",
+        "status": "confirmed",
+        "summary": "On the exact make_inputs() workload (seed 1221, m=32, k=128, residual=0.5), the Triton kernel measured on GPU gives E = 0.16230 vs the float64 reference, exceeding the 0.12 budget (ref_norm 7.227, err_norm 1.173, outputs all finite). An fp64 simulation of the identical 7-level quantizer reproduces E = 0.16230, confirming the excess comes from the quantization error aligned with the residual-injected x, not from kernel arithmetic artifacts.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:57:57Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:56:49Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:57:57Z",
+              "data": {
+                "E_exceeds_budget": true,
+                "E_fp64_sim_of_quantizer": 0.16230056135138632,
+                "E_kernel": 0.1623005732699385,
+                "all_finite": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "ed9662ac270d7ba9d20096a8cc30d190b835a9906e69a9f9b183d75b510d43da"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "d653fbd8771a93772b6122f40ae59806189b237f251acd34b3b7d39b04bfbfec"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "51f8065f8ce6ff34f074d03f72fa6d4b9b0e437097729fce3e87ba291ef5819e"
+                  }
+                ],
+                "budget": 0.12,
+                "duration_s": 4.385988,
+                "err_norm": 1.172982813035686,
+                "exit_code": 0,
+                "expected_signal": "E_kernel > 0.12 on the fixed workload (claim c1) or E_kernel <= 0.12",
+                "json_parse_error": null,
+                "json_result": {
+                  "E_exceeds_budget": true,
+                  "E_fp64_sim_of_quantizer": 0.16230056135138632,
+                  "E_kernel": 0.1623005732699385,
+                  "all_finite": true,
+                  "budget": 0.12,
+                  "err_norm": 1.172982813035686,
+                  "metric": "contract E on exact make_inputs workload",
+                  "ref_norm": 7.227225322764448
+                },
+                "ref_norm": 7.227225322764448,
+                "stderr": "",
+                "stdout": "{\"metric\": \"contract E on exact make_inputs workload\", \"E_kernel\": 0.1623005732699385, \"E_fp64_sim_of_quantizer\": 0.16230056135138632, \"budget\": 0.12, \"all_finite\": true, \"ref_norm\": 7.227225322764448, \"err_norm\": 1.172982813035686, \"E_exceeds_budget\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the exact make_inputs() workload (seed 1221, m=32, k=128, residual=0.5), the Triton kernel measured on GPU gives E = 0.16230 vs the float64 reference, exceeding the 0.12 budget (ref_norm 7.227, err_norm 1.173, outputs all finite). An fp64 simulation of the identical 7-level quantizer reproduces E = 0.16230, confirming the excess comes from the quantization error aligned with the residual-injected x, not from kernel arithmetic artifacts.",
+              "supports": "confirmed",
+              "tool_event_id": "t12"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "make_inputs deliberately adds 0.5 * the normalized summed per-row quantization residual to x, so the kernel's per-row 7-level quantization error is correlated with x; whether this alignment drives E over the 0.12 budget is the central compliance question and is directly measurable on the fixed workload.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Compliance metric E = ||output - float64 reference||_2 / max(||reference||_2, 0.001*sqrt(32)); passes iff finite and E <= 0.12 on the exact make_inputs() workload."
+            },
+            {
+              "source": "kernel.py make_inputs",
+              "summary": "x is norm-1 random plus 0.5 * normalized per-row quantization-residual direction (residual=0.5), aligning x with the quantization error the kernel introduces."
+            }
+          ],
+          "scope_rationale": "The claim concerns the exact single workload make_inputs() defines (m=32, k=128, residual=0.5); the contract requires E <= 0.12 on that workload, so a measured E > 0.12 on it is a direct budget violation.",
+          "statement": "On the fixed make_inputs() workload (m=32, k=128, residual=0.5), the per-row 7-level quantization error correlated with the residual-aligned x yields E > 0.12, violating the budget.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:57:57Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:57:57Z",
+          "data": {
+            "E_exceeds_budget": true,
+            "E_fp64_sim_of_quantizer": 0.16230056135138632,
+            "E_kernel": 0.1623005732699385,
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "ed9662ac270d7ba9d20096a8cc30d190b835a9906e69a9f9b183d75b510d43da"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "d653fbd8771a93772b6122f40ae59806189b237f251acd34b3b7d39b04bfbfec"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "51f8065f8ce6ff34f074d03f72fa6d4b9b0e437097729fce3e87ba291ef5819e"
+              }
+            ],
+            "budget": 0.12,
+            "duration_s": 4.385988,
+            "err_norm": 1.172982813035686,
+            "exit_code": 0,
+            "expected_signal": "E_kernel > 0.12 on the fixed workload (claim c1) or E_kernel <= 0.12",
+            "json_parse_error": null,
+            "json_result": {
+              "E_exceeds_budget": true,
+              "E_fp64_sim_of_quantizer": 0.16230056135138632,
+              "E_kernel": 0.1623005732699385,
+              "all_finite": true,
+              "budget": 0.12,
+              "err_norm": 1.172982813035686,
+              "metric": "contract E on exact make_inputs workload",
+              "ref_norm": 7.227225322764448
+            },
+            "ref_norm": 7.227225322764448,
+            "stderr": "",
+            "stdout": "{\"metric\": \"contract E on exact make_inputs workload\", \"E_kernel\": 0.1623005732699385, \"E_fp64_sim_of_quantizer\": 0.16230056135138632, \"budget\": 0.12, \"all_finite\": true, \"ref_norm\": 7.227225322764448, \"err_norm\": 1.172982813035686, \"E_exceeds_budget\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact make_inputs() workload (seed 1221, m=32, k=128, residual=0.5), the Triton kernel measured on GPU gives E = 0.16230 vs the float64 reference, exceeding the 0.12 budget (ref_norm 7.227, err_norm 1.173, outputs all finite). An fp64 simulation of the identical 7-level quantizer reproduces E = 0.16230, confirming the excess comes from the quantization error aligned with the residual-injected x, not from kernel arithmetic artifacts.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "E_budget": 0.12,
+          "E_fp32_quantized_matvec": 0.16230056559349976,
+          "E_fp64_quantized_matvec": 0.16230056135138632,
+          "min_distance_to_.5_boundary_fp32": 0.0,
+          "num_elements": 4096,
+          "qi_level_flips": 0,
+          "scale_mismatches_rows": 0
+        },
+        "event_id": "t13",
+        "status": "rebutted",
+        "summary": "Across all 4096 weight elements of the fixed workload, the fp32-simulated kernel quantizer produces exactly the same qi levels and scales as the fp64 quantizer used to construct x's residual direction: 0 level flips, 0 scale mismatches. The resulting E values are essentially identical (fp32 0.16230057 vs fp64 0.16230056). The proposed fp32-vs-fp64 quantizer divergence does not occur on this workload; the budget violation is attributable purely to the quantization error itself (c1), not to rounding-mode mismatch.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-30T08:57:57Z",
+      "id": "t15",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:56:49Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:57:57Z",
+              "data": {
+                "E_budget": 0.12,
+                "E_fp32_quantized_matvec": 0.16230056559349976,
+                "E_fp64_quantized_matvec": 0.16230056135138632,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t13_probe.py",
+                    "sha256": "a07155b39bc9de7e7a62067d38f600b3e753ea3ab3bd49ae47f1e3d582a5df0a"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t13_stdout.txt",
+                    "sha256": "9f63b37eeba5a422abf6a8a2e25b974ffaaaf4b97b2de3e01dc761ebd7fbff99"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t13_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t13_json_result.json",
+                    "sha256": "ea8c11c23f7b7b64ab2ddabbd736a2f47127a3e57876e164995ddce4f442cada"
+                  }
+                ],
+                "duration_s": 3.219762,
+                "exit_code": 0,
+                "expected_signal": "count of qi level flips between fp32-simulated kernel quantizer and fp64 quantizer; 0 flips means no mismatch",
+                "json_parse_error": null,
+                "json_result": {
+                  "E_budget": 0.12,
+                  "E_fp32_quantized_matvec": 0.16230056559349976,
+                  "E_fp64_quantized_matvec": 0.16230056135138632,
+                  "metric": "fp32 vs fp64 quantizer level flips on fixed W (4096 elems)",
+                  "min_distance_to_.5_boundary_fp32": 0.0,
+                  "num_elements": 4096,
+                  "qi_level_flips": 0,
+                  "scale_mismatches_rows": 0
+                },
+                "min_distance_to_.5_boundary_fp32": 0.0,
+                "num_elements": 4096,
+                "qi_level_flips": 0,
+                "scale_mismatches_rows": 0,
+                "stderr": "",
+                "stdout": "{\"metric\": \"fp32 vs fp64 quantizer level flips on fixed W (4096 elems)\", \"num_elements\": 4096, \"qi_level_flips\": 0, \"scale_mismatches_rows\": 0, \"min_distance_to_.5_boundary_fp32\": 0.0, \"E_fp32_quantized_matvec\": 0.16230056559349976, \"E_fp64_quantized_matvec\": 0.16230056135138632, \"E_budget\": 0.12}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Across all 4096 weight elements of the fixed workload, the fp32-simulated kernel quantizer produces exactly the same qi levels and scales as the fp64 quantizer used to construct x's residual direction: 0 level flips, 0 scale mismatches. The resulting E values are essentially identical (fp32 0.16230057 vs fp64 0.16230056). The proposed fp32-vs-fp64 quantizer divergence does not occur on this workload; the budget violation is attributable purely to the quantization error itself (c1), not to rounding-mode mismatch.",
+              "supports": "rebutted",
+              "tool_event_id": "t13"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "The residual direction is computed with np.floor in float64, while Triton computes floor(w/scale+0.5) in float32 with a float32 scale; if w/scale lands within one fp32 ulp of a .5 boundary or fp32 scale differs from fp64 scale, qi flips a level for some elements, changing the error vector and potentially E.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Reference is the float64 mathematical operation on the SAME float32 input values; only the exact make_inputs() workload (whose residual direction is computed in float64) is in scope."
+            },
+            {
+              "source": "kernel.py",
+              "summary": "Kernel computes scale = tl.max(tl.abs(w))/7 and qi = clip(floor(w/scale+0.5),-7,7) in float32, while make_inputs computes the residual with float64 wf and float64 scale."
+            }
+          ],
+          "scope_rationale": "The claim compares the kernel's fp32 quantizer against the fp64 quantizer used to build the in-scope workload's x direction; on the fixed workload this changes the actual quantization error relative to what fp64 simulation predicts, directly affecting the contract metric E.",
+          "statement": "Float32 computation of scale and qi in the kernel may differ from the float64 quantizer used to construct x's residual direction, flipping quantization levels at .5 boundaries and changing the error vector, potentially pushing E above or below what an fp64 simulation predicts.",
+          "status": "rebutted",
+          "updated_at": "2026-09-30T08:57:57Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:57:57Z",
+          "data": {
+            "E_budget": 0.12,
+            "E_fp32_quantized_matvec": 0.16230056559349976,
+            "E_fp64_quantized_matvec": 0.16230056135138632,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "a07155b39bc9de7e7a62067d38f600b3e753ea3ab3bd49ae47f1e3d582a5df0a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "9f63b37eeba5a422abf6a8a2e25b974ffaaaf4b97b2de3e01dc761ebd7fbff99"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "ea8c11c23f7b7b64ab2ddabbd736a2f47127a3e57876e164995ddce4f442cada"
+              }
+            ],
+            "duration_s": 3.219762,
+            "exit_code": 0,
+            "expected_signal": "count of qi level flips between fp32-simulated kernel quantizer and fp64 quantizer; 0 flips means no mismatch",
+            "json_parse_error": null,
+            "json_result": {
+              "E_budget": 0.12,
+              "E_fp32_quantized_matvec": 0.16230056559349976,
+              "E_fp64_quantized_matvec": 0.16230056135138632,
+              "metric": "fp32 vs fp64 quantizer level flips on fixed W (4096 elems)",
+              "min_distance_to_.5_boundary_fp32": 0.0,
+              "num_elements": 4096,
+              "qi_level_flips": 0,
+              "scale_mismatches_rows": 0
+            },
+            "min_distance_to_.5_boundary_fp32": 0.0,
+            "num_elements": 4096,
+            "qi_level_flips": 0,
+            "scale_mismatches_rows": 0,
+            "stderr": "",
+            "stdout": "{\"metric\": \"fp32 vs fp64 quantizer level flips on fixed W (4096 elems)\", \"num_elements\": 4096, \"qi_level_flips\": 0, \"scale_mismatches_rows\": 0, \"min_distance_to_.5_boundary_fp32\": 0.0, \"E_fp32_quantized_matvec\": 0.16230056559349976, \"E_fp64_quantized_matvec\": 0.16230056135138632, \"E_budget\": 0.12}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Across all 4096 weight elements of the fixed workload, the fp32-simulated kernel quantizer produces exactly the same qi levels and scales as the fp64 quantizer used to construct x's residual direction: 0 level flips, 0 scale mismatches. The resulting E values are essentially identical (fp32 0.16230057 vs fp64 0.16230056). The proposed fp32-vs-fp64 quantizer divergence does not occur on this workload; the budget violation is attributable purely to the quantization error itself (c1), not to rounding-mode mismatch.",
+          "supports": "rebutted",
+          "tool_event_id": "t13"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: c1 is confirmed with direct on-device evidence \u2014 E = 0.1623 > 0.12 on the exact make_inputs() workload (m=32, k=128, residual=0.5), all outputs finite, and an fp64 simulation of the identical quantizer reproduces the same E, isolating the cause as the quantization error itself. c2 is rebutted: the kernel's fp32 quantizer matches the fp64 quantizer exactly (0 level flips, 0 scale mismatches over all 4096 elements). No remaining claim covers an untested in-scope risk; all other potential issues (scale=0, alternative shapes/dtypes, strides) are outside the single fixed workload contract.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-30T08:58:04Z",
+      "id": "t16",
+      "output": {
+        "created_at": "2026-09-30T08:58:04Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: c1 is confirmed with direct on-device evidence \u2014 E = 0.1623 > 0.12 on the exact make_inputs() workload (m=32, k=128, residual=0.5), all outputs finite, and an fp64 simulation of the identical quantizer reproduces the same E, isolating the cause as the quantization error itself. c2 is rebutted: the kernel's fp32 quantizer matches the fp64 quantizer exactly (0 level flips, 0 scale mismatches over all 4096 elements). No remaining claim covers an untested in-scope risk; all other potential issues (scale=0, alternative shapes/dtypes, strides) are outside the single fixed workload contract.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 15,
+        "tool_event_id": "t16",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 is confirmed and in-scope: a GPU probe on the exact make_inputs() workload (seed 1221, m=32, k=128, residual=0.5) measured E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.16230 > 0.12 budget (ref_norm 7.227, err_norm 1.173, all outputs finite). The contract explicitly requires E <= 0.12 and states reduced precision is permitted only if the budget is met; this measured violation on the single fixed workload is decisive. An fp64 simulation of the identical quantizer reproduces E = 0.16230, and claim c2's alternative explanation (fp32-vs-fp64 quantizer level flips) is rebutted with 0 flips and 0 scale mismatches over all 4096 weights, isolating the cause as the kernel's 7-level per-row quantization error aligned with the residual-injected x. Skeptic reviewed the latest evidence and recorded no new claims.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:58:12Z",
+      "id": "t17",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-30T08:58:12Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 is confirmed and in-scope: a GPU probe on the exact make_inputs() workload (seed 1221, m=32, k=128, residual=0.5) measured E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.16230 > 0.12 budget (ref_norm 7.227, err_norm 1.173, all outputs finite). The contract explicitly requires E <= 0.12 and states reduced precision is permitted only if the budget is met; this measured violation on the single fixed workload is decisive. An fp64 simulation of the identical quantizer reproduces E = 0.16230, and claim c2's alternative explanation (fp32-vs-fp64 quantizer level flips) is rebutted with 0 flips and 0 scale mismatches over all 4096 weights, isolating the cause as the kernel's 7-level per-row quantization error aligned with the residual-injected x. Skeptic reviewed the latest evidence and recorded no new claims.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-30T08:58:12Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Claim c1 is confirmed and in-scope: a GPU probe on the exact make_inputs() workload (seed 1221, m=32, k=128, residual=0.5) measured E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.16230 > 0.12 budget (ref_norm 7.227, err_norm 1.173, all outputs finite). The contract explicitly requires E <= 0.12 and states reduced precision is permitted only if the budget is met; this measured violation on the single fixed workload is decisive. An fp64 simulation of the identical quantizer reproduces E = 0.16230, and claim c2's alternative explanation (fp32-vs-fp64 quantizer level flips) is rebutted with 0 flips and 0 scale mismatches over all 4096 weights, isolating the cause as the kernel's 7-level per-row quantization error aligned with the residual-injected x. Skeptic reviewed the latest evidence and recorded no new claims.",
+    "verdict": "reject"
+  }
+}

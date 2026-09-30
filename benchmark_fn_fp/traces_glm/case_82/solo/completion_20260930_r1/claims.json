@@ -1,0 +1,65 @@
+[
+  {
+    "created_at": "2026-09-30T08:46:21Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:46:47Z",
+        "data": {
+          "E": 0.001576224834839737,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "073c98b7a34051653bfd96d42e831a47cd63e9fd04a0a2b438df0c52663e90f9"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "7e443f9c851a969f23621db2be20ab723a0a527542c654fd037df02eefc148a9"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "den": 0.17878792473572785,
+          "duration_s": 6.466886,
+          "exit_code": 0,
+          "expected_signal": null,
+          "finite": true,
+          "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+          "json_result": null,
+          "num": 0.00028180996713791196,
+          "stderr": "",
+          "stdout": "{'E': np.float64(0.001576224834839737), 'num': np.float64(0.00028180996713791196), 'den': np.float64(0.17878792473572785), 'norm_ref': np.float64(0.17878792473572785), 'finite': True}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Running the exact make_inputs() workload through the kernel and comparing against a float64 reference gives E = 0.0015762 (num=2.818e-4, den=0.17879 from ||ref||), which exceeds the contract budget E <= 0.001. Outputs are finite, so the failure is purely the budget violation, consistent with the fp16 rounding of softmax probabilities.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The kernel computes softmax probabilities in fp32 but rounds p through fp16 before the weighted sum over V, and the workload's V is deliberately offset (center=0.9) to induce cancellation in the output, shrinking ||reference||. fp16's ~5e-4 relative quantization step on p can plausibly push the relative output error above the 1e-3 budget.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: reference is the float64 mathematical operation on the same float32 inputs; E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(num_elements)) must be <= 0.001 for exactly the make_inputs() workload."
+      }
+    ],
+    "scope_rationale": "The contract requires E <= 0.001 on the single make_inputs() workload with a float64 reference; if the fp16 rounding of p makes E exceed that, it is a budget violation.",
+    "statement": "The kernel's fp16 rounding of softmax probabilities (line 15: p.to(tl.float16).to(tl.float32)) causes the output relative error E to exceed the 0.001 budget on the specified workload.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:46:47Z"
+  }
+]

@@ -1,0 +1,91 @@
+[
+  {
+    "created_at": "2026-09-30T08:29:04Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:29:13Z",
+        "data": {
+          "contract_rstd_var0": 316.22776601683796,
+          "kernel_rstd_var0": 100000.0,
+          "ratio": 316.22776601683796,
+          "source_line": 26
+        },
+        "id": "c1.e1",
+        "kind": "source_inspection",
+        "summary": "kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps). For a constant row, var == 0 exactly (two-pass variance with masked lanes contributing 0), so kernel rstd = 1/eps = 1e5 for eps=1e-5, while the contract formula 1/sqrt(var+eps) gives 1/sqrt(eps) \u2248 316.23 \u2014 a 316.23x divergence in the auxiliary Rstd buffer. Note this buffer is internal: for var=0 the store at line 36 writes (0)*rstd*w + b = b, so the returned y equals bias either way, consistent with the claim's out-of-scope classification.",
+        "supports": "confirmed",
+        "tool_event_id": null
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "At var=0, contract rstd = 1/sqrt(eps) while kernel rstd = 1/eps; with eps=1e-5 these are ~316 vs 100000, a 316x difference. However, only y is contractual per the problem statement, and at var=0 the output y equals bias in both cases, so this divergence is visible only in the internal Mean/Rstd buffers the kernel writes.",
+    "scope": "out_of_scope",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt asks only whether layer_norm()'s output satisfies the formula; the Mean/Rstd buffers are internal artifacts of the kernel, and for constant rows y equals bias in both implementations, so this divergence does not affect the contractual output.",
+    "statement": "The kernel's auxiliary rstd buffer is 1/(sqrt(var)+eps), which for a constant row (var=0) equals 1/eps instead of the contract's 1/sqrt(eps), so any consumer comparing the rstd normalizer against the reference formula diverges by a factor of 1/sqrt(eps) (~316x for eps=1e-5).",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:29:16Z"
+  },
+  {
+    "created_at": "2026-09-30T08:29:31Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:30:26Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t13_probe.py",
+              "sha256": "1a6b5b75f656b9ade19cba0e5469b9414b9765f154c86e1bce2b717d3f30d946"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t13_stdout.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t13_stderr.txt",
+              "sha256": "5509a05e2d02fdbaf00a086f4084a02929d5e52c6a04d9a0fe778d2bb66238d7"
+            }
+          ],
+          "duration_s": 4.506198,
+          "exit_code": 1,
+          "expected_signal": "kernel y deviates from contract-formula y by orders of magnitude for small-variance rows while randn control agrees",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "reason": "cpu_tensor_pointer_error",
+          "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_20/debate/probes/t13_probe.py\", line 36, in <module>\n    y = layer_norm(x, w, b, eps)\n        ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_20/kernel.py\", line 46, in layer_norm\n    _layer_norm_kernel[(n_rows,)](x, y, weight, bias, mean, rstd,\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 390, in <lambda>\n    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)\n                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 617, in run\n    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,\n  File \"/usr/local/lib/python3.11/site-packages/triton/backends/nvidia/driver.py\", line 708, in __call__\n    self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,\nValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)\n",
+          "stdout": "",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe failed with ValueError: CPU tensor pointers not accessible from Triton; no measurement taken. Inconclusive \u2014 retry with .cuda() tensors.",
+        "supports": "inconclusive",
+        "tool_event_id": "t13"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "Line 26 computes rstd = 1.0/(tl.sqrt(var)+eps) instead of 1/sqrt(var+eps). For a row with small nonzero variance, e.g. var = 1e-6 (std 1e-3) and eps=1e-5, contract rstd = 1/sqrt(1.1e-5) \u2248 302 while kernel rstd = 1/(1e-3+1e-5) \u2248 990 \u2014 a >3x error in the normalizer. Since (x-mean) != 0 for such rows, y = (x-mean)*rstd*w + b differs from the contract by the same >3x factor on the normalized component, far beyond any typical allclose tolerance. The error vanishes only for normal-variance rows (var >> eps) and for exactly-constant rows (where (x-mean)=0).",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract states rstd = 1 / sqrt(var + eps) and y = (x-mean)*rstd*weight + bias, and explicitly says eps 'must keep the normalizer finite as the row variance approaches zero' \u2014 the near-zero-variance regime is the contract's stated protected domain, so output accuracy there is required."
+      }
+    ],
+    "scope_rationale": "problem.txt's stated formula is rstd = 1/sqrt(var + eps) and it explicitly names the near-zero-variance regime (\"as the row variance approaches zero\") as the case eps must handle; rows with small nonzero variance are squarely inside this stated contract, and the returned y (the only contractual output per problem.txt) then deviates from the formula's value.",
+    "statement": "For rows with small nonzero variance (e.g. var ~ 1e-6, eps = 1e-5), the returned layer_norm() output y deviates from the contract formula 1/sqrt(var+eps) because the kernel computes rstd = 1/(sqrt(var)+eps) at line 26, giving an error of order eps/(2*var) in the normalizer (~3x for var=1e-6), which multiplies directly into y = (x-mean)*rstd*weight + bias.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-30T08:30:26Z"
+  }
+]

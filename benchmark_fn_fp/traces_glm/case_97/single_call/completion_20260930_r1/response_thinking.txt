@@ -1,0 +1,13 @@
+The recurrence with decay 0.99, noise 0.001, bias 0.01. h accumulates ~0.01/(1-0.99)=1 magnitude. float16 rounding each step: eps ~ 6e-4 relative; accumulated error over 896 steps could be ~0.005 relative? h ~ bounded around 1.0. fp16 rounding error per step ~ h*5e-4? Actually rounding to fp16 gives relative error ~2^-11 ≈ 4.9e-4. Errors accumulate ~sqrt(896)*4e-4 ≈ 0.012 relative — exceeds 0.003 budget? But errors partially decay by factor 0.99 per step; accumulated variance: sum (0.99^k * 5e-4)^2 ≈ 5e-4/sqrt(1-0.98)≈3.5e-3. Hmm borderline. Also fp16 with h ~1 gives absolute error up to 2^-11≈4.88e-4 per step. Accumulated error std ~ 4.88e-4 * sqrt(1/(1-0.9801)) ≈ 4.88e-4*7.1 ≈ 3.5e-3. Relative E: reference norm ~ sqrt(896*32)*1 ≈ 169; error norm ~ sqrt(896*32)*3.5e-3 ≈ 0.59 → E ≈ 3.5e-3 > 0.003. Hmm close. But errors aren't independent per element—they're the same rounding pattern? Each element d independent, each has its own error trajectory. Per-element relative error ~3.5e-3 with some distribution. Denominator uses ||ref||_2 which includes mean h≈1 per element, so E ≈ RMS relative error ≈ ~3.5e-3-ish. Also systematic bias: fp16 round-to-nearest is unbiased-ish. Also note h in fp16 near 1: spacing is 2^-10≈9.77e-4, max error 4.88e-4. Variance of rounding error uniform: (4.88e-4)^2/3 ≈ 7.9e-8, std 2.8e-4. Accumulated: sqrt(7.9e-8/(1-0.9801))=sqrt(4e-6)=2e-3. E ≈ 2e-3 < 0.003? Borderline again.
+
+Wait also b values: noise 0.001, bias 0.01. h steady state ~0.01/(0.01)=1.0 with fluctuation. Actually h = 0.99h + 0.0101±0.001 → h≈1.01. Round errors in h each step also get multiplied by a=0.99.
+
+But bigger issue: the rounding to fp16 also affects b? No, b stored in fp32, computed a*h+b in fp32, then rounded. Also h may be small at first (t=0 h=0.0101+noise) — early steps h small, fp16 fine.
+
+Also fp16 subnormals: h ~1, fine.
+
+Estimate: variance per step of rounding error: uniform in ±u where u = spacing/2. For h in [1,2), spacing 2^-10, u=4.88e-4. Var = u²/3 = 7.95e-8. Amplification: error at step s persists decayed by 0.99^(t-s). Total variance ≈ Var/(1-0.99²) ≈ 7.95e-8/0.0199 ≈ 4e-6, std ≈ 2e-3. Per-element relative error ~2e-3 relative to h≈1. E over all elements ≈ 2e-3 (RMS). That's below 0.003. But there could be bias: h values near 1.01, distribution of rounding might be slightly biased but small. Also h occasionally in [0.5,1) with finer spacing — even smaller error.
+
+Also max vs RMS: E is L2 norm ratio, so RMS. 2e-3 < 3e-3 budget. Seems compliant. Also could be systematic: h converges to fixed point where 0.99h + b ≈ h... rounding to nearest grid point; if h sits between grid points the recurrence could lock to a cycle, error bounded by half spacing ~4.88e-4 anyway. Fine.
+
+Verdict: trust, moderate confidence.

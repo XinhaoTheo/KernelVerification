@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-a05775b70f7a4e2bb3507e96f76bedaf",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I have full artifact context. The critical surface: the kernel computes `e / tl.sum(e)` with no guard for rows where no mask positions are kept — a fully-masked row yields sum 0 and 0/0 = NaN, directly violating the \"all-zero, finite\" contract clause. I'll record the description model now.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-994880ec9b3cd5f3",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.\", \"Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).\", \"Fully-masked rows must return an all-zero output row.\", \"Every returned value must be finite (no NaN/Inf in any row).\", \"Downstream is attention probabilities, so zero rows mean 'contributes nothing'.\"], \"kernel_model\": [\"One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.\", \"Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.\", \"Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).\", \"Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.\", \"Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).\", \"Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes).\"], \"risk_map\": [\"Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane — violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).\", \"Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.\", \"Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.\", \"BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.\", \"Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.\", \"keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs.\"], \"open_questions\": [\"What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?\", \"Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?\", \"Exact behavior of tl.sum over all-zeros followed by division in the target Triton version — needs runtime probe by the Experimenter.\"], \"scope_notes\": [\"In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.\", \"Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.\", \"No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.\", \"n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain.\"], \"summary\": \"Described case_27: masked row-wise softmax with arbitrary mask. Contract requires all-zero, finite output rows even when a row keeps no positions; the kernel divides by tl.sum(e) unconditionally, so an all-masked row produces 0/0 = NaN. This empty-row case is the primary risk surface.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Key bug: empty keep row → sum(e)=0 → 0/0 = NaN, violating all-zero finite contract. Also mask loaded with row*stride for M — mask assumed same stride; fine if contiguous same shape. Record description.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757213,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 961,
+    "prompt_tokens": 4127,
+    "total_tokens": 5088,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 49,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 1979,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 49
+    }
+  }
+}

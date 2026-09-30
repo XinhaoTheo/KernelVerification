@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-00e833824f0e49d7b6e45acb894859bc",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The contract clamps residual probabilities to zero, but the kernel computes a raw subtraction — that's the main description gap worth recording for the Skeptic.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-98cfed0c9ab7b973",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Recovered token must be sampled from residual distribution p_residual(v) proportional to max(target_prob[v] - draft_prob[v], 0), per problem.txt.\", \"Tokens where target_prob < draft_prob (draft over-proposed) must carry zero residual probability and must never be returned as the recovered token.\", \"Sampling via exponential-race (Gumbel-max): with inv_q = 1/q and q ~ Exponential(1), output is argmax_v(p_residual(v) * inv_q[v]).\", \"Inputs are (target_probs, draft_probs, inv_q), each [batch_size, vocab_size]; output is per-request token id tensor.\", \"No explicit test_code or tolerance is present in the artifact, so the acceptance metric (exact index match vs distributional check) is not specified.\"], \"kernel_model\": [\"One Triton program per request (grid = batch_size); loops over vocab in BLOCK_SIZE chunks and tracks a running max of score = (target_prob - draft_prob) * inv_q, using tl.max(..., return_indices=True) per chunk.\", \"score = prob * inv_q is computed WITHOUT clamping prob to >= 0 (kernel.py line 23); the only masking is vocab_offset < vocab_size which sets out-of-range entries to -inf (lines 20, 26).\", \"recovered_id defaults to 0 and is updated only when local_max > max_val strictly, so the first block containing the global max wins but strict '>' plus identical -inf chunks keeps 0 on ties with -inf (line 28-30).\", \"A final clamp tl.minimum(recovered_id, vocab_size - 1) guards against out-of-range indices (line 31); output is int64 per request.\", \"Python wrapper assumes contiguous [batch, vocab] layout, indexing flat as req_idx * vocab_size + offset; BLOCK_SIZE = next_power_of_2(vocab_size).\"], \"open_questions\": [\"What is the actual acceptance test — exact index equality against a reference argmax, or statistical/distributional equivalence over many random draws?\", \"Are inv_q values guaranteed strictly positive, or can they be zero/inf (e.g. q extremely small), and does that interact with negative-residual scoring?\", \"Is there a guaranteed positive-residual region in test inputs, or are degenerate all-over-proposed rows in scope?\"], \"risk_map\": [\"Missing clamp: score uses raw target_prob - draft_prob, so a token with target < draft gets a negative score rather than 0; per contract it must have zero residual mass. This matters when all real residuals are 0 or negative, or when negative residual * large inv_q beats near-zero positive scores.\", \"Behavior when every score is <= 0: kernel returns the argmax of negative values (an over-proposed token) or default id 0, whereas the contract forbids ever returning an over-proposed token; the clamp-then-argmax semantics differ.\", \"Masked-out lanes use -inf but in-range lanes with negative score can still win over a masked lane; combined with the uninitialized recovered_id = 0, ties or all-negative cases may return id 0 even if token 0 is over-proposed.\", \"Strict '>' comparison across block loop plus tl.max tie-breaking: first-index tie-breaking within a block, but a later block with an equal max does not update — generally consistent with first-occurrence argmax, worth checking against reference tie semantics.\", \"Contiguity/stride assumption: wrapper passes tensors directly with flat req_idx * vocab_size indexing; non-contiguous inputs would silently misread.\", \"inv_q loaded with other=0.0 for masked lanes — fine given -inf mask on score, but negative residual * inv_q with unusual inv_q values (0, inf, NaN) could alter argmax.\"], \"scope_notes\": [\"Only the per-request recovered-token argmax is in scope; no softmax normalization or downstream sampling beyond inv_q multiplication is required by problem.txt.\", \"inv_q is supplied (precomputed 1/q); generating q or exponentials is out of scope.\", \"Test code is absent from the artifact (test_code empty), so scope of validation metrics is currently undefined.\", \"No dtype information is given; kernel loads implicitly per pointer dtype and compares in fp32 via max_val, but input dtype (fp16/bf16/fp32) is unspecified.\"], \"summary\": \"Initial description of case_01 recovered-token sampler: kernel implements chunked argmax of (target_prob - draft_prob) * inv_q per request, but omits the contractually required max(...,0) clamp on the residual probability.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Key risk: kernel computes target_prob - draft_prob without clamping to >= 0 (max(...,0)). Negative residuals give negative scores, never argmax (unless all masked... if all scores negative, argmax picks largest which is fine since largest negative is closest to zero — but a negative score is always < 0, and some positive residual presumably exists). But if all residuals negative (all over-proposed tokens), kernel picks one with a negative score — should never return over-proposed token. Also uninitialized recovered_id=0 default if all -inf. Also masked score uses -inf, but negative-prob entries are not masked — a token with target<draft gets negative score which can win if all others are -inf/0? Score 0 could tie. Also potential issue: `recovered_id = 0` Python int vs tensor, tl.minimum ok. Also tl.max with all -inf fine.\n\nMain bug surface: missing max(prob,0) clamp per contract. Record update.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756122,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1206,
+    "prompt_tokens": 4541,
+    "total_tokens": 5747,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 204,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 204
+    }
+  }
+}

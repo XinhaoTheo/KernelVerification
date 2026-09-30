@@ -1,0 +1,18 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are verifying whether a GPU (Triton) kernel implementation is correct.\n\nYou will be given:\n1. A problem statement describing the operation's contract and its reference behavior.\n2. The kernel implementation under test.\n\nDecide one of:\n- \"reject\": the implementation has a real defect / violates the stated contract.\n- \"trust\": the implementation is correct, or is an equally valid alternative implementation.\n- \"needs_more_evidence\": you genuinely cannot tell.\n\nAnswer with the JSON object required by the output schema.\nOutput schema:\n{\"type\": \"object\", \"required\": [\"verdict\", \"confidence\", \"reason\"], \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": [\"trust\", \"reject\", \"needs_more_evidence\"], \"description\": \"'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell.\"}, \"confidence\": {\"type\": \"number\", \"description\": \"0.0 to 1.0.\"}, \"reason\": {\"type\": \"string\", \"description\": \"One or two sentences.\"}}, \"additionalProperties\": false}"
+    },
+    {
+      "role": "user",
+      "content": "## Problem statement (contract + reference behavior)\n\nOperation: row-wise softmax restricted to the positions a boolean mask keeps,\nthe attention-probability step of any masked or padded attention kernel.\n\n    y[j] = exp(x[j]) / sum over kept k of exp(x[k])     if mask[j]\n    y[j] = 0                                            otherwise\n\nInput domain: the mask is arbitrary. In particular a row may keep NO positions\nat all -- a fully padded query row, or a causal row before its first visible\nkey. For such a row the specification requires an all-zero output row: there is\nno probability mass to distribute, and every downstream consumer treats the row\nas contributing nothing.\n\nEvery returned value must be finite.\n\nDoes masked_softmax() satisfy this contract?\n\n\n## Kernel implementation under test (kernel.py)\n\n```python\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _masked_softmax_kernel(X, M, Y, stride, N, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < N\n    x = tl.load(X + row * stride + cols, mask=valid, other=-float(\"inf\"))\n    keep = tl.load(M + row * stride + cols, mask=valid, other=0).to(tl.int1)\n    x = tl.where(keep, x, -float(\"inf\"))\n    x = x - tl.max(x, axis=0)\n    e = tl.where(keep, tl.exp(x), 0.0)\n    tl.store(Y + row * stride + cols, e / tl.sum(e, axis=0), mask=valid)\n\n\ndef masked_softmax(x, mask):\n    # Row-wise softmax over the positions the mask keeps.\n    n_rows, n_cols = x.shape\n    y = torch.empty_like(x)\n    _masked_softmax_kernel[(n_rows,)](x, mask, y, x.stride(0), n_cols,\n                                      BLOCK=triton.next_power_of_2(n_cols))\n    return y\n\n```\n\nIs this implementation correct?"
+    }
+  ],
+  "response_format": {
+    "type": "json_object"
+  },
+  "reasoning_effort": "low"
+}

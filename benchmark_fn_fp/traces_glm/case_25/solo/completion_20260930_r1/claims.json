@@ -1,0 +1,65 @@
+[
+  {
+    "created_at": "2026-09-30T08:32:39Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:33:15Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "33f5035b1ec1dc224ef79abdea048ac0562eadfe6ac35c4b9eee003b3d4332a9"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "aa740818aa55678329250c9fd4b9b9430ded1debd54e65e52c44ac405056eba2"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "bias_ratio_after_50": 1.0134652828753588,
+          "duration_s": 5.267861,
+          "exit_code": 0,
+          "expected_signal": null,
+          "frac_mismatched": 0.4765625,
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "max_abs_err_vs_reference": 0.0783224105834961,
+          "n": 1024,
+          "stderr": "",
+          "stdout": "RESULT_JSON_BEGIN\n{\"metric\": \"elementwise mismatch vs round-to-nearest reference + repeated-application bias\", \"n\": 1024, \"max_abs_err_vs_reference\": 0.0783224105834961, \"frac_mismatched\": 0.4765625, \"mean_abs_initial\": 2.290151357650757, \"mean_abs_after_1\": 2.2913122177124023, \"mean_abs_after_10\": 2.320835828781128, \"mean_abs_after_50\": 2.320988893508911, \"bias_ratio_after_50\": 1.0134652828753588}\nRESULT_JSON_END\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t8 (randn(1024)*3, fp32, block 1024) shows 47.66% of elements mismatch a round-to-nearest reference with max abs error 0.0783 (half a quantization step, scale=absmax/127), confirming tl.floor truncates instead of rounding to nearest; this is the per-element round-trip error, not just a compounding artifact.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Line 14 uses tl.floor(x / scale) instead of round-to-nearest; floor truncates toward -inf, so positive values are systematically biased downward and repeated round trips shrink the tensor toward zero, violating the contract's unbiasedness requirement.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract states 'q = round(x / scale) to the nearest representable level' and 'The rounding must be to nearest, so the round trip is unbiased: repeated application must not push the tensor systematically toward zero or away from it.'"
+      }
+    ],
+    "scope_rationale": "The contract explicitly requires q = round(x / scale) to nearest with an unbiased round trip; using floor violates the stated rounding formula and the declared unbiasedness invariant.",
+    "statement": "The kernel uses floor instead of round-to-nearest when quantizing, introducing a systematic downward bias that compounds over repeated round trips.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:33:15Z"
+  }
+]

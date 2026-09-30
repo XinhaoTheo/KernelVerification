@@ -13,7 +13,7 @@ The values here are measured, not guessed. Each one is justified at its row.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -79,8 +79,8 @@ PROFILES: dict[str, ModelProfile] = {
         # returns no tool call at all.
         max_tokens=32768,
         timeout_s=1800,
-        # Fireworks list price for GLM-5.3 per million tokens. No prompt caching
-        # is applied here, so cached tokens bill as ordinary input.
+        # Historical estimation rates. Preserve these for old traces without a
+        # pricing snapshot; new traces use the dated rates below.
         price_in=0.28,
         price_out=1.10,
         cache_write=1.0,
@@ -131,6 +131,35 @@ def profile_for(model: str) -> ModelProfile:
 def traces_dir_for(model: str) -> str:
     """The family tree containing this model's case/arm/trial directories."""
     return profile_for(model).traces_dir
+
+
+def pricing_snapshot(model: str) -> dict | None:
+    """Freeze a new trial's estimation rates without repricing old evidence."""
+    profile = profile_for(model)
+    if not profile.known:
+        return None
+    rates = {"input_per_million": profile.price_in,
+             "output_per_million": profile.price_out,
+             "cache_write_multiplier": profile.cache_write,
+             "cache_read_multiplier": profile.cache_read,
+             "basis": "project model profile estimate, not an invoice"}
+    if model == "accounts/fireworks/models/glm-5p3":
+        rates.update(input_per_million=1.40, output_per_million=4.40,
+                     checked_at="2026-09-30",
+                     source="https://fireworks.ai/models/fireworks/glm-5p3",
+                     basis="published list price; cached input conservatively billed as uncached; excludes GPU")
+    return rates
+
+
+def profile_for_trace(model: str, metadata: dict) -> ModelProfile:
+    profile = profile_for(model)
+    rates = metadata.get("pricing_snapshot")
+    if not rates:
+        return profile
+    return replace(profile, price_in=float(rates["input_per_million"]),
+                   price_out=float(rates["output_per_million"]),
+                   cache_write=float(rates.get("cache_write_multiplier", 1)),
+                   cache_read=float(rates.get("cache_read_multiplier", 1)))
 
 
 def label_for_traces_dir(name: str) -> str:

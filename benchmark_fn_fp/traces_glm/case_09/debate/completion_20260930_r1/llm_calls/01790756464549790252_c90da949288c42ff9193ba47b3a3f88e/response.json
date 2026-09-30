@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-ec5e5522a166417daab2a7848c832c8d",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two independent runtime probes: c1 tests exactly-tied maxima (all-equal rows, duplicated max) across several power-of-two N, and c2 tests unique-max rows (reversed-range, random) to check order direction. Both compare the returned index to torch.argmax (which keeps the lowest index on ties).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-ac02094392028bc6",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_09\\\")\\nfrom kernel import sorted_topk_indices\\n\\nres = {}\\ndev = \\\"cuda\\\"\\nfor N in [2, 4, 8, 16, 64]:\\n    B = 8\\n    rows = []\\n    # all-equal row\\n    rows.append(torch.full((N,), 0.5, device=dev))\\n    # duplicated max at various pairs\\n    for (i, j) in [(0, N // 2), (1, N - 2), (N // 2, N - 1)]:\\n        r = torch.randn(N, device=dev)\\n        m = r.max()\\n        r[i] = m; r[j] = m\\n        rows.append(r)\\n    # max repeated 3 times\\n    r = torch.randn(N, device=dev)\\n    m = r.max()\\n    for t in [0, N // 3, N - 1]:\\n        r[t] = m\\n    rows.append(r)\\n    scores = torch.stack(rows)\\n    got = sorted_topk_indices(scores, 1).squeeze(1)\\n    want = scores.argmax(1)\\n    mism = (got != want).nonzero().flatten().tolist()\\n    res[f\\\"N={N}\\\"] = {\\\"mismatch_rows\\\": mism, \\\"got\\\": got.tolist(), \\\"want\\\": want.tolist(),\\n                     \\\"n_rows\\\": scores.shape[0]}\\nprint(json.dumps({\\\"claim\\\": \\\"c1 tie-break\\\", \\\"metric\\\": \\\"exact index equality vs torch.argmax (lowest tied index)\\\", \\\"results\\\": res}))\", \"expected_signal\": \"returned top-1 index differs from lowest tied-max index on some row\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-8fcb65494de9cf1e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_09\\\")\\nfrom kernel import sorted_topk_indices\\n\\nres = {}\\ndev = \\\"cuda\\\"\\nfor N in [2, 4, 8, 16, 64]:\\n    B = 16\\n    # reversed-range rows: max at 0, min at N-1 (descending unique values)\\n    desc = torch.arange(N, 0, -1, device=dev, dtype=torch.float32).unsqueeze(0).expand(B // 2, N)\\n    # ascending-range: max at N-1, min at 0\\n    asc = torch.arange(1, N + 1, device=dev, dtype=torch.float32).unsqueeze(0).expand(B // 2, N)\\n    rand = torch.randn(B, N, device=dev)\\n    scores = torch.cat([desc, asc, rand])[:B]\\n    got = sorted_topk_indices(scores, 1).squeeze(1)\\n    want = scores.argmax(1)\\n    mism = (got != want).nonzero().flatten().tolist()\\n    res[f\\\"N={N}\\\"] = {\\\"mismatch_rows\\\": mism, \\\"n_rows\\\": scores.shape[0],\\n                     \\\"desc_row_got\\\": got[0].item(), \\\"desc_row_want\\\": want[0].item(),\\n                     \\\"asc_row_got\\\": got[B // 2].item(), \\\"asc_row_want\\\": want[B // 2].item()}\\nprint(json.dumps({\\\"claim\\\": \\\"c2 order direction\\\", \\\"metric\\\": \\\"exact index equality vs torch.argmax on unique-max rows\\\", \\\"results\\\": res}))\", \"expected_signal\": \"returned top-1 index differs from argmax (e.g. min index returned) on some unique-max row\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch two probes (c1 ties, c2 unique max). Need to import kernel from artifact... use session dir /root/cases/case_09/kernel.py.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756465,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 872,
+    "prompt_tokens": 26541,
+    "total_tokens": 27413,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 34,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 34
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-650d6e8b2cab46038781d65a263e5f10",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe crashed on a shape mismatch in my own test code (row of 6 values assigned to an 11-wide row), so nothing was tested yet. I'll fix the probe and rerun.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a598a595fe3102c8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, '/root/cases/case_32')\\nfrom kernel import triton_argsort\\n\\ndef check(keys):\\n    N, W = keys.shape\\n    s, p = triton_argsort(keys.cuda())\\n    s = s.cpu(); p = p.cpu()\\n    kc = keys.cpu()\\n    sorted_ok = bool(torch.all(s[:, :-1] <= s[:, 1:]))\\n    gather_ok = bool(torch.all(s == torch.gather(kc, 1, p)))\\n    ref = torch.argsort(kc, dim=1, stable=True)\\n    stable_ok = bool(torch.all(p == ref))\\n    return sorted_ok, gather_ok, stable_ok\\n\\nresults = {}\\ntorch.manual_seed(0)\\n\\nresults['W16_dup'] = check(torch.randint(0, 5, (64, 16), dtype=torch.int64))\\nresults['W13_dup'] = check(torch.randint(0, 7, (64, 13), dtype=torch.int64))\\nresults['W9_rand'] = check(torch.randint(-100, 100, (32, 9), dtype=torch.int64))\\nresults['W3_rand'] = check(torch.randint(-100, 100, (16, 3), dtype=torch.int64))\\nresults['W1_rand'] = check(torch.randint(-100, 100, (16, 1), dtype=torch.int64))\\nk = torch.randint(-2**62, 2**62, (32, 11), dtype=torch.int64)\\nk[0, :] = torch.tensor([2**63-1]*5 + [0]*3 + [-2**63]*3, dtype=torch.int64)\\nk[1, :] = torch.tensor([2**63-1, -2**63, 2**63-1, -2**63, 5, 5, 0, 0, 5, -2**63, 2**63-1], dtype=torch.int64)\\nresults['W11_extremes'] = check(k)\\nresults['W10_all_equal'] = check(torch.full((8, 10), 42, dtype=torch.int64))\\nbad = []\\nfor W in [2,3,4,5,6,7,8,12,17,32,33]:\\n    for t in range(10):\\n        kk = torch.randint(-3, 3, (16, W), dtype=torch.int64)\\n        s_ok, g_ok, st_ok = check(kk)\\n        if not (s_ok and g_ok and st_ok):\\n            bad.append((W, t, s_ok, g_ok, st_ok))\\nresults['sweep_bad'] = bad\\n\\nprint(json.dumps({k2: (list(v) if isinstance(v, tuple) else v) for k2, v in results.items()}))\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Probe had a shape bug. Rerun fixed probe.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757985,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 665,
+    "prompt_tokens": 12758,
+    "total_tokens": 13423,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 12,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 12
+    }
+  }
+}

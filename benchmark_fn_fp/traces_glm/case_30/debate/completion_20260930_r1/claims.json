@@ -1,0 +1,129 @@
+[
+  {
+    "created_at": "2026-09-30T08:35:45Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:36:34Z",
+        "data": {
+          "all_equal_fp32_expected": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "all_equal_fp32_kernel": [
+            7,
+            7,
+            7,
+            7
+          ],
+          "all_equal_fp32_mismatch_rows": 4,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "1fbf7fa2f4a7f8f1aab055617919d2512ad0d1206e663280c2c0b94da913a78b"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "26079f848580f319126eeda793bc63849da3b701685aa60c7df9febc257430d6"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "f2d5a8f11d61ba58f86c67420cab4b09308316c22b02366304b5b6fe71018480"
+            }
+          ],
+          "bf16_kernel_mismatch_vs_lowest": 0,
+          "bf16_rows": 256,
+          "bf16_ties_rows_with_tied_max": 0,
+          "distinct_fp32_correct_rows": 4,
+          "duration_s": 6.984565,
+          "exit_code": 0,
+          "expected_signal": "With tied maxima, kernel returns highest tied index (e.g. E-1 for all-equal rows) instead of lowest tied index 0.",
+          "json_parse_error": null,
+          "json_result": {
+            "all_equal_fp32_expected": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "all_equal_fp32_kernel": [
+              7,
+              7,
+              7,
+              7
+            ],
+            "all_equal_fp32_mismatch_rows": 4,
+            "bf16_kernel_mismatch_vs_lowest": 0,
+            "bf16_kernel_mismatch_vs_torchargmax": 0,
+            "bf16_rows": 256,
+            "bf16_ties_rows_with_tied_max": 0,
+            "distinct_fp32_correct_rows": 4,
+            "partial_tie_fp32_expected": [
+              2,
+              2,
+              2,
+              2
+            ],
+            "partial_tie_fp32_kernel": [
+              7,
+              7,
+              7,
+              7
+            ],
+            "partial_tie_fp32_mismatch_rows": 4
+          },
+          "partial_tie_fp32_expected": [
+            2,
+            2,
+            2,
+            2
+          ],
+          "partial_tie_fp32_kernel": [
+            7,
+            7,
+            7,
+            7
+          ],
+          "partial_tie_fp32_mismatch_rows": 4,
+          "stderr": "",
+          "stdout": "{\"all_equal_fp32_kernel\": [7, 7, 7, 7], \"all_equal_fp32_expected\": [0, 0, 0, 0], \"all_equal_fp32_mismatch_rows\": 4, \"partial_tie_fp32_kernel\": [7, 7, 7, 7], \"partial_tie_fp32_expected\": [2, 2, 2, 2], \"partial_tie_fp32_mismatch_rows\": 4, \"bf16_ties_rows_with_tied_max\": 0, \"bf16_kernel_mismatch_vs_lowest\": 0, \"bf16_kernel_mismatch_vs_torchargmax\": 0, \"bf16_rows\": 256, \"distinct_fp32_correct_rows\": 4}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Runtime probe confirms the tie-direction contract violation: for all-equal fp32 logits (E=8), route_top1 returns 7 (E-1) for every row instead of the required lowest tied index 0; for a partial tie (max shared by experts 2 and 5), it returns 7 instead of 2. Distinct-logit rows match torch.argmax (4/4 correct), showing the argmax value is right but the tie rule is broken. bf16 random rows had 0 tied maxima, so bf16 case was non-informative on ties but the fp32 tie cases are decisive and in-scope per problem.txt.",
+        "supports": "confirmed",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "kernel.py line 17 uses `take = v >= best`, so on equal logits each later expert replaces the current best; with all logits tied (e.g. all-equal logits, which reduced-precision routing routinely produces), the kernel returns E-1, whereas the contract requires the lowest tied index (0).",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Ties are a normal occurrence with reduced-precision router logits; when several experts share the largest logit, the contract requires the LOWEST expert index to win."
+      }
+    ],
+    "scope_rationale": "The contract explicitly states ties occur routinely and requires the lowest tied expert index to win; the kernel's `v >= best` comparison makes the highest tied index win instead.",
+    "statement": "route_top1 breaks the required tie rule: with `take = v >= best`, the last (highest-index) expert among tied maxima wins, but the contract requires the LOWEST tied index; e.g. for a row where all logits are equal, the kernel returns E-1 instead of 0.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:36:34Z"
+  }
+]

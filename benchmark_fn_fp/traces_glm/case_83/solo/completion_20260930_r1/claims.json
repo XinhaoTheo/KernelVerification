@@ -1,0 +1,91 @@
+[
+  {
+    "created_at": "2026-09-30T08:49:47Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:50:08Z",
+        "data": {
+          "E": 0.004019616219081861,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "535fed02ab5630e92452d1fa3446286714eb27d4fdf9946541ff779551d3c6f0"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "f0b40827cec2de8b29a7fc6b5e358d786277821d65414f8e53d6101ef6cd0e20"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t6_json_result.json",
+              "sha256": "a8c7ead8ccfa355b200d4c307942f519e108dd514285df3828f37c9548ee34a1"
+            }
+          ],
+          "budget": 0.003,
+          "duration_s": 5.930464,
+          "exit_code": 0,
+          "expected_signal": null,
+          "finite": true,
+          "json_parse_error": null,
+          "json_result": {
+            "E": 0.004019616219081861,
+            "budget": 0.003,
+            "dtype": "torch.float32",
+            "finite": true,
+            "max_abs_err": 0.07155016483739018,
+            "max_rel_err": 0.011308904528730832,
+            "metric": "relative_l2_error_E",
+            "ref_norm": 529.4260244408146,
+            "shape": [
+              640,
+              32
+            ],
+            "verdict_per_contract": false
+          },
+          "max_abs_err": 0.07155016483739018,
+          "max_rel_err": 0.011308904528730832,
+          "ref_norm": 529.4260244408146,
+          "shape": [
+            640,
+            32
+          ],
+          "stderr": "",
+          "stdout": "{\"metric\": \"relative_l2_error_E\", \"E\": 0.004019616219081861, \"budget\": 0.003, \"finite\": true, \"ref_norm\": 529.4260244408146, \"max_abs_err\": 0.07155016483739018, \"max_rel_err\": 0.011308904528730832, \"shape\": [640, 32], \"dtype\": \"torch.float32\", \"verdict_per_contract\": false}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On the exact make_inputs() workload (t=640, d=32, decay=1.0), the kernel output vs float64 reference gives E = 0.00402, exceeding the 0.003 budget (outputs finite, max_abs_err 0.0716, max_rel_err 0.0113). The per-step fp16 rounding of the recurrent state is the accumulated-error source.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The kernel rounds the recurrent state to fp16 at every one of 640 steps. With a=1.0 exactly, the reference h[t] grows linearly (~t*0.01 up to ~6.4), and fp16's ~5e-4 relative quantization error is injected each step, so accumulated error may exceed the contract's E <= 0.003.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Reference is the float64 recurrence on the same float32 inputs from make_inputs(); the kernel satisfies iff all outputs are finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(n)) <= 0.003."
+      }
+    ],
+    "scope_rationale": "Contract requires E <= 0.003 with the float64 recurrence as reference on the exact make_inputs() workload.",
+    "statement": "On the single specified workload (t=640, d=32, decay=1.0), the kernel's repeated fp16 rounding of the recurrent state causes relative error E > 0.003 against the float64 reference.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:50:08Z"
+  }
+]

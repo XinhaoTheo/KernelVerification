@@ -1,20 +1,26 @@
-"""Every string and list in the rendered run state must be bounded.
+"""Auxiliary run state is bounded; the task's source and contract stay complete.
 
 Per-field caps only bound the fields someone remembered to cap. A new state
 field, a dict nested inside a tool output, or a list an agent can append to
 without limit would otherwise reach the prompt at full length and be re-sent on
 every call. These tests assert the property generically, so adding an unbounded
-field fails here rather than showing up as a bill.
+auxiliary field fails here rather than showing up as a bill. The three primary
+artifact fields are explicit exceptions because truncating them changes the
+verification task.
 """
 from __future__ import annotations
 
 import json
 
+import pytest
+
 from verifier.agentic import state as S
 from verifier.agentic.agents.base import _DEFAULT_LIST_LIMIT, _state_for_prompt
 
 BIG = "X" * 40_000
-HARD_CEILING = 12_100  # the artifact source budget, the largest allowed anywhere
+HARD_CEILING = 12_100  # upper bound for auxiliary strings, including trim markers
+COMPLETE_ARTIFACT_PATHS = {"state.artifact.kernel_code", "state.artifact.test_code",
+                           "state.artifact.problem_text"}
 
 
 def _oversized_state() -> S.RunState:
@@ -70,9 +76,10 @@ def _strings(node, path=""):
             yield from _strings(value, f"{path}[{index}]")
 
 
-def test_no_string_in_the_rendered_state_is_unbounded() -> None:
+def test_no_auxiliary_string_in_the_rendered_state_is_unbounded() -> None:
     rendered = _state_for_prompt(_oversized_state(), role="skeptic")
-    oversized = {p: len(v) for p, v in _strings(rendered, "state") if len(v) > HARD_CEILING}
+    oversized = {p: len(v) for p, v in _strings(rendered, "state")
+                 if p not in COMPLETE_ARTIFACT_PATHS and len(v) > HARD_CEILING}
     assert not oversized, f"unbounded strings reached the prompt: {oversized}"
 
 
@@ -87,7 +94,8 @@ def test_nested_tool_payloads_are_bounded_too() -> None:
 def test_judge_sees_the_full_ledger_but_still_bounded() -> None:
     # The Judge is exempt from claim compaction; it must not be exempt from bounds.
     rendered = _state_for_prompt(_oversized_state(), role="judge")
-    oversized = {p: len(v) for p, v in _strings(rendered, "state") if len(v) > HARD_CEILING}
+    oversized = {p: len(v) for p, v in _strings(rendered, "state")
+                 if p not in COMPLETE_ARTIFACT_PATHS and len(v) > HARD_CEILING}
     assert not oversized, f"unbounded strings reached the Judge prompt: {oversized}"
 
 
@@ -109,6 +117,46 @@ def test_normal_sized_content_is_passed_through_untouched() -> None:
     rendered = _state_for_prompt(st, role="skeptic")
     assert "truncated" not in json.dumps(rendered)
     assert rendered["claims"][0]["statement"] == "stride handling is wrong"
+
+
+@pytest.mark.parametrize("role", ["solo", "describer", "skeptic", "experimenter", "judge"])
+def test_full_task_inputs_reach_every_role_past_the_old_12k_limit(role) -> None:
+    """Keep a long kernel's wrapper and final contract clause through both clamps."""
+    from verifier.agentic.agents.base import LLMAgent
+
+    kernel = "\n".join(f"# kernel setup line {i}: " + "x" * 40 for i in range(500))
+    kernel += "\n\ndef run(x):\n    return actual_kernel(x, preserve_tail=True)\n"
+    test = "\n".join(f"# reference setup line {i}: " + "y" * 40 for i in range(500))
+    test += "\n\ndef test_wrapper():\n    assert final_reference_check()\n"
+    contract = ("All explicitly listed configurations are in scope.\n" * 500
+                + "FINAL CLAUSE: Include the short trailing group and preserve its output.\n")
+    state = _oversized_state()
+    state.artifact.update(kernel_code=kernel, test_code=test, problem_text=contract)
+    before = dict(state.artifact)
+    # The actual user-prompt serializer includes _state_for_prompt_unbounded and
+    # the generic recursive clamp. No model or paid API is needed for this check.
+    agent = LLMAgent(role=role, instructions="Verify.", llm_client=None)
+    prompt = agent._build_user_prompt(state=state)
+    _, separator, payload = prompt.partition("=== Current Run State ===\n")
+    assert separator
+    rendered, _ = json.JSONDecoder().raw_decode(payload)
+    artifact = rendered["artifact"]
+    for key, source in (("kernel_code", kernel), ("test_code", test)):
+        assert len(source) > 12_000
+        recovered = []
+        for number, line in enumerate(artifact[key].splitlines(), start=1):
+            prefix, content = line.split(": ", 1)
+            assert int(prefix) == number
+            recovered.append(content)
+        assert "\n".join(recovered) == source.rstrip("\n")
+        assert "truncated" not in artifact[key]
+    assert artifact["problem_text"] == contract
+    assert "actual_kernel(x, preserve_tail=True)" in artifact["kernel_code"]
+    assert "final_reference_check()" in artifact["test_code"]
+    assert len(artifact["notes"]) < HARD_CEILING
+    assert len(rendered["tool_events"][0]["output"]["stdout"]) < HARD_CEILING
+    assert len(rendered["history"][0]["text"]) < HARD_CEILING
+    assert state.artifact == before
 
 
 def test_evidence_fields_survive_at_their_own_budget() -> None:

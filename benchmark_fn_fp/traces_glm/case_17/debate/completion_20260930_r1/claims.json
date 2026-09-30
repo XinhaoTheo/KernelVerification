@@ -1,0 +1,225 @@
+[
+  {
+    "created_at": "2026-09-30T08:26:42Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:27:14Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "f60b49ad3cfad5a68d8ad79b413cb0839bc9f196b7377e5bc8f1045f8902cf4e"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "6af1b7ae70eb4449a5c584ea56b89e033c5346ee878544dd0de87e263a3c0701"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "ade5e877b36b0c083fdaedfd7eb139c39517ac3c0e8e1115a3ae51d3133e99f2"
+            }
+          ],
+          "chunk": 64,
+          "duration_s": 5.089887,
+          "exit_code": 0,
+          "expected_signal": "trailing partial chunk positions (64..99) remain 0 while reference cumsum is nonzero; max_abs_err_tail >> 0",
+          "json_parse_error": null,
+          "json_result": {
+            "chunk": 64,
+            "dtype": "torch.float32",
+            "max_abs_err_tail": 10.053009033203125,
+            "max_abs_err_written": 1.9073486328125e-06,
+            "ref_tail_allclose": false,
+            "sample_out_tail": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "sample_ref_tail": [
+              -1.1006591320037842,
+              -2.0740959644317627,
+              -1.1181726455688477,
+              -2.2976255416870117,
+              -3.304033041000366,
+              -3.1880407333374023
+            ],
+            "seqlen": 100,
+            "shape": [
+              3,
+              100
+            ],
+            "tail_indices": [
+              64,
+              99
+            ],
+            "tail_is_all_zero": true
+          },
+          "max_abs_err_tail": 10.053009033203125,
+          "max_abs_err_written": 1.9073486328125e-06,
+          "sample_out_tail": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "sample_ref_tail": [
+            -1.1006591320037842,
+            -2.0740959644317627,
+            -1.1181726455688477,
+            -2.2976255416870117,
+            -3.304033041000366,
+            -3.1880407333374023
+          ],
+          "seqlen": 100,
+          "shape": [
+            3,
+            100
+          ],
+          "stderr": "",
+          "stdout": "{\"seqlen\": 100, \"chunk\": 64, \"shape\": [3, 100], \"dtype\": \"torch.float32\", \"tail_indices\": [64, 99], \"max_abs_err_written\": 1.9073486328125e-06, \"max_abs_err_tail\": 10.053009033203125, \"tail_is_all_zero\": true, \"ref_tail_allclose\": false, \"sample_out_tail\": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], \"sample_ref_tail\": [-1.1006591320037842, -2.0740959644317627, -1.1181726455688477, -2.2976255416870117, -3.304033041000366, -3.1880407333374023]}\n",
+          "tail_allclose": false,
+          "tail_is_all_zero": true,
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "seqlen=100, chunk=64: positions 0-63 match reference cumsum (max_abs_err 1.9e-6), but the entire trailing partial chunk (positions 64-99) is all zeros while the reference is nonzero \u2014 tail_is_all_zero=true, max_abs_err_tail=10.05, allclose fails. The floor-division loop bound (seqlen//CHUNK=1) never visits the final partial chunk, exactly as claimed.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The loop bound uses floor division, so the final partial chunk of size seqlen % chunk (e.g. seqlen=100, chunk=64) is never stored; out = torch.zeros_like leaves those positions as 0.0 instead of the correct cumulative sums.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly states seqlen is not required to be a multiple of chunk and that trailing positions must still produce correct outputs; seqlen=100, chunk=64 (or any seqlen%64!=0) is a contract-admitted input.",
+    "statement": "When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_like, violating y[b,t]=sum_{s<=t}x[b,s].",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:27:14Z"
+  },
+  {
+    "created_at": "2026-09-30T08:26:42Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:27:14Z",
+        "data": {
+          "allclose": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "e224633176c1ec019e07d576e7b450dced24c6e777d372199a557199c8b03e81"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "bca21d89e1a3ec96422bb034bfa1da290d3bf14cba2e14e2628010eef13905dc"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "a1a52f80786a571158628e2f1df949cd760ac32b41a393f658a6aba6a58e14d5"
+            }
+          ],
+          "chunk": 64,
+          "duration_s": 4.895248,
+          "exit_code": 0,
+          "expected_signal": "entire output tensor is zeros (n_chunks=0, loop never runs) while reference cumsum is nonzero",
+          "json_parse_error": null,
+          "json_result": {
+            "allclose": false,
+            "chunk": 64,
+            "max_abs_err": 10.293733596801758,
+            "out_is_all_zero": true,
+            "out_nonzero_count": 0,
+            "ref_nonzero_count": 64,
+            "sample_out": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "sample_ref": [
+              -0.2962779998779297,
+              2.3801701068878174,
+              2.239323854446411,
+              1.395228624343872
+            ],
+            "seqlen": 32,
+            "shape": [
+              2,
+              32
+            ]
+          },
+          "max_abs_err": 10.293733596801758,
+          "out_is_all_zero": true,
+          "out_nonzero_count": 0,
+          "ref_nonzero_count": 64,
+          "seqlen": 32,
+          "shape": [
+            2,
+            32
+          ],
+          "stderr": "",
+          "stdout": "{\"seqlen\": 32, \"chunk\": 64, \"shape\": [2, 32], \"max_abs_err\": 10.293733596801758, \"out_is_all_zero\": true, \"ref_nonzero_count\": 64, \"out_nonzero_count\": 0, \"allclose\": false, \"sample_out\": [0.0, 0.0, 0.0, 0.0], \"sample_ref\": [-0.2962779998779297, 2.3801701068878174, 2.239323854446411, 1.395228624343872]}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "seqlen=32, chunk=64: n_chunks = 32//64 = 0, the kernel loop never executes, and the entire output tensor is zeros (out_nonzero_count=0) while the reference cumsum is nonzero at all 64 elements (max_abs_err=10.29, allclose=false). Complete failure of the contract for a contract-admitted input, exactly as claimed.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "seqlen // CHUNK = 0, so range(0) skips the loop entirely and out stays all zeros \u2014 a more severe subcase of the floor-division bug.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+      }
+    ],
+    "scope_rationale": "problem.txt says any positive seqlen; seqlen=32 < chunk=64 gives n_chunks=0, leaving the entire output zero instead of the correct cumsum.",
+    "statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted input.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:27:14Z"
+  }
+]

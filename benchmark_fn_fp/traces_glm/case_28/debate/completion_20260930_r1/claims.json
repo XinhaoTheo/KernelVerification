@@ -1,0 +1,215 @@
+[
+  {
+    "created_at": "2026-09-30T08:35:11Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:35:47Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "c637e4019751b4a8171fbdace69b3b0e88cba9fdefce3953dc3c60d4a6b8096e"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "a9195c3484bc71cc5f188bab04c8f2730a104b115be1033a100dd71a57ae2075"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "5794736171b697330d4db947fe11fefb67fab88bc87e6bd444b98eea352a6da1"
+            }
+          ],
+          "budget": 0.05,
+          "duration_s": 5.738579,
+          "exit_code": 0,
+          "expected_signal": "per-row relative error > 5% for heavy-tailed rows with 50-100x outliers",
+          "json_parse_error": null,
+          "json_result": {
+            "budget": 0.05,
+            "metric": "per_row_relative_L2_error",
+            "trials": [
+              {
+                "exceeds_5pct": true,
+                "max_row_err": 0.5486,
+                "outlier_ratio": 20,
+                "per_row_rel_err": [
+                  0.5413,
+                  0.5324,
+                  0.5486,
+                  0.5443
+                ]
+              },
+              {
+                "exceeds_5pct": true,
+                "max_row_err": 0.8487,
+                "outlier_ratio": 50,
+                "per_row_rel_err": [
+                  0.8487,
+                  0.8298,
+                  0.8269,
+                  0.8447
+                ]
+              },
+              {
+                "exceeds_5pct": true,
+                "max_row_err": 0.9423,
+                "outlier_ratio": 100,
+                "per_row_rel_err": [
+                  0.9344,
+                  0.9405,
+                  0.9423,
+                  0.9377
+                ]
+              }
+            ]
+          },
+          "max_row_err_ratio100": 0.9423,
+          "max_row_err_ratio20": 0.5486,
+          "max_row_err_ratio50": 0.8487,
+          "outlier_ratios": [
+            20,
+            50,
+            100
+          ],
+          "per_row_rel_err": {
+            "100x": [
+              0.9344,
+              0.9405,
+              0.9423,
+              0.9377
+            ],
+            "20x": [
+              0.5413,
+              0.5324,
+              0.5486,
+              0.5443
+            ],
+            "50x": [
+              0.8487,
+              0.8298,
+              0.8269,
+              0.8447
+            ]
+          },
+          "stderr": "",
+          "stdout": "{\"metric\": \"per_row_relative_L2_error\", \"budget\": 0.05, \"trials\": [{\"outlier_ratio\": 20, \"per_row_rel_err\": [0.5413, 0.5324, 0.5486, 0.5443], \"max_row_err\": 0.5486, \"exceeds_5pct\": true}, {\"outlier_ratio\": 50, \"per_row_rel_err\": [0.8487, 0.8298, 0.8269, 0.8447], \"max_row_err\": 0.8487, \"exceeds_5pct\": true}, {\"outlier_ratio\": 100, \"per_row_rel_err\": [0.9344, 0.9405, 0.9423, 0.9377], \"max_row_err\": 0.9423, \"exceeds_5pct\": true}]}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Heavy-tailed rows (bulk ~N(0,1), two outlier channels at 20x/50x/100x the bulk \u2014 squarely within the contract's stated 1-2 orders-of-magnitude outlier domain) show per-row relative L2 errors of 53-55%, 83-85%, and 93-94% respectively, all far above the 5% budget. The outlier channels are clamped at 127*scale with scale calibrated on the third-largest |x|, removing most of their magnitude. Confirmed.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The kernel deliberately calibrates scale on the third-largest |x| (default pctl_levels=2) instead of the row absmax, so the top-2 magnitude values map to |q|>127 and are clamped; with outlier-to-bulk ratios of 10-100x, the clamped entries lose most of their magnitude and dominate the row norm.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Input domain explicitly includes 'a small number of channels carrying values one or two orders of magnitude above the bulk'; accuracy requirement is per-row relative error <= 5% and clamped entries 'remove [their] whole magnitude from the reconstruction', which is 'not loose enough to absorb a value that has been clamped away'."
+      }
+    ],
+    "scope_rationale": "The contract's input domain is heavy-tailed activations with a few channels 1-2 orders of magnitude above the bulk, and it explicitly states the 5% budget cannot absorb clamped entries. A row where the two largest magnitudes are ~50-100x the bulk will have both clamped, likely exceeding 5% relative error.",
+    "statement": "For a heavy-tailed row (e.g., bulk ~N(0,1) with 1-2 channels 50-100x the bulk), quant_dequant with default pctl_levels=2 clamps the outlier channels at 127*scale where scale is the third-largest |x|/127, producing per-row relative error well above the 5% budget.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:35:47Z"
+  },
+  {
+    "created_at": "2026-09-30T08:35:11Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:35:47Z",
+        "data": {
+          "absmax_reference_max_err": 0.0194,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "7b02990b1d2c4b6fb86d06e7067accbf2f3f211bb19c109daccefc583719f534"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "2a3250f76a9de905a6b2c7b060156afcd68678f1b70e54afb993243fa6f9849f"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "4174b5f484c16b9c837b66cde22f1a5d6b12010173bdf782569562f5ecbdb450"
+            }
+          ],
+          "duration_s": 5.737025,
+          "exit_code": 0,
+          "expected_signal": "tied top-3 magnitudes collapse thresh to 0, scale=1.0, per-row error near 100%",
+          "json_parse_error": null,
+          "json_result": {
+            "absmax_reference_max_err": 0.0194,
+            "exceeds_5pct": true,
+            "kernel_per_row_err": [
+              0.3593,
+              0.3479,
+              0.361,
+              0.3491
+            ],
+            "kernel_y_zero_fraction": 0.000244140625,
+            "max_kernel_err": 0.361,
+            "metric": "per_row_relative_L2_error, kernel vs absmax-reference"
+          },
+          "kernel_y_zero_fraction": 0.000244140625,
+          "max_kernel_err": 0.361,
+          "stderr": "",
+          "stdout": "{\"metric\": \"per_row_relative_L2_error, kernel vs absmax-reference\", \"kernel_per_row_err\": [0.3593, 0.3479, 0.361, 0.3491], \"max_kernel_err\": 0.361, \"absmax_reference_max_err\": 0.0194, \"kernel_y_zero_fraction\": 0.000244140625, \"exceeds_5pct\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "top_tied_magnitude": 0.5
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Rows with the top-3 |x| tied at 0.5 over a ~0.05-magnitude bulk show kernel per-row relative errors of ~35-36% vs the absmax-calibrated reference's 1.94% \u2014 7x over the 5% budget. The strict '<' drops all tied top values at once, collapsing thresh toward the bulk and mis-calibrating the scale (the ~0 scale=1.0 fallback is one manifestation; here thresh lands on the bulk max, crushing small entries to the 0.004-scale grid). Confirmed for the tied-top-values regime.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "tl.where(ax < thresh, ax, 0.0) with strict < removes all tied entries at once; if the three or more largest magnitudes are equal, thresh collapses to 0, the fallback scale=1.0 quantizes every |x|<0.5 to 0 and all others to integer values, destroying the row.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract requires per-row relative reconstruction error <= 5% for real transformer activations; heavy-tailed rows commonly have duplicated outlier magnitudes (identical outlier channels), and the scheme formula scale = calibration(|x|)/127 must reconstruct each row within 5%."
+      }
+    ],
+    "scope_rationale": "Transformer activation rows with duplicated outlier magnitudes (e.g., two channels both at the max value, plus repeated values) are within the stated heavy-tailed input domain; when the top-3 |x| are tied, the threshold collapses to 0 and the fallback scale=1.0 quantizes small-magnitude entries to zero.",
+    "statement": "When the top |x| values of a row are tied (e.g., a row where the three largest magnitudes are equal), the strict '<' threshold loop drops all tied values at once, making thresh=0 and scale=1.0, so the whole row quantizes to 0 or tiny integers and the per-row relative error approaches 100% for small-magnitude rows.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:35:47Z"
+  }
+]

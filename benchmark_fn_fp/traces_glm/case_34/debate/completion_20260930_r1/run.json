@@ -1,0 +1,1058 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "__pycache__/kernel.cpython-311.pyc",
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_34",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _blocked_sum_kernel(X, Out, N, BLOCK: tl.constexpr):\n    pid = tl.program_id(0)\n    idx = pid * BLOCK + tl.arange(0, BLOCK)\n    x = tl.load(X + idx, mask=idx < N, other=0.0)\n    tl.atomic_add(Out, tl.sum(x, axis=0))\n\n\ndef blocked_sum(x: torch.Tensor, block: int = 1024) -> torch.Tensor:\n    \"\"\"Sum of a float32 tensor, one atomic accumulation per block.\"\"\"\n    out = torch.zeros(1, device=x.device, dtype=torch.float32)\n    _blocked_sum_kernel[(triton.cdiv(x.numel(), block),)](x, out, x.numel(), BLOCK=block)\n    return out\n",
+    "passed": null,
+    "problem_text": "Operation: sum of a float32 tensor, partitioned across blocks and combined with\none atomic add per block, the reduction strategy used by split-K GEMM and\nall-reduce kernels.\n\n    out = sum over i of x[i]\n\nThe sum is a per-tensor statistic over an activation buffer carried in full\nfloat32. Every element of x is an ordinary activation value drawn from the\nlayer's own distribution, standard normal in the shipped workload, and x holds\nN = 65536 elements. No quantisation grid, common scale, or shared exponent\napplies to them.\n\nContract: two calls on the same input must return bitwise identical results. The\nstatistic is compared across replicas holding the same shard and is pinned as a\ngolden value in CI, so two runs that disagree in their last bits are not\ninterchangeable. How the sum is partitioned across blocks, and in what order the\npartial sums are combined, are performance choices the contract leaves free; only\nthe returned bits are constrained.\n\nDoes blocked_sum() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_34",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:41:50Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:42:18Z",
+          "data": {
+            "N": 65536,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "c8fb1e10d94a2d46593edd53269f00b9a08708216c33082fb8d7070d8927b8c7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "bbb2dd6ac80a883876332e2cfdad5021825beed2bf36f21e4ee1524f61543e4b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "961f02d2d8a7edba0b6e3a5f634c8052f748055c8b97c3dd8c66320a2fb6c709"
+              }
+            ],
+            "block": 1024,
+            "distinct_bits_hex": [
+              "0x43222096",
+              "0x43222097",
+              "0x43222098",
+              "0x43222099",
+              "0x4322209a",
+              "0x4322209b",
+              "0x4322209c",
+              "0x4322209d",
+              "0x4322209e",
+              "0x4322209f",
+              "0x432220a0",
+              "0x432220a1",
+              "0x432220a2"
+            ],
+            "duration_s": 5.920995,
+            "exit_code": 0,
+            "expected_signal": "more than one distinct output bit pattern across repeated calls, or exactly one",
+            "json_parse_error": null,
+            "json_result": {
+              "N": 65536,
+              "block": 1024,
+              "distinct_bits_hex": [
+                "0x43222096",
+                "0x43222097",
+                "0x43222098",
+                "0x43222099",
+                "0x4322209a",
+                "0x4322209b",
+                "0x4322209c",
+                "0x4322209d",
+                "0x4322209e",
+                "0x4322209f",
+                "0x432220a0",
+                "0x432220a1",
+                "0x432220a2"
+              ],
+              "distinct_values": [
+                162.12728881835938,
+                162.12730407714844,
+                162.1273193359375,
+                162.12733459472656,
+                162.12734985351562,
+                162.1273651123047,
+                162.12738037109375,
+                162.1273956298828,
+                162.12741088867188,
+                162.12742614746094,
+                162.12744140625,
+                162.12745666503906,
+                162.12747192382812
+              ],
+              "distribution": "standard normal (seed 0)",
+              "dtype": "float32",
+              "metric": "distinct raw output bit patterns over 300 repeated calls",
+              "n_calls": 300,
+              "n_distinct_bits": 13,
+              "reason": "contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation",
+              "ref_sum": 162.1273193359375
+            },
+            "max_value": 162.12747192382812,
+            "metric": "distinct raw output bit patterns over 300 repeated calls",
+            "min_value": 162.12728881835938,
+            "n_calls": 300,
+            "n_distinct_bits": 13,
+            "ref_sum": 162.1273193359375,
+            "stderr": "",
+            "stdout": "{\"metric\": \"distinct raw output bit patterns over 300 repeated calls\", \"reason\": \"contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation\", \"n_distinct_bits\": 13, \"distinct_bits_hex\": [\"0x43222096\", \"0x43222097\", \"0x43222098\", \"0x43222099\", \"0x4322209a\", \"0x4322209b\", \"0x4322209c\", \"0x4322209d\", \"0x4322209e\", \"0x4322209f\", \"0x432220a0\", \"0x432220a1\", \"0x432220a2\"], \"distinct_values\": [162.12728881835938, 162.12730407714844, 162.1273193359375, 162.12733459472656, 162.12734985351562, 162.1273651123047, 162.12738037109375, 162.1273956298828, 162.12741088867188, 162.12742614746094, 162.12744140625, 162.12745666503906, 162.12747192382812], \"ref_sum\": 162.1273193359375, \"n_calls\": 300, \"N\": 65536, \"block\": 1024, \"dtype\": \"float32\", \"distribution\": \"standard normal (seed 0)\"}\n",
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Repeating blocked_sum 300 times on the same 65536-element standard-normal float32 tensor (default block=1024) yielded 13 distinct raw output bit patterns spanning 0x43222096 to 0x432220a2 (values ~162.1272888 to ~162.1274719), i.e. a spread of 13 ULPs. This directly violates the contract that two calls on the same input must return bitwise identical results, confirming the atomic_add cross-block nondeterminism hypothesis.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "tl.atomic_add to a single float32 address from many concurrent programs has an unspecified completion order; float32 addition is non-associative, so different cross-block orders round differently, producing last-bit differences between runs on the same input. The contract explicitly forbids any last-bit disagreement.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract: two calls on the same input must return bitwise identical results... two runs that disagree in their last bits are not interchangeable."
+        }
+      ],
+      "scope_rationale": "The stated contract requires two calls on the same input (N=65536 float32 standard-normal) to return bitwise identical results; the shipped workload uses default block=1024, so 64 atomic adds per call compete on ordering. Any cross-run ULP difference in the output scalar violates this directly.",
+      "statement": "blocked_sum on a 65536-element standard-normal float32 input (default block=1024) can return different raw bits across repeated calls on the same input, because the 64 per-block partial sums are combined via tl.atomic_add in hardware-determined order and float32 addition is non-associative, violating the bitwise-identical contract.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:42:18Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_34",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_34"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_34"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_34"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_34",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 15.775033990999873,
+      "role": "describer",
+      "round": 2,
+      "text": "The kernel uses a single atomic_add per block into one output scalar, and the contract demands bitwise-identical results across runs \u2014 the atomic accumulation order is exactly the nondeterminism surface. I'll record this description.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": "[\"Compute the sum of an N-element float32 tensor (N=65536, standard normal activations in the shipped workload) with no quantization or shared exponent.\", \"Partitioning across blocks and the order of combining partial sums are explicitly free performance choices; only the returned bits are constrained.\", \"Hard requirement: two calls on the same input must return bitwise identical results, because the value is pinned as a CI golden and compared across replicas holding the same shard.\"], \"kernel_model</arg_key><arg_value>[\"blocked_sum launches a Triton kernel over cdiv(N, block) programs (default block=1024), each masking its slice with other=0.0 and computing tl.sum over its BLOCK lanes.\", \"Each program then does tl.atomic_add(Out, partial_sum) into a single pre-zeroed float32 scalar on the GPU.\", \"Output is a length-1 float32 tensor; no deterministic reduction tree, no stream/device ordering trick, no CPU fallback.\", \"Within a block the tl.sum reduction order is compiler/ISA-fixed per launch, so per-block partials are presumably stable; the cross-block combination is delegated to hardware atomic ordering.\"], \"risk_map</arg_key><arg_value>[\"tl.atomic_add from many concurrent programs to the same float32 address has an unspecified completion order; the resulting rounding of the cross-block accumulation can differ between runs, violating the bitwise-identical contract even when each per-block partial is deterministic.\", \"With N=65536, block=1024 there are 64 competing atomics; for standard normal data the expected cross-run ULP differences are small but nonzero \u2014 the contract forbids even last-bit disagreement.\", \"Atomic float adds on the same address may serialize unpredictably or, on some hardware, use different internal ordering (e.g. reduction networks), so determinism cannot be assumed from one passing run.\", \"If block is caller-chosen such that it does not divide N or is not a power of two, masking still guards correctness of values, but launch-count/order assumptions remain as-is; the atomic nondeterminism risk is independent of block size.\", \"tl.sum lane order within a block should be fixed by compilation, but JIT recompilation or different BLOCK constexpr values across runs would change partials \u2014 worth noting only if the harness varies block.\"], \"scope_notes</arg_key><arg_value>In-scope: bitwise determinism of the returned scalar across repeated identical calls, per the problem contract; N=65536 float32, standard normal in the shipped workload.\", \"Out-of-scope per contract: how the sum is partitioned and the order in which partial sums are combined, as long as returned bits are stable; performance is a free choice.\", \"Test code is empty in this artifact (test_code: ''), so determinism evidence must come from repeated-run probes comparing raw bits, not from an existing harness.\"], \"open_questions\": [\"Does the runtime evidence show cross-run bitwise differences in the output scalar for identical inputs (e.g. via .view(torch.int32) comparison over repeated calls)?\", \"Does Triton/hardware on this platform happen to serialize same-address atomics in launch order consistently, which would mask the theoretical nondeterminism in a small number of runs?\", \"Is the reference/benchmark tolerance bitwise (contract says bits), or is there a hidden numeric tolerance that would make atomic nondeterminism acceptable?\"], \"summary</arg_key><arg_value>case_34: blocked_sum sums a 65536-element float32 tensor via per-block Triton partial sums combined by float32 atomic_add into one scalar. Contract requires bitwise-identical results across runs; the atomic accumulation order is the primary determinism risk."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.775,
+        "input_tokens": 4219,
+        "output_tokens": 821
+      }
+    },
+    {
+      "duration_s": 7.962743413999988,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The contract demands bitwise-identical results across repeated calls, while the kernel combines 64 per-block partial sums through hardware-order float32 atomic adds \u2014 the exact nondeterminism surface. I'll record this as the primary in-scope claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "tl.atomic_add to a single float32 address from many concurrent programs has an unspecified completion order; float32 addition is non-associative, so different cross-block orders round differently, producing last-bit differences between runs on the same input. The contract explicitly forbids any last-bit disagreement.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract: two calls on the same input must return bitwise identical results... two runs that disagree in their last bits are not interchangeable."
+              }
+            ],
+            "scope_rationale": "The stated contract requires two calls on the same input (N=65536 float32 standard-normal) to return bitwise identical results; the shipped workload uses default block=1024, so 64 atomic adds per call compete on ordering. Any cross-run ULP difference in the output scalar violates this directly.",
+            "statement": "blocked_sum on a 65536-element standard-normal float32 input (default block=1024) can return different raw bits across repeated calls on the same input, because the 64 per-block partial sums are combined via tl.atomic_add in hardware-determined order and float32 addition is non-associative, violating the bitwise-identical contract."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.963,
+        "input_tokens": 7368,
+        "output_tokens": 326
+      }
+    },
+    {
+      "duration_s": 7.8226140970000415,
+      "role": "experimenter",
+      "round": 4,
+      "text": "The only open claim (c1) is that the atomic accumulation order makes repeated calls non-bitwise-identical. I'll probe it directly by calling blocked_sum many times on the same fixed 65536-element standard-normal tensor and comparing raw output bits.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_34/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ntorch.manual_seed(0)\nx = torch.randn(65536, device=\"cuda\", dtype=torch.float32)\nref = x.sum().item()\n\nbits = []\nfor _ in range(300):\n    out = k.blocked_sum(x)\n    bits.append(out.view(torch.int32).item())\n\nuniq = sorted(set(bits))\nvals = [torch.tensor(b, dtype=torch.int32).view(torch.float32).item() for b in uniq]\nprint(json.dumps({\n    \"metric\": \"distinct raw output bit patterns over 300 repeated calls\",\n    \"reason\": \"contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation\",\n    \"n_distinct_bits\": len(uniq),\n    \"distinct_bits_hex\": [hex(b) for b in uniq],\n    \"distinct_values\": vals,\n    \"ref_sum\": ref,\n    \"n_calls\": 300,\n    \"N\": x.numel(),\n    \"block\": 1024,\n    \"dtype\": \"float32\",\n    \"distribution\": \"standard normal (seed 0)\",\n}))\n",
+            "expected_signal": "more than one distinct output bit pattern across repeated calls, or exactly one",
+            "timeout_s": 240
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.823,
+        "input_tokens": 9021,
+        "output_tokens": 387
+      }
+    },
+    {
+      "duration_s": 14.309843343000011,
+      "role": "experimenter",
+      "round": 5,
+      "text": "The probe decisively confirms c1: 300 repeated calls on the same input produced 13 distinct raw output bit patterns (0x43222096\u20130x4322209a2), a direct violation of the bitwise-identical contract. I'll finalize the evidence and update the claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "N": 65536,
+              "block": 1024,
+              "distinct_bits_hex": [
+                "0x43222096",
+                "0x43222097",
+                "0x43222098",
+                "0x43222099",
+                "0x4322209a",
+                "0x4322209b",
+                "0x4322209c",
+                "0x4322209d",
+                "0x4322209e",
+                "0x4322209f",
+                "0x432220a0",
+                "0x432220a1",
+                "0x432220a2"
+              ],
+              "max_value": 162.12747192382812,
+              "metric": "distinct raw output bit patterns over 300 repeated calls",
+              "min_value": 162.12728881835938,
+              "n_calls": 300,
+              "n_distinct_bits": 13,
+              "ref_sum": 162.1273193359375
+            },
+            "event_id": "t7",
+            "status": "confirmed",
+            "summary": "Repeating blocked_sum 300 times on the same 65536-element standard-normal float32 tensor (default block=1024) yielded 13 distinct raw output bit patterns spanning 0x43222096 to 0x432220a2 (values ~162.1272888 to ~162.1274719), i.e. a spread of 13 ULPs. This directly violates the contract that two calls on the same input must return bitwise identical results, confirming the atomic_add cross-block nondeterminism hypothesis.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 14.31,
+        "input_tokens": 12640,
+        "output_tokens": 445
+      }
+    },
+    {
+      "duration_s": 6.646273947000054,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The evidence is decisive: the confirmed in-scope claim c1 shows 13 distinct output bit patterns across 300 repeated calls on the same input, directly violating the bitwise-identical contract. No additional claims are needed.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The sole contract requirement (bitwise-identical results across calls on the same input) is already covered by confirmed in-scope claim c1, which has decisive runtime evidence: 300 repeated calls on the same 65536-element standard-normal float32 tensor at default block=1024 produced 13 distinct raw output bit patterns (0x43222096\u20130x432220a2, ~13 ULP spread), due to nondeterministic float32 tl.atomic_add ordering. The kernel source contains no other behavior surface (masking and per-block tl.sum are correct for N divisible by block), so no further claims would be material.",
+            "reviewed_claims": [
+              "c1"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.646,
+        "input_tokens": 18718,
+        "output_tokens": 221
+      }
+    },
+    {
+      "duration_s": 7.626349323000113,
+      "role": "judge",
+      "round": 7,
+      "text": "The sole claim c1 is confirmed in_scope with decisive runtime evidence: 300 repeated calls on the same input produced 13 distinct output bit patterns, directly violating the contract's explicit bitwise-identical requirement. Skeptic signed off with no new claims. Since no test.py/get_inputs exist, problem.txt is the operative contract, and its hard determinism requirement is violated. I'll record a reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The problem.txt contract explicitly requires that two calls on the same input return bitwise identical results (\"two runs that disagree in their last bits are not interchangeable\"). Confirmed in-scope claim c1 shows via a runtime probe (tool event t7) that 300 repeated calls of blocked_sum on the same 65536-element standard-normal float32 tensor (default block=1024) produced 13 distinct raw output bit patterns spanning 0x43222096\u20130x432220a2 (~162.1272888 to ~162.1274719, a 13-ULP spread), because the 64 per-block partial sums are combined via tl.atomic_add in hardware-nondeterministic order and float32 addition is non-associative. The artifact has no test.py or get_inputs, so problem.txt is the operative contract, and this is a direct violation of its explicitly required behavior \u2014 not an acceptable rounding/ordering deviation, since the contract itself constrains the returned bits. No open claims remain, and the Skeptic reviewed the latest evidence and recorded no new claims.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.626,
+        "input_tokens": 19475,
+        "output_tokens": 371
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-30T08:42:25Z",
+    "decision": "no_new_claims",
+    "reason": "The sole contract requirement (bitwise-identical results across calls on the same input) is already covered by confirmed in-scope claim c1, which has decisive runtime evidence: 300 repeated calls on the same 65536-element standard-normal float32 tensor at default block=1024 produced 13 distinct raw output bit patterns (0x43222096\u20130x432220a2, ~13 ULP spread), due to nondeterministic float32 tl.atomic_add ordering. The kernel source contains no other behavior surface (masking and per-block tl.sum are correct for N divisible by block), so no further claims would be material.",
+    "reviewed_claims": [
+      "c1"
+    ],
+    "reviewed_tool_event_count": 8,
+    "tool_event_id": "t9",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_34"
+      },
+      "created_at": "2026-09-30T08:41:26Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "__pycache__/kernel.cpython-311.pyc",
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_34",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _blocked_sum_kernel(X, Out, N, BLOCK: tl.constexpr):\n    pid = tl.program_id(0)\n    idx = pid * BLOCK + tl.arange(0, BLOCK)\n    x = tl.load(X + idx, mask=idx < N, other=0.0)\n    tl.atomic_add(Out, tl.sum(x, axis=0))\n\n\ndef blocked_sum(x: torch.Tensor, block: int = 1024) -> torch.Tensor:\n    \"\"\"Sum of a float32 tensor, one atomic accumulation per block.\"\"\"\n    out = torch.zeros(1, device=x.device, dtype=torch.float32)\n    _blocked_sum_kernel[(triton.cdiv(x.numel(), block),)](x, out, x.numel(), BLOCK=block)\n    return out\n",
+        "passed": null,
+        "problem_text": "Operation: sum of a float32 tensor, partitioned across blocks and combined with\none atomic add per block, the reduction strategy used by split-K GEMM and\nall-reduce kernels.\n\n    out = sum over i of x[i]\n\nThe sum is a per-tensor statistic over an activation buffer carried in full\nfloat32. Every element of x is an ordinary activation value drawn from the\nlayer's own distribution, standard normal in the shipped workload, and x holds\nN = 65536 elements. No quantisation grid, common scale, or shared exponent\napplies to them.\n\nContract: two calls on the same input must return bitwise identical results. The\nstatistic is compared across replicas holding the same shard and is pinned as a\ngolden value in CI, so two runs that disagree in their last bits are not\ninterchangeable. How the sum is partitioned across blocks, and in what order the\npartial sums are combined, are performance choices the contract leaves free; only\nthe returned bits are constrained.\n\nDoes blocked_sum() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_34",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_34"
+      },
+      "created_at": "2026-09-30T08:41:26Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: sum of a float32 tensor, partitioned across blocks and combined with\none atomic add per block, the reduction strategy used by split-K GEMM and\nall-reduce kernels.\n\n    out = sum over i of x[i]\n\nThe sum is a per-tensor statistic over an activation buffer carried in full\nfloat32. Every element of x is an ordinary activation value drawn from the\nlayer's own distribution, standard normal in the shipped workload, and x holds\nN = 65536 elements. No quantisation grid, common scale, or shared exponent\napplies to them.\n\nContract: two calls on the same input must return bitwise identical results. The\nstatistic is compared across replicas holding the same shard and is pinned as a\ngolden value in CI, so two runs that disagree in their last bits are not\ninterchangeable. How the sum is partitioned across blocks, and in what order the\npartial sums are combined, are performance choices the contract leaves free; only\nthe returned bits are constrained.\n\nDoes blocked_sum() satisfy this contract?\n",
+        "entry": "case_34",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_34"
+      },
+      "created_at": "2026-09-30T08:41:26Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_34",
+        "files": [
+          {
+            "kind": "other",
+            "path": "__pycache__/kernel.cpython-311.pyc",
+            "size_bytes": 1637
+          },
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 599
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1003
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_34",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:41:26Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_34\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_34",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": "[\"Compute the sum of an N-element float32 tensor (N=65536, standard normal activations in the shipped workload) with no quantization or shared exponent.\", \"Partitioning across blocks and the order of combining partial sums are explicitly free performance choices; only the returned bits are constrained.\", \"Hard requirement: two calls on the same input must return bitwise identical results, because the value is pinned as a CI golden and compared across replicas holding the same shard.\"], \"kernel_model</arg_key><arg_value>[\"blocked_sum launches a Triton kernel over cdiv(N, block) programs (default block=1024), each masking its slice with other=0.0 and computing tl.sum over its BLOCK lanes.\", \"Each program then does tl.atomic_add(Out, partial_sum) into a single pre-zeroed float32 scalar on the GPU.\", \"Output is a length-1 float32 tensor; no deterministic reduction tree, no stream/device ordering trick, no CPU fallback.\", \"Within a block the tl.sum reduction order is compiler/ISA-fixed per launch, so per-block partials are presumably stable; the cross-block combination is delegated to hardware atomic ordering.\"], \"risk_map</arg_key><arg_value>[\"tl.atomic_add from many concurrent programs to the same float32 address has an unspecified completion order; the resulting rounding of the cross-block accumulation can differ between runs, violating the bitwise-identical contract even when each per-block partial is deterministic.\", \"With N=65536, block=1024 there are 64 competing atomics; for standard normal data the expected cross-run ULP differences are small but nonzero \u2014 the contract forbids even last-bit disagreement.\", \"Atomic float adds on the same address may serialize unpredictably or, on some hardware, use different internal ordering (e.g. reduction networks), so determinism cannot be assumed from one passing run.\", \"If block is caller-chosen such that it does not divide N or is not a power of two, masking still guards correctness of values, but launch-count/order assumptions remain as-is; the atomic nondeterminism risk is independent of block size.\", \"tl.sum lane order within a block should be fixed by compilation, but JIT recompilation or different BLOCK constexpr values across runs would change partials \u2014 worth noting only if the harness varies block.\"], \"scope_notes</arg_key><arg_value>In-scope: bitwise determinism of the returned scalar across repeated identical calls, per the problem contract; N=65536 float32, standard normal in the shipped workload.\", \"Out-of-scope per contract: how the sum is partitioned and the order in which partial sums are combined, as long as returned bits are stable; performance is a free choice.\", \"Test code is empty in this artifact (test_code: ''), so determinism evidence must come from repeated-run probes comparing raw bits, not from an existing harness.\"], \"open_questions\": [\"Does the runtime evidence show cross-run bitwise differences in the output scalar for identical inputs (e.g. via .view(torch.int32) comparison over repeated calls)?\", \"Does Triton/hardware on this platform happen to serialize same-address atomics in launch order consistently, which would mask the theoretical nondeterminism in a small number of runs?\", \"Is the reference/benchmark tolerance bitwise (contract says bits), or is there a hidden numeric tolerance that would make atomic nondeterminism acceptable?\"], \"summary</arg_key><arg_value>case_34: blocked_sum sums a 65536-element float32 tensor via per-block Triton partial sums combined by float32 atomic_add into one scalar. Contract requires bitwise-identical results across runs; the atomic accumulation order is the primary determinism risk."
+      },
+      "created_at": "2026-09-30T08:41:42Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "tool record_description_update missing required arg: summary",
+          "recoverable": true,
+          "type": "ToolRegistryError"
+        },
+        "error_type": "ToolRegistryError",
+        "event_id": "t5",
+        "message": "tool record_description_update missing required arg: summary",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "tl.atomic_add to a single float32 address from many concurrent programs has an unspecified completion order; float32 addition is non-associative, so different cross-block orders round differently, producing last-bit differences between runs on the same input. The contract explicitly forbids any last-bit disagreement.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: two calls on the same input must return bitwise identical results... two runs that disagree in their last bits are not interchangeable."
+          }
+        ],
+        "scope_rationale": "The stated contract requires two calls on the same input (N=65536 float32 standard-normal) to return bitwise identical results; the shipped workload uses default block=1024, so 64 atomic adds per call compete on ordering. Any cross-run ULP difference in the output scalar violates this directly.",
+        "statement": "blocked_sum on a 65536-element standard-normal float32 input (default block=1024) can return different raw bits across repeated calls on the same input, because the 64 per-block partial sums are combined via tl.atomic_add in hardware-determined order and float32 addition is non-associative, violating the bitwise-identical contract."
+      },
+      "created_at": "2026-09-30T08:41:50Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-30T08:41:50Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "tl.atomic_add to a single float32 address from many concurrent programs has an unspecified completion order; float32 addition is non-associative, so different cross-block orders round differently, producing last-bit differences between runs on the same input. The contract explicitly forbids any last-bit disagreement.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: two calls on the same input must return bitwise identical results... two runs that disagree in their last bits are not interchangeable."
+          }
+        ],
+        "scope_rationale": "The stated contract requires two calls on the same input (N=65536 float32 standard-normal) to return bitwise identical results; the shipped workload uses default block=1024, so 64 atomic adds per call compete on ordering. Any cross-run ULP difference in the output scalar violates this directly.",
+        "statement": "blocked_sum on a 65536-element standard-normal float32 input (default block=1024) can return different raw bits across repeated calls on the same input, because the 64 per-block partial sums are combined via tl.atomic_add in hardware-determined order and float32 addition is non-associative, violating the bitwise-identical contract.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:41:50Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_34/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ntorch.manual_seed(0)\nx = torch.randn(65536, device=\"cuda\", dtype=torch.float32)\nref = x.sum().item()\n\nbits = []\nfor _ in range(300):\n    out = k.blocked_sum(x)\n    bits.append(out.view(torch.int32).item())\n\nuniq = sorted(set(bits))\nvals = [torch.tensor(b, dtype=torch.int32).view(torch.float32).item() for b in uniq]\nprint(json.dumps({\n    \"metric\": \"distinct raw output bit patterns over 300 repeated calls\",\n    \"reason\": \"contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation\",\n    \"n_distinct_bits\": len(uniq),\n    \"distinct_bits_hex\": [hex(b) for b in uniq],\n    \"distinct_values\": vals,\n    \"ref_sum\": ref,\n    \"n_calls\": 300,\n    \"N\": x.numel(),\n    \"block\": 1024,\n    \"dtype\": \"float32\",\n    \"distribution\": \"standard normal (seed 0)\",\n}))\n",
+        "expected_signal": "more than one distinct output bit pattern across repeated calls, or exactly one",
+        "timeout_s": 240
+      },
+      "created_at": "2026-09-30T08:42:04Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "c8fb1e10d94a2d46593edd53269f00b9a08708216c33082fb8d7070d8927b8c7"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "bbb2dd6ac80a883876332e2cfdad5021825beed2bf36f21e4ee1524f61543e4b"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "961f02d2d8a7edba0b6e3a5f634c8052f748055c8b97c3dd8c66320a2fb6c709"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "blocked_sum on a 65536-element standard-normal float32 input (default block=1024) can return different raw bits across repeated calls on the same input, because the 64 per-block partial sums are combined via tl.atomic_add in hardware-determined order and float32 addition is non-associative, violating the bitwise-identical contract.",
+        "cwd": "/root/cases/case_34",
+        "duration_s": 5.920995,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "c8fb1e10d94a2d46593edd53269f00b9a08708216c33082fb8d7070d8927b8c7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "bbb2dd6ac80a883876332e2cfdad5021825beed2bf36f21e4ee1524f61543e4b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "961f02d2d8a7edba0b6e3a5f634c8052f748055c8b97c3dd8c66320a2fb6c709"
+              }
+            ],
+            "duration_s": 5.920995,
+            "exit_code": 0,
+            "expected_signal": "more than one distinct output bit pattern across repeated calls, or exactly one",
+            "json_parse_error": null,
+            "json_result": {
+              "N": 65536,
+              "block": 1024,
+              "distinct_bits_hex": [
+                "0x43222096",
+                "0x43222097",
+                "0x43222098",
+                "0x43222099",
+                "0x4322209a",
+                "0x4322209b",
+                "0x4322209c",
+                "0x4322209d",
+                "0x4322209e",
+                "0x4322209f",
+                "0x432220a0",
+                "0x432220a1",
+                "0x432220a2"
+              ],
+              "distinct_values": [
+                162.12728881835938,
+                162.12730407714844,
+                162.1273193359375,
+                162.12733459472656,
+                162.12734985351562,
+                162.1273651123047,
+                162.12738037109375,
+                162.1273956298828,
+                162.12741088867188,
+                162.12742614746094,
+                162.12744140625,
+                162.12745666503906,
+                162.12747192382812
+              ],
+              "distribution": "standard normal (seed 0)",
+              "dtype": "float32",
+              "metric": "distinct raw output bit patterns over 300 repeated calls",
+              "n_calls": 300,
+              "n_distinct_bits": 13,
+              "reason": "contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation",
+              "ref_sum": 162.1273193359375
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"distinct raw output bit patterns over 300 repeated calls\", \"reason\": \"contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation\", \"n_distinct_bits\": 13, \"distinct_bits_hex\": [\"0x43222096\", \"0x43222097\", \"0x43222098\", \"0x43222099\", \"0x4322209a\", \"0x4322209b\", \"0x4322209c\", \"0x4322209d\", \"0x4322209e\", \"0x4322209f\", \"0x432220a0\", \"0x432220a1\", \"0x432220a2\"], \"distinct_values\": [162.12728881835938, 162.12730407714844, 162.1273193359375, 162.12733459472656, 162.12734985351562, 162.1273651123047, 162.12738037109375, 162.1273956298828, 162.12741088867188, 162.12742614746094, 162.12744140625, 162.12745666503906, 162.12747192382812], \"ref_sum\": 162.1273193359375, \"n_calls\": 300, \"N\": 65536, \"block\": 1024, \"dtype\": \"float32\", \"distribution\": \"standard normal (seed 0)\"}\n",
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "more than one distinct output bit pattern across repeated calls, or exactly one",
+        "json_parse_error": null,
+        "json_result": {
+          "N": 65536,
+          "block": 1024,
+          "distinct_bits_hex": [
+            "0x43222096",
+            "0x43222097",
+            "0x43222098",
+            "0x43222099",
+            "0x4322209a",
+            "0x4322209b",
+            "0x4322209c",
+            "0x4322209d",
+            "0x4322209e",
+            "0x4322209f",
+            "0x432220a0",
+            "0x432220a1",
+            "0x432220a2"
+          ],
+          "distinct_values": [
+            162.12728881835938,
+            162.12730407714844,
+            162.1273193359375,
+            162.12733459472656,
+            162.12734985351562,
+            162.1273651123047,
+            162.12738037109375,
+            162.1273956298828,
+            162.12741088867188,
+            162.12742614746094,
+            162.12744140625,
+            162.12745666503906,
+            162.12747192382812
+          ],
+          "distribution": "standard normal (seed 0)",
+          "dtype": "float32",
+          "metric": "distinct raw output bit patterns over 300 repeated calls",
+          "n_calls": 300,
+          "n_distinct_bits": 13,
+          "reason": "contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation",
+          "ref_sum": 162.1273193359375
+        },
+        "sandbox": {
+          "cpu_limit_s": 270,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"distinct raw output bit patterns over 300 repeated calls\", \"reason\": \"contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation\", \"n_distinct_bits\": 13, \"distinct_bits_hex\": [\"0x43222096\", \"0x43222097\", \"0x43222098\", \"0x43222099\", \"0x4322209a\", \"0x4322209b\", \"0x4322209c\", \"0x4322209d\", \"0x4322209e\", \"0x4322209f\", \"0x432220a0\", \"0x432220a1\", \"0x432220a2\"], \"distinct_values\": [162.12728881835938, 162.12730407714844, 162.1273193359375, 162.12733459472656, 162.12734985351562, 162.1273651123047, 162.12738037109375, 162.1273956298828, 162.12741088867188, 162.12742614746094, 162.12744140625, 162.12745666503906, 162.12747192382812], \"ref_sum\": 162.1273193359375, \"n_calls\": 300, \"N\": 65536, \"block\": 1024, \"dtype\": \"float32\", \"distribution\": \"standard normal (seed 0)\"}\n",
+        "timed_out": false,
+        "timeout_s": 240,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "N": 65536,
+          "block": 1024,
+          "distinct_bits_hex": [
+            "0x43222096",
+            "0x43222097",
+            "0x43222098",
+            "0x43222099",
+            "0x4322209a",
+            "0x4322209b",
+            "0x4322209c",
+            "0x4322209d",
+            "0x4322209e",
+            "0x4322209f",
+            "0x432220a0",
+            "0x432220a1",
+            "0x432220a2"
+          ],
+          "max_value": 162.12747192382812,
+          "metric": "distinct raw output bit patterns over 300 repeated calls",
+          "min_value": 162.12728881835938,
+          "n_calls": 300,
+          "n_distinct_bits": 13,
+          "ref_sum": 162.1273193359375
+        },
+        "event_id": "t7",
+        "status": "confirmed",
+        "summary": "Repeating blocked_sum 300 times on the same 65536-element standard-normal float32 tensor (default block=1024) yielded 13 distinct raw output bit patterns spanning 0x43222096 to 0x432220a2 (values ~162.1272888 to ~162.1274719), i.e. a spread of 13 ULPs. This directly violates the contract that two calls on the same input must return bitwise identical results, confirming the atomic_add cross-block nondeterminism hypothesis.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:42:18Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:41:50Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:42:18Z",
+              "data": {
+                "N": 65536,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "c8fb1e10d94a2d46593edd53269f00b9a08708216c33082fb8d7070d8927b8c7"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "bbb2dd6ac80a883876332e2cfdad5021825beed2bf36f21e4ee1524f61543e4b"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "961f02d2d8a7edba0b6e3a5f634c8052f748055c8b97c3dd8c66320a2fb6c709"
+                  }
+                ],
+                "block": 1024,
+                "distinct_bits_hex": [
+                  "0x43222096",
+                  "0x43222097",
+                  "0x43222098",
+                  "0x43222099",
+                  "0x4322209a",
+                  "0x4322209b",
+                  "0x4322209c",
+                  "0x4322209d",
+                  "0x4322209e",
+                  "0x4322209f",
+                  "0x432220a0",
+                  "0x432220a1",
+                  "0x432220a2"
+                ],
+                "duration_s": 5.920995,
+                "exit_code": 0,
+                "expected_signal": "more than one distinct output bit pattern across repeated calls, or exactly one",
+                "json_parse_error": null,
+                "json_result": {
+                  "N": 65536,
+                  "block": 1024,
+                  "distinct_bits_hex": [
+                    "0x43222096",
+                    "0x43222097",
+                    "0x43222098",
+                    "0x43222099",
+                    "0x4322209a",
+                    "0x4322209b",
+                    "0x4322209c",
+                    "0x4322209d",
+                    "0x4322209e",
+                    "0x4322209f",
+                    "0x432220a0",
+                    "0x432220a1",
+                    "0x432220a2"
+                  ],
+                  "distinct_values": [
+                    162.12728881835938,
+                    162.12730407714844,
+                    162.1273193359375,
+                    162.12733459472656,
+                    162.12734985351562,
+                    162.1273651123047,
+                    162.12738037109375,
+                    162.1273956298828,
+                    162.12741088867188,
+                    162.12742614746094,
+                    162.12744140625,
+                    162.12745666503906,
+                    162.12747192382812
+                  ],
+                  "distribution": "standard normal (seed 0)",
+                  "dtype": "float32",
+                  "metric": "distinct raw output bit patterns over 300 repeated calls",
+                  "n_calls": 300,
+                  "n_distinct_bits": 13,
+                  "reason": "contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation",
+                  "ref_sum": 162.1273193359375
+                },
+                "max_value": 162.12747192382812,
+                "metric": "distinct raw output bit patterns over 300 repeated calls",
+                "min_value": 162.12728881835938,
+                "n_calls": 300,
+                "n_distinct_bits": 13,
+                "ref_sum": 162.1273193359375,
+                "stderr": "",
+                "stdout": "{\"metric\": \"distinct raw output bit patterns over 300 repeated calls\", \"reason\": \"contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation\", \"n_distinct_bits\": 13, \"distinct_bits_hex\": [\"0x43222096\", \"0x43222097\", \"0x43222098\", \"0x43222099\", \"0x4322209a\", \"0x4322209b\", \"0x4322209c\", \"0x4322209d\", \"0x4322209e\", \"0x4322209f\", \"0x432220a0\", \"0x432220a1\", \"0x432220a2\"], \"distinct_values\": [162.12728881835938, 162.12730407714844, 162.1273193359375, 162.12733459472656, 162.12734985351562, 162.1273651123047, 162.12738037109375, 162.1273956298828, 162.12741088867188, 162.12742614746094, 162.12744140625, 162.12745666503906, 162.12747192382812], \"ref_sum\": 162.1273193359375, \"n_calls\": 300, \"N\": 65536, \"block\": 1024, \"dtype\": \"float32\", \"distribution\": \"standard normal (seed 0)\"}\n",
+                "timed_out": false,
+                "timeout_s": 240
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Repeating blocked_sum 300 times on the same 65536-element standard-normal float32 tensor (default block=1024) yielded 13 distinct raw output bit patterns spanning 0x43222096 to 0x432220a2 (values ~162.1272888 to ~162.1274719), i.e. a spread of 13 ULPs. This directly violates the contract that two calls on the same input must return bitwise identical results, confirming the atomic_add cross-block nondeterminism hypothesis.",
+              "supports": "confirmed",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "tl.atomic_add to a single float32 address from many concurrent programs has an unspecified completion order; float32 addition is non-associative, so different cross-block orders round differently, producing last-bit differences between runs on the same input. The contract explicitly forbids any last-bit disagreement.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract: two calls on the same input must return bitwise identical results... two runs that disagree in their last bits are not interchangeable."
+            }
+          ],
+          "scope_rationale": "The stated contract requires two calls on the same input (N=65536 float32 standard-normal) to return bitwise identical results; the shipped workload uses default block=1024, so 64 atomic adds per call compete on ordering. Any cross-run ULP difference in the output scalar violates this directly.",
+          "statement": "blocked_sum on a 65536-element standard-normal float32 input (default block=1024) can return different raw bits across repeated calls on the same input, because the 64 per-block partial sums are combined via tl.atomic_add in hardware-determined order and float32 addition is non-associative, violating the bitwise-identical contract.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:42:18Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:42:18Z",
+          "data": {
+            "N": 65536,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "c8fb1e10d94a2d46593edd53269f00b9a08708216c33082fb8d7070d8927b8c7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "bbb2dd6ac80a883876332e2cfdad5021825beed2bf36f21e4ee1524f61543e4b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "961f02d2d8a7edba0b6e3a5f634c8052f748055c8b97c3dd8c66320a2fb6c709"
+              }
+            ],
+            "block": 1024,
+            "distinct_bits_hex": [
+              "0x43222096",
+              "0x43222097",
+              "0x43222098",
+              "0x43222099",
+              "0x4322209a",
+              "0x4322209b",
+              "0x4322209c",
+              "0x4322209d",
+              "0x4322209e",
+              "0x4322209f",
+              "0x432220a0",
+              "0x432220a1",
+              "0x432220a2"
+            ],
+            "duration_s": 5.920995,
+            "exit_code": 0,
+            "expected_signal": "more than one distinct output bit pattern across repeated calls, or exactly one",
+            "json_parse_error": null,
+            "json_result": {
+              "N": 65536,
+              "block": 1024,
+              "distinct_bits_hex": [
+                "0x43222096",
+                "0x43222097",
+                "0x43222098",
+                "0x43222099",
+                "0x4322209a",
+                "0x4322209b",
+                "0x4322209c",
+                "0x4322209d",
+                "0x4322209e",
+                "0x4322209f",
+                "0x432220a0",
+                "0x432220a1",
+                "0x432220a2"
+              ],
+              "distinct_values": [
+                162.12728881835938,
+                162.12730407714844,
+                162.1273193359375,
+                162.12733459472656,
+                162.12734985351562,
+                162.1273651123047,
+                162.12738037109375,
+                162.1273956298828,
+                162.12741088867188,
+                162.12742614746094,
+                162.12744140625,
+                162.12745666503906,
+                162.12747192382812
+              ],
+              "distribution": "standard normal (seed 0)",
+              "dtype": "float32",
+              "metric": "distinct raw output bit patterns over 300 repeated calls",
+              "n_calls": 300,
+              "n_distinct_bits": 13,
+              "reason": "contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation",
+              "ref_sum": 162.1273193359375
+            },
+            "max_value": 162.12747192382812,
+            "metric": "distinct raw output bit patterns over 300 repeated calls",
+            "min_value": 162.12728881835938,
+            "n_calls": 300,
+            "n_distinct_bits": 13,
+            "ref_sum": 162.1273193359375,
+            "stderr": "",
+            "stdout": "{\"metric\": \"distinct raw output bit patterns over 300 repeated calls\", \"reason\": \"contract requires bitwise-identical results across calls on the same input; any >1 distinct bit pattern is a direct violation\", \"n_distinct_bits\": 13, \"distinct_bits_hex\": [\"0x43222096\", \"0x43222097\", \"0x43222098\", \"0x43222099\", \"0x4322209a\", \"0x4322209b\", \"0x4322209c\", \"0x4322209d\", \"0x4322209e\", \"0x4322209f\", \"0x432220a0\", \"0x432220a1\", \"0x432220a2\"], \"distinct_values\": [162.12728881835938, 162.12730407714844, 162.1273193359375, 162.12733459472656, 162.12734985351562, 162.1273651123047, 162.12738037109375, 162.1273956298828, 162.12741088867188, 162.12742614746094, 162.12744140625, 162.12745666503906, 162.12747192382812], \"ref_sum\": 162.1273193359375, \"n_calls\": 300, \"N\": 65536, \"block\": 1024, \"dtype\": \"float32\", \"distribution\": \"standard normal (seed 0)\"}\n",
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Repeating blocked_sum 300 times on the same 65536-element standard-normal float32 tensor (default block=1024) yielded 13 distinct raw output bit patterns spanning 0x43222096 to 0x432220a2 (values ~162.1272888 to ~162.1274719), i.e. a spread of 13 ULPs. This directly violates the contract that two calls on the same input must return bitwise identical results, confirming the atomic_add cross-block nondeterminism hypothesis.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "The sole contract requirement (bitwise-identical results across calls on the same input) is already covered by confirmed in-scope claim c1, which has decisive runtime evidence: 300 repeated calls on the same 65536-element standard-normal float32 tensor at default block=1024 produced 13 distinct raw output bit patterns (0x43222096\u20130x432220a2, ~13 ULP spread), due to nondeterministic float32 tl.atomic_add ordering. The kernel source contains no other behavior surface (masking and per-block tl.sum are correct for N divisible by block), so no further claims would be material.",
+        "reviewed_claims": [
+          "c1"
+        ]
+      },
+      "created_at": "2026-09-30T08:42:25Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-30T08:42:25Z",
+        "decision": "no_new_claims",
+        "reason": "The sole contract requirement (bitwise-identical results across calls on the same input) is already covered by confirmed in-scope claim c1, which has decisive runtime evidence: 300 repeated calls on the same 65536-element standard-normal float32 tensor at default block=1024 produced 13 distinct raw output bit patterns (0x43222096\u20130x432220a2, ~13 ULP spread), due to nondeterministic float32 tl.atomic_add ordering. The kernel source contains no other behavior surface (masking and per-block tl.sum are correct for N divisible by block), so no further claims would be material.",
+        "reviewed_claims": [
+          "c1"
+        ],
+        "reviewed_tool_event_count": 8,
+        "tool_event_id": "t9",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The problem.txt contract explicitly requires that two calls on the same input return bitwise identical results (\"two runs that disagree in their last bits are not interchangeable\"). Confirmed in-scope claim c1 shows via a runtime probe (tool event t7) that 300 repeated calls of blocked_sum on the same 65536-element standard-normal float32 tensor (default block=1024) produced 13 distinct raw output bit patterns spanning 0x43222096\u20130x432220a2 (~162.1272888 to ~162.1274719, a 13-ULP spread), because the 64 per-block partial sums are combined via tl.atomic_add in hardware-nondeterministic order and float32 addition is non-associative. The artifact has no test.py or get_inputs, so problem.txt is the operative contract, and this is a direct violation of its explicitly required behavior \u2014 not an acceptable rounding/ordering deviation, since the contract itself constrains the returned bits. No open claims remain, and the Skeptic reviewed the latest evidence and recorded no new claims.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:42:32Z",
+      "id": "t10",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-30T08:42:32Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The problem.txt contract explicitly requires that two calls on the same input return bitwise identical results (\"two runs that disagree in their last bits are not interchangeable\"). Confirmed in-scope claim c1 shows via a runtime probe (tool event t7) that 300 repeated calls of blocked_sum on the same 65536-element standard-normal float32 tensor (default block=1024) produced 13 distinct raw output bit patterns spanning 0x43222096\u20130x432220a2 (~162.1272888 to ~162.1274719, a 13-ULP spread), because the 64 per-block partial sums are combined via tl.atomic_add in hardware-nondeterministic order and float32 addition is non-associative. The artifact has no test.py or get_inputs, so problem.txt is the operative contract, and this is a direct violation of its explicitly required behavior \u2014 not an acceptable rounding/ordering deviation, since the contract itself constrains the returned bits. No open claims remain, and the Skeptic reviewed the latest evidence and recorded no new claims.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-30T08:42:32Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The problem.txt contract explicitly requires that two calls on the same input return bitwise identical results (\"two runs that disagree in their last bits are not interchangeable\"). Confirmed in-scope claim c1 shows via a runtime probe (tool event t7) that 300 repeated calls of blocked_sum on the same 65536-element standard-normal float32 tensor (default block=1024) produced 13 distinct raw output bit patterns spanning 0x43222096\u20130x432220a2 (~162.1272888 to ~162.1274719, a 13-ULP spread), because the 64 per-block partial sums are combined via tl.atomic_add in hardware-nondeterministic order and float32 addition is non-associative. The artifact has no test.py or get_inputs, so problem.txt is the operative contract, and this is a direct violation of its explicitly required behavior \u2014 not an acceptable rounding/ordering deviation, since the contract itself constrains the returned bits. No open claims remain, and the Skeptic reviewed the latest evidence and recorded no new claims.",
+    "verdict": "reject"
+  }
+}

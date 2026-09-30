@@ -1,0 +1,50 @@
+{
+  "id": "chatcmpl-d574cc9a9f9444debe25c7d940cee470",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"reject\", \"confidence\": 0.8, \"reason\": \"The softmax weights are quantized to float16 (eps ~4.9e-4 relative) before the weighted sum over V, while the input construction (center=0.9) deliberately shrinks the output norm to ~10% of p@v, so the fp16-induced error (~1e-4..1e-3 absolute against ||y||≈0.05) yields relative error E well above the 1e-3 budget.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "float16 rounding of p introduces error ~1e-3 per element relative; with softmax weights summing, error likely ~5e-4 relative in y. Relative budget 1e-3 of ||y||. fp16 has ~1e-3 relative error per weight (eps=9.8e-4). Actually fp16 relative precision up to 2^-11 ≈ 4.9e-4. Sum of weighted v: error ~ 4.9e-4 * weighted-average |v| / |y|. y is p@v, |y| ~ ||p@v||. Since v was offset to create cancellation (\"Structured value offset controls cancellation\"), y is small relative to |v| magnitude! v -= center*(p@v) makes p@v_new = p@v_old - center*(p@v_old)... wait p@v_new = p@v - center * p @ ((p@v)[None,:] broadcast over n) = p@v - center*(n*? ) hmm. p is (n,), (p@v) is (d,). Broadcast (p@v)[None,:] shape (1,d); v_new = v - center*(p@v) broadcast rows: each row subtracts the same vector. Then p@v_new = p@v - center*(p@v)*sum(p) = (1-center)*p@v. So y scaled by (1-center)=0.1, making it small while p to fp16 error gives error proportional to original magnitude... Actually error in p propagates to error in sum p*v ≈ ||delta p||*||v||. delta p relative 5e-4, so error ~5e-4*||v||-ish, while ||y|| = 0.1*||p@v_orig||. p@v_orig ~ typical v magnitude ~1. So relative error ~5e-3, exceeding 1e-3? But budget denominator uses max(||ref||, 0.001*sqrt(num elements)) — sqrt(32)*0.001=0.0057. ||y|| ≈ 0.1*||p@v||; p@v of random v with p concentrated... scores scaled by 1.1 then /sqrt(32)≈0.194, so scores range ~±1, softmax fairly uniform. p@v ~ (1/sqrt(n_eff))... ||v|| rows ~sqrt(32)*1.1; p@v with n=128 averaged: if p uniform, p@v ≈ mean of v rows, norm ~ sqrt(32)*1.1/sqrt(128) ≈ 0.55. So ||y||≈0.055. Budget floor 0.0057.\n\nError from fp16: each p_i rounded with relative error ≤2^-11. Errors in p random; resulting y error = sum delta_p_i * v_i. delta_p_i ≤ 4.9e-4 * p_i, sum |delta_p| ≤ 4.9e-4 (sum p=1). But errors random → error ~ 4.9e-4 * ||weighted v|| ≈ 4.9e-4 * 0.55 (in fp32-ish norm). That's 2.7e-4 vs budget min(?) E = err/max(0.055, 0.0057) = 2.7e-4/0.055 ≈ 5e-3. Hmm, that exceeds 1e-3.\n\nBut wait: after p normalized in fp32, rounding to fp16 then back to fp32: p values rounded, sum no longer exactly 1 but errors random sign. y = sum p_i v_i, error = sum e_i v_i where e_i ~ uniform ±4.9e-4 p_i. Worst-case |e| bound 4.9e-4 * sum p_i |v_i|... norm of error vector: each component d: sum_i e_i v_{i,d}. e_i random sign, magnitude ~ p_i * 2.4e-4 rms. RMS error per component ≈ 2.4e-4 * sqrt(sum p_i^2 * v^2) ≈ 2.4e-4 * ||p-weighted v|| ~ 2.4e-4*0.55 ≈ 1.3e-4 per comp; norm over 32 comps ≈ 1.3e-4*sqrt(32)=7.5e-4. E ≈ 7.5e-4/0.055 ≈ 0.014 > 0.001. Reject.\n\nAlso fp16 rounding loses small p values entirely? p values with uniform softmax over 128: each ~0.0078, fine in fp16.\n\nHmm, but fp16 relative error is 2^-11 max, average maybe 1.2e-4. My estimate E ~ 0.005-0.014, well above 0.001. Also the whole computation in fp32 vs fp64 reference adds tiny error; the dominant is fp16. Seems like a clear budget violation. The \"structured cancellation\" (center=0.9) is designed to expose exactly this. Reject.\n\nAlso note scores computed with tl.exp of fp32 — fine. The p cast to fp16 is the deliberate flaw. Confidence moderately high, say 0.8.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756316,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1278,
+    "prompt_tokens": 1337,
+    "total_tokens": 2615,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1163,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 823,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 1163
+    }
+  }
+}

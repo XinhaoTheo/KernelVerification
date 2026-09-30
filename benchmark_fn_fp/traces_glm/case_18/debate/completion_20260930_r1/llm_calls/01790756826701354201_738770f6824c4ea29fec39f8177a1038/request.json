@@ -1,0 +1,411 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Experimenter agent in an agentic kernel verification system.\nYour job is to gather evidence for open claims using local tools.\n\nRules:\n- Start from the claim ledger and description_model. Use read_claim_ledger when claim state is unclear.\n- Use contract_model and scope_notes to avoid probing irrelevant out-of-scope behavior.\n- Account for every open claim before yielding control to the Judge. Do not silently ignore open claims.\n- For each open claim with no evidence, either gather direct evidence or attach explicit inconclusive evidence explaining the blocker.\n- For each experiment, target one concrete claim.\n- Prefer run_claim_probe for runtime experiments; pass the target claim_id and a concise expected_signal.\n- Probe code should print a final JSON object on the last stdout line when possible.\n- You cannot observe a run_claim_probe result in the same response that requested it, so it is the response after that consumes it -- which is not the same as spending that whole turn on it (see below).\n- Finalize and launch in the same response. An unfinalized run_claim_probe result must be consumed before you yield control, but consuming it does not need a turn of its own: put finalize_probe_evidence for the results you can now see and the next run_claim_probe in the same response. A turn that only finalizes, or only launches, spends a whole model call on half a step.\n- Launch independent probes together. When several open claims can be tested without one claim's outcome changing another's experiment design, issue a run_claim_probe for each in one response and finalize them all in the next. Hold a probe back only when it genuinely depends on a result you do not have yet -- for example when you must choose inputs that avoid triggering a defect another claim just confirmed, so the two cannot confound each other. Say in your message which claims you are batching and which you are holding back, and why.\n- Use finalize_probe_evidence to interpret the probe output; it appends runtime evidence and updates claim status in one tool call.\n- Put every decisive measurement in the evidence `data` object as named key/value pairs (for example {\"rms_1e-8_ratio\": 990.1, \"max_abs_err\": 0.0731, \"tolerance\": 0.01}), not only in the prose summary. `data` is preserved in full for later turns; long prose summaries may be trimmed, so a number that exists only in prose can be lost to the agents who read your evidence afterwards.\n- Use run_python_probe only for debugging or exploratory work that is not yet tied to a claim.\n- Use append_evidence and update_claim_status directly only for non-probe evidence, such as source inspection or artifact reads.\n- Mark evidence inconclusive when the tool output cannot decide the claim.\n- Use request_description when a probe result or source path needs Describer interpretation before you can finalize evidence.\n- If tool budget or missing environment prevents covering all claims in one turn, state exactly which claim ids remain uncovered.\n- Do not invent results that are not present in tool output or source context.\n- Do not output a final verdict. That is the Judge agent's job.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_18\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import torch\\n2: import triton\\n3: import triton.language as tl\\n4: \\n5: \\n6: @triton.jit\\n7: def _softmax_kernel(OUT, IN, stride_om, stride_im, n_cols, BLOCK: tl.constexpr):\\n8:     row = tl.program_id(0)\\n9:     in_row = IN + row * stride_im\\n10:     out_row = OUT + row * stride_om\\n11:     n_full = n_cols // BLOCK\\n12: \\n13:     row_max = -float(\\\"inf\\\")\\n14:     for b in range(tl.cdiv(n_cols, BLOCK)):\\n15:         cols = b * BLOCK + tl.arange(0, BLOCK)\\n16:         x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\\\"inf\\\"))\\n17:         row_max = tl.maximum(row_max, tl.max(x, axis=0))\\n18: \\n19:     denom = 0.0\\n20:     for b in range(n_full):\\n21:         cols = b * BLOCK + tl.arange(0, BLOCK)\\n22:         x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\\\"inf\\\"))\\n23:         denom += tl.sum(tl.exp(x - row_max), axis=0)\\n24: \\n25:     for b in range(tl.cdiv(n_cols, BLOCK)):\\n26:         cols = b * BLOCK + tl.arange(0, BLOCK)\\n27:         x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\\\"inf\\\"))\\n28:         tl.store(out_row + cols, tl.exp(x - row_max) / denom, mask=cols < n_cols)\\n29: \\n30: \\n31: def softmax(x: torch.Tensor, block_size: int = 128) -> torch.Tensor:\\n32:     \\\"\\\"\\\"Row-wise softmax of a 2-D float32 tensor.\\\"\\\"\\\"\\n33:     n_rows, n_cols = x.shape\\n34:     out = torch.empty_like(x)\\n35:     _softmax_kernel[(n_rows,)](out, x, out.stride(0), x.stride(0), n_cols, BLOCK=block_size)\\n36:     return out\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Operation: row-wise softmax of a 2-D float32 tensor, computed in blocks of\\n`block_size` columns (the standard three-pass fused-softmax structure used by\\nTriton-based normalization kernels).\\n\\nFor each row x:\\n\\n    y[j] = exp(x[j] - max(x)) / sum_k exp(x[k] - max(x))\\n\\nso every row of the result must be a probability distribution: all entries\\nnon-negative and summing to 1.\\n\\nInput domain: `n_cols` may be any positive integer. It is NOT required to be a\\nmultiple of `block_size`; when it is not, the trailing partial block is still\\npart of the row and must be normalized with the rest of it.\\n\\nDoes softmax() satisfy this contract?\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_18\",\n    \"status\": \"under_test\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\",\n      \"c2\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-09-30T08:26:47Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"skeptic\",\n      \"rationale\": \"kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest.\"\n        }\n      ],\n      \"scope_rationale\": \"problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).\",\n      \"statement\": \"For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-09-30T08:26:47Z\"\n    },\n    {\n      \"created_at\": \"2026-09-30T08:26:47Z\",\n      \"evidence\": [],\n      \"id\": \"c2\",\n      \"raised_by\": \"skeptic\",\n      \"rationale\": \"With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution.\"\n        }\n      ],\n      \"scope_rationale\": \"problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.\",\n      \"statement\": \"When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-09-30T08:26:47Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [\n      \"Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.\",\n      \"Every output row must be a valid probability distribution: non-negative entries summing to 1.\",\n      \"n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).\",\n      \"Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper.\"\n    ],\n    \"kernel_model\": [\n      \"kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \\u2014 correct for partial blocks.\",\n      \"kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.\",\n      \"kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.\",\n      \"Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).\",\n      \"Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking.\"\n    ],\n    \"open_questions\": [],\n    \"risk_map\": [\n      \"Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \\u2014 tail values with large exp(x-max) inflate the error most.\",\n      \"When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \\u2014 a benign probe can pass while partial-block inputs fail.\",\n      \"Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.\",\n      \"Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \\u2014 fully broken rows, worst-case instance of the same bug.\",\n      \"Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain.\"\n    ],\n    \"scope_notes\": [\n      \"Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\\\", \\\"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\\\", \\\"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\\\"]\"\n    ]\n  },\n  \"entry\": \"case_18\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_18\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_18\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_18\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_18\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"describer\",\n      \"round\": 2,\n      \"text\": \"I have full context: the kernel computes row-wise softmax in three passes, but the denominator pass uses `n_full = n_cols // BLOCK` full blocks only, excluding the trailing partial block \\u2014 which the problem explicitly says must be included. I'll record the description model now.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"contract_model\": [\n              \"Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.\",\n              \"Every output row must be a valid probability distribution: non-negative entries summing to 1.\",\n              \"n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).\",\n              \"Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper.\"\n            ],\n            \"kernel_model\": [\n              \"kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \\u2014 correct for partial blocks.\",\n              \"kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.\",\n              \"kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.\",\n              \"Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).\",\n              \"Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking.\"\n            ],\n            \"risk_map\": [\n              \"Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \\u2014 tail values with large exp(x-max) inflate the error most.\",\n              \"When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \\u2014 a benign probe can pass while partial-block inputs fail.\",\n              \"Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.\",\n              \"Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \\u2014 fully broken rows, worst-case instance of the same bug.\",\n              \"Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain.\"\n            ],\n            \"scope_notes\": \"Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\\\", \\\"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\\\", \\\"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\\\"]\",\n            \"summary\": \"Description of case_18: Triton three-pass row-wise softmax. Max pass and output pass iterate all blocks via tl.cdiv, but the denominator pass iterates only n_full = n_cols // BLOCK blocks, omitting the trailing partial block \\u2014 violating the contract that non-multiple n_cols be fully normalized.\"\n          },\n          \"tool\": \"record_description_update\"\n        }\n      ]\n    },\n    {\n      \"role\": \"skeptic\",\n      \"round\": 3,\n      \"text\": \"I'll record the two highest-risk, testable claims derived from the source: the truncated denominator for partial-block widths, and the degenerate n_cols < block_size case.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest.\"\n              }\n            ],\n            \"scope_rationale\": \"problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).\",\n            \"statement\": \"For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.\"\n          },\n          \"tool\": \"record_claim\"\n        },\n        {\n          \"args\": {\n            \"rationale\": \"With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution.\"\n              }\n            ],\n            \"scope_rationale\": \"problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.\",\n            \"statement\": \"When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"experimenter\",\n      \"round\": 4,\n      \"text\": \"I'll probe both claims at once: c1 (n_cols=130, partial block, row sums) and c2 (n_cols=64 < block_size, NaN/Inf check). They're independent experiments.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_18/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ntorch.manual_seed(0)\\nx = torch.randn(4, 130, device=\\\"cuda\\\", dtype=torch.float32)\\nout = k.softmax(x)\\nref = torch.softmax(x, dim=1)\\nrow_sums = out.sum(dim=1)\\nprint(json.dumps({\\n  \\\"shape\\\": list(x.shape),\\n  \\\"row_sums\\\": row_sums.tolist(),\\n  \\\"max_row_sum_dev_from_1\\\": (row_sums - 1).abs().max().item(),\\n  \\\"max_abs_err_vs_torch_softmax\\\": (out - ref).abs().max().item(),\\n  \\\"has_nan\\\": bool(torch.isnan(out).any()),\\n  \\\"min_entry\\\": out.min().item()\\n}))\",\n            \"expected_signal\": \"row sums > 1 and nonzero max abs error vs torch.softmax\"\n          },\n          \"tool\": \"run_claim_probe\"\n        },\n        {\n          \"args\": {\n            \"claim_id\": \"c2\",\n            \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_18/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ntorch.manual_seed(0)\\nx = torch.randn(4, 64, device=\\\"cuda\\\", dtype=torch.float32)\\nout = k.softmax(x)\\nref = torch.softmax(x, dim=1)\\nrow_sums = out.sum(dim=1)\\nprint(json.dumps({\\n  \\\"shape\\\": list(x.shape),\\n  \\\"row_sums\\\": row_sums.tolist(),\\n  \\\"has_nan\\\": bool(torch.isnan(out).any()),\\n  \\\"has_inf\\\": bool(torch.isinf(out).any()),\\n  \\\"max_abs_err_vs_torch_softmax\\\": (out - ref).abs().max().item()\\n}))\",\n            \"expected_signal\": \"output contains NaN or Inf due to denom=0.0\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [\n    {\n      \"contract_model\": [\n        \"Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.\",\n        \"Every output row must be a valid probability distribution: non-negative entries summing to 1.\",\n        \"n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).\",\n        \"Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper.\"\n      ],\n      \"created_at\": \"2026-09-30T08:26:38Z\",\n      \"created_by\": \"describer\",\n      \"id\": \"du1\",\n      \"impact_on_claims\": [],\n      \"kernel_model\": [\n        \"kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \\u2014 correct for partial blocks.\",\n        \"kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.\",\n        \"kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.\",\n        \"Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).\",\n        \"Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking.\"\n      ],\n      \"open_questions\": [],\n      \"risk_map\": [\n        \"Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \\u2014 tail values with large exp(x-max) inflate the error most.\",\n        \"When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \\u2014 a benign probe can pass while partial-block inputs fail.\",\n        \"Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.\",\n        \"Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \\u2014 fully broken rows, worst-case instance of the same bug.\",\n        \"Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain.\"\n      ],\n      \"scope_notes\": [\n        \"Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\\\", \\\"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\\\", \\\"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\\\"]\"\n      ],\n      \"summary\": \"Description of case_18: Triton three-pass row-wise softmax. Max pass and output pass iterate all blocks via tl.cdiv, but the denominator pass iterates only n_full = n_cols // BLOCK blocks, omitting the trailing partial block \\u2014 violating the contract that non-multiple n_cols be fully normalized.\",\n      \"task_ids\": [],\n      \"turn\": 2\n    }\n  ],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_18\"\n      },\n      \"created_at\": \"2026-09-30T08:26:22Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_18\",\n        \"has_error\": null,\n        \"kernel_code\": \"import torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _softmax_kernel(OUT, IN, stride_om, stride_im, n_cols, BLOCK: tl.constexpr):\\n    row = tl.program_id(0)\\n    in_row = IN + row * stride_im\\n    out_row = OUT + row * stride_om\\n    n_full = n_cols // BLOCK\\n\\n    row_max = -float(\\\"inf\\\")\\n    for b in range(tl.cdiv(n_cols, BLOCK)):\\n        cols = b * BLOCK + tl.arange(0, BLOCK)\\n        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\\\"inf\\\"))\\n        row_max = tl.maximum(row_max, tl.max(x, axis=0))\\n\\n    denom = 0.0\\n    for b in range(n_full):\\n        cols = b * BLOCK + tl.arange(0, BLOCK)\\n        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\\\"inf\\\"))\\n        denom += tl.sum(tl.exp(x - row_max), axis=0)\\n\\n    for b in range(tl.cdiv(n_cols, BLOCK)):\\n        cols = b * BLOCK + tl.arange(0, BLOCK)\\n        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\\\"inf\\\"))\\n        tl.store(out_row + cols, tl.exp(x - row_max) / denom, mask=cols < n_cols)\\n\\n\\ndef softmax(x: torch.Tensor, block_size: int = 128) -> torch.Tensor:\\n    \\\"\\\"\\\"Row-wise softmax of a 2-D float32 tensor.\\\"\\\"\\\"\\n    n_rows, n_cols = x.shape\\n    out = torch.empty_like(x)\\n    _softmax_kernel[(n_rows,)](out, x, out.stride(0), x.stride(0), n_cols, BLOCK=block_size)\\n    return out\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Operation: row-wise softmax of a 2-D float32 tensor, computed in blocks of\\n`block_size` columns (the standard three-pass fused-softmax structure used by\\nTriton-based normalization kernels).\\n\\nFor each row x:\\n\\n    y[j] = exp(x[j] - max(x)) / sum_k exp(x[k] - max(x))\\n\\nso every row of the result must be a probability distribution: all entries\\nnon-negative and summing to 1.\\n\\nInput domain: `n_cols` may be any positive integer. It is NOT required to be a\\nmultiple of `block_size`; when it is not, the trailing partial block is still\\npart of the row and must be normalized with the rest of it.\\n\\nDoes softmax() satisfy this contract?\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_18\",\n        \"status\": \"under_test\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_18\"\n      },\n      \"created_at\": \"2026-09-30T08:26:22Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Operation: row-wise softmax of a 2-D float32 tensor, computed in blocks of\\n`block_size` columns (the standard three-pass fused-softmax structure used by\\nTriton-based normalization kernels).\\n\\nFor each row x:\\n\\n    y[j] = exp(x[j] - max(x)) / sum_k exp(x[k] - max(x))\\n\\nso every row of the result must be a probability distribution: all entries\\nnon-negative and summing to 1.\\n\\nInput domain: `n_cols` may be any positive integer. It is NOT required to be a\\nmultiple of `block_size`; when it is not, the trailing partial block is still\\npart of the row and must be normalized with the rest of it.\\n\\nDoes softmax() satisfy this contract?\\n\",\n        \"entry\": \"case_18\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_18\"\n      },\n      \"created_at\": \"2026-09-30T08:26:22Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_18\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 1291\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 68\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 629\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_18\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-30T08:26:22Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_18\\\",\\n  \\\"status\\\": \\\"under_test\\\",\\n  \\\"passed\\\": null\\n}\\n\",\n        \"entry\": \"case_18\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 68,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"contract_model\": [\n          \"Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.\",\n          \"Every output row must be a valid probability distribution: non-negative entries summing to 1.\",\n          \"n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).\",\n          \"Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper.\"\n        ],\n        \"kernel_model\": [\n          \"kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \\u2014 correct for partial blocks.\",\n          \"kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.\",\n          \"kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.\",\n          \"Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).\",\n          \"Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking.\"\n        ],\n        \"risk_map\": [\n          \"Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \\u2014 tail values with large exp(x-max) inflate the error most.\",\n          \"When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \\u2014 a benign probe can pass while partial-block inputs fail.\",\n          \"Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.\",\n          \"Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \\u2014 fully broken rows, worst-case instance of the same bug.\",\n          \"Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain.\"\n        ],\n        \"scope_notes\": \"Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\\\", \\\"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\\\", \\\"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\\\"]\",\n        \"summary\": \"Description of case_18: Triton three-pass row-wise softmax. Max pass and output pass iterate all blocks via tl.cdiv, but the denominator pass iterates only n_full = n_cols // BLOCK blocks, omitting the trailing partial block \\u2014 violating the contract that non-multiple n_cols be fully normalized.\"\n      },\n      \"created_at\": \"2026-09-30T08:26:38Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"description_model\": {\n          \"contract_model\": [\n            \"Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.\",\n            \"Every output row must be a valid probability distribution: non-negative entries summing to 1.\",\n            \"n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).\",\n            \"Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper.\"\n          ],\n          \"kernel_model\": [\n            \"kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \\u2014 correct for partial blocks.\",\n            \"kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.\",\n            \"kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.\",\n            \"Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).\",\n            \"Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking.\"\n          ],\n          \"open_questions\": [],\n          \"risk_map\": [\n            \"Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \\u2014 tail values with large exp(x-max) inflate the error most.\",\n            \"When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \\u2014 a benign probe can pass while partial-block inputs fail.\",\n            \"Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.\",\n            \"Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \\u2014 fully broken rows, worst-case instance of the same bug.\",\n            \"Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain.\"\n          ],\n          \"scope_notes\": [\n            \"Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\\\", \\\"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\\\", \\\"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\\\"]\"\n          ]\n        },\n        \"resolved_tasks\": [],\n        \"update\": {\n          \"contract_model\": [\n            \"Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.\",\n            \"Every output row must be a valid probability distribution: non-negative entries summing to 1.\",\n            \"n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).\",\n            \"Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper.\"\n          ],\n          \"created_at\": \"2026-09-30T08:26:38Z\",\n          \"created_by\": \"describer\",\n          \"id\": \"du1\",\n          \"impact_on_claims\": [],\n          \"kernel_model\": [\n            \"kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \\u2014 correct for partial blocks.\",\n            \"kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.\",\n            \"kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.\",\n            \"Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).\",\n            \"Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking.\"\n          ],\n          \"open_questions\": [],\n          \"risk_map\": [\n            \"Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \\u2014 tail values with large exp(x-max) inflate the error most.\",\n            \"When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \\u2014 a benign probe can pass while partial-block inputs fail.\",\n            \"Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.\",\n            \"Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \\u2014 fully broken rows, worst-case instance of the same bug.\",\n            \"Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain.\"\n          ],\n          \"scope_notes\": [\n            \"Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\\\", \\\"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\\\", \\\"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\\\"]\"\n          ],\n          \"summary\": \"Description of case_18: Triton three-pass row-wise softmax. Max pass and output pass iterate all blocks via tl.cdiv, but the denominator pass iterates only n_full = n_cols // BLOCK blocks, omitting the trailing partial block \\u2014 violating the contract that non-multiple n_cols be fully normalized.\",\n          \"task_ids\": [],\n          \"turn\": 2\n        }\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_description_update\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest.\"\n          }\n        ],\n        \"scope_rationale\": \"problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).\",\n        \"statement\": \"For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.\"\n      },\n      \"created_at\": \"2026-09-30T08:26:47Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"created_at\": \"2026-09-30T08:26:47Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"skeptic\",\n        \"rationale\": \"kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest.\"\n          }\n        ],\n        \"scope_rationale\": \"problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).\",\n        \"statement\": \"For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-09-30T08:26:47Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution.\"\n          }\n        ],\n        \"scope_rationale\": \"problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.\",\n        \"statement\": \"When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.\"\n      },\n      \"created_at\": \"2026-09-30T08:26:47Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"created_at\": \"2026-09-30T08:26:47Z\",\n        \"evidence\": [],\n        \"id\": \"c2\",\n        \"raised_by\": \"skeptic\",\n        \"rationale\": \"With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution.\"\n          }\n        ],\n        \"scope_rationale\": \"problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.\",\n        \"statement\": \"When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-09-30T08:26:47Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_18/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ntorch.manual_seed(0)\\nx = torch.randn(4, 130, device=\\\"cuda\\\", dtype=torch.float32)\\nout = k.softmax(x)\\nref = torch.softmax(x, dim=1)\\nrow_sums = out.sum(dim=1)\\nprint(json.dumps({\\n  \\\"shape\\\": list(x.shape),\\n  \\\"row_sums\\\": row_sums.tolist(),\\n  \\\"max_row_sum_dev_from_1\\\": (row_sums - 1).abs().max().item(),\\n  \\\"max_abs_err_vs_torch_softmax\\\": (out - ref).abs().max().item(),\\n  \\\"has_nan\\\": bool(torch.isnan(out).any()),\\n  \\\"min_entry\\\": out.min().item()\\n}))\",\n        \"expected_signal\": \"row sums > 1 and nonzero max abs error vs torch.softmax\"\n      },\n      \"created_at\": \"2026-09-30T08:27:00Z\",\n      \"id\": \"t8\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t8_probe.py\",\n            \"sha256\": \"bf1c19e5a364f053c143de067ca11b7c633092cc88f57b644747c27431ecf63f\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t8_stdout.txt\",\n            \"sha256\": \"b3d97993012cf21e008341ed04df5b7a23811f20c48094b0fce58ae6de6915ae\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t8_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n            \"kind\": \"json_result\",\n            \"path\": \"probes/t8_json_result.json\",\n            \"sha256\": \"dddc50ccb88cfe66894bdb404d7b2972102a9d67ed88bbe819b34deeae9a3468\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.\",\n        \"cwd\": \"/root/cases/case_18\",\n        \"duration_s\": 4.736636,\n        \"event_id\": \"t8\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t8_probe.py\",\n                \"sha256\": \"bf1c19e5a364f053c143de067ca11b7c633092cc88f57b644747c27431ecf63f\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t8_stdout.txt\",\n                \"sha256\": \"b3d97993012cf21e008341ed04df5b7a23811f20c48094b0fce58ae6de6915ae\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t8_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t8_json_result.json\",\n                \"sha256\": \"dddc50ccb88cfe66894bdb404d7b2972102a9d67ed88bbe819b34deeae9a3468\"\n              }\n            ],\n            \"duration_s\": 4.736636,\n            \"exit_code\": 0,\n            \"expected_signal\": \"row sums > 1 and nonzero max abs error vs torch.softmax\",\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"has_nan\": false,\n              \"max_abs_err_vs_torch_softmax\": 0.00867936760187149,\n              \"max_row_sum_dev_from_1\": 0.13868117332458496,\n              \"min_entry\": 0.00022502124193124473,\n              \"row_sums\": [\n                1.0045435428619385,\n                1.0068390369415283,\n                1.007639765739441,\n                1.138681173324585\n              ],\n              \"shape\": [\n                4,\n                130\n              ]\n            },\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"shape\\\": [4, 130], \\\"row_sums\\\": [1.0045435428619385, 1.0068390369415283, 1.007639765739441, 1.138681173324585], \\\"max_row_sum_dev_from_1\\\": 0.13868117332458496, \\\"max_abs_err_vs_torch_softmax\\\": 0.00867936760187149, \\\"has_nan\\\": false, \\\"min_entry\\\": 0.00022502124193124473}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe produced a JSON result that needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t8\"\n        },\n        \"exit_code\": 0,\n        \"expected_signal\": \"row sums > 1 and nonzero max abs error vs torch.softmax\",\n        \"json_parse_error\": null,\n        \"json_result\": {\n          \"has_nan\": false,\n          \"max_abs_err_vs_torch_softmax\": 0.00867936760187149,\n          \"max_row_sum_dev_from_1\": 0.13868117332458496,\n          \"min_entry\": 0.00022502124193124473,\n          \"row_sums\": [\n            1.0045435428619385,\n            1.0068390369415283,\n            1.007639765739441,\n            1.138681173324585\n          ],\n          \"shape\": [\n            4,\n            130\n          ]\n        },\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"{\\\"shape\\\": [4, 130], \\\"row_sums\\\": [1.0045435428619385, 1.0068390369415283, 1.007639765739441, 1.138681173324585], \\\"max_row_sum_dev_from_1\\\": 0.13868117332458496, \\\"max_abs_err_vs_torch_softmax\\\": 0.00867936760187149, \\\"has_nan\\\": false, \\\"min_entry\\\": 0.00022502124193124473}\\n\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c2\",\n        \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_18/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ntorch.manual_seed(0)\\nx = torch.randn(4, 64, device=\\\"cuda\\\", dtype=torch.float32)\\nout = k.softmax(x)\\nref = torch.softmax(x, dim=1)\\nrow_sums = out.sum(dim=1)\\nprint(json.dumps({\\n  \\\"shape\\\": list(x.shape),\\n  \\\"row_sums\\\": row_sums.tolist(),\\n  \\\"has_nan\\\": bool(torch.isnan(out).any()),\\n  \\\"has_inf\\\": bool(torch.isinf(out).any()),\\n  \\\"max_abs_err_vs_torch_softmax\\\": (out - ref).abs().max().item()\\n}))\",\n        \"expected_signal\": \"output contains NaN or Inf due to denom=0.0\"\n      },\n      \"created_at\": \"2026-09-30T08:27:06Z\",\n      \"id\": \"t9\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t9_probe.py\",\n            \"sha256\": \"2efa3b0ed092d3b9fa40c6d03c39f31f4a09cad49aa26d155761e4eb51ac448f\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t9_stdout.txt\",\n            \"sha256\": \"d04312deef92e58acb376e285cc5d04b69ecf4af025c0046d9ab882b84b46c78\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t9_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n            \"kind\": \"json_result\",\n            \"path\": \"probes/t9_json_result.json\",\n            \"sha256\": \"98a84f031321f2a03b382519c4e8af3dc2a1e41ca0e52826adcd22969bd8796a\"\n          }\n        ],\n        \"claim_id\": \"c2\",\n        \"claim_statement\": \"When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.\",\n        \"cwd\": \"/root/cases/case_18\",\n        \"duration_s\": 5.771302,\n        \"event_id\": \"t9\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c2\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t9_probe.py\",\n                \"sha256\": \"2efa3b0ed092d3b9fa40c6d03c39f31f4a09cad49aa26d155761e4eb51ac448f\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t9_stdout.txt\",\n                \"sha256\": \"d04312deef92e58acb376e285cc5d04b69ecf4af025c0046d9ab882b84b46c78\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t9_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t9_json_result.json\",\n                \"sha256\": \"98a84f031321f2a03b382519c4e8af3dc2a1e41ca0e52826adcd22969bd8796a\"\n              }\n            ],\n            \"duration_s\": 5.771302,\n            \"exit_code\": 0,\n            \"expected_signal\": \"output contains NaN or Inf due to denom=0.0\",\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"has_inf\": true,\n              \"has_nan\": false,\n              \"max_abs_err_vs_torch_softmax\": Infinity,\n              \"row_sums\": [\n                Infinity,\n                Infinity,\n                Infinity,\n                Infinity\n              ],\n              \"shape\": [\n                4,\n                64\n              ]\n            },\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"shape\\\": [4, 64], \\\"row_sums\\\": [Infinity, Infinity, Infinity, Infinity], \\\"has_nan\\\": false, \\\"has_inf\\\": true, \\\"max_abs_err_vs_torch_softmax\\\": Infinity}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe produced a JSON result that needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t9\"\n        },\n        \"exit_code\": 0,\n        \"expected_signal\": \"output contains NaN or Inf due to denom=0.0\",\n        \"json_parse_error\": null,\n        \"json_result\": {\n          \"has_inf\": true,\n          \"has_nan\": false,\n          \"max_abs_err_vs_torch_softmax\": Infinity,\n          \"row_sums\": [\n            Infinity,\n            Infinity,\n            Infinity,\n            Infinity\n          ],\n          \"shape\": [\n            4,\n            64\n          ]\n        },\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"{\\\"shape\\\": [4, 64], \\\"row_sums\\\": [Infinity, Infinity, Infinity, Infinity], \\\"has_nan\\\": false, \\\"has_inf\\\": true, \\\"max_abs_err_vs_torch_softmax\\\": Infinity}\\n\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 30894,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "request_description",
+        "description": "Request a Describer clarification for source, contract, probe, or verdict ambiguity.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "reason_kind",
+            "question"
+          ],
+          "properties": {
+            "reason_kind": {
+              "type": "string",
+              "enum": [
+                "contract_scope",
+                "source_interpretation",
+                "probe_anomaly",
+                "verdict_blocker",
+                "other"
+              ]
+            },
+            "question": {
+              "type": "string"
+            },
+            "related_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "source_refs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

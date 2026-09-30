@@ -1,0 +1,50 @@
+{
+  "id": "chatcmpl-b3469b22954949efaf7c4fc8559d9f0b",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"reject\", \"confidence\": 0.85, \"reason\": \"EVEN_SEQ_KBLOCK is computed as ((cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0), i.e., the total key length, not per-sequence like the Q side (which uses torch.all over cu_q_seqlens diffs). If total length happens to be a multiple of k_block_size while some individual sequence is not, the flag is wrongly True, so the kernel skips the 'off_n < end_n' masking and the partial final key block bleeds into the next sequence's keys/values, which then contribute to the softmax \u2014 violating the contract.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Check EVEN_SEQ_KBLOCK: computed as ((cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0) \u2014 total length, not per-sequence. But that's just a flag; if per-block masks are used, non-even handling uses cu_k_block. Actually EVEN flag affects masks. If total is even but an individual sequence is not multiple of block size, EVEN_SEQ_KBLOCK=True would skip masking off_n < end_n... but partial-block masking also handled by \"if not EVEN_SEQ_KBLOCK and start_n + BLOCK_N > end_n\". If flag wrongly True, keys past sequence end within a partial block are loaded (out of range? no \u2014 next sequence's keys) and contribute. Wait, cu_k_block gives start index of each block in flat sequence; end_n = next block start. For last block of a sequence, off_n up to start_n+BLOCK_N could cross into next sequence's positions, since cu_k_block for next block starts at next sequence start (which may not equal start_n + block size). E.g., seq len 10, block 16: block covers positions 0..9; positions beyond cu_k_seqlens[1] belong to next sequence. With EVEN flag True (total even), no masking \u2192 wrong.\n\nBut wait, EVEN_SEQ_KBLOCK also affects which k positions loaded. If flag False (uneven), masks off_n < end_n. If flag computed as total even while per-seq uneven, we get incorrect inclusion of next sequence keys and also v loads reading wrong positions but still valid memory (flat). This is a real bug. Similarly EVEN_SEQ_QBLOCK uses torch.all over per-sequence, correct. So K side flag is wrong: should be torch.all((cu_k_seqlens[1:]-cu_k_seqlens[:-1]) % k_block_size == 0).\n\nHmm, but wait: cu_k_block defines block start offsets. Does cu_k_block for the next batch's first block start at cu_k_seqlens[b+1]? In calculate_blocks, block_sizes cumsum \u2014 block_sizes[cu_num_block[1:]] = last block sizes, and cumsum yields cu_block[b+1's first] = cu_seqlens[b+1]? Yes, cumsum of actual block sizes equals cumulative seq lens. So end_n for partial block equals batch_k_end only via next block start. So masking uses off_n < end_n correct only when EVEN_SEQ_KBLOCK is False. When total length is multiple of block size but a sequence isn't, flag wrongly True \u2192 reject.\n\nAlso causal condition, lse, etc. fine. Also note EVEN flag True but partial block exists \u2192 qk computed with next sequence keys, softmax includes them. Defect.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756105,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 724,
+    "prompt_tokens": 4116,
+    "total_tokens": 4840,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 574,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 574
+    }
+  }
+}

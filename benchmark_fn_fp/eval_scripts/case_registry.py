@@ -18,6 +18,10 @@ def load_registry(benchmark: Path) -> dict:
 
 def validation_path(benchmark: Path, dataset: str) -> Path:
     root = Path(benchmark) / dataset
+    if dataset == "numerical_pilot":
+        # The pilot's answer key already contains its T4 measurements and
+        # frozen public-file hashes; no new GPU result is implied by this route.
+        return root / "answer_key.json"
     if dataset in {"numerical_challenges", "evidence_challenges"}:
         private = root / "private_data" / "validation_gpu.json"
         if private.exists():

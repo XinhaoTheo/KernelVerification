@@ -1,0 +1,50 @@
+{
+  "id": "chatcmpl-5483f8acec434ea98811bade8f0dc18b",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"reject\", \"confidence\": 0.6, \"reason\": \"The kernel quantizes the softmax probabilities to fp16 (p.to(fp16)), giving each p_i a relative error up to ~2.4e-4 (RMS ~1.4e-4). Since the workload centers V so the reference output is shrunk by (1 - center) = 0.1, the expected relative output error is ~1.4e-4/0.1 ≈ 1.4e-3, which exceeds the 1e-3 budget; the fp16 round-trip is the dominant error source and is likely to violate E <= 0.001 on this workload.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "fp16 rounding of p (probabilities up to ~1/... after softmax). p values ~0.008 average, fp16 relative error ~2^-11 ≈ 5e-4. Sum of p*v with fp16-rounded p — relative error in p ~1e-3 worst case per element. Output is weighted average of v. With p rounding to fp16, errors accumulate ~ sqrt or sum. Worst-case: each p has relative error up to 4.88e-4. Output y = Σ p_i v_i, error ≤ Σ 4.88e-4 p_i |v_i| ≈ 4.88e-4 * max|v| * ... reference norm? v is centered to create cancellation (v -= center*(p@v)), so output y = p@(v - center*p@v) ≈ (1-center)*p@v... Actually center=0.9, so output is scaled by 0.1 roughly — reference norm reduced ~10x. But normalization by p sum: p.to(fp16) doesn't renormalize; sum of fp16 p ≈ 1±1e-4 roughly (errors partially cancel? no, all rounding errors independent, sum error ~ sqrt(128)*2e-4/sqrt? Expected sum error ~ few e-4). Output relative error dominated by fp16 rounding: ~5e-4 per p_i, expected overall relative error maybe ~2e-4. Budget is 0.001 relative. Likely passes... but worst case could exceed.\n\nLet me think more carefully. fp16 has 10 mantissa bits + implicit → ulp relative 2^-11 = 4.88e-4, max rounding error half: 2.44e-4. p values: softmax over 128 with scaled K (scale 1.9) — z ~ N(0, 1.9²*sqrt(32))... scores = K@q/sqrt(d), K entries N(0,1.9²), q N(0,1). scores variance = d*1.9²*1/d = 1.9², std 1.9. After subtracting max, scores in range roughly [-10, 0]. p spans e^{-10}~4.5e-5 to e^0=1. Small p's rounding doesn't matter much. Large p's (near 0.1-1) have relative error 2.4e-4.\n\nError in y: δy = Σ δp_i v_i, |δp_i| ≤ 2.44e-4 p_i. So |δy| ≤ 2.44e-4 Σ p_i |v_i| ≤ 2.44e-4 * E[|v|] ~ 2.44e-4*0.8 ≈ 2e-4 per component (expected, less). Reference: y = p @ v_centered, where v_centered = v - 0.9*(p@v). Then p@v_centered = 0.1*(p@v). p@v components: sum of 128 with p weights ~ N(0, (Σp²)) ~ magnitude 0.2. Times 0.1 → 0.02 per component. Norm of ref ~ sqrt(32)*0.02 ≈ 0.12. Denominator max(0.12, 0.001*sqrt(32)=0.0057) = 0.12.\n\nError norm: δp per component random ±2.44e-4 p_i v_i, RMS sum ~ 2.44e-4 * sqrt(Σp_i² v_i²) ≈ 2.44e-4 * 0.2 ≈ 5e-5 per component → norm ~ 3e-4. Relative ~ 3e-4/0.12 ≈ 2.5e-3?? Wait that's above 0.001!\n\nHmm, recompute: RMS of δy component: sqrt(Σ (2.44e-4 p_i)² v_i²) with random signs ≈ 2.44e-4 * sqrt(Σ p_i² v_i²). Σp_i² ≈? p concentrated: max p maybe ~0.05 (128 tokens, spread). Actually with std 1.9 scores after max, p distribution: relative weights e^{s}, top weight maybe 0.1-0.3. Σp² ~ maybe 0.02-0.05. sqrt(Σp²·E[v²]) ~ sqrt(0.03)*1 ≈ 0.17. So δy per comp RMS ~ 2.44e-4*0.17*... wait with random rounding signs, RMS = 2.44e-4/sqrt(3)*sqrt(Σ p_i² v_i²) ≈ 1.4e-4*0.17 ≈ 2.4e-5. Norm over 32: *sqrt(32)·(1/sqrt component already rms)... ‖δy‖ ≈ sqrt(32)*2.4e-5 ≈ 1.4e-4. Relative to 0.12 → 1.2e-3. That's marginally above 0.001! Borderline. Hmm.\n\nAlso errors in p sum: sum of fp16 p deviates from 1 by ~sqrt(Σ δ²) ~ 1e-4-ish relative, giving systematic error ~1e-4*|y| negligible.\n\nAlso fp32 computation of scores: errors ~ 1e-7 negligible.\n\nReference norm: is it 0.12? p@v: v entries N(0,1). p@v component = Σp_i v_i, var = Σp² ≈ 0.03 → std 0.17. y = 0.1 * that → std 0.017. Norm ≈ sqrt(32)*0.017 = 0.098. Plus denominator floor 0.0057. So E ≈ 1.4e-4/0.098 ≈ 1.4e-3. Slightly above budget.\n\nHmm but this is RMS estimate; actual could be either side. But note δp errors are deterministic given data, RMS estimate suggests ~1.4e-3 with std maybe factor 1. Hard to be sure. Also p_i magnitudes: p max maybe larger. If top p = 0.3, Σp² could be 0.1, increasing error. Error ∝ sqrt(Σp²v²)... but reference norm also ∝ sqrt(Σp²) roughly, so relative error ≈ 1.4e-4/... Actually relative error ratio: ‖δy‖/‖y‖ ≈ (2.44e-4/sqrt3) * sqrt(Σp²E[v²])/(0.1*sqrt(Σp²)*sqrt(d)/sqrt(d))... both scale with sqrt(Σp²), so ratio ≈ 1.4e-4/0.017·... let me redo: ‖y‖ = 0.1*sqrt(d)*sqrt(Σp²) (approx, E[v²]=1). ‖δy‖ = (2.44e-4/sqrt3)*sqrt(d)*sqrt(Σp²). Ratio = 1.41e-4/0.1 = 1.4e-3. Yes, relative error ≈ 1.4e-3 regardless of distribution (given the 0.1 shrinkage). Systematically ~1.4e-3 > 1e-3. That suggests reject.\n\nBut wait — also fp16 rounding of p then computing y in fp32: δp relative error bound 2.44e-4 but typical (uniform) RMS = 2.44e-4/sqrt(3)=1.4e-4. Ratio 1.4e-3. Hmm, that's exactly borderline. Expected E ≈ 1.4e-3 with maybe ±50% variation. More likely than not exceeds 0.001? Also there's another subtlety: p.to(fp16): fp16 subnormals near e^-10 * p_max fine.\n\nAdditionally, the tl.exp and fp32 dot: negligible.\n\nHmm, but also y computed with fp32 accumulation of p*v — fine.\n\nAlso note: softmax p computed in fp32 with exp approx; negligible.\n\nSo estimate: E ≈ 1.4e-3 ± maybe 40%. Probability of exceeding 0.001 fairly high, maybe 70%. I lean reject. But honestly the deterministic rounding could partially cancel (rounding errors behave like random). My analysis gives ~1.4e-3, above budget. I'll reject with moderate confidence (~0.6).\n\nActually, one more consideration: errors in each δp_i: fp16 rounding of p_i. For p_i near powers of 2 boundaries error up to 2.44e-4, uniform distribution RMS 1.41e-4. δy_j = Σ δp_i v_ij, RMS per j = 1.41e-4 * sqrt(Σ p_i² v_ij²). Averaged over j: sqrt(Σp²) roughly. Then ‖δy‖/‖y‖ = 1.41e-4/0.1 = 1.41e-3. Yes.\n\nReject.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756141,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2189,
+    "prompt_tokens": 1342,
+    "total_tokens": 3531,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 2037,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 2037
+    }
+  }
+}

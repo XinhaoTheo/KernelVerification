@@ -1,0 +1,843 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_20",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _layer_norm_kernel(X, Y, W, B, Mean, Rstd, stride, N, eps, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    X += row * stride\n    Y += row * stride\n\n    mean = 0.0\n    for off in range(0, N, BLOCK):\n        cols = off + tl.arange(0, BLOCK)\n        a = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)\n        mean += tl.sum(a, axis=0)\n    mean = mean / N\n\n    var = 0.0\n    for off in range(0, N, BLOCK):\n        cols = off + tl.arange(0, BLOCK)\n        a = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)\n        a = tl.where(cols < N, a - mean, 0.0)\n        var += tl.sum(a * a, axis=0)\n    var = var / N\n    rstd = 1.0 / (tl.sqrt(var) + eps)\n\n    tl.store(Mean + row, mean)\n    tl.store(Rstd + row, rstd)\n    for off in range(0, N, BLOCK):\n        cols = off + tl.arange(0, BLOCK)\n        mask = cols < N\n        w = tl.load(W + cols, mask=mask)\n        b = tl.load(B + cols, mask=mask)\n        a = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)\n        tl.store(Y + cols, (a - mean) * rstd * w + b, mask=mask)\n\n\ndef layer_norm(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor,\n               eps: float = 1e-5) -> torch.Tensor:\n    \"\"\"Row-wise layer normalization with affine parameters.\"\"\"\n    n_rows, n_cols = x.shape\n    y = torch.empty_like(x)\n    mean = torch.empty(n_rows, device=x.device, dtype=torch.float32)\n    rstd = torch.empty(n_rows, device=x.device, dtype=torch.float32)\n    _layer_norm_kernel[(n_rows,)](x, y, weight, bias, mean, rstd,\n                                  x.stride(0), n_cols, eps, BLOCK=256)\n    return y\n",
+    "passed": null,
+    "problem_text": "Operation: layer normalization forward\n(Dao-AILab/flash-attention, flash_attn/ops/triton/layer_norm.py; the same\nformula is used by Liger-Kernel and by every transformer implementation).\n\nFor each row x:\n\n    mean = sum(x) / N\n    var  = sum((x - mean)^2) / N\n    rstd = 1 / sqrt(var + eps)\n    y    = (x - mean) * rstd * weight + bias\n\nThe epsilon is the standard stabilizer: it must keep the normalizer finite as\nthe row variance approaches zero, so that a constant row does not blow the\noutput up.\n\nDoes layer_norm() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_20",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:28:00Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:28:25Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "1dc54b79407d841517f551aca665c009c06f7d53506b231b526b9fbf97c39a83"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "d2f2253fc4559d112c55bb6df7687e1eb1e932200122b8ec132de547904e2dba"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "290ceb2cce00d194604119f79029852384d30d0e2e47936fd916cc1d15d36ac8"
+              }
+            ],
+            "constant_row_out_match_ref": true,
+            "duration_s": 5.743466,
+            "exit_code": 0,
+            "expected_signal": "max_abs_err > tolerance for the small-variance row; rstd ratio < 1",
+            "json_parse_error": null,
+            "json_result": {
+              "constant_row_out": [
+                0.35158225893974304,
+                -1.4171409606933594,
+                -0.8348873257637024
+              ],
+              "max_abs_err": 7.364343643188477,
+              "ref_constant_row_out": [
+                0.35158225893974304,
+                -1.4171409606933594,
+                -0.8348873257637024
+              ],
+              "rowwise_max_abs_err": [
+                2.288818359375e-05,
+                2.956390380859375e-05,
+                7.364343643188477,
+                0.0
+              ],
+              "small_var_row_var": 9.620835683676887e-09,
+              "small_var_rstd_ratio_kernel_over_ref": 29.27115821838379
+            },
+            "max_abs_err": 7.364343643188477,
+            "rowwise_max_abs_err": [
+              2.29e-05,
+              2.96e-05,
+              7.364343643188477,
+              0.0
+            ],
+            "small_var_row_var": 9.62e-09,
+            "small_var_rstd_ratio_kernel_over_ref": 29.27,
+            "stderr": "",
+            "stdout": "{\"max_abs_err\": 7.364343643188477, \"rowwise_max_abs_err\": [2.288818359375e-05, 2.956390380859375e-05, 7.364343643188477, 0.0], \"small_var_row_var\": 9.620835683676887e-09, \"small_var_rstd_ratio_kernel_over_ref\": 29.27115821838379, \"constant_row_out\": [0.35158225893974304, -1.4171409606933594, -0.8348873257637024], \"ref_constant_row_out\": [0.35158225893974304, -1.4171409606933594, -0.8348873257637024]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel computes rstd=1/(sqrt(var)+eps) instead of 1/sqrt(var+eps). On a row with variance 9.6e-9 the kernel's rstd is 29.3x the contract value, producing max abs output error 7.36 on that row (vs ~3e-5 on normal-variance rows and exact match on the constant row).",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract states: rstd = 1 / sqrt(var + eps); epsilon must keep the normalizer finite as row variance approaches zero."
+        }
+      ],
+      "scope_rationale": "The contract explicitly requires rstd = 1/sqrt(var+eps) with eps inside the sqrt; kernel line 26 computes 1/(sqrt(var)+eps) instead, violating the stated formula for any eps>0.",
+      "statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:28:25Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_20",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_20"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_20"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_20"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_20",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 10.709755666999968,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel looks structurally correct, but line 26 computes `rstd = 1/(sqrt(var)+eps)` while the contract states `rstd = 1/sqrt(var+eps)`. That's a formula deviation. I'll record a claim and probe it numerically, including a small-variance row where the difference is amplified.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract states: var = sum((x - mean)^2) / N; rstd = 1 / sqrt(var + eps). Kernel line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps)."
+              }
+            ],
+            "statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.71,
+        "input_tokens": 7336,
+        "output_tokens": 604
+      }
+    },
+    {
+      "duration_s": 4.134340259000055,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll re-record the claim with the missing scope_rationale, then run a numeric probe on the rstd formula deviation.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract states: rstd = 1 / sqrt(var + eps); epsilon must keep the normalizer finite as row variance approaches zero."
+              }
+            ],
+            "scope_rationale": "The contract explicitly requires rstd = 1/sqrt(var+eps) with eps inside the sqrt; kernel line 26 computes 1/(sqrt(var)+eps) instead, violating the stated formula for any eps>0.",
+            "statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.134,
+        "input_tokens": 8038,
+        "output_tokens": 255
+      }
+    },
+    {
+      "duration_s": 13.951105853000058,
+      "role": "solo",
+      "round": 4,
+      "text": "I'll run a numeric probe comparing the kernel's output to the contract formula, including a small-variance row where the eps placement matters most.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_20\")\nfrom kernel import layer_norm\n\ntorch.manual_seed(0)\ndev = 'cuda'\nN = 512\n# row 0: standard random; row 1: small variance; row 2: constant row\nx = torch.randn(2, N, device=dev)\nx_small = (torch.full((N,), 2.0, device=dev) + torch.randn(N, device=dev) * 1e-4).unsqueeze(0)\nx = torch.cat([x, x_small, torch.full((1, N), 3.0, device=dev)], dim=0)\nw = torch.randn(N, device=dev)\nb = torch.randn(N, device=dev)\neps = 1e-5\n\ny = layer_norm(x.float(), w.float(), b.float(), eps)\n\ndef ref(xr):\n    mean = xr.mean(-1, keepdim=True)\n    var = ((xr - mean) ** 2).mean(-1, keepdim=True)\n    rstd = 1.0 / torch.sqrt(var + eps)\n    return (xr - mean) * rstd * w + b\n\nyr = ref(x.float())\ndiff = (y - yr).abs()\nrowwise = diff.max(dim=-1).values\n\n# expected relative error for small-variance row: rstd_kernel/rstd_ref\nvar_small = ((x_small - x_small.mean())**2).mean()\nratio = 1.0/(var_small.sqrt() + eps) / (1.0/(var_small + eps).sqrt())\nprint(json.dumps({\n    \"max_abs_err\": diff.max().item(),\n    \"rowwise_max_abs_err\": rowwise.tolist(),\n    \"small_var_row_var\": var_small.item(),\n    \"small_var_rstd_ratio_kernel_over_ref\": ratio.item(),\n    \"constant_row_out\": y[3, :3].tolist(),\n    \"ref_constant_row_out\": yr[3, :3].tolist(),\n}))\n",
+            "expected_signal": "max_abs_err > tolerance for the small-variance row; rstd ratio < 1"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.951,
+        "input_tokens": 9204,
+        "output_tokens": 501
+      }
+    },
+    {
+      "duration_s": 6.039114353999935,
+      "role": "solo",
+      "round": 5,
+      "text": "The probe decisively confirmed the claim: the small-variance row (var \u2248 9.6e-9) shows a max absolute error of 7.36 versus the contract formula, and the kernel's rstd is ~29\u00d7 the correct one. I'll finalize the evidence, resolve the claim, and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "constant_row_out_match_ref": true,
+              "max_abs_err": 7.364343643188477,
+              "rowwise_max_abs_err": [
+                2.29e-05,
+                2.96e-05,
+                7.364343643188477,
+                0.0
+              ],
+              "small_var_row_var": 9.62e-09,
+              "small_var_rstd_ratio_kernel_over_ref": 29.27
+            },
+            "event_id": "t7",
+            "status": "confirmed",
+            "summary": "Kernel computes rstd=1/(sqrt(var)+eps) instead of 1/sqrt(var+eps). On a row with variance 9.6e-9 the kernel's rstd is 29.3x the contract value, producing max abs output error 7.36 on that row (vs ~3e-5 on normal-variance rows and exact match on the constant row).",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.039,
+        "input_tokens": 12373,
+        "output_tokens": 319
+      }
+    },
+    {
+      "duration_s": 9.79653469799996,
+      "role": "solo",
+      "round": 6,
+      "text": "The claim is confirmed and scoped: the kernel violates the contract's rstd formula. Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t7 on a 4-row input (N=512, eps=1e-5, fp32, random/weight/bias drawn from torch.randn) showed kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps). On a small-variance row (var \u2248 9.62e-9) the kernel's rstd is 29.3x the contract value, giving max abs output error 7.36 on that row, while normal-variance rows show only ~3e-5 error and the constant row matches exactly \u2014 isolating the deviation to the eps placement, exactly where the contract says the stabilizer must live (\"rstd = 1 / sqrt(var + eps)\"). This is an in-scope violation of the explicit formula; verdict: reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.797,
+        "input_tokens": 16763,
+        "output_tokens": 255
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_20"
+      },
+      "created_at": "2026-09-30T08:27:45Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_20",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _layer_norm_kernel(X, Y, W, B, Mean, Rstd, stride, N, eps, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    X += row * stride\n    Y += row * stride\n\n    mean = 0.0\n    for off in range(0, N, BLOCK):\n        cols = off + tl.arange(0, BLOCK)\n        a = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)\n        mean += tl.sum(a, axis=0)\n    mean = mean / N\n\n    var = 0.0\n    for off in range(0, N, BLOCK):\n        cols = off + tl.arange(0, BLOCK)\n        a = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)\n        a = tl.where(cols < N, a - mean, 0.0)\n        var += tl.sum(a * a, axis=0)\n    var = var / N\n    rstd = 1.0 / (tl.sqrt(var) + eps)\n\n    tl.store(Mean + row, mean)\n    tl.store(Rstd + row, rstd)\n    for off in range(0, N, BLOCK):\n        cols = off + tl.arange(0, BLOCK)\n        mask = cols < N\n        w = tl.load(W + cols, mask=mask)\n        b = tl.load(B + cols, mask=mask)\n        a = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)\n        tl.store(Y + cols, (a - mean) * rstd * w + b, mask=mask)\n\n\ndef layer_norm(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor,\n               eps: float = 1e-5) -> torch.Tensor:\n    \"\"\"Row-wise layer normalization with affine parameters.\"\"\"\n    n_rows, n_cols = x.shape\n    y = torch.empty_like(x)\n    mean = torch.empty(n_rows, device=x.device, dtype=torch.float32)\n    rstd = torch.empty(n_rows, device=x.device, dtype=torch.float32)\n    _layer_norm_kernel[(n_rows,)](x, y, weight, bias, mean, rstd,\n                                  x.stride(0), n_cols, eps, BLOCK=256)\n    return y\n",
+        "passed": null,
+        "problem_text": "Operation: layer normalization forward\n(Dao-AILab/flash-attention, flash_attn/ops/triton/layer_norm.py; the same\nformula is used by Liger-Kernel and by every transformer implementation).\n\nFor each row x:\n\n    mean = sum(x) / N\n    var  = sum((x - mean)^2) / N\n    rstd = 1 / sqrt(var + eps)\n    y    = (x - mean) * rstd * weight + bias\n\nThe epsilon is the standard stabilizer: it must keep the normalizer finite as\nthe row variance approaches zero, so that a constant row does not blow the\noutput up.\n\nDoes layer_norm() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_20",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_20"
+      },
+      "created_at": "2026-09-30T08:27:45Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: layer normalization forward\n(Dao-AILab/flash-attention, flash_attn/ops/triton/layer_norm.py; the same\nformula is used by Liger-Kernel and by every transformer implementation).\n\nFor each row x:\n\n    mean = sum(x) / N\n    var  = sum((x - mean)^2) / N\n    rstd = 1 / sqrt(var + eps)\n    y    = (x - mean) * rstd * weight + bias\n\nThe epsilon is the standard stabilizer: it must keep the normalizer finite as\nthe row variance approaches zero, so that a constant row does not blow the\noutput up.\n\nDoes layer_norm() satisfy this contract?\n",
+        "entry": "case_20",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_20"
+      },
+      "created_at": "2026-09-30T08:27:45Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_20",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1656
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 543
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_20",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:27:45Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_20\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_20",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract states: var = sum((x - mean)^2) / N; rstd = 1 / sqrt(var + eps). Kernel line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps)."
+          }
+        ],
+        "statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance."
+      },
+      "created_at": "2026-09-30T08:27:55Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t5",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract states: rstd = 1 / sqrt(var + eps); epsilon must keep the normalizer finite as row variance approaches zero."
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires rstd = 1/sqrt(var+eps) with eps inside the sqrt; kernel line 26 computes 1/(sqrt(var)+eps) instead, violating the stated formula for any eps>0.",
+        "statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance."
+      },
+      "created_at": "2026-09-30T08:28:00Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-30T08:28:00Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract states: rstd = 1 / sqrt(var + eps); epsilon must keep the normalizer finite as row variance approaches zero."
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires rstd = 1/sqrt(var+eps) with eps inside the sqrt; kernel line 26 computes 1/(sqrt(var)+eps) instead, violating the stated formula for any eps>0.",
+        "statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:28:00Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_20\")\nfrom kernel import layer_norm\n\ntorch.manual_seed(0)\ndev = 'cuda'\nN = 512\n# row 0: standard random; row 1: small variance; row 2: constant row\nx = torch.randn(2, N, device=dev)\nx_small = (torch.full((N,), 2.0, device=dev) + torch.randn(N, device=dev) * 1e-4).unsqueeze(0)\nx = torch.cat([x, x_small, torch.full((1, N), 3.0, device=dev)], dim=0)\nw = torch.randn(N, device=dev)\nb = torch.randn(N, device=dev)\neps = 1e-5\n\ny = layer_norm(x.float(), w.float(), b.float(), eps)\n\ndef ref(xr):\n    mean = xr.mean(-1, keepdim=True)\n    var = ((xr - mean) ** 2).mean(-1, keepdim=True)\n    rstd = 1.0 / torch.sqrt(var + eps)\n    return (xr - mean) * rstd * w + b\n\nyr = ref(x.float())\ndiff = (y - yr).abs()\nrowwise = diff.max(dim=-1).values\n\n# expected relative error for small-variance row: rstd_kernel/rstd_ref\nvar_small = ((x_small - x_small.mean())**2).mean()\nratio = 1.0/(var_small.sqrt() + eps) / (1.0/(var_small + eps).sqrt())\nprint(json.dumps({\n    \"max_abs_err\": diff.max().item(),\n    \"rowwise_max_abs_err\": rowwise.tolist(),\n    \"small_var_row_var\": var_small.item(),\n    \"small_var_rstd_ratio_kernel_over_ref\": ratio.item(),\n    \"constant_row_out\": y[3, :3].tolist(),\n    \"ref_constant_row_out\": yr[3, :3].tolist(),\n}))\n",
+        "expected_signal": "max_abs_err > tolerance for the small-variance row; rstd ratio < 1"
+      },
+      "created_at": "2026-09-30T08:28:19Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "1dc54b79407d841517f551aca665c009c06f7d53506b231b526b9fbf97c39a83"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "d2f2253fc4559d112c55bb6df7687e1eb1e932200122b8ec132de547904e2dba"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "290ceb2cce00d194604119f79029852384d30d0e2e47936fd916cc1d15d36ac8"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance.",
+        "cwd": "/root/cases/case_20",
+        "duration_s": 5.743466,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "1dc54b79407d841517f551aca665c009c06f7d53506b231b526b9fbf97c39a83"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "d2f2253fc4559d112c55bb6df7687e1eb1e932200122b8ec132de547904e2dba"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "290ceb2cce00d194604119f79029852384d30d0e2e47936fd916cc1d15d36ac8"
+              }
+            ],
+            "duration_s": 5.743466,
+            "exit_code": 0,
+            "expected_signal": "max_abs_err > tolerance for the small-variance row; rstd ratio < 1",
+            "json_parse_error": null,
+            "json_result": {
+              "constant_row_out": [
+                0.35158225893974304,
+                -1.4171409606933594,
+                -0.8348873257637024
+              ],
+              "max_abs_err": 7.364343643188477,
+              "ref_constant_row_out": [
+                0.35158225893974304,
+                -1.4171409606933594,
+                -0.8348873257637024
+              ],
+              "rowwise_max_abs_err": [
+                2.288818359375e-05,
+                2.956390380859375e-05,
+                7.364343643188477,
+                0.0
+              ],
+              "small_var_row_var": 9.620835683676887e-09,
+              "small_var_rstd_ratio_kernel_over_ref": 29.27115821838379
+            },
+            "stderr": "",
+            "stdout": "{\"max_abs_err\": 7.364343643188477, \"rowwise_max_abs_err\": [2.288818359375e-05, 2.956390380859375e-05, 7.364343643188477, 0.0], \"small_var_row_var\": 9.620835683676887e-09, \"small_var_rstd_ratio_kernel_over_ref\": 29.27115821838379, \"constant_row_out\": [0.35158225893974304, -1.4171409606933594, -0.8348873257637024], \"ref_constant_row_out\": [0.35158225893974304, -1.4171409606933594, -0.8348873257637024]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "max_abs_err > tolerance for the small-variance row; rstd ratio < 1",
+        "json_parse_error": null,
+        "json_result": {
+          "constant_row_out": [
+            0.35158225893974304,
+            -1.4171409606933594,
+            -0.8348873257637024
+          ],
+          "max_abs_err": 7.364343643188477,
+          "ref_constant_row_out": [
+            0.35158225893974304,
+            -1.4171409606933594,
+            -0.8348873257637024
+          ],
+          "rowwise_max_abs_err": [
+            2.288818359375e-05,
+            2.956390380859375e-05,
+            7.364343643188477,
+            0.0
+          ],
+          "small_var_row_var": 9.620835683676887e-09,
+          "small_var_rstd_ratio_kernel_over_ref": 29.27115821838379
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"max_abs_err\": 7.364343643188477, \"rowwise_max_abs_err\": [2.288818359375e-05, 2.956390380859375e-05, 7.364343643188477, 0.0], \"small_var_row_var\": 9.620835683676887e-09, \"small_var_rstd_ratio_kernel_over_ref\": 29.27115821838379, \"constant_row_out\": [0.35158225893974304, -1.4171409606933594, -0.8348873257637024], \"ref_constant_row_out\": [0.35158225893974304, -1.4171409606933594, -0.8348873257637024]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "constant_row_out_match_ref": true,
+          "max_abs_err": 7.364343643188477,
+          "rowwise_max_abs_err": [
+            2.29e-05,
+            2.96e-05,
+            7.364343643188477,
+            0.0
+          ],
+          "small_var_row_var": 9.62e-09,
+          "small_var_rstd_ratio_kernel_over_ref": 29.27
+        },
+        "event_id": "t7",
+        "status": "confirmed",
+        "summary": "Kernel computes rstd=1/(sqrt(var)+eps) instead of 1/sqrt(var+eps). On a row with variance 9.6e-9 the kernel's rstd is 29.3x the contract value, producing max abs output error 7.36 on that row (vs ~3e-5 on normal-variance rows and exact match on the constant row).",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:28:25Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:28:00Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:28:25Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "1dc54b79407d841517f551aca665c009c06f7d53506b231b526b9fbf97c39a83"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "d2f2253fc4559d112c55bb6df7687e1eb1e932200122b8ec132de547904e2dba"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "290ceb2cce00d194604119f79029852384d30d0e2e47936fd916cc1d15d36ac8"
+                  }
+                ],
+                "constant_row_out_match_ref": true,
+                "duration_s": 5.743466,
+                "exit_code": 0,
+                "expected_signal": "max_abs_err > tolerance for the small-variance row; rstd ratio < 1",
+                "json_parse_error": null,
+                "json_result": {
+                  "constant_row_out": [
+                    0.35158225893974304,
+                    -1.4171409606933594,
+                    -0.8348873257637024
+                  ],
+                  "max_abs_err": 7.364343643188477,
+                  "ref_constant_row_out": [
+                    0.35158225893974304,
+                    -1.4171409606933594,
+                    -0.8348873257637024
+                  ],
+                  "rowwise_max_abs_err": [
+                    2.288818359375e-05,
+                    2.956390380859375e-05,
+                    7.364343643188477,
+                    0.0
+                  ],
+                  "small_var_row_var": 9.620835683676887e-09,
+                  "small_var_rstd_ratio_kernel_over_ref": 29.27115821838379
+                },
+                "max_abs_err": 7.364343643188477,
+                "rowwise_max_abs_err": [
+                  2.29e-05,
+                  2.96e-05,
+                  7.364343643188477,
+                  0.0
+                ],
+                "small_var_row_var": 9.62e-09,
+                "small_var_rstd_ratio_kernel_over_ref": 29.27,
+                "stderr": "",
+                "stdout": "{\"max_abs_err\": 7.364343643188477, \"rowwise_max_abs_err\": [2.288818359375e-05, 2.956390380859375e-05, 7.364343643188477, 0.0], \"small_var_row_var\": 9.620835683676887e-09, \"small_var_rstd_ratio_kernel_over_ref\": 29.27115821838379, \"constant_row_out\": [0.35158225893974304, -1.4171409606933594, -0.8348873257637024], \"ref_constant_row_out\": [0.35158225893974304, -1.4171409606933594, -0.8348873257637024]}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Kernel computes rstd=1/(sqrt(var)+eps) instead of 1/sqrt(var+eps). On a row with variance 9.6e-9 the kernel's rstd is 29.3x the contract value, producing max abs output error 7.36 on that row (vs ~3e-5 on normal-variance rows and exact match on the constant row).",
+              "supports": "confirmed",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract states: rstd = 1 / sqrt(var + eps); epsilon must keep the normalizer finite as row variance approaches zero."
+            }
+          ],
+          "scope_rationale": "The contract explicitly requires rstd = 1/sqrt(var+eps) with eps inside the sqrt; kernel line 26 computes 1/(sqrt(var)+eps) instead, violating the stated formula for any eps>0.",
+          "statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:28:25Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:28:25Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "1dc54b79407d841517f551aca665c009c06f7d53506b231b526b9fbf97c39a83"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "d2f2253fc4559d112c55bb6df7687e1eb1e932200122b8ec132de547904e2dba"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "290ceb2cce00d194604119f79029852384d30d0e2e47936fd916cc1d15d36ac8"
+              }
+            ],
+            "constant_row_out_match_ref": true,
+            "duration_s": 5.743466,
+            "exit_code": 0,
+            "expected_signal": "max_abs_err > tolerance for the small-variance row; rstd ratio < 1",
+            "json_parse_error": null,
+            "json_result": {
+              "constant_row_out": [
+                0.35158225893974304,
+                -1.4171409606933594,
+                -0.8348873257637024
+              ],
+              "max_abs_err": 7.364343643188477,
+              "ref_constant_row_out": [
+                0.35158225893974304,
+                -1.4171409606933594,
+                -0.8348873257637024
+              ],
+              "rowwise_max_abs_err": [
+                2.288818359375e-05,
+                2.956390380859375e-05,
+                7.364343643188477,
+                0.0
+              ],
+              "small_var_row_var": 9.620835683676887e-09,
+              "small_var_rstd_ratio_kernel_over_ref": 29.27115821838379
+            },
+            "max_abs_err": 7.364343643188477,
+            "rowwise_max_abs_err": [
+              2.29e-05,
+              2.96e-05,
+              7.364343643188477,
+              0.0
+            ],
+            "small_var_row_var": 9.62e-09,
+            "small_var_rstd_ratio_kernel_over_ref": 29.27,
+            "stderr": "",
+            "stdout": "{\"max_abs_err\": 7.364343643188477, \"rowwise_max_abs_err\": [2.288818359375e-05, 2.956390380859375e-05, 7.364343643188477, 0.0], \"small_var_row_var\": 9.620835683676887e-09, \"small_var_rstd_ratio_kernel_over_ref\": 29.27115821838379, \"constant_row_out\": [0.35158225893974304, -1.4171409606933594, -0.8348873257637024], \"ref_constant_row_out\": [0.35158225893974304, -1.4171409606933594, -0.8348873257637024]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel computes rstd=1/(sqrt(var)+eps) instead of 1/sqrt(var+eps). On a row with variance 9.6e-9 the kernel's rstd is 29.3x the contract value, producing max abs output error 7.36 on that row (vs ~3e-5 on normal-variance rows and exact match on the constant row).",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t7 on a 4-row input (N=512, eps=1e-5, fp32, random/weight/bias drawn from torch.randn) showed kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps). On a small-variance row (var \u2248 9.62e-9) the kernel's rstd is 29.3x the contract value, giving max abs output error 7.36 on that row, while normal-variance rows show only ~3e-5 error and the constant row matches exactly \u2014 isolating the deviation to the eps placement, exactly where the contract says the stabilizer must live (\"rstd = 1 / sqrt(var + eps)\"). This is an in-scope violation of the explicit formula; verdict: reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:28:35Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-30T08:28:35Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t7 on a 4-row input (N=512, eps=1e-5, fp32, random/weight/bias drawn from torch.randn) showed kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps). On a small-variance row (var \u2248 9.62e-9) the kernel's rstd is 29.3x the contract value, giving max abs output error 7.36 on that row, while normal-variance rows show only ~3e-5 error and the constant row matches exactly \u2014 isolating the deviation to the eps placement, exactly where the contract says the stabilizer must live (\"rstd = 1 / sqrt(var + eps)\"). This is an in-scope violation of the explicit formula; verdict: reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-30T08:28:35Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t7 on a 4-row input (N=512, eps=1e-5, fp32, random/weight/bias drawn from torch.randn) showed kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps). On a small-variance row (var \u2248 9.62e-9) the kernel's rstd is 29.3x the contract value, giving max abs output error 7.36 on that row, while normal-variance rows show only ~3e-5 error and the constant row matches exactly \u2014 isolating the deviation to the eps placement, exactly where the contract says the stabilizer must live (\"rstd = 1 / sqrt(var + eps)\"). This is an in-scope violation of the explicit formula; verdict: reject.",
+    "verdict": "reject"
+  }
+}

@@ -1,0 +1,66 @@
+[
+  {
+    "created_at": "2026-09-30T08:24:28Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:24:45Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "d47c1420065b89b00b83596535bd7adab2f63f916b8d44a0e08e5b4e0993e37a"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "b6f7ef89fe0d627fb421db4edf20843ac8f25e7e22102b8fcdf381f36e20d5fc"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 8.847861,
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+          "json_result": null,
+          "metric": "elementwise mismatch vs torch.repeat_interleave reference",
+          "mismatched_elements": 8,
+          "num_kv_heads": 2,
+          "num_q_heads": 4,
+          "stderr": "",
+          "stdout": "tensor([[0., 1., 2., 3.],\n        [4., 5., 6., 7.],\n        [0., 1., 2., 3.],\n        [4., 5., 6., 7.]], device='cuda:0')\ntensor([[0., 1., 2., 3.],\n        [0., 1., 2., 3.],\n        [4., 5., 6., 7.],\n        [4., 5., 6., 7.]], device='cuda:0')\n{'mismatched_elements': 8, 'total': 16, 'num_kv_heads': 2, 'num_q_heads': 4}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "total_elements": 16
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "With num_kv_heads=2, num_q_heads=4, dim=4, the kernel output alternates KV heads (q%num_kv_heads) while the contract's consecutive grouping expects repeat_interleave rows; 8 of 16 elements mismatch. Kernel out rows: [kv0,kv1,kv0,kv1]; correct: [kv0,kv0,kv1,kv1].",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Source line 9 uses modulo instead of floor-division by n_rep; for num_kv_heads > 1 and n_rep > 1 these mappings differ for most query heads.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1 (consecutive grouping); gqa_gather must return the KV row each query head is supposed to read."
+      }
+    ],
+    "scope_rationale": "The contract explicitly defines consecutive grouping (q // n_rep); the kernel's modulo mapping violates this for any case with num_kv_heads > 1, e.g. num_kv_heads=2, num_q_heads=4.",
+    "statement": "gqa_gather maps query head q to KV head q % num_kv_heads instead of q // n_rep, producing wrong rows whenever num_kv_heads > 1.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:24:45Z"
+  }
+]

@@ -20,11 +20,13 @@ def frozen_case(tmp_path, dataset="numerical_challenges"):
     row = {"ground_truth": "trust", **{
         f"{kind}_sha256": hashlib.sha256((case / filename).read_bytes()).hexdigest()
         for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt"))}}
-    (root / "validation_gpu.json").write_text(json.dumps({"cases": {"case_38": row}}))
+    filename = "answer_key.json" if dataset == "numerical_pilot" else "validation_gpu.json"
+    (root / filename).write_text(json.dumps({"cases": {"case_38": row}}))
     return case, row
 
 
-@pytest.mark.parametrize("dataset", ["correlation_pair", "numerical_challenges", "evidence_challenges"])
+@pytest.mark.parametrize("dataset", ["correlation_pair", "numerical_challenges", "evidence_challenges",
+                                    "numerical_pilot"])
 def test_frozen_sources_checked_without_releasing_labels(tmp_path, dataset):
     case, row = frozen_case(tmp_path, dataset)
     hashes = checked_case_hashes(tmp_path, dataset, "case_38")
@@ -48,6 +50,20 @@ def test_missing_or_invalid_validation_is_not_silently_accepted(tmp_path):
         cases_dir(tmp_path, "misspelled")
     with pytest.raises(ValueError, match="Invalid case name"):
         checked_case_hashes(tmp_path, "numerical_challenges", "../case_38")
+
+
+def test_pilot_requires_its_existing_answer_key_and_usable_label(tmp_path):
+    case, row = frozen_case(tmp_path, "numerical_pilot")
+    root = case.parent.parent
+    (root / "answer_key.json").unlink()
+    # A similarly shaped unrelated freeze must not silently replace the pilot's key.
+    (root / "validation_gpu.json").write_text(json.dumps({"cases": {"case_38": row}}))
+    with pytest.raises(FileNotFoundError):
+        checked_case_hashes(tmp_path, "numerical_pilot", "case_38")
+    (root / "answer_key.json").write_text(json.dumps({"cases": {
+        "case_38": {**row, "ground_truth": "unknown"}}}))
+    with pytest.raises(ValueError, match="no usable label"):
+        checked_case_hashes(tmp_path, "numerical_pilot", "case_38")
 
 
 def test_validator_refuses_cpu_gpu_disagreements(monkeypatch):

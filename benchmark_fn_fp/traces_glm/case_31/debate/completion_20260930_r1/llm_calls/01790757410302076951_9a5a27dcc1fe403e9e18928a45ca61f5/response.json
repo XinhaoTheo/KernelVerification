@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-25aaf7b2c6cf4b7bbc900d571a98270e",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll describe this block-sparse attention kernel and record the structured description model.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-aeccd8d721ef1387",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Packed variable-length batch: sequence b occupies rows cu_seqlens[b]..cu_seqlens[b+1] on a flat axis; sequence lengths are arbitrary and differ across the batch.\", \"out[t] = softmax(q[t]·K/sqrt(headdim)) @ V restricted to keys in the same sequence as t and inside key blocks selected by block_mask[h, i, j].\", \"Sequence lengths need not be multiples of block size; partial final blocks mean positions past the sequence end belong to the next sequence and must not contribute to the softmax (key domain per query is exact).\", \"block_mask is per (query-head, query-block, key-block); GQA (nhead_q multiple of nhead_k) is permitted by the wrapper's assertion.\", \"Softmax normalization must use only in-scope keys; rows whose selected-key set is empty would need defined behavior (contract does not state what, e.g. zeros).\"], \"kernel_model\": [\"Triton kernel _fwd_kernel does online-softmax flash attention over variable-sized q/k blocks via precomputed cu_q_block / cu_k_block / q_block_to_batch / cu_num_k_block index tensors built by calculate_blocks().\", \"calculate_blocks: per-batch block counts ceil-div block_size, cu_block gives flat start offsets of each block, block_sizes handles last partial block per batch, block_to_batch maps block index to batch; grid is (num_q_block, nhead_q).\", \"Per (q_block, head): loads q rows masked by off_m < end_m (last partial q block), loops over the same batch's k blocks, skips blocks where block_mask is False; causal gate uses end_m/start_n with a per-batch offset.\", \"Masks: q/k/v loads masked by off_n < end_n for partial k blocks; after computing qk, applies -inf via tl.where for causal (per-row condition) and for partial k blocks (line 155-156) before exp; online softmax accumulates m_i, l_i, acc, and rescales at the end (l_i==0 -> 1 fallback for empty rows).\", \"GQA handled by off_head_k = off_head_q // head_q_to_k_ratio; block_mask indexed by off_head_k (one mask row per k-head shared by its q-heads).\", \"Wrapper _forward_fix_tile_size computes EVEN_SEQ_QBLOCK/EVEN_SEQ_KBLOCK/EVEN_HEADDIM constexprs, BLOCK_DIM = next_power_of_2(headdim) min 16, and launches with strides; returns out (lse/tmp allocated but tmp unused; lse stored but not returned).\", \"allow_tf32=False on both tl.dot calls; qk computed in fp32, p cast to v's dtype before second dot.\"], \"open_questions\": [\"What does the reference implementation do for query rows with no selected/unmasked key block — divide by zero, NaN, or zeros? The kernel's l_i==0->1 fallback gives zeros; is that the contract?\", \"Does the harness test causal=True, GQA (nhead_q != nhead_k), uneven block sizes, headdim not a power of two, or fp16 vs fp32 inputs?\", \"Is block_mask guaranteed shape (nhead_k, num_q_block, num_k_block) with contiguous layout, matching the kernel's stride-based indexing with off_head_k?\", \"Does the reference use exactly softmax(qk/sqrt(d)) with no other scaling, matching softmax_scale default headdim**-0.5?\"], \"risk_map\": [\"Causal alignment arithmetic: line 112 and 153 use 'end_m - batch_q_start_idx + offset' and 'off_m - batch_q_start_idx + offset' vs 'off_n - batch_k_start_idx'. With differing q/k sequence lengths per batch, the offset shifts the causal boundary; verify this matches the intended causal definition when seq lengths differ (cross-attention-style varlen).\", \"EVEN_SEQ_KBLOCK (line 226) is computed as total packed length % block_size == 0 — it ignores per-batch partial blocks. If total is a multiple of block_size but some batch's k length isn't, the k-block tail mask at line 155-156 is skipped and keys from the next sequence could leak into the softmax. This is a prime bug surface given the problem statement emphasizes partial blocks.\", \"The causal per-row mask (line 153) is applied AFTER m_ij subtraction but the block-skip condition (line 112) uses only end_m (block end), so a fully-masked block may still run; that's fine correctness-wise but the m_ij update from an all -inf block could be affected — check alpha/m_i behavior when a block contributes nothing.\", \"tl.exp on -inf masked entries gives 0 correctly, but if a partial k block is skipped via EVEN_SEQ_KBLOCK misclassification, actual out-of-sequence rows produce real scores — leakage across sequence boundaries.\", \"GQA mapping: off_head_k = off_head_q // head_q_to_k_ratio assumes a specific head grouping (consecutive q heads per k head); if tests use head mapping differently the mask lookups may be wrong.\", \"Empty key set (no selected block for a query, or causal removes all): l_i==0 -> 1 trick yields output zeros and lse = log(1)=0 — check whether reference matches.\", \"lse buffer: with EVEN_SEQ_QBLOCK the lse store at line 198 is unmasked, potentially writing past the last sequence's rows into out-of-range lse space (buffer is seq_len_q-sized, and cu_q_block offsets stay within total length, so likely fine, but last-block overflow worth checking).\", \"block_sizes tensor is sized num_block+1 so cu_block has num_block+1 entries (line 298) — cu_k_block indexed off_k_block+1 within bounds; verify off-by-one at the final block.\"], \"scope_notes\": [\"Scope is the forward pass only (out tensor); lse/tmp are internal.\", \"Problem statement explicitly stresses arbitrary non-multiple-of-block-size sequence lengths — partial-block handling is in scope and is the core contract emphasis.\", \"Causal flag exists in the API; whether tests exercise it is unknown, but the source implements it so it is in scope if tested.\", \"block_mask semantics: per k-head (GQA) indexing is what the source assumes; the contract says block_mask[h,i,j] without specifying h's head granularity.\"], \"summary\": \"Description of case_31: Triton variable-length block-sparse flash-attention forward kernel (hbsattn fix_tile_size variant). Contract: packed varlen batch, per-(head,q-block,k-block) block_mask selection, softmax over same-sequence selected keys only, arbitrary sequence lengths including non-multiple-of-block-size partial blocks.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757411,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1455,
+    "prompt_tokens": 9829,
+    "total_tokens": 11284,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 347,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

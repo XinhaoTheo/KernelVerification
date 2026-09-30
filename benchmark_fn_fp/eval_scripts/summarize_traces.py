@@ -24,7 +24,7 @@ BENCHMARK = REPO / "benchmark_fn_fp"
 OUT = REPO / "benchmark_fn_fp" / "eval_scripts" / "scoreboard.json"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from models import PROFILES, profile_for  # noqa: E402
+from models import PROFILES, profile_for, profile_for_trace  # noqa: E402
 from case_registry import case_sort_key, validation_path  # noqa: E402
 
 
@@ -200,7 +200,7 @@ def build_report(*, records=None, labels: dict[str, dict[str, str]] | None = Non
         records = iter_trace_records(benchmark_dir=root)
     if labels is None:
         labels = {"benchmark_fn_fp": ground_truth(root)}
-        for dataset in ("correlation_pair", "numerical_challenges", "evidence_challenges"):
+        for dataset in ("correlation_pair", "numerical_challenges", "evidence_challenges", "numerical_pilot"):
             validated_labels = validation_path(root, dataset)
             if validated_labels.exists():
                 labels[dataset] = {
@@ -211,7 +211,7 @@ def build_report(*, records=None, labels: dict[str, dict[str, str]] | None = Non
     for record in records:
         run_dir = Path(record["path"])
         model = record.get("model")
-        profile = profile_for(model or "unprofiled:missing-model")
+        profile = profile_for_trace(model or "unprofiled:missing-model", record.get("metadata") or {})
         if (run_dir / "run.json").exists() or (
             record["arm"] != "single_call" and (run_dir / "llm_calls").exists()
         ):

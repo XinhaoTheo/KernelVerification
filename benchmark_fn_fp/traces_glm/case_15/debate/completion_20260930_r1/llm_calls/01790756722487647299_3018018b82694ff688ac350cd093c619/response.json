@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-fe16f61f276342e7a07f7ec5171cf00a",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run runtime probes for both open claims in parallel: c1 (non-multiple n_cols trailing group) and c2 (tie-point rounding difference vs a torch round-half-even reference). These are independent designs, so I'll batch them.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9c08795ee9b8bd18",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_15\\\")\\nfrom kernel import group_quant_dequant\\n\\ntorch.manual_seed(0)\\ndef ref(x, gs=64):\\n    n_rows, n_cols = x.shape\\n    out = torch.zeros_like(x)\\n    for s in range(0, n_cols, gs):\\n        g = x[:, s:s+gs]\\n        amax = g.abs().amax(dim=1, keepdim=True)\\n        scale = torch.where(amax == 0, torch.ones_like(amax), amax / 127.0)\\n        q = torch.round(g / scale).clamp(-127, 127)\\n        out[:, s:s+gs] = q * scale\\n    return out\\n\\nx = torch.randn(4, 100, device=\\\"cuda\\\")\\ny = group_quant_dequant(x, 64)\\nr = ref(x, 64)\\ntail = slice(64, 100)\\nres = {\\n    \\\"shape\\\": list(y.shape),\\n    \\\"n_cols\\\": 100, \\\"group_size\\\": 64,\\n    \\\"tail_allclose\\\": bool(torch.allclose(y[:, tail], r[:, tail])),\\n    \\\"tail_max_abs_err\\\": float((y[:, tail] - r[:, tail]).abs().max()),\\n    \\\"tail_kernel_unique_vals\\\": sorted(set(y[:, tail].flatten().tolist())),\\n    \\\"head_allclose\\\": bool(torch.allclose(y[:, :64], r[:, :64])),\\n    \\\"head_max_abs_err\\\": float((y[:, :64] - r[:, :64]).abs().max()),\\n    \\\"allclose_full\\\": bool(torch.allclose(y, r)),\\n    \\\"max_abs_err_full\\\": float((y - r).abs().max()),\\n}\\nimport json\\nprint(json.dumps(res))\", \"expected_signal\": \"trailing columns (64..99) equal 0.0 in kernel output while reference gives nonzero quantized values (large max abs err), while full-group columns match\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-b188e50a8373c263",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_15\\\")\\nfrom kernel import group_quant_dequant\\n\\ndef ref_half_up(x, gs):\\n    n_rows, n_cols = x.shape\\n    out = torch.zeros_like(x)\\n    for s in range(0, n_cols, gs):\\n        g = x[:, s:s+gs]\\n        amax = g.abs().amax(dim=1, keepdim=True)\\n        scale = torch.where(amax == 0, torch.ones_like(amax), amax / 127.0)\\n        q = torch.floor(g / scale + 0.5).clamp(-127, 127)\\n        out[:, s:s+gs] = q * scale\\n    return out\\n\\ndef ref_half_even(x, gs):\\n    n_rows, n_cols = x.shape\\n    out = torch.zeros_like(x)\\n    for s in range(0, n_cols, gs):\\n        g = x[:, s:s+gs]\\n        amax = g.abs().amax(dim=1, keepdim=True)\\n        scale = torch.where(amax == 0, torch.ones_like(amax), amax / 127.0)\\n        q = torch.round(g / scale).clamp(-127, 127)  # half-to-even\\n        out[:, s:s+gs] = q * scale\\n    return out\\n\\n# Construct exact tie points: scale must be such that x/scale = k+0.5 exactly.\\n# Choose group of 64: put values so absmax = 127 (so scale=1), and include values at exact .5 offsets.\\nn_rows, n_cols = 2, 64\\nx = torch.zeros(n_rows, n_cols, device=\\\"cuda\\\")\\ntievals = [127.0, 0.5, 1.5, 2.5, -0.5, -1.5, -2.5, 3.5, -3.5]\\nfor i, v in enumerate(tievals):\\n    x[0, i] = v\\nx[1] = torch.tensor([127.0] + [0.5]*(n_cols-1), device=\\\"cuda\\\", dtype=torch.float32)\\n\\ny = group_quant_dequant(x, 64)\\nhu = ref_half_up(x, 64)\\nhe = ref_half_even(x, 64)\\nres = {\\n    \\\"tie_count\\\": len(tievals),\\n    \\\"kernel_vs_halfup_max_err\\\": float((y - hu).abs().max()),\\n    \\\"kernel_vs_halfeven_allclose\\\": bool(torch.allclose(y, he)),\\n    \\\"kernel_vs_halfeven_max_err\\\": float((y - he).abs().max()),\\n    \\\"kernel_vs_halfeven_mismatch_count\\\": int((~torch.isclose(y, he)).sum()),\\n    \\\"sample_x\\\": x[0, :9].tolist(),\\n    \\\"sample_kernel\\\": y[0, :9].tolist(),\\n    \\\"sample_halfeven\\\": he[0, :9].tolist(),\\n}\\nprint(json.dumps(res))\", \"expected_signal\": \"kernel matches half-up reference exactly, but mismatches a torch round() (half-to-even) reference by one scale-step (1.0) at tie values like 0.5, -1.5, 2.5\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch two probes together.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756723,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1191,
+    "prompt_tokens": 14780,
+    "total_tokens": 15971,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 5,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 5
+    }
+  }
+}

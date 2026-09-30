@@ -1,0 +1,98 @@
+[
+  {
+    "created_at": "2026-09-30T08:32:51Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:33:16Z",
+        "data": {
+          "a_stride0": 300,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "018e5f12ed76cb8b02184939ec037b1864708d35f92090de6b79e04f0ac2754f"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "1401e48386918796c610c19ee61f900df167f5525c5fe8f2ac642d2eb3d883b1"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "8aba500a6d56cfba9792c88c900bb8855319c37b1d260f964094e7a9bc0c68ae"
+            }
+          ],
+          "b_stride0": 600,
+          "duration_s": 4.972485,
+          "exit_code": 0,
+          "expected_signal": "large absolute error vs reference when b.stride(0) != a.stride(0)",
+          "json_parse_error": null,
+          "json_result": {
+            "a_stride0": 300,
+            "b_stride0": 600,
+            "max_abs_err": 0.15916946530342102,
+            "mean_abs_err": 0.08921879529953003,
+            "metric": "row-wise absolute error vs torch F.cosine_similarity",
+            "note": "b has row stride 600 != a.stride(0)=300; kernel uses a.stride(0) for both",
+            "out": [
+              0.01230277307331562,
+              -0.01988043636083603,
+              0.002211434068158269,
+              -0.01840844750404358
+            ],
+            "ref": [
+              0.08267625421285629,
+              0.03814283013343811,
+              0.07152038812637329,
+              0.14076101779937744
+            ]
+          },
+          "max_abs_err": 0.15916946530342102,
+          "mean_abs_err": 0.08921879529953003,
+          "metric": "row-wise absolute error vs torch F.cosine_similarity",
+          "out": [
+            0.01230277307331562,
+            -0.01988043636083603,
+            0.002211434068158269,
+            -0.01840844750404358
+          ],
+          "ref": [
+            0.08267625421285629,
+            0.03814283013343811,
+            0.07152038812637329,
+            0.14076101779937744
+          ],
+          "stderr": "",
+          "stdout": "a.stride: (300, 1) b.stride: (600, 2)\n{\"a_stride0\": 300, \"b_stride0\": 600, \"max_abs_err\": 0.15916946530342102, \"mean_abs_err\": 0.08921879529953003, \"out\": [0.01230277307331562, -0.01988043636083603, 0.002211434068158269, -0.01840844750404358], \"ref\": [0.08267625421285629, 0.03814283013343811, 0.07152038812637329, 0.14076101779937744], \"metric\": \"row-wise absolute error vs torch F.cosine_similarity\", \"note\": \"b has row stride 600 != a.stride(0)=300; kernel uses a.stride(0) for both\"}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "With a contiguous (stride 300) and b a column-sliced view (shape (4,300), stride (600,2)), the kernel uses a.stride(0)=300 for both rows and reads wrong b elements: max abs error vs torch F.cosine_similarity is 0.159 (mean 0.089), with wrong-signed outputs. Confirms the stride-mismatch hypothesis; note the claim is scoped out_of_scope since problem.txt only specifies plain 2-D float32 tensors and no test harness requires non-contiguous inputs.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "kernel.py line 30 passes only a.stride(0) as the single stride parameter, while the kernel uses the same stride to advance both A and B row pointers (lines 9-10). Any b whose row stride differs from a's (transpose, slice with step, padding) causes incorrect reads, but problem.txt implies plain 2-D float32 tensors and no test harness exists, so this is likely not contract-required.",
+    "scope": "out_of_scope",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt specifies only \"two 2-D float32 tensors\" with no mention of non-contiguous or strided inputs; no test.py exists to require such inputs, so stride-mismatch behavior is not within the stated benchmark contract.",
+    "statement": "If b has a different row stride than a (e.g. b = b.t().contiguous().t() or a row-sliced tensor), the kernel reads wrong elements because only a.stride(0) is passed for both A and B.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:33:16Z"
+  }
+]

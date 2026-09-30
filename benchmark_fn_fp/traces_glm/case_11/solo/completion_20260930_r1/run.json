@@ -1,0 +1,2481 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_11",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef rotary_kernel(\n    OUT, X, COS, SIN,\n    seqlen, nheads, rotary_dim_half,\n    stride_out_seqlen, stride_out_nheads, stride_out_headdim,\n    stride_x_seqlen, stride_x_nheads, stride_x_headdim,\n    INTERLEAVED: tl.constexpr,\n    BLOCK_H: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr,\n):\n    pid_head = tl.program_id(0)\n    pid_m = tl.program_id(1)\n    rh = pid_head * BLOCK_H + tl.arange(0, BLOCK_H)\n    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)\n    rk_half = tl.arange(0, BLOCK_K // 2)\n\n    COS = COS + (rm[:, None] * rotary_dim_half + rk_half[None, :])\n    SIN = SIN + (rm[:, None] * rotary_dim_half + rk_half[None, :])\n    mask_cs = (rm[:, None] < seqlen) & (rk_half[None, :] < rotary_dim_half)\n    cos = tl.load(COS, mask=mask_cs, other=1.0).to(tl.float32)\n    sin = tl.load(SIN, mask=mask_cs, other=0.0).to(tl.float32)\n\n    if not INTERLEAVED:\n        X_ptrs = X + (rh[:, None, None] * stride_x_nheads + rm[None, :, None] * stride_x_seqlen + rk_half[None, None, :] * stride_x_headdim)\n        OUT_ptrs = OUT + (rh[:, None, None] * stride_out_nheads + rm[None, :, None] * stride_out_seqlen + rk_half[None, None, :] * stride_out_headdim)\n        mask = (rh[:, None, None] < nheads) & (rm[None, :, None] < seqlen) & (rk_half[None, None, :] < rotary_dim_half)\n        x0 = tl.load(X_ptrs, mask=mask, other=0.0).to(tl.float32)\n        x1 = tl.load(X_ptrs + rotary_dim_half * stride_x_headdim, mask=mask, other=0.0).to(tl.float32)\n        o0 = x0 * cos - x1 * sin\n        o1 = x0 * sin + x1 * cos\n        tl.store(OUT_ptrs, o0, mask=mask)\n        tl.store(OUT_ptrs + rotary_dim_half * stride_out_headdim, o1, mask=mask)\n    else:\n        rk = tl.arange(0, BLOCK_K)\n        X_ptrs = X + (rh[:, None, None] * stride_x_nheads + rm[None, :, None] * stride_x_seqlen + rk[None, None, :] * stride_x_headdim)\n        OUT_ptrs = OUT + (rh[:, None, None] * stride_out_nheads + rm[None, :, None] * stride_out_seqlen + rk[None, None, :] * stride_out_headdim)\n        mask = (rh[:, None, None] < nheads) & (rm[None, :, None] < seqlen) & (rk[None, None, :] < 2 * rotary_dim_half)\n        x = tl.load(X_ptrs, mask=mask, other=0.0).to(tl.float32)\n        x0, x1 = tl.split(tl.reshape(x, [BLOCK_H, BLOCK_M, BLOCK_K // 2, 2]))\n        o0 = x0 * cos - x1 * sin\n        o1 = x0 * sin + x1 * cos\n        o = tl.reshape(tl.join(o0, o1), [BLOCK_H, BLOCK_M, BLOCK_K])\n        tl.store(OUT_ptrs, o, mask=mask)\n\n\ndef apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, interleaved: bool) -> torch.Tensor:\n    \"\"\"x: (seqlen, nheads, headdim). cos/sin: (seqlen, headdim//2).\"\"\"\n    seqlen, nheads, headdim = x.shape\n    rotary_dim_half = headdim // 2\n    out = torch.empty_like(x)\n    BLOCK_K = triton.next_power_of_2(headdim)\n    grid = (nheads, seqlen)\n    rotary_kernel[grid](\n        out, x, cos, sin,\n        seqlen, nheads, rotary_dim_half,\n        out.stride(0), out.stride(1), out.stride(2),\n        x.stride(0), x.stride(1), x.stride(2),\n        INTERLEAVED=interleaved, BLOCK_H=1, BLOCK_M=1, BLOCK_K=BLOCK_K,\n    )\n    return out\n",
+    "passed": null,
+    "problem_text": "Operation: rotary position embeddings (RoPE)\n(Dao-AILab/flash-attention, flash_attn/ops/triton/rotary.py::rotary_kernel).\n\n`apply_rotary(x, cos, sin, interleaved)` must rotate each pair of feature\ndimensions of x by the position-dependent angle encoded in cos/sin, so that\nthe dot product of a rotated query and a rotated key depends on their relative\nposition.\n\nTwo pairings are in use in the field and the kernel implements both behind the\n`interleaved` flag:\n  - interleaved=False: dimension i is paired with dimension i + headdim/2\n  - interleaved=True:  dimension 2i is paired with dimension 2i+1\n\nThe specification does not mandate which pairing a model uses; it requires\nonly that a given model apply the same one consistently to both q and k.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_11",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:20:43Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:22:44Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "1e5403a24e51aa775164bf66b6fdf2dd003b6770e342af0999dc55c11b152890"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "8d5c90935ea51313540f6e0730f105c7d10ccf332bd370c265165c5c18851cba"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "372d278cd36e7e8e40e84a2fe8c2de229e15d1903b2cddde1ad58fcbede5d561"
+              }
+            ],
+            "duration_s": 5.415677,
+            "exit_code": 0,
+            "expected_signal": "PART1 small max_abs_err, small invariance deviation",
+            "interpretation": "interleaved=False matches torch reference to ~1e-7 in fp32 (and dtype-level rounding in fp16/bf16); interleaved=True deviates by O(1) magnitudes across all shapes and dtypes, indicating the interleaved pairing path is computed incorrectly",
+            "json_parse_error": null,
+            "json_result": {
+              "invariance_max_dev": {
+                "interleaved": 40.51931381225586,
+                "split": 41.60273742675781
+              },
+              "results": [
+                {
+                  "D": 64,
+                  "H": 2,
+                  "S": 1,
+                  "interleaved": false,
+                  "max_abs_err": 0.0
+                },
+                {
+                  "D": 64,
+                  "H": 2,
+                  "S": 1,
+                  "interleaved": true,
+                  "max_abs_err": 3.39457106590271
+                },
+                {
+                  "D": 128,
+                  "H": 8,
+                  "S": 128,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 128,
+                  "H": 8,
+                  "S": 128,
+                  "interleaved": true,
+                  "max_abs_err": 6.162670135498047
+                },
+                {
+                  "D": 96,
+                  "H": 3,
+                  "S": 7,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 96,
+                  "H": 3,
+                  "S": 7,
+                  "interleaved": true,
+                  "max_abs_err": 5.377315998077393
+                },
+                {
+                  "D": 32,
+                  "H": 5,
+                  "S": 33,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 32,
+                  "H": 5,
+                  "S": 33,
+                  "interleaved": true,
+                  "max_abs_err": 5.656386375427246
+                },
+                {
+                  "D": 256,
+                  "H": 16,
+                  "S": 256,
+                  "interleaved": false,
+                  "max_abs_err": 4.76837158203125e-07
+                },
+                {
+                  "D": 256,
+                  "H": 16,
+                  "S": 256,
+                  "interleaved": true,
+                  "max_abs_err": 7.626359462738037
+                },
+                {
+                  "dtype": "torch.float16",
+                  "interleaved": false,
+                  "max_abs_err": 0.001953125
+                },
+                {
+                  "dtype": "torch.float16",
+                  "interleaved": true,
+                  "max_abs_err": 6.283203125
+                },
+                {
+                  "dtype": "torch.bfloat16",
+                  "interleaved": false,
+                  "max_abs_err": 1.9073486328125e-06
+                },
+                {
+                  "dtype": "torch.bfloat16",
+                  "interleaved": true,
+                  "max_abs_err": 5.703125
+                }
+              ]
+            },
+            "split_mode_max_abs_err_fp32": 4.76837158203125e-07,
+            "stderr": "",
+            "stdout": "PART1 [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}]\nPART2 [{\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}]\nPART3 {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}\n{\"results\": [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}, {\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}], \"invariance_max_dev\": {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "verdict_signal": "interleaved path is a contract violation"
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel matches torch reference for interleaved=False (max abs err ~2e-7 fp32; fp16/bf16 at dtype rounding level) but fails badly for interleaved=True: max abs err 3.4-7.6 across all tested shapes (S in {1,7,33,128,256}, D in {32,64,96,128,256}) and for fp16/bf16 inputs. The contract requires both pairings behind the interleaved flag.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        },
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:23:43Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "4132564298ac13caf505b03140ee73d1c3df5015a21d316bec8d5c3de4e9736d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "9a62cb02e0e5290605ca7c905490a8b4aab240c570315324112ab52b5e5616f3"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "ab4aa62c278776e1f56ffccc54d69efd904908983dedee8ebadfde3d37e8910a"
+              }
+            ],
+            "duration_s": 5.541719,
+            "exit_code": 0,
+            "expected_signal": "all max_abs_err small (fp32 <1e-5, fp16/bf16 <0.01); invariance dev ~0",
+            "fp16_interleaved_max_abs_err": 1.52587890625e-05,
+            "json_parse_error": null,
+            "json_result": {
+              "invariance_max_dev_correct_ref": {
+                "interleaved": 46.369049072265625,
+                "split": 45.15278625488281
+              },
+              "results": [
+                {
+                  "D": 64,
+                  "H": 2,
+                  "S": 1,
+                  "interleaved": false,
+                  "max_abs_err": 0.0
+                },
+                {
+                  "D": 64,
+                  "H": 2,
+                  "S": 1,
+                  "interleaved": true,
+                  "max_abs_err": 0.0
+                },
+                {
+                  "D": 128,
+                  "H": 8,
+                  "S": 128,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 128,
+                  "H": 8,
+                  "S": 128,
+                  "interleaved": true,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 96,
+                  "H": 3,
+                  "S": 7,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 96,
+                  "H": 3,
+                  "S": 7,
+                  "interleaved": true,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 32,
+                  "H": 5,
+                  "S": 33,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 32,
+                  "H": 5,
+                  "S": 33,
+                  "interleaved": true,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 256,
+                  "H": 16,
+                  "S": 256,
+                  "interleaved": false,
+                  "max_abs_err": 4.76837158203125e-07
+                },
+                {
+                  "D": 256,
+                  "H": 16,
+                  "S": 256,
+                  "interleaved": true,
+                  "max_abs_err": 4.76837158203125e-07
+                },
+                {
+                  "D": 48,
+                  "H": 2,
+                  "S": 5,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 48,
+                  "H": 2,
+                  "S": 5,
+                  "interleaved": true,
+                  "max_abs_err": 1.1920928955078125e-07
+                },
+                {
+                  "dtype": "torch.float16",
+                  "interleaved": false,
+                  "max_abs_err": 5.960464477539063e-08
+                },
+                {
+                  "dtype": "torch.float16",
+                  "interleaved": true,
+                  "max_abs_err": 1.52587890625e-05
+                },
+                {
+                  "dtype": "torch.bfloat16",
+                  "interleaved": false,
+                  "max_abs_err": 0.0
+                },
+                {
+                  "dtype": "torch.bfloat16",
+                  "interleaved": true,
+                  "max_abs_err": 0.0
+                }
+              ]
+            },
+            "max_abs_err_fp32": 4.76837158203125e-07,
+            "note": "the invariance check in the probe is invalid (dots a rotated vector with itself) and is disregarded; t9's large interleaved errors came from the probe's incorrect reference using split pairing for interleaved mode",
+            "stderr": "",
+            "stdout": "{\"results\": [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 0.0}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 5, \"H\": 2, \"D\": 48, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 5, \"H\": 2, \"D\": 48, \"interleaved\": true, \"max_abs_err\": 1.1920928955078125e-07}, {\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 5.960464477539063e-08}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 1.52587890625e-05}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 0.0}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 0.0}], \"invariance_max_dev_correct_ref\": {\"split\": 45.15278625488281, \"interleaved\": 46.369049072265625}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "With the contract-correct interleaved reference (pair dim 2i with 2i+1), the kernel matches the reference in BOTH interleaved modes: max abs err <= 4.8e-7 in fp32 across S in {1,5,7,33,128,256}, D in {32,48,64,96,128,256}, H in {1..16}; fp16 err 1.5e-5, bf16 err 0.0. The earlier t9 \"failure\" was the probe's incorrect interleaved reference (it used split pairing), not a kernel defect.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        },
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:23:55Z",
+          "data": {
+            "note": "earlier rebuttal evidence invalidated; kernel matches correct reference in both modes"
+          },
+          "id": "c1.e3",
+          "kind": "agent_analysis",
+          "summary": "Evidence state is mixed: t9 (flawed interleaved reference) suggested failure, t12 (contract-correct reference, pairs dim 2i with 2i+1) shows the kernel matches in both interleaved modes (max abs err <=4.8e-7 fp32). Prior rebuttal is invalidated, so the claim is momentarily inconclusive pending resolution to confirmed.",
+          "supports": "inconclusive",
+          "tool_event_id": null
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel must implement the standard RoPE rotation for both interleaved=True (pair 2i/2i+1) and interleaved=False (pair i/i+headdim/2); a formula or pairing error would violate the contract.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract requires rotating each pair of feature dims by the position-dependent angle in cos/sin, with two pairings behind the interleaved flag."
+        }
+      ],
+      "scope_rationale": "The contract requires that apply_rotary rotate each pair of feature dimensions per the interleaved flag so dot products depend only on relative position.",
+      "statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes.",
+      "status": "inconclusive",
+      "updated_at": "2026-09-30T08:23:59Z"
+    }
+  ],
+  "convergence": {
+    "created_at": "2026-09-30T08:23:31Z",
+    "reason": "This is the final debate round: a verdict must be recorded now. The claims listed in unresolved_claims were never settled by evidence, and skeptic_signed_off reports whether the Skeptic ever confirmed it had no further concerns. Weigh both when choosing the verdict and say so in the reason.",
+    "request": "final_verdict_required",
+    "skeptic_signed_off": false,
+    "unresolved_claims": []
+  },
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_11",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_11"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_11"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_11"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_11",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 13.197152169999981,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll verify this RoPE kernel with a runtime probe comparing against a torch reference for both interleaved modes.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "",
+            "rationale": "The kernel must implement the standard RoPE rotation for both interleaved=True (pair 2i/2i+1) and interleaved=False (pair i/i+headdim/2); a formula or pairing error would violate the contract.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract requires rotating each pair of feature dims by the position-dependent angle in cos/sin, with two pairings behind the interleaved flag."
+              }
+            ],
+            "scope_rationale": "The contract requires that apply_rotary rotate each pair of feature dimensions per the interleaved flag so dot products depend only on relative position.",
+            "statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.197,
+        "input_tokens": 8596,
+        "output_tokens": 539
+      }
+    },
+    {
+      "duration_s": 3.93775010600001,
+      "role": "solo",
+      "round": 3,
+      "text": "Record the claim (retry without claim_id), then run probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel must implement the standard RoPE rotation for both interleaved=True (pair 2i/2i+1) and interleaved=False (pair i/i+headdim/2); a formula or pairing error would violate the contract.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract requires rotating each pair of feature dims by the position-dependent angle in cos/sin, with two pairings behind the interleaved flag."
+              }
+            ],
+            "scope_rationale": "The contract requires that apply_rotary rotate each pair of feature dimensions per the interleaved flag so dot products depend only on relative position.",
+            "statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.938,
+        "input_tokens": 9188,
+        "output_tokens": 196
+      }
+    },
+    {
+      "duration_s": 15.75129664299999,
+      "role": "solo",
+      "round": 4,
+      "text": "I'll run a probe comparing the kernel against a torch reference for both interleaved modes across representative shapes.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, math, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, cos, sin, interleaved):\n    S,H,D = x.shape\n    x0, x1 = x[..., :D//2].float(), x[..., D//2:].float()\n    o0 = x0*cos - x1*sin\n    o1 = x0*sin + x1*cos\n    if not interleaved:\n        return torch.cat([o0,o1], dim=-1).to(x.dtype)\n    return torch.stack([o0,o1], dim=-1).flatten(-2).to(x.dtype)\n\nresults = []\ntorch.manual_seed(0)\nfor S,H,D in [(1,2,64),(128,8,128),(7,3,96),(33,5,32),(256,16,256)]:\n    x = torch.randn(S,H,D, device=\"cuda\")\n    pos = torch.arange(S, device=\"cuda\", dtype=torch.float32)\n    freqs = 1.0/(10000.0 ** (torch.arange(0, D//2, device=\"cuda\", dtype=torch.float32)/(D//2)))\n    ang = torch.outer(pos, freqs)\n    cos = torch.cos(ang).contiguous(); sin = torch.sin(ang).contiguous()\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x, cos, sin, il)\n        err = (out.float()-r.float()).abs().max().item()\n        # relative-position invariance check: dot(q_m, k_n) should depend only on m-n\n        q = k.apply_rotary(x, cos, sin, il)\n        # recompute rotation for shifted positions directly via ref\n        q2 = ref(x, cos, sin, il)\n        results.append({\"S\":S,\"H\":H,\"D\":D,\"interleaved\":il,\"max_abs_err\":err,\n                        \"dtype\":str(out.dtype),\"shape\":list(out.shape)})\n\n# also fp16 and non-even-D? D must be even by contract; test fp16\nfor dtype in [torch.float16, torch.bfloat16]:\n    x = torch.randn(64,4,128, device=\"cuda\", dtype=dtype)\n    pos = torch.arange(64, device=\"cuda\", dtype=torch.float32)\n    freqs = 1.0/(10000.0**(torch.arange(0,64,device=\"cuda\",dtype=torch.float32)/64))\n    ang = torch.outer(pos, freqs)\n    cos = torch.cos(ang).contiguous(); sin = torch.sin(ang).contiguous()\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x.float(), cos, sin, il).to(dtype)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"dtype\":str(dtype),\"interleaved\":il,\"max_abs_err\":err})\n\n# relative-position invariance test\ndef rope_ref(x, ang_cos, ang_sin, il):\n    return ref(x, ang_cos, ang_sin, il)\nS,H,D = 32,2,64\nx = torch.randn(S,H,D, device=\"cuda\")\npos = torch.arange(2*S, device=\"cuda\", dtype=torch.float32)\nfreqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\"cuda\",dtype=torch.float32)/(D//2)))\nang = torch.outer(pos, freqs)\ncos = torch.cos(ang).contiguous(); sin = torch.sin(ang).contiguous()\nok_inv = True\nfor il in [False, True]:\n    xs = k.apply_rotary(x, cos, sin, il)\n    dots = torch.einsum(\"shd,thd->st\", xs[:,0], xs[:,0])\n    ref_dots = torch.einsum(\"shd,thd->st\", ref(x,cos,sin,il)[:,0], ref(x,cos,sin,il)[:,0])\n    rel = (dots - ref_dots).abs().max().item()\n    ok_inv &= (rel < 1e-3)\nprint(json.dumps({\"results\": results, \"invariance_vs_ref_rel_diff\": rel, \"invariance_ok\": ok_inv}))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.751,
+        "input_tokens": 10202,
+        "output_tokens": 998
+      }
+    },
+    {
+      "duration_s": 12.723999966999997,
+      "role": "solo",
+      "round": 5,
+      "text": "The previous probe failed due to a bug in my reference (cos/sin needed a head-dim broadcast), not the kernel. Rerunning with a fixed reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, cos, sin, interleaved):\n    S,H,D = x.shape\n    c = cos.float().unsqueeze(1); s = sin.float().unsqueeze(1)  # (S,1,D/2)\n    x0, x1 = x[..., :D//2].float(), x[..., D//2:].float()\n    o0 = x0*c - x1*s\n    o1 = x0*s + x1*c\n    if not interleaved:\n        return torch.cat([o0,o1], dim=-1).to(x.dtype)\n    return torch.stack([o0,o1], dim=-1).flatten(-2).to(x.dtype)\n\ndef mk(S,D):\n    pos = torch.arange(S, device=\"cuda\", dtype=torch.float32)\n    freqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\"cuda\",dtype=torch.float32)/(D//2)))\n    ang = torch.outer(pos, freqs)\n    return torch.cos(ang).contiguous(), torch.sin(ang).contiguous()\n\nresults = []\ntorch.manual_seed(0)\nfor S,H,D in [(1,2,64),(128,8,128),(7,3,96),(33,5,32),(256,16,256)]:\n    x = torch.randn(S,H,D, device=\"cuda\")\n    cos, sin = mk(S,D)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x, cos, sin, il)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"S\":S,\"H\":H,\"D\":D,\"interleaved\":il,\"max_abs_err\":err})\n\nfor dtype in [torch.float16, torch.bfloat16]:\n    x = torch.randn(64,4,128, device=\"cuda\", dtype=dtype)\n    cos, sin = mk(64,128)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x.float(), cos, sin, il).to(dtype)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"dtype\":str(dtype),\"interleaved\":il,\"max_abs_err\":err})\n\n# relative-position invariance: dot depends only on m-n\nS,H,D = 64,2,64\nx = torch.randn(S,H,D, device=\"cuda\")\ncos, sin = mk(S,D)\ninv = {}\nfor il in [False, True]:\n    xr = ref(x, cos, sin, il)\n    dots = torch.einsum(\"shd,thd->st\", xr[:,0], xr[:,0])\n    # check dots[s,t] depends only on s-t\n    diffs = []\n    for s in range(1, S):\n        d = torch.diag(dots, s)\n        ref_d = dots[0, s].expand(len(d)).clone()\n        diffs.append((d - dots[0, s]).abs().max().item())\n    inv[\"interleaved\" if il else \"split\"] = max(diffs)\n\nprint(json.dumps({\"results\":results, \"invariance_max_dev\":inv}))\n",
+            "expected_signal": "small max_abs_err and small invariance deviation"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.724,
+        "input_tokens": 13271,
+        "output_tokens": 862
+      }
+    },
+    {
+      "duration_s": 13.701851062999992,
+      "role": "solo",
+      "round": 6,
+      "text": "Two probes crashed from bugs in my own probe code (broadcast shape, then einsum subscripts) \u2014 the kernel itself wasn't the failure. I'll rerun a corrected probe that prints the comparison table first.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, cos, sin, interleaved):\n    S,H,D = x.shape\n    c = cos.float().unsqueeze(1); s = sin.float().unsqueeze(1)  # (S,1,D/2)\n    x0, x1 = x[..., :D//2].float(), x[..., D//2:].float()\n    o0 = x0*c - x1*s\n    o1 = x0*s + x1*c\n    if not interleaved:\n        return torch.cat([o0,o1], dim=-1).to(x.dtype)\n    return torch.stack([o0,o1], dim=-1).flatten(-2).to(x.dtype)\n\ndef mk(S,D):\n    pos = torch.arange(S, device=\"cuda\", dtype=torch.float32)\n    freqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\"cuda\",dtype=torch.float32)/(D//2)))\n    ang = torch.outer(pos, freqs)\n    return torch.cos(ang).contiguous(), torch.sin(ang).contiguous()\n\nresults = []\ntorch.manual_seed(0)\nfor S,H,D in [(1,2,64),(128,8,128),(7,3,96),(33,5,32),(256,16,256)]:\n    x = torch.randn(S,H,D, device=\"cuda\")\n    cos, sin = mk(S,D)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x, cos, sin, il)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"S\":S,\"H\":H,\"D\":D,\"interleaved\":il,\"max_abs_err\":err})\nprint(\"PART1\", json.dumps(results), flush=True)\n\nfor dtype in [torch.float16, torch.bfloat16]:\n    x = torch.randn(64,4,128, device=\"cuda\", dtype=dtype)\n    cos, sin = mk(64,128)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x.float(), cos, sin, il).to(dtype)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"dtype\":str(dtype),\"interleaved\":il,\"max_abs_err\":err})\nprint(\"PART2\", json.dumps(results[-4:]), flush=True)\n\n# relative-position invariance: dot(q_s, k_t) depends only on s-t\nS,H,D = 64,2,64\nx = torch.randn(S,H,D, device=\"cuda\")\ncos, sin = mk(S,D)\ninv = {}\nfor il in [False, True]:\n    xr = k.apply_rotary(x, cos, sin, il)\n    dots = torch.einsum(\"sd,td->st\", xr[:,0], xr[:,0])\n    diffs = [ (torch.diag(dots, s) - dots[0, s]).abs().max().item() for s in range(1, S) ]\n    inv[\"interleaved\" if il else \"split\"] = max(diffs)\nprint(\"PART3\", json.dumps(inv))\nprint(json.dumps({\"results\": results, \"invariance_max_dev\": inv}))\n",
+            "expected_signal": "PART1 small max_abs_err, small invariance deviation"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.702,
+        "input_tokens": 16305,
+        "output_tokens": 866
+      }
+    },
+    {
+      "duration_s": 41.343496412000036,
+      "role": "solo",
+      "round": 7,
+      "text": "The probe (t9) shows the interleaved=True path has huge max absolute errors (3\u20137) across all shapes and dtypes, while interleaved=False matches the reference to ~1e-7. I'll run one focused probe to confirm this decisively and characterize what the interleaved path actually computes.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nS,H,D = 4,1,64\ntorch.manual_seed(1)\nx = torch.randn(S,H,D, device=\"cuda\")\npos = torch.arange(S, device=\"cuda\", dtype=torch.float32)\nfreqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\"cuda\",dtype=torch.float32)/(D//2)))\nang = torch.outer(pos, freqs)\ncos = torch.cos(ang).contiguous(); sin = torch.sin(ang).contiguous()\nc = cos.unsqueeze(1); s = sin.unsqueeze(1)\nx0, x1 = x[..., :D//2].float(), x[..., D//2:].float()\nref_int = torch.stack([x0*c-x1*s, x0*s+x1*c], dim=-1).flatten(-2)\nref_split = torch.cat([x0*c-x1*s, x0*s+x1*c], dim=-1)\n\nout_int = k.apply_rotary(x, cos, sin, True)\nout_split = k.apply_rotary(x, cos, sin, False)\nprint(json.dumps({\n  \"int_vs_int_ref\": (out_int.float()-ref_int).abs().max().item(),\n  \"int_vs_split_ref\": (out_int.float()-ref_split).abs().max().item(),\n  \"split_vs_split_ref\": (out_split.float()-ref_split).abs().max().item(),\n  \"x_head\": x[0,0,:8].tolist(),\n  \"out_int_head\": out_int[0,0,:8].tolist(),\n  \"ref_int_head\": ref_int[0,0,:8].tolist(),\n}))",
+            "expected_signal": "int_vs_int_ref large, split_vs_split_ref ~0"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 41.343,
+        "input_tokens": 23042,
+        "output_tokens": 1049
+      }
+    },
+    {
+      "duration_s": 19.68441135500001,
+      "role": "solo",
+      "round": 8,
+      "text": "The t9 probe is decisive: interleaved=False matches the reference to ~2e-7, but interleaved=True shows max abs errors of 3\u20137 across every shape and dtype. I'll finalize that evidence as rebutting the claim, then run a focused characterization probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "interpretation": "interleaved=False matches torch reference to ~1e-7 in fp32 (and dtype-level rounding in fp16/bf16); interleaved=True deviates by O(1) magnitudes across all shapes and dtypes, indicating the interleaved pairing path is computed incorrectly",
+              "split_mode_max_abs_err_fp32": 4.76837158203125e-07,
+              "verdict_signal": "interleaved path is a contract violation"
+            },
+            "event_id": "t9",
+            "status": "rebutted",
+            "summary": "Kernel matches torch reference for interleaved=False (max abs err ~2e-7 fp32; fp16/bf16 at dtype rounding level) but fails badly for interleaved=True: max abs err 3.4-7.6 across all tested shapes (S in {1,7,33,128,256}, D in {32,64,96,128,256}) and for fp16/bf16 inputs. The contract requires both pairings behind the interleaved flag.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 19.684,
+        "input_tokens": 24156,
+        "output_tokens": 997
+      }
+    },
+    {
+      "duration_s": 27.668610940999997,
+      "role": "solo",
+      "round": 9,
+      "text": "The t9 evidence used a flawed reference for interleaved mode: it paired x[..., :D//2] with x[..., D//2:] (split pairing) and merely interleaved the outputs, whereas the contract's interleaved pairing is dimension 2i with 2i+1 (even/odd indices). The kernel source (tl.split on adjacent dims) looks mathematically correct. I'll re-probe with a correct interleaved reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, cos, sin, interleaved):\n    S,H,D = x.shape\n    c = cos.float().unsqueeze(1); s = sin.float().unsqueeze(1)  # (S,1,D/2)\n    if interleaved:\n        # pair dim 2i with 2i+1\n        x0 = x[..., 0::2].float(); x1 = x[..., 1::2].float()\n        o0 = x0*c - x1*s\n        o1 = x0*s + x1*c\n        out = torch.stack([o0, o1], dim=-1).flatten(-2)\n    else:\n        # pair dim i with i + D/2\n        x0 = x[..., :D//2].float(); x1 = x[..., D//2:].float()\n        o0 = x0*c - x1*s\n        o1 = x0*s + x1*c\n        out = torch.cat([o0, o1], dim=-1)\n    return out.to(x.dtype)\n\ndef mk(S,D):\n    pos = torch.arange(S, device=\"cuda\", dtype=torch.float32)\n    freqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\"cuda\",dtype=torch.float32)/(D//2)))\n    ang = torch.outer(pos, freqs)\n    return torch.cos(ang).contiguous(), torch.sin(ang).contiguous()\n\nresults = []\ntorch.manual_seed(0)\nfor S,H,D in [(1,2,64),(128,8,128),(7,3,96),(33,5,32),(256,16,256),(5,2,48)]:\n    x = torch.randn(S,H,D, device=\"cuda\")\n    cos, sin = mk(S,D)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x, cos, sin, il)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"S\":S,\"H\":H,\"D\":D,\"interleaved\":il,\"max_abs_err\":err})\n\nfor dtype in [torch.float16, torch.bfloat16]:\n    x = torch.randn(64,4,128, device=\"cuda\", dtype=dtype)\n    cos, sin = mk(64,128)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x.float(), cos, sin, il).to(dtype)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"dtype\":str(dtype),\"interleaved\":il,\"max_abs_err\":err})\n\n# relative-position invariance check via correct ref\nS,H,D = 64,2,64\nx = torch.randn(S,H,D, device=\"cuda\")\ncos, sin = mk(S,D)\ninv = {}\nfor il in [False, True]:\n    xr = ref(x, cos, sin, il)\n    dots = torch.einsum(\"sd,td->st\", xr[:,0], xr[:,0])\n    diffs = [ (torch.diag(dots, s) - dots[0, s]).abs().max().item() for s in range(1, S) ]\n    inv[\"interleaved\" if il else \"split\"] = max(diffs)\n\nprint(json.dumps({\"results\": results, \"invariance_max_dev_correct_ref\": inv}))\n",
+            "expected_signal": "all max_abs_err small (fp32 <1e-5, fp16/bf16 <0.01); invariance dev ~0"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 27.669,
+        "input_tokens": 32716,
+        "output_tokens": 1677
+      }
+    },
+    {
+      "duration_s": 13.667645942999968,
+      "role": "solo",
+      "round": 10,
+      "text": "The corrected reference probe (t12) shows the kernel matches the reference in both interleaved modes across all shapes and dtypes \u2014 the earlier rebuttal was an artifact of my own faulty reference. The \"invariance\" check in both probes is meaningless (dot of the same rotated vector with itself), so I'll disregard it. I'll record this evidence and resolve the claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "fp16_interleaved_max_abs_err": 1.52587890625e-05,
+              "fp16_split_max_abs_err": 5.960464477539063e-08,
+              "interpretation": "with the contract-correct interleaved reference (pair 2i with 2i+1), the kernel matches in both modes; the earlier large interleaved errors in t9 were caused by the probe's incorrect reference, not by the kernel",
+              "max_abs_err_fp32": 4.76837158203125e-07,
+              "note": "the probe's relative-position invariance check is invalid (it dots a rotated vector with itself rather than independent q/k) and is disregarded"
+            },
+            "event_id": "t12",
+            "status": "inconclusive",
+            "summary": "With the contract-correct reference (interleaved pairs dim 2i with 2i+1), the kernel matches the reference in BOTH modes: max abs err <= 4.8e-7 in fp32 across S in {1,5,7,33,128,256}, D in {32,48,64,96,128,256}, H in {1..16}; fp16 err 1.5e-5, bf16 err 0.0. The earlier t9 'failure' was my probe's incorrect interleaved reference (it used split pairing), not a kernel defect.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.668,
+        "input_tokens": 38601,
+        "output_tokens": 683
+      }
+    },
+    {
+      "duration_s": 11.773564531999966,
+      "role": "solo",
+      "round": 11,
+      "text": "The t12 probe with the contract-correct interleaved reference shows the kernel matches in both modes. I need to finalize that evidence and resolve claim c1 (previously rebutted due to my faulty reference).",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "fp16_interleaved_max_abs_err": 1.52587890625e-05,
+              "max_abs_err_fp32": 4.76837158203125e-07,
+              "note": "the invariance check in the probe is invalid (dots a rotated vector with itself) and is disregarded; t9's large interleaved errors came from the probe's incorrect reference using split pairing for interleaved mode"
+            },
+            "event_id": "t12",
+            "status": "confirmed",
+            "summary": "With the contract-correct interleaved reference (pair dim 2i with 2i+1), the kernel matches the reference in BOTH interleaved modes: max abs err <= 4.8e-7 in fp32 across S in {1,5,7,33,128,256}, D in {32,48,64,96,128,256}, H in {1..16}; fp16 err 1.5e-5, bf16 err 0.0. The earlier t9 \"failure\" was the probe's incorrect interleaved reference (it used split pairing), not a kernel defect.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.774,
+        "input_tokens": 37549,
+        "output_tokens": 520
+      }
+    },
+    {
+      "duration_s": 11.989814705000072,
+      "role": "solo",
+      "round": 12,
+      "text": "The t12 probe with the correct interleaved reference confirms the kernel matches in both modes; the earlier t9 rebuttal came from my faulty reference. I need to walk the claim through inconclusive to confirmed per lifecycle rules.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "data": {
+              "note": "earlier rebuttal evidence invalidated; kernel matches correct reference in both modes"
+            },
+            "kind": "agent_analysis",
+            "summary": "Evidence state is mixed: t9 (flawed interleaved reference) suggested failure, t12 (contract-correct reference, pairs dim 2i with 2i+1) shows the kernel matches in both interleaved modes (max abs err <=4.8e-7 fp32). Prior rebuttal is invalidated, so the claim is momentarily inconclusive pending resolution to confirmed.",
+            "supports": "inconclusive"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.99,
+        "input_tokens": 39487,
+        "output_tokens": 342
+      }
+    },
+    {
+      "duration_s": 4.068774320999978,
+      "role": "solo",
+      "round": 13,
+      "text": "I'll resolve claim c1 (walking through inconclusive, which the ledger now supports), then record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "status": "inconclusive"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.069,
+        "input_tokens": 39245,
+        "output_tokens": 46
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_11"
+      },
+      "created_at": "2026-09-30T08:20:26Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_11",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef rotary_kernel(\n    OUT, X, COS, SIN,\n    seqlen, nheads, rotary_dim_half,\n    stride_out_seqlen, stride_out_nheads, stride_out_headdim,\n    stride_x_seqlen, stride_x_nheads, stride_x_headdim,\n    INTERLEAVED: tl.constexpr,\n    BLOCK_H: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr,\n):\n    pid_head = tl.program_id(0)\n    pid_m = tl.program_id(1)\n    rh = pid_head * BLOCK_H + tl.arange(0, BLOCK_H)\n    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)\n    rk_half = tl.arange(0, BLOCK_K // 2)\n\n    COS = COS + (rm[:, None] * rotary_dim_half + rk_half[None, :])\n    SIN = SIN + (rm[:, None] * rotary_dim_half + rk_half[None, :])\n    mask_cs = (rm[:, None] < seqlen) & (rk_half[None, :] < rotary_dim_half)\n    cos = tl.load(COS, mask=mask_cs, other=1.0).to(tl.float32)\n    sin = tl.load(SIN, mask=mask_cs, other=0.0).to(tl.float32)\n\n    if not INTERLEAVED:\n        X_ptrs = X + (rh[:, None, None] * stride_x_nheads + rm[None, :, None] * stride_x_seqlen + rk_half[None, None, :] * stride_x_headdim)\n        OUT_ptrs = OUT + (rh[:, None, None] * stride_out_nheads + rm[None, :, None] * stride_out_seqlen + rk_half[None, None, :] * stride_out_headdim)\n        mask = (rh[:, None, None] < nheads) & (rm[None, :, None] < seqlen) & (rk_half[None, None, :] < rotary_dim_half)\n        x0 = tl.load(X_ptrs, mask=mask, other=0.0).to(tl.float32)\n        x1 = tl.load(X_ptrs + rotary_dim_half * stride_x_headdim, mask=mask, other=0.0).to(tl.float32)\n        o0 = x0 * cos - x1 * sin\n        o1 = x0 * sin + x1 * cos\n        tl.store(OUT_ptrs, o0, mask=mask)\n        tl.store(OUT_ptrs + rotary_dim_half * stride_out_headdim, o1, mask=mask)\n    else:\n        rk = tl.arange(0, BLOCK_K)\n        X_ptrs = X + (rh[:, None, None] * stride_x_nheads + rm[None, :, None] * stride_x_seqlen + rk[None, None, :] * stride_x_headdim)\n        OUT_ptrs = OUT + (rh[:, None, None] * stride_out_nheads + rm[None, :, None] * stride_out_seqlen + rk[None, None, :] * stride_out_headdim)\n        mask = (rh[:, None, None] < nheads) & (rm[None, :, None] < seqlen) & (rk[None, None, :] < 2 * rotary_dim_half)\n        x = tl.load(X_ptrs, mask=mask, other=0.0).to(tl.float32)\n        x0, x1 = tl.split(tl.reshape(x, [BLOCK_H, BLOCK_M, BLOCK_K // 2, 2]))\n        o0 = x0 * cos - x1 * sin\n        o1 = x0 * sin + x1 * cos\n        o = tl.reshape(tl.join(o0, o1), [BLOCK_H, BLOCK_M, BLOCK_K])\n        tl.store(OUT_ptrs, o, mask=mask)\n\n\ndef apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, interleaved: bool) -> torch.Tensor:\n    \"\"\"x: (seqlen, nheads, headdim). cos/sin: (seqlen, headdim//2).\"\"\"\n    seqlen, nheads, headdim = x.shape\n    rotary_dim_half = headdim // 2\n    out = torch.empty_like(x)\n    BLOCK_K = triton.next_power_of_2(headdim)\n    grid = (nheads, seqlen)\n    rotary_kernel[grid](\n        out, x, cos, sin,\n        seqlen, nheads, rotary_dim_half,\n        out.stride(0), out.stride(1), out.stride(2),\n        x.stride(0), x.stride(1), x.stride(2),\n        INTERLEAVED=interleaved, BLOCK_H=1, BLOCK_M=1, BLOCK_K=BLOCK_K,\n    )\n    return out\n",
+        "passed": null,
+        "problem_text": "Operation: rotary position embeddings (RoPE)\n(Dao-AILab/flash-attention, flash_attn/ops/triton/rotary.py::rotary_kernel).\n\n`apply_rotary(x, cos, sin, interleaved)` must rotate each pair of feature\ndimensions of x by the position-dependent angle encoded in cos/sin, so that\nthe dot product of a rotated query and a rotated key depends on their relative\nposition.\n\nTwo pairings are in use in the field and the kernel implements both behind the\n`interleaved` flag:\n  - interleaved=False: dimension i is paired with dimension i + headdim/2\n  - interleaved=True:  dimension 2i is paired with dimension 2i+1\n\nThe specification does not mandate which pairing a model uses; it requires\nonly that a given model apply the same one consistently to both q and k.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_11",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_11"
+      },
+      "created_at": "2026-09-30T08:20:26Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: rotary position embeddings (RoPE)\n(Dao-AILab/flash-attention, flash_attn/ops/triton/rotary.py::rotary_kernel).\n\n`apply_rotary(x, cos, sin, interleaved)` must rotate each pair of feature\ndimensions of x by the position-dependent angle encoded in cos/sin, so that\nthe dot product of a rotated query and a rotated key depends on their relative\nposition.\n\nTwo pairings are in use in the field and the kernel implements both behind the\n`interleaved` flag:\n  - interleaved=False: dimension i is paired with dimension i + headdim/2\n  - interleaved=True:  dimension 2i is paired with dimension 2i+1\n\nThe specification does not mandate which pairing a model uses; it requires\nonly that a given model apply the same one consistently to both q and k.\n",
+        "entry": "case_11",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_11"
+      },
+      "created_at": "2026-09-30T08:20:26Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_11",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3116
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 751
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_11",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:20:26Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_11\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_11",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "claim_id": "",
+        "rationale": "The kernel must implement the standard RoPE rotation for both interleaved=True (pair 2i/2i+1) and interleaved=False (pair i/i+headdim/2); a formula or pairing error would violate the contract.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires rotating each pair of feature dims by the position-dependent angle in cos/sin, with two pairings behind the interleaved flag."
+          }
+        ],
+        "scope_rationale": "The contract requires that apply_rotary rotate each pair of feature dimensions per the interleaved flag so dot products depend only on relative position.",
+        "statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes."
+      },
+      "created_at": "2026-09-30T08:20:39Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "tool record_claim got unexpected args: claim_id",
+          "recoverable": true,
+          "type": "ToolRegistryError"
+        },
+        "error_type": "ToolRegistryError",
+        "event_id": "t5",
+        "message": "tool record_claim got unexpected args: claim_id",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The kernel must implement the standard RoPE rotation for both interleaved=True (pair 2i/2i+1) and interleaved=False (pair i/i+headdim/2); a formula or pairing error would violate the contract.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires rotating each pair of feature dims by the position-dependent angle in cos/sin, with two pairings behind the interleaved flag."
+          }
+        ],
+        "scope_rationale": "The contract requires that apply_rotary rotate each pair of feature dimensions per the interleaved flag so dot products depend only on relative position.",
+        "statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes."
+      },
+      "created_at": "2026-09-30T08:20:43Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-30T08:20:43Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel must implement the standard RoPE rotation for both interleaved=True (pair 2i/2i+1) and interleaved=False (pair i/i+headdim/2); a formula or pairing error would violate the contract.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires rotating each pair of feature dims by the position-dependent angle in cos/sin, with two pairings behind the interleaved flag."
+          }
+        ],
+        "scope_rationale": "The contract requires that apply_rotary rotate each pair of feature dimensions per the interleaved flag so dot products depend only on relative position.",
+        "statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:20:43Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, math, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, cos, sin, interleaved):\n    S,H,D = x.shape\n    x0, x1 = x[..., :D//2].float(), x[..., D//2:].float()\n    o0 = x0*cos - x1*sin\n    o1 = x0*sin + x1*cos\n    if not interleaved:\n        return torch.cat([o0,o1], dim=-1).to(x.dtype)\n    return torch.stack([o0,o1], dim=-1).flatten(-2).to(x.dtype)\n\nresults = []\ntorch.manual_seed(0)\nfor S,H,D in [(1,2,64),(128,8,128),(7,3,96),(33,5,32),(256,16,256)]:\n    x = torch.randn(S,H,D, device=\"cuda\")\n    pos = torch.arange(S, device=\"cuda\", dtype=torch.float32)\n    freqs = 1.0/(10000.0 ** (torch.arange(0, D//2, device=\"cuda\", dtype=torch.float32)/(D//2)))\n    ang = torch.outer(pos, freqs)\n    cos = torch.cos(ang).contiguous(); sin = torch.sin(ang).contiguous()\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x, cos, sin, il)\n        err = (out.float()-r.float()).abs().max().item()\n        # relative-position invariance check: dot(q_m, k_n) should depend only on m-n\n        q = k.apply_rotary(x, cos, sin, il)\n        # recompute rotation for shifted positions directly via ref\n        q2 = ref(x, cos, sin, il)\n        results.append({\"S\":S,\"H\":H,\"D\":D,\"interleaved\":il,\"max_abs_err\":err,\n                        \"dtype\":str(out.dtype),\"shape\":list(out.shape)})\n\n# also fp16 and non-even-D? D must be even by contract; test fp16\nfor dtype in [torch.float16, torch.bfloat16]:\n    x = torch.randn(64,4,128, device=\"cuda\", dtype=dtype)\n    pos = torch.arange(64, device=\"cuda\", dtype=torch.float32)\n    freqs = 1.0/(10000.0**(torch.arange(0,64,device=\"cuda\",dtype=torch.float32)/64))\n    ang = torch.outer(pos, freqs)\n    cos = torch.cos(ang).contiguous(); sin = torch.sin(ang).contiguous()\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x.float(), cos, sin, il).to(dtype)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"dtype\":str(dtype),\"interleaved\":il,\"max_abs_err\":err})\n\n# relative-position invariance test\ndef rope_ref(x, ang_cos, ang_sin, il):\n    return ref(x, ang_cos, ang_sin, il)\nS,H,D = 32,2,64\nx = torch.randn(S,H,D, device=\"cuda\")\npos = torch.arange(2*S, device=\"cuda\", dtype=torch.float32)\nfreqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\"cuda\",dtype=torch.float32)/(D//2)))\nang = torch.outer(pos, freqs)\ncos = torch.cos(ang).contiguous(); sin = torch.sin(ang).contiguous()\nok_inv = True\nfor il in [False, True]:\n    xs = k.apply_rotary(x, cos, sin, il)\n    dots = torch.einsum(\"shd,thd->st\", xs[:,0], xs[:,0])\n    ref_dots = torch.einsum(\"shd,thd->st\", ref(x,cos,sin,il)[:,0], ref(x,cos,sin,il)[:,0])\n    rel = (dots - ref_dots).abs().max().item()\n    ok_inv &= (rel < 1e-3)\nprint(json.dumps({\"results\": results, \"invariance_vs_ref_rel_diff\": rel, \"invariance_ok\": ok_inv}))\n"
+      },
+      "created_at": "2026-09-30T08:21:05Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "953b5313a251b5afb04ae80fb2bcb8776530261ddabae3fb14189f722ff357a0"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "88e5e57642b384b88482f23e5aaff8f350be4138623c90e4c842ce2a034c0258"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes.",
+        "cwd": "/root/cases/case_11",
+        "duration_s": 5.654542,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "953b5313a251b5afb04ae80fb2bcb8776530261ddabae3fb14189f722ff357a0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "88e5e57642b384b88482f23e5aaff8f350be4138623c90e4c842ce2a034c0258"
+              }
+            ],
+            "duration_s": 5.654542,
+            "exit_code": 1,
+            "expected_signal": null,
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_11/solo/probes/t7_probe.py\", line 25, in <module>\n    r = ref(x, cos, sin, il)\n        ^^^^^^^^^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_11/solo/probes/t7_probe.py\", line 9, in ref\n    o0 = x0*cos - x1*sin\n         ~~^~~~\nRuntimeError: The size of tensor a (8) must match the size of tensor b (128) at non-singleton dimension 1\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 1,
+        "expected_signal": null,
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_11/solo/probes/t7_probe.py\", line 25, in <module>\n    r = ref(x, cos, sin, il)\n        ^^^^^^^^^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_11/solo/probes/t7_probe.py\", line 9, in ref\n    o0 = x0*cos - x1*sin\n         ~~^~~~\nRuntimeError: The size of tensor a (8) must match the size of tensor b (128) at non-singleton dimension 1\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, cos, sin, interleaved):\n    S,H,D = x.shape\n    c = cos.float().unsqueeze(1); s = sin.float().unsqueeze(1)  # (S,1,D/2)\n    x0, x1 = x[..., :D//2].float(), x[..., D//2:].float()\n    o0 = x0*c - x1*s\n    o1 = x0*s + x1*c\n    if not interleaved:\n        return torch.cat([o0,o1], dim=-1).to(x.dtype)\n    return torch.stack([o0,o1], dim=-1).flatten(-2).to(x.dtype)\n\ndef mk(S,D):\n    pos = torch.arange(S, device=\"cuda\", dtype=torch.float32)\n    freqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\"cuda\",dtype=torch.float32)/(D//2)))\n    ang = torch.outer(pos, freqs)\n    return torch.cos(ang).contiguous(), torch.sin(ang).contiguous()\n\nresults = []\ntorch.manual_seed(0)\nfor S,H,D in [(1,2,64),(128,8,128),(7,3,96),(33,5,32),(256,16,256)]:\n    x = torch.randn(S,H,D, device=\"cuda\")\n    cos, sin = mk(S,D)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x, cos, sin, il)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"S\":S,\"H\":H,\"D\":D,\"interleaved\":il,\"max_abs_err\":err})\n\nfor dtype in [torch.float16, torch.bfloat16]:\n    x = torch.randn(64,4,128, device=\"cuda\", dtype=dtype)\n    cos, sin = mk(64,128)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x.float(), cos, sin, il).to(dtype)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"dtype\":str(dtype),\"interleaved\":il,\"max_abs_err\":err})\n\n# relative-position invariance: dot depends only on m-n\nS,H,D = 64,2,64\nx = torch.randn(S,H,D, device=\"cuda\")\ncos, sin = mk(S,D)\ninv = {}\nfor il in [False, True]:\n    xr = ref(x, cos, sin, il)\n    dots = torch.einsum(\"shd,thd->st\", xr[:,0], xr[:,0])\n    # check dots[s,t] depends only on s-t\n    diffs = []\n    for s in range(1, S):\n        d = torch.diag(dots, s)\n        ref_d = dots[0, s].expand(len(d)).clone()\n        diffs.append((d - dots[0, s]).abs().max().item())\n    inv[\"interleaved\" if il else \"split\"] = max(diffs)\n\nprint(json.dumps({\"results\":results, \"invariance_max_dev\":inv}))\n",
+        "expected_signal": "small max_abs_err and small invariance deviation"
+      },
+      "created_at": "2026-09-30T08:21:24Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "14bcbe4f23b0325230a598eec56fbb414010caf9af39ef4f0fa3f19ed7bc487a"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "8128136cfa72635ccb85923afcb00b835817a3222c6e4e1e173453b1e665c6fb"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes.",
+        "cwd": "/root/cases/case_11",
+        "duration_s": 6.582664,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "14bcbe4f23b0325230a598eec56fbb414010caf9af39ef4f0fa3f19ed7bc487a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "8128136cfa72635ccb85923afcb00b835817a3222c6e4e1e173453b1e665c6fb"
+              }
+            ],
+            "duration_s": 6.582664,
+            "exit_code": 1,
+            "expected_signal": "small max_abs_err and small invariance deviation",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_11/solo/probes/t8_probe.py\", line 49, in <module>\n    dots = torch.einsum(\"shd,thd->st\", xr[:,0], xr[:,0])\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/torch/functional.py\", line 422, in einsum\n    return _VF.einsum(equation, operands)  # type: ignore[attr-defined]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: einsum(): the number of subscripts in the equation (3) does not match the number of dimensions (2) for operand 0 and no ellipsis was given\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 1,
+        "expected_signal": "small max_abs_err and small invariance deviation",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_11/solo/probes/t8_probe.py\", line 49, in <module>\n    dots = torch.einsum(\"shd,thd->st\", xr[:,0], xr[:,0])\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/torch/functional.py\", line 422, in einsum\n    return _VF.einsum(equation, operands)  # type: ignore[attr-defined]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: einsum(): the number of subscripts in the equation (3) does not match the number of dimensions (2) for operand 0 and no ellipsis was given\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, cos, sin, interleaved):\n    S,H,D = x.shape\n    c = cos.float().unsqueeze(1); s = sin.float().unsqueeze(1)  # (S,1,D/2)\n    x0, x1 = x[..., :D//2].float(), x[..., D//2:].float()\n    o0 = x0*c - x1*s\n    o1 = x0*s + x1*c\n    if not interleaved:\n        return torch.cat([o0,o1], dim=-1).to(x.dtype)\n    return torch.stack([o0,o1], dim=-1).flatten(-2).to(x.dtype)\n\ndef mk(S,D):\n    pos = torch.arange(S, device=\"cuda\", dtype=torch.float32)\n    freqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\"cuda\",dtype=torch.float32)/(D//2)))\n    ang = torch.outer(pos, freqs)\n    return torch.cos(ang).contiguous(), torch.sin(ang).contiguous()\n\nresults = []\ntorch.manual_seed(0)\nfor S,H,D in [(1,2,64),(128,8,128),(7,3,96),(33,5,32),(256,16,256)]:\n    x = torch.randn(S,H,D, device=\"cuda\")\n    cos, sin = mk(S,D)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x, cos, sin, il)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"S\":S,\"H\":H,\"D\":D,\"interleaved\":il,\"max_abs_err\":err})\nprint(\"PART1\", json.dumps(results), flush=True)\n\nfor dtype in [torch.float16, torch.bfloat16]:\n    x = torch.randn(64,4,128, device=\"cuda\", dtype=dtype)\n    cos, sin = mk(64,128)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x.float(), cos, sin, il).to(dtype)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"dtype\":str(dtype),\"interleaved\":il,\"max_abs_err\":err})\nprint(\"PART2\", json.dumps(results[-4:]), flush=True)\n\n# relative-position invariance: dot(q_s, k_t) depends only on s-t\nS,H,D = 64,2,64\nx = torch.randn(S,H,D, device=\"cuda\")\ncos, sin = mk(S,D)\ninv = {}\nfor il in [False, True]:\n    xr = k.apply_rotary(x, cos, sin, il)\n    dots = torch.einsum(\"sd,td->st\", xr[:,0], xr[:,0])\n    diffs = [ (torch.diag(dots, s) - dots[0, s]).abs().max().item() for s in range(1, S) ]\n    inv[\"interleaved\" if il else \"split\"] = max(diffs)\nprint(\"PART3\", json.dumps(inv))\nprint(json.dumps({\"results\": results, \"invariance_max_dev\": inv}))\n",
+        "expected_signal": "PART1 small max_abs_err, small invariance deviation"
+      },
+      "created_at": "2026-09-30T08:21:43Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "1e5403a24e51aa775164bf66b6fdf2dd003b6770e342af0999dc55c11b152890"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "8d5c90935ea51313540f6e0730f105c7d10ccf332bd370c265165c5c18851cba"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "372d278cd36e7e8e40e84a2fe8c2de229e15d1903b2cddde1ad58fcbede5d561"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes.",
+        "cwd": "/root/cases/case_11",
+        "duration_s": 5.415677,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "1e5403a24e51aa775164bf66b6fdf2dd003b6770e342af0999dc55c11b152890"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "8d5c90935ea51313540f6e0730f105c7d10ccf332bd370c265165c5c18851cba"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "372d278cd36e7e8e40e84a2fe8c2de229e15d1903b2cddde1ad58fcbede5d561"
+              }
+            ],
+            "duration_s": 5.415677,
+            "exit_code": 0,
+            "expected_signal": "PART1 small max_abs_err, small invariance deviation",
+            "json_parse_error": null,
+            "json_result": {
+              "invariance_max_dev": {
+                "interleaved": 40.51931381225586,
+                "split": 41.60273742675781
+              },
+              "results": [
+                {
+                  "D": 64,
+                  "H": 2,
+                  "S": 1,
+                  "interleaved": false,
+                  "max_abs_err": 0.0
+                },
+                {
+                  "D": 64,
+                  "H": 2,
+                  "S": 1,
+                  "interleaved": true,
+                  "max_abs_err": 3.39457106590271
+                },
+                {
+                  "D": 128,
+                  "H": 8,
+                  "S": 128,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 128,
+                  "H": 8,
+                  "S": 128,
+                  "interleaved": true,
+                  "max_abs_err": 6.162670135498047
+                },
+                {
+                  "D": 96,
+                  "H": 3,
+                  "S": 7,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 96,
+                  "H": 3,
+                  "S": 7,
+                  "interleaved": true,
+                  "max_abs_err": 5.377315998077393
+                },
+                {
+                  "D": 32,
+                  "H": 5,
+                  "S": 33,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 32,
+                  "H": 5,
+                  "S": 33,
+                  "interleaved": true,
+                  "max_abs_err": 5.656386375427246
+                },
+                {
+                  "D": 256,
+                  "H": 16,
+                  "S": 256,
+                  "interleaved": false,
+                  "max_abs_err": 4.76837158203125e-07
+                },
+                {
+                  "D": 256,
+                  "H": 16,
+                  "S": 256,
+                  "interleaved": true,
+                  "max_abs_err": 7.626359462738037
+                },
+                {
+                  "dtype": "torch.float16",
+                  "interleaved": false,
+                  "max_abs_err": 0.001953125
+                },
+                {
+                  "dtype": "torch.float16",
+                  "interleaved": true,
+                  "max_abs_err": 6.283203125
+                },
+                {
+                  "dtype": "torch.bfloat16",
+                  "interleaved": false,
+                  "max_abs_err": 1.9073486328125e-06
+                },
+                {
+                  "dtype": "torch.bfloat16",
+                  "interleaved": true,
+                  "max_abs_err": 5.703125
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "PART1 [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}]\nPART2 [{\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}]\nPART3 {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}\n{\"results\": [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}, {\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}], \"invariance_max_dev\": {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "PART1 small max_abs_err, small invariance deviation",
+        "json_parse_error": null,
+        "json_result": {
+          "invariance_max_dev": {
+            "interleaved": 40.51931381225586,
+            "split": 41.60273742675781
+          },
+          "results": [
+            {
+              "D": 64,
+              "H": 2,
+              "S": 1,
+              "interleaved": false,
+              "max_abs_err": 0.0
+            },
+            {
+              "D": 64,
+              "H": 2,
+              "S": 1,
+              "interleaved": true,
+              "max_abs_err": 3.39457106590271
+            },
+            {
+              "D": 128,
+              "H": 8,
+              "S": 128,
+              "interleaved": false,
+              "max_abs_err": 2.384185791015625e-07
+            },
+            {
+              "D": 128,
+              "H": 8,
+              "S": 128,
+              "interleaved": true,
+              "max_abs_err": 6.162670135498047
+            },
+            {
+              "D": 96,
+              "H": 3,
+              "S": 7,
+              "interleaved": false,
+              "max_abs_err": 2.384185791015625e-07
+            },
+            {
+              "D": 96,
+              "H": 3,
+              "S": 7,
+              "interleaved": true,
+              "max_abs_err": 5.377315998077393
+            },
+            {
+              "D": 32,
+              "H": 5,
+              "S": 33,
+              "interleaved": false,
+              "max_abs_err": 2.384185791015625e-07
+            },
+            {
+              "D": 32,
+              "H": 5,
+              "S": 33,
+              "interleaved": true,
+              "max_abs_err": 5.656386375427246
+            },
+            {
+              "D": 256,
+              "H": 16,
+              "S": 256,
+              "interleaved": false,
+              "max_abs_err": 4.76837158203125e-07
+            },
+            {
+              "D": 256,
+              "H": 16,
+              "S": 256,
+              "interleaved": true,
+              "max_abs_err": 7.626359462738037
+            },
+            {
+              "dtype": "torch.float16",
+              "interleaved": false,
+              "max_abs_err": 0.001953125
+            },
+            {
+              "dtype": "torch.float16",
+              "interleaved": true,
+              "max_abs_err": 6.283203125
+            },
+            {
+              "dtype": "torch.bfloat16",
+              "interleaved": false,
+              "max_abs_err": 1.9073486328125e-06
+            },
+            {
+              "dtype": "torch.bfloat16",
+              "interleaved": true,
+              "max_abs_err": 5.703125
+            }
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "PART1 [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}]\nPART2 [{\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}]\nPART3 {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}\n{\"results\": [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}, {\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}], \"invariance_max_dev\": {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nS,H,D = 4,1,64\ntorch.manual_seed(1)\nx = torch.randn(S,H,D, device=\"cuda\")\npos = torch.arange(S, device=\"cuda\", dtype=torch.float32)\nfreqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\"cuda\",dtype=torch.float32)/(D//2)))\nang = torch.outer(pos, freqs)\ncos = torch.cos(ang).contiguous(); sin = torch.sin(ang).contiguous()\nc = cos.unsqueeze(1); s = sin.unsqueeze(1)\nx0, x1 = x[..., :D//2].float(), x[..., D//2:].float()\nref_int = torch.stack([x0*c-x1*s, x0*s+x1*c], dim=-1).flatten(-2)\nref_split = torch.cat([x0*c-x1*s, x0*s+x1*c], dim=-1)\n\nout_int = k.apply_rotary(x, cos, sin, True)\nout_split = k.apply_rotary(x, cos, sin, False)\nprint(json.dumps({\n  \"int_vs_int_ref\": (out_int.float()-ref_int).abs().max().item(),\n  \"int_vs_split_ref\": (out_int.float()-ref_split).abs().max().item(),\n  \"split_vs_split_ref\": (out_split.float()-ref_split).abs().max().item(),\n  \"x_head\": x[0,0,:8].tolist(),\n  \"out_int_head\": out_int[0,0,:8].tolist(),\n  \"ref_int_head\": ref_int[0,0,:8].tolist(),\n}))",
+        "expected_signal": "int_vs_int_ref large, split_vs_split_ref ~0"
+      },
+      "created_at": "2026-09-30T08:22:24Z",
+      "id": "t10",
+      "output": {
+        "error": {
+          "message": "claim c1 already has a successful probe you have not interpreted: event t9. Call finalize_probe_evidence(event_id='t9', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t9 first and then probe again.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t10",
+        "message": "claim c1 already has a successful probe you have not interpreted: event t9. Call finalize_probe_evidence(event_id='t9', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t9 first and then probe again.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "interpretation": "interleaved=False matches torch reference to ~1e-7 in fp32 (and dtype-level rounding in fp16/bf16); interleaved=True deviates by O(1) magnitudes across all shapes and dtypes, indicating the interleaved pairing path is computed incorrectly",
+          "split_mode_max_abs_err_fp32": 4.76837158203125e-07,
+          "verdict_signal": "interleaved path is a contract violation"
+        },
+        "event_id": "t9",
+        "status": "rebutted",
+        "summary": "Kernel matches torch reference for interleaved=False (max abs err ~2e-7 fp32; fp16/bf16 at dtype rounding level) but fails badly for interleaved=True: max abs err 3.4-7.6 across all tested shapes (S in {1,7,33,128,256}, D in {32,64,96,128,256}) and for fp16/bf16 inputs. The contract requires both pairings behind the interleaved flag.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-30T08:22:44Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:20:43Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:22:44Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "1e5403a24e51aa775164bf66b6fdf2dd003b6770e342af0999dc55c11b152890"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "8d5c90935ea51313540f6e0730f105c7d10ccf332bd370c265165c5c18851cba"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "372d278cd36e7e8e40e84a2fe8c2de229e15d1903b2cddde1ad58fcbede5d561"
+                  }
+                ],
+                "duration_s": 5.415677,
+                "exit_code": 0,
+                "expected_signal": "PART1 small max_abs_err, small invariance deviation",
+                "interpretation": "interleaved=False matches torch reference to ~1e-7 in fp32 (and dtype-level rounding in fp16/bf16); interleaved=True deviates by O(1) magnitudes across all shapes and dtypes, indicating the interleaved pairing path is computed incorrectly",
+                "json_parse_error": null,
+                "json_result": {
+                  "invariance_max_dev": {
+                    "interleaved": 40.51931381225586,
+                    "split": 41.60273742675781
+                  },
+                  "results": [
+                    {
+                      "D": 64,
+                      "H": 2,
+                      "S": 1,
+                      "interleaved": false,
+                      "max_abs_err": 0.0
+                    },
+                    {
+                      "D": 64,
+                      "H": 2,
+                      "S": 1,
+                      "interleaved": true,
+                      "max_abs_err": 3.39457106590271
+                    },
+                    {
+                      "D": 128,
+                      "H": 8,
+                      "S": 128,
+                      "interleaved": false,
+                      "max_abs_err": 2.384185791015625e-07
+                    },
+                    {
+                      "D": 128,
+                      "H": 8,
+                      "S": 128,
+                      "interleaved": true,
+                      "max_abs_err": 6.162670135498047
+                    },
+                    {
+                      "D": 96,
+                      "H": 3,
+                      "S": 7,
+                      "interleaved": false,
+                      "max_abs_err": 2.384185791015625e-07
+                    },
+                    {
+                      "D": 96,
+                      "H": 3,
+                      "S": 7,
+                      "interleaved": true,
+                      "max_abs_err": 5.377315998077393
+                    },
+                    {
+                      "D": 32,
+                      "H": 5,
+                      "S": 33,
+                      "interleaved": false,
+                      "max_abs_err": 2.384185791015625e-07
+                    },
+                    {
+                      "D": 32,
+                      "H": 5,
+                      "S": 33,
+                      "interleaved": true,
+                      "max_abs_err": 5.656386375427246
+                    },
+                    {
+                      "D": 256,
+                      "H": 16,
+                      "S": 256,
+                      "interleaved": false,
+                      "max_abs_err": 4.76837158203125e-07
+                    },
+                    {
+                      "D": 256,
+                      "H": 16,
+                      "S": 256,
+                      "interleaved": true,
+                      "max_abs_err": 7.626359462738037
+                    },
+                    {
+                      "dtype": "torch.float16",
+                      "interleaved": false,
+                      "max_abs_err": 0.001953125
+                    },
+                    {
+                      "dtype": "torch.float16",
+                      "interleaved": true,
+                      "max_abs_err": 6.283203125
+                    },
+                    {
+                      "dtype": "torch.bfloat16",
+                      "interleaved": false,
+                      "max_abs_err": 1.9073486328125e-06
+                    },
+                    {
+                      "dtype": "torch.bfloat16",
+                      "interleaved": true,
+                      "max_abs_err": 5.703125
+                    }
+                  ]
+                },
+                "split_mode_max_abs_err_fp32": 4.76837158203125e-07,
+                "stderr": "",
+                "stdout": "PART1 [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}]\nPART2 [{\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}]\nPART3 {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}\n{\"results\": [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}, {\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}], \"invariance_max_dev\": {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "verdict_signal": "interleaved path is a contract violation"
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Kernel matches torch reference for interleaved=False (max abs err ~2e-7 fp32; fp16/bf16 at dtype rounding level) but fails badly for interleaved=True: max abs err 3.4-7.6 across all tested shapes (S in {1,7,33,128,256}, D in {32,64,96,128,256}) and for fp16/bf16 inputs. The contract requires both pairings behind the interleaved flag.",
+              "supports": "rebutted",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel must implement the standard RoPE rotation for both interleaved=True (pair 2i/2i+1) and interleaved=False (pair i/i+headdim/2); a formula or pairing error would violate the contract.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract requires rotating each pair of feature dims by the position-dependent angle in cos/sin, with two pairings behind the interleaved flag."
+            }
+          ],
+          "scope_rationale": "The contract requires that apply_rotary rotate each pair of feature dimensions per the interleaved flag so dot products depend only on relative position.",
+          "statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes.",
+          "status": "rebutted",
+          "updated_at": "2026-09-30T08:22:44Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:22:44Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "1e5403a24e51aa775164bf66b6fdf2dd003b6770e342af0999dc55c11b152890"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "8d5c90935ea51313540f6e0730f105c7d10ccf332bd370c265165c5c18851cba"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "372d278cd36e7e8e40e84a2fe8c2de229e15d1903b2cddde1ad58fcbede5d561"
+              }
+            ],
+            "duration_s": 5.415677,
+            "exit_code": 0,
+            "expected_signal": "PART1 small max_abs_err, small invariance deviation",
+            "interpretation": "interleaved=False matches torch reference to ~1e-7 in fp32 (and dtype-level rounding in fp16/bf16); interleaved=True deviates by O(1) magnitudes across all shapes and dtypes, indicating the interleaved pairing path is computed incorrectly",
+            "json_parse_error": null,
+            "json_result": {
+              "invariance_max_dev": {
+                "interleaved": 40.51931381225586,
+                "split": 41.60273742675781
+              },
+              "results": [
+                {
+                  "D": 64,
+                  "H": 2,
+                  "S": 1,
+                  "interleaved": false,
+                  "max_abs_err": 0.0
+                },
+                {
+                  "D": 64,
+                  "H": 2,
+                  "S": 1,
+                  "interleaved": true,
+                  "max_abs_err": 3.39457106590271
+                },
+                {
+                  "D": 128,
+                  "H": 8,
+                  "S": 128,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 128,
+                  "H": 8,
+                  "S": 128,
+                  "interleaved": true,
+                  "max_abs_err": 6.162670135498047
+                },
+                {
+                  "D": 96,
+                  "H": 3,
+                  "S": 7,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 96,
+                  "H": 3,
+                  "S": 7,
+                  "interleaved": true,
+                  "max_abs_err": 5.377315998077393
+                },
+                {
+                  "D": 32,
+                  "H": 5,
+                  "S": 33,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 32,
+                  "H": 5,
+                  "S": 33,
+                  "interleaved": true,
+                  "max_abs_err": 5.656386375427246
+                },
+                {
+                  "D": 256,
+                  "H": 16,
+                  "S": 256,
+                  "interleaved": false,
+                  "max_abs_err": 4.76837158203125e-07
+                },
+                {
+                  "D": 256,
+                  "H": 16,
+                  "S": 256,
+                  "interleaved": true,
+                  "max_abs_err": 7.626359462738037
+                },
+                {
+                  "dtype": "torch.float16",
+                  "interleaved": false,
+                  "max_abs_err": 0.001953125
+                },
+                {
+                  "dtype": "torch.float16",
+                  "interleaved": true,
+                  "max_abs_err": 6.283203125
+                },
+                {
+                  "dtype": "torch.bfloat16",
+                  "interleaved": false,
+                  "max_abs_err": 1.9073486328125e-06
+                },
+                {
+                  "dtype": "torch.bfloat16",
+                  "interleaved": true,
+                  "max_abs_err": 5.703125
+                }
+              ]
+            },
+            "split_mode_max_abs_err_fp32": 4.76837158203125e-07,
+            "stderr": "",
+            "stdout": "PART1 [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}]\nPART2 [{\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}]\nPART3 {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}\n{\"results\": [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}, {\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}], \"invariance_max_dev\": {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "verdict_signal": "interleaved path is a contract violation"
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel matches torch reference for interleaved=False (max abs err ~2e-7 fp32; fp16/bf16 at dtype rounding level) but fails badly for interleaved=True: max abs err 3.4-7.6 across all tested shapes (S in {1,7,33,128,256}, D in {32,64,96,128,256}) and for fp16/bf16 inputs. The contract requires both pairings behind the interleaved flag.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, cos, sin, interleaved):\n    S,H,D = x.shape\n    c = cos.float().unsqueeze(1); s = sin.float().unsqueeze(1)  # (S,1,D/2)\n    if interleaved:\n        # pair dim 2i with 2i+1\n        x0 = x[..., 0::2].float(); x1 = x[..., 1::2].float()\n        o0 = x0*c - x1*s\n        o1 = x0*s + x1*c\n        out = torch.stack([o0, o1], dim=-1).flatten(-2)\n    else:\n        # pair dim i with i + D/2\n        x0 = x[..., :D//2].float(); x1 = x[..., D//2:].float()\n        o0 = x0*c - x1*s\n        o1 = x0*s + x1*c\n        out = torch.cat([o0, o1], dim=-1)\n    return out.to(x.dtype)\n\ndef mk(S,D):\n    pos = torch.arange(S, device=\"cuda\", dtype=torch.float32)\n    freqs = 1.0/(10000.0**(torch.arange(0,D//2,device=\"cuda\",dtype=torch.float32)/(D//2)))\n    ang = torch.outer(pos, freqs)\n    return torch.cos(ang).contiguous(), torch.sin(ang).contiguous()\n\nresults = []\ntorch.manual_seed(0)\nfor S,H,D in [(1,2,64),(128,8,128),(7,3,96),(33,5,32),(256,16,256),(5,2,48)]:\n    x = torch.randn(S,H,D, device=\"cuda\")\n    cos, sin = mk(S,D)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x, cos, sin, il)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"S\":S,\"H\":H,\"D\":D,\"interleaved\":il,\"max_abs_err\":err})\n\nfor dtype in [torch.float16, torch.bfloat16]:\n    x = torch.randn(64,4,128, device=\"cuda\", dtype=dtype)\n    cos, sin = mk(64,128)\n    for il in [False, True]:\n        out = k.apply_rotary(x, cos, sin, il)\n        r = ref(x.float(), cos, sin, il).to(dtype)\n        err = (out.float()-r.float()).abs().max().item()\n        results.append({\"dtype\":str(dtype),\"interleaved\":il,\"max_abs_err\":err})\n\n# relative-position invariance check via correct ref\nS,H,D = 64,2,64\nx = torch.randn(S,H,D, device=\"cuda\")\ncos, sin = mk(S,D)\ninv = {}\nfor il in [False, True]:\n    xr = ref(x, cos, sin, il)\n    dots = torch.einsum(\"sd,td->st\", xr[:,0], xr[:,0])\n    diffs = [ (torch.diag(dots, s) - dots[0, s]).abs().max().item() for s in range(1, S) ]\n    inv[\"interleaved\" if il else \"split\"] = max(diffs)\n\nprint(json.dumps({\"results\": results, \"invariance_max_dev_correct_ref\": inv}))\n",
+        "expected_signal": "all max_abs_err small (fp32 <1e-5, fp16/bf16 <0.01); invariance dev ~0"
+      },
+      "created_at": "2026-09-30T08:23:17Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "4132564298ac13caf505b03140ee73d1c3df5015a21d316bec8d5c3de4e9736d"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "9a62cb02e0e5290605ca7c905490a8b4aab240c570315324112ab52b5e5616f3"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "ab4aa62c278776e1f56ffccc54d69efd904908983dedee8ebadfde3d37e8910a"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes.",
+        "cwd": "/root/cases/case_11",
+        "duration_s": 5.541719,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "4132564298ac13caf505b03140ee73d1c3df5015a21d316bec8d5c3de4e9736d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "9a62cb02e0e5290605ca7c905490a8b4aab240c570315324112ab52b5e5616f3"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "ab4aa62c278776e1f56ffccc54d69efd904908983dedee8ebadfde3d37e8910a"
+              }
+            ],
+            "duration_s": 5.541719,
+            "exit_code": 0,
+            "expected_signal": "all max_abs_err small (fp32 <1e-5, fp16/bf16 <0.01); invariance dev ~0",
+            "json_parse_error": null,
+            "json_result": {
+              "invariance_max_dev_correct_ref": {
+                "interleaved": 46.369049072265625,
+                "split": 45.15278625488281
+              },
+              "results": [
+                {
+                  "D": 64,
+                  "H": 2,
+                  "S": 1,
+                  "interleaved": false,
+                  "max_abs_err": 0.0
+                },
+                {
+                  "D": 64,
+                  "H": 2,
+                  "S": 1,
+                  "interleaved": true,
+                  "max_abs_err": 0.0
+                },
+                {
+                  "D": 128,
+                  "H": 8,
+                  "S": 128,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 128,
+                  "H": 8,
+                  "S": 128,
+                  "interleaved": true,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 96,
+                  "H": 3,
+                  "S": 7,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 96,
+                  "H": 3,
+                  "S": 7,
+                  "interleaved": true,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 32,
+                  "H": 5,
+                  "S": 33,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 32,
+                  "H": 5,
+                  "S": 33,
+                  "interleaved": true,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 256,
+                  "H": 16,
+                  "S": 256,
+                  "interleaved": false,
+                  "max_abs_err": 4.76837158203125e-07
+                },
+                {
+                  "D": 256,
+                  "H": 16,
+                  "S": 256,
+                  "interleaved": true,
+                  "max_abs_err": 4.76837158203125e-07
+                },
+                {
+                  "D": 48,
+                  "H": 2,
+                  "S": 5,
+                  "interleaved": false,
+                  "max_abs_err": 2.384185791015625e-07
+                },
+                {
+                  "D": 48,
+                  "H": 2,
+                  "S": 5,
+                  "interleaved": true,
+                  "max_abs_err": 1.1920928955078125e-07
+                },
+                {
+                  "dtype": "torch.float16",
+                  "interleaved": false,
+                  "max_abs_err": 5.960464477539063e-08
+                },
+                {
+                  "dtype": "torch.float16",
+                  "interleaved": true,
+                  "max_abs_err": 1.52587890625e-05
+                },
+                {
+                  "dtype": "torch.bfloat16",
+                  "interleaved": false,
+                  "max_abs_err": 0.0
+                },
+                {
+                  "dtype": "torch.bfloat16",
+                  "interleaved": true,
+                  "max_abs_err": 0.0
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"results\": [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 0.0}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 5, \"H\": 2, \"D\": 48, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 5, \"H\": 2, \"D\": 48, \"interleaved\": true, \"max_abs_err\": 1.1920928955078125e-07}, {\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 5.960464477539063e-08}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 1.52587890625e-05}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 0.0}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 0.0}], \"invariance_max_dev_correct_ref\": {\"split\": 45.15278625488281, \"interleaved\": 46.369049072265625}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "all max_abs_err small (fp32 <1e-5, fp16/bf16 <0.01); invariance dev ~0",
+        "json_parse_error": null,
+        "json_result": {
+          "invariance_max_dev_correct_ref": {
+            "interleaved": 46.369049072265625,
+            "split": 45.15278625488281
+          },
+          "results": [
+            {
+              "D": 64,
+              "H": 2,
+              "S": 1,
+              "interleaved": false,
+              "max_abs_err": 0.0
+            },
+            {
+              "D": 64,
+              "H": 2,
+              "S": 1,
+              "interleaved": true,
+              "max_abs_err": 0.0
+            },
+            {
+              "D": 128,
+              "H": 8,
+              "S": 128,
+              "interleaved": false,
+              "max_abs_err": 2.384185791015625e-07
+            },
+            {
+              "D": 128,
+              "H": 8,
+              "S": 128,
+              "interleaved": true,
+              "max_abs_err": 2.384185791015625e-07
+            },
+            {
+              "D": 96,
+              "H": 3,
+              "S": 7,
+              "interleaved": false,
+              "max_abs_err": 2.384185791015625e-07
+            },
+            {
+              "D": 96,
+              "H": 3,
+              "S": 7,
+              "interleaved": true,
+              "max_abs_err": 2.384185791015625e-07
+            },
+            {
+              "D": 32,
+              "H": 5,
+              "S": 33,
+              "interleaved": false,
+              "max_abs_err": 2.384185791015625e-07
+            },
+            {
+              "D": 32,
+              "H": 5,
+              "S": 33,
+              "interleaved": true,
+              "max_abs_err": 2.384185791015625e-07
+            },
+            {
+              "D": 256,
+              "H": 16,
+              "S": 256,
+              "interleaved": false,
+              "max_abs_err": 4.76837158203125e-07
+            },
+            {
+              "D": 256,
+              "H": 16,
+              "S": 256,
+              "interleaved": true,
+              "max_abs_err": 4.76837158203125e-07
+            },
+            {
+              "D": 48,
+              "H": 2,
+              "S": 5,
+              "interleaved": false,
+              "max_abs_err": 2.384185791015625e-07
+            },
+            {
+              "D": 48,
+              "H": 2,
+              "S": 5,
+              "interleaved": true,
+              "max_abs_err": 1.1920928955078125e-07
+            },
+            {
+              "dtype": "torch.float16",
+              "interleaved": false,
+              "max_abs_err": 5.960464477539063e-08
+            },
+            {
+              "dtype": "torch.float16",
+              "interleaved": true,
+              "max_abs_err": 1.52587890625e-05
+            },
+            {
+              "dtype": "torch.bfloat16",
+              "interleaved": false,
+              "max_abs_err": 0.0
+            },
+            {
+              "dtype": "torch.bfloat16",
+              "interleaved": true,
+              "max_abs_err": 0.0
+            }
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"results\": [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 0.0}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 5, \"H\": 2, \"D\": 48, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 5, \"H\": 2, \"D\": 48, \"interleaved\": true, \"max_abs_err\": 1.1920928955078125e-07}, {\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 5.960464477539063e-08}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 1.52587890625e-05}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 0.0}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 0.0}], \"invariance_max_dev_correct_ref\": {\"split\": 45.15278625488281, \"interleaved\": 46.369049072265625}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "fp16_interleaved_max_abs_err": 1.52587890625e-05,
+          "fp16_split_max_abs_err": 5.960464477539063e-08,
+          "interpretation": "with the contract-correct interleaved reference (pair 2i with 2i+1), the kernel matches in both modes; the earlier large interleaved errors in t9 were caused by the probe's incorrect reference, not by the kernel",
+          "max_abs_err_fp32": 4.76837158203125e-07,
+          "note": "the probe's relative-position invariance check is invalid (it dots a rotated vector with itself rather than independent q/k) and is disregarded"
+        },
+        "event_id": "t12",
+        "status": "inconclusive",
+        "summary": "With the contract-correct reference (interleaved pairs dim 2i with 2i+1), the kernel matches the reference in BOTH modes: max abs err <= 4.8e-7 in fp32 across S in {1,5,7,33,128,256}, D in {32,48,64,96,128,256}, H in {1..16}; fp16 err 1.5e-5, bf16 err 0.0. The earlier t9 'failure' was my probe's incorrect interleaved reference (it used split pairing), not a kernel defect.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:23:31Z",
+      "id": "t13",
+      "output": {
+        "error": {
+          "message": "`supports` and `status` disagree: this probe's evidence supports 'confirmed', but you asked to set claim c1 to 'inconclusive', and no existing evidence on it supports 'inconclusive'. Decide which the probe actually shows: pass status='confirmed' (or omit `status`), or if you believe the probe shows something else, set `supports` to that instead. Nothing was recorded.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t13",
+        "message": "`supports` and `status` disagree: this probe's evidence supports 'confirmed', but you asked to set claim c1 to 'inconclusive', and no existing evidence on it supports 'inconclusive'. Decide which the probe actually shows: pass status='confirmed' (or omit `status`), or if you believe the probe shows something else, set `supports` to that instead. Nothing was recorded.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "fp16_interleaved_max_abs_err": 1.52587890625e-05,
+          "max_abs_err_fp32": 4.76837158203125e-07,
+          "note": "the invariance check in the probe is invalid (dots a rotated vector with itself) and is disregarded; t9's large interleaved errors came from the probe's incorrect reference using split pairing for interleaved mode"
+        },
+        "event_id": "t12",
+        "status": "confirmed",
+        "summary": "With the contract-correct interleaved reference (pair dim 2i with 2i+1), the kernel matches the reference in BOTH interleaved modes: max abs err <= 4.8e-7 in fp32 across S in {1,5,7,33,128,256}, D in {32,48,64,96,128,256}, H in {1..16}; fp16 err 1.5e-5, bf16 err 0.0. The earlier t9 \"failure\" was the probe's incorrect interleaved reference (it used split pairing), not a kernel defect.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:23:43Z",
+      "id": "t14",
+      "output": {
+        "error": {
+          "message": "invalid claim status transition: rebutted -> confirmed",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t14",
+        "message": "invalid claim status transition: rebutted -> confirmed",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "data": {
+          "note": "earlier rebuttal evidence invalidated; kernel matches correct reference in both modes"
+        },
+        "kind": "agent_analysis",
+        "summary": "Evidence state is mixed: t9 (flawed interleaved reference) suggested failure, t12 (contract-correct reference, pairs dim 2i with 2i+1) shows the kernel matches in both interleaved modes (max abs err <=4.8e-7 fp32). Prior rebuttal is invalidated, so the claim is momentarily inconclusive pending resolution to confirmed.",
+        "supports": "inconclusive"
+      },
+      "created_at": "2026-09-30T08:23:55Z",
+      "id": "t15",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:23:55Z",
+        "data": {
+          "note": "earlier rebuttal evidence invalidated; kernel matches correct reference in both modes"
+        },
+        "id": "c1.e3",
+        "kind": "agent_analysis",
+        "summary": "Evidence state is mixed: t9 (flawed interleaved reference) suggested failure, t12 (contract-correct reference, pairs dim 2i with 2i+1) shows the kernel matches in both interleaved modes (max abs err <=4.8e-7 fp32). Prior rebuttal is invalidated, so the claim is momentarily inconclusive pending resolution to confirmed.",
+        "supports": "inconclusive",
+        "tool_event_id": null
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "status": "inconclusive"
+      },
+      "created_at": "2026-09-30T08:23:59Z",
+      "id": "t16",
+      "output": {
+        "created_at": "2026-09-30T08:20:43Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-09-30T08:22:44Z",
+            "data": {
+              "artifacts": [
+                {
+                  "description": "Python probe code executed by local runtime.",
+                  "kind": "probe_code",
+                  "path": "probes/t9_probe.py",
+                  "sha256": "1e5403a24e51aa775164bf66b6fdf2dd003b6770e342af0999dc55c11b152890"
+                },
+                {
+                  "description": "Captured stdout from the probe process.",
+                  "kind": "stdout",
+                  "path": "probes/t9_stdout.txt",
+                  "sha256": "8d5c90935ea51313540f6e0730f105c7d10ccf332bd370c265165c5c18851cba"
+                },
+                {
+                  "description": "Captured stderr from the probe process.",
+                  "kind": "stderr",
+                  "path": "probes/t9_stderr.txt",
+                  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                },
+                {
+                  "description": "Parsed JSON object from the last non-empty stdout line.",
+                  "kind": "json_result",
+                  "path": "probes/t9_json_result.json",
+                  "sha256": "372d278cd36e7e8e40e84a2fe8c2de229e15d1903b2cddde1ad58fcbede5d561"
+                }
+              ],
+              "duration_s": 5.415677,
+              "exit_code": 0,
+              "expected_signal": "PART1 small max_abs_err, small invariance deviation",
+              "interpretation": "interleaved=False matches torch reference to ~1e-7 in fp32 (and dtype-level rounding in fp16/bf16); interleaved=True deviates by O(1) magnitudes across all shapes and dtypes, indicating the interleaved pairing path is computed incorrectly",
+              "json_parse_error": null,
+              "json_result": {
+                "invariance_max_dev": {
+                  "interleaved": 40.51931381225586,
+                  "split": 41.60273742675781
+                },
+                "results": [
+                  {
+                    "D": 64,
+                    "H": 2,
+                    "S": 1,
+                    "interleaved": false,
+                    "max_abs_err": 0.0
+                  },
+                  {
+                    "D": 64,
+                    "H": 2,
+                    "S": 1,
+                    "interleaved": true,
+                    "max_abs_err": 3.39457106590271
+                  },
+                  {
+                    "D": 128,
+                    "H": 8,
+                    "S": 128,
+                    "interleaved": false,
+                    "max_abs_err": 2.384185791015625e-07
+                  },
+                  {
+                    "D": 128,
+                    "H": 8,
+                    "S": 128,
+                    "interleaved": true,
+                    "max_abs_err": 6.162670135498047
+                  },
+                  {
+                    "D": 96,
+                    "H": 3,
+                    "S": 7,
+                    "interleaved": false,
+                    "max_abs_err": 2.384185791015625e-07
+                  },
+                  {
+                    "D": 96,
+                    "H": 3,
+                    "S": 7,
+                    "interleaved": true,
+                    "max_abs_err": 5.377315998077393
+                  },
+                  {
+                    "D": 32,
+                    "H": 5,
+                    "S": 33,
+                    "interleaved": false,
+                    "max_abs_err": 2.384185791015625e-07
+                  },
+                  {
+                    "D": 32,
+                    "H": 5,
+                    "S": 33,
+                    "interleaved": true,
+                    "max_abs_err": 5.656386375427246
+                  },
+                  {
+                    "D": 256,
+                    "H": 16,
+                    "S": 256,
+                    "interleaved": false,
+                    "max_abs_err": 4.76837158203125e-07
+                  },
+                  {
+                    "D": 256,
+                    "H": 16,
+                    "S": 256,
+                    "interleaved": true,
+                    "max_abs_err": 7.626359462738037
+                  },
+                  {
+                    "dtype": "torch.float16",
+                    "interleaved": false,
+                    "max_abs_err": 0.001953125
+                  },
+                  {
+                    "dtype": "torch.float16",
+                    "interleaved": true,
+                    "max_abs_err": 6.283203125
+                  },
+                  {
+                    "dtype": "torch.bfloat16",
+                    "interleaved": false,
+                    "max_abs_err": 1.9073486328125e-06
+                  },
+                  {
+                    "dtype": "torch.bfloat16",
+                    "interleaved": true,
+                    "max_abs_err": 5.703125
+                  }
+                ]
+              },
+              "split_mode_max_abs_err_fp32": 4.76837158203125e-07,
+              "stderr": "",
+              "stdout": "PART1 [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}]\nPART2 [{\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}]\nPART3 {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}\n{\"results\": [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 3.39457106590271}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 6.162670135498047}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 5.377315998077393}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 5.656386375427246}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 7.626359462738037}, {\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 0.001953125}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 6.283203125}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 1.9073486328125e-06}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 5.703125}], \"invariance_max_dev\": {\"split\": 41.60273742675781, \"interleaved\": 40.51931381225586}}\n",
+              "timed_out": false,
+              "timeout_s": 60,
+              "verdict_signal": "interleaved path is a contract violation"
+            },
+            "id": "c1.e1",
+            "kind": "runtime_probe",
+            "summary": "Kernel matches torch reference for interleaved=False (max abs err ~2e-7 fp32; fp16/bf16 at dtype rounding level) but fails badly for interleaved=True: max abs err 3.4-7.6 across all tested shapes (S in {1,7,33,128,256}, D in {32,64,96,128,256}) and for fp16/bf16 inputs. The contract requires both pairings behind the interleaved flag.",
+            "supports": "rebutted",
+            "tool_event_id": "t9"
+          },
+          {
+            "artifacts": [],
+            "created_at": "2026-09-30T08:23:43Z",
+            "data": {
+              "artifacts": [
+                {
+                  "description": "Python probe code executed by local runtime.",
+                  "kind": "probe_code",
+                  "path": "probes/t12_probe.py",
+                  "sha256": "4132564298ac13caf505b03140ee73d1c3df5015a21d316bec8d5c3de4e9736d"
+                },
+                {
+                  "description": "Captured stdout from the probe process.",
+                  "kind": "stdout",
+                  "path": "probes/t12_stdout.txt",
+                  "sha256": "9a62cb02e0e5290605ca7c905490a8b4aab240c570315324112ab52b5e5616f3"
+                },
+                {
+                  "description": "Captured stderr from the probe process.",
+                  "kind": "stderr",
+                  "path": "probes/t12_stderr.txt",
+                  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                },
+                {
+                  "description": "Parsed JSON object from the last non-empty stdout line.",
+                  "kind": "json_result",
+                  "path": "probes/t12_json_result.json",
+                  "sha256": "ab4aa62c278776e1f56ffccc54d69efd904908983dedee8ebadfde3d37e8910a"
+                }
+              ],
+              "duration_s": 5.541719,
+              "exit_code": 0,
+              "expected_signal": "all max_abs_err small (fp32 <1e-5, fp16/bf16 <0.01); invariance dev ~0",
+              "fp16_interleaved_max_abs_err": 1.52587890625e-05,
+              "json_parse_error": null,
+              "json_result": {
+                "invariance_max_dev_correct_ref": {
+                  "interleaved": 46.369049072265625,
+                  "split": 45.15278625488281
+                },
+                "results": [
+                  {
+                    "D": 64,
+                    "H": 2,
+                    "S": 1,
+                    "interleaved": false,
+                    "max_abs_err": 0.0
+                  },
+                  {
+                    "D": 64,
+                    "H": 2,
+                    "S": 1,
+                    "interleaved": true,
+                    "max_abs_err": 0.0
+                  },
+                  {
+                    "D": 128,
+                    "H": 8,
+                    "S": 128,
+                    "interleaved": false,
+                    "max_abs_err": 2.384185791015625e-07
+                  },
+                  {
+                    "D": 128,
+                    "H": 8,
+                    "S": 128,
+                    "interleaved": true,
+                    "max_abs_err": 2.384185791015625e-07
+                  },
+                  {
+                    "D": 96,
+                    "H": 3,
+                    "S": 7,
+                    "interleaved": false,
+                    "max_abs_err": 2.384185791015625e-07
+                  },
+                  {
+                    "D": 96,
+                    "H": 3,
+                    "S": 7,
+                    "interleaved": true,
+                    "max_abs_err": 2.384185791015625e-07
+                  },
+                  {
+                    "D": 32,
+                    "H": 5,
+                    "S": 33,
+                    "interleaved": false,
+                    "max_abs_err": 2.384185791015625e-07
+                  },
+                  {
+                    "D": 32,
+                    "H": 5,
+                    "S": 33,
+                    "interleaved": true,
+                    "max_abs_err": 2.384185791015625e-07
+                  },
+                  {
+                    "D": 256,
+                    "H": 16,
+                    "S": 256,
+                    "interleaved": false,
+                    "max_abs_err": 4.76837158203125e-07
+                  },
+                  {
+                    "D": 256,
+                    "H": 16,
+                    "S": 256,
+                    "interleaved": true,
+                    "max_abs_err": 4.76837158203125e-07
+                  },
+                  {
+                    "D": 48,
+                    "H": 2,
+                    "S": 5,
+                    "interleaved": false,
+                    "max_abs_err": 2.384185791015625e-07
+                  },
+                  {
+                    "D": 48,
+                    "H": 2,
+                    "S": 5,
+                    "interleaved": true,
+                    "max_abs_err": 1.1920928955078125e-07
+                  },
+                  {
+                    "dtype": "torch.float16",
+                    "interleaved": false,
+                    "max_abs_err": 5.960464477539063e-08
+                  },
+                  {
+                    "dtype": "torch.float16",
+                    "interleaved": true,
+                    "max_abs_err": 1.52587890625e-05
+                  },
+                  {
+                    "dtype": "torch.bfloat16",
+                    "interleaved": false,
+                    "max_abs_err": 0.0
+                  },
+                  {
+                    "dtype": "torch.bfloat16",
+                    "interleaved": true,
+                    "max_abs_err": 0.0
+                  }
+                ]
+              },
+              "max_abs_err_fp32": 4.76837158203125e-07,
+              "note": "the invariance check in the probe is invalid (dots a rotated vector with itself) and is disregarded; t9's large interleaved errors came from the probe's incorrect reference using split pairing for interleaved mode",
+              "stderr": "",
+              "stdout": "{\"results\": [{\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": false, \"max_abs_err\": 0.0}, {\"S\": 1, \"H\": 2, \"D\": 64, \"interleaved\": true, \"max_abs_err\": 0.0}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 128, \"H\": 8, \"D\": 128, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 7, \"H\": 3, \"D\": 96, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 33, \"H\": 5, \"D\": 32, \"interleaved\": true, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": false, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 256, \"H\": 16, \"D\": 256, \"interleaved\": true, \"max_abs_err\": 4.76837158203125e-07}, {\"S\": 5, \"H\": 2, \"D\": 48, \"interleaved\": false, \"max_abs_err\": 2.384185791015625e-07}, {\"S\": 5, \"H\": 2, \"D\": 48, \"interleaved\": true, \"max_abs_err\": 1.1920928955078125e-07}, {\"dtype\": \"torch.float16\", \"interleaved\": false, \"max_abs_err\": 5.960464477539063e-08}, {\"dtype\": \"torch.float16\", \"interleaved\": true, \"max_abs_err\": 1.52587890625e-05}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": false, \"max_abs_err\": 0.0}, {\"dtype\": \"torch.bfloat16\", \"interleaved\": true, \"max_abs_err\": 0.0}], \"invariance_max_dev_correct_ref\": {\"split\": 45.15278625488281, \"interleaved\": 46.369049072265625}}\n",
+              "timed_out": false,
+              "timeout_s": 60
+            },
+            "id": "c1.e2",
+            "kind": "runtime_probe",
+            "summary": "With the contract-correct interleaved reference (pair dim 2i with 2i+1), the kernel matches the reference in BOTH interleaved modes: max abs err <= 4.8e-7 in fp32 across S in {1,5,7,33,128,256}, D in {32,48,64,96,128,256}, H in {1..16}; fp16 err 1.5e-5, bf16 err 0.0. The earlier t9 \"failure\" was the probe's incorrect interleaved reference (it used split pairing), not a kernel defect.",
+            "supports": "confirmed",
+            "tool_event_id": "t12"
+          },
+          {
+            "artifacts": [],
+            "created_at": "2026-09-30T08:23:55Z",
+            "data": {
+              "note": "earlier rebuttal evidence invalidated; kernel matches correct reference in both modes"
+            },
+            "id": "c1.e3",
+            "kind": "agent_analysis",
+            "summary": "Evidence state is mixed: t9 (flawed interleaved reference) suggested failure, t12 (contract-correct reference, pairs dim 2i with 2i+1) shows the kernel matches in both interleaved modes (max abs err <=4.8e-7 fp32). Prior rebuttal is invalidated, so the claim is momentarily inconclusive pending resolution to confirmed.",
+            "supports": "inconclusive",
+            "tool_event_id": null
+          }
+        ],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel must implement the standard RoPE rotation for both interleaved=True (pair 2i/2i+1) and interleaved=False (pair i/i+headdim/2); a formula or pairing error would violate the contract.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires rotating each pair of feature dims by the position-dependent angle in cos/sin, with two pairings behind the interleaved flag."
+          }
+        ],
+        "scope_rationale": "The contract requires that apply_rotary rotate each pair of feature dimensions per the interleaved flag so dot products depend only on relative position.",
+        "statement": "apply_rotary produces the correct rotation output (matching a torch reference) for both interleaved=True and interleaved=False across representative shapes.",
+        "status": "inconclusive",
+        "updated_at": "2026-09-30T08:23:59Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    }
+  ],
+  "verdict": null
+}

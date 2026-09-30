@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-bd6c6ff7578d429199634fce41e92d83",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe comparing the kernel against a PyTorch reference across representative shapes, including zero-norm rows and non-multiple-of-256 column counts.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a254308b2e2b5d6e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_24\\\")\\nfrom kernel import cosine_similarity\\n\\ndev = \\\"cuda\\\"\\ntorch.manual_seed(0)\\n\\ndef ref(a, b, eps=1e-8):\\n    a32 = a.double(); b32 = b.double()\\n    dot = (a32*b32).sum(-1)\\n    denom = torch.sqrt((a32*a32).sum(-1)) * torch.sqrt((b32*b32).sum(-1))\\n    return (dot / torch.clamp(denom, min=eps)).float()\\n\\nresults = []\\nfor (M, N) in [(4, 64), (128, 1000), (37, 513), (1, 1), (256, 4096)]:\\n    a = torch.randn(M, N, device=dev, dtype=torch.float32)\\n    b = torch.randn(M, N, device=dev, dtype=torch.float32)\\n    out = cosine_similarity(a, b)\\n    r = ref(a, b)\\n    results.append(dict(shape=(M,N), max_abs=(out-r).abs().max().item(), in_bounds=bool(((out.abs()<=1.0+1e-5).all().item())))\\n\\n# zero-norm rows: a row all zeros, b row all zeros, both zeros\\na = torch.randn(8, 300, device=dev); b = torch.randn(8, 300, device=dev)\\na[2] = 0.0; b[4] = 0.0\\na[6] = 0.0; b[6] = 0.0\\nout = cosine_similarity(a, b)\\nr = ref(a, b)\\nresults.append(dict(shape=\\\"zero-norm rows\\\", max_abs=(out-r).abs().max().item(), finite=bool(torch.isfinite(out).all().item()), ref_vals=r[2].item(), out_val=out[2].item()))\\n\\n# tiny-norm rows (denominator below eps)\\na = torch.full((4, 128), 1e-5, device=dev); b = torch.full((4,128), -1e-5, device=dev)\\nout = cosine_similarity(a, b); r = ref(a, b)\\nresults.append(dict(shape=\\\"tiny-norm\\\", max_abs=(out-r).abs().max().item(), finite=bool(torch.isfinite(out).all().item())))\\n\\n# parallel/orthogonal/antiparallel exact cases\\na = torch.eye(3, device=dev); b = torch.eye(3, device=dev)\\nout = cosine_similarity(a, b)\\nresults.append(dict(shape=\\\"identity\\\", out=out.tolist()))\\na = torch.tensor([[1.,2.,3.],[1.,0.,0.],[0.,1.,0.]], device=dev)\\nb = torch.tensor([[-1.,-2.,-3.],[0.,1.,0.],[0.,1.,0.]], device=dev)\\nout = cosine_similarity(a, b); r = ref(a,b)\\nresults.append(dict(shape=\\\"aligned\\\", out=out.tolist(), ref=r.tolist(), max_abs=(out-r).abs().max().item()))\\n\\nprint(json.dumps(results, indent=1))\\noverall = max(x.get(\\\"max_abs\\\", 0.0) for x in results if isinstance(x.get(\\\"max_abs\\\"), float))\\nprint(json.dumps({\\\"overall_max_abs\\\": overall, \\\"pass\\\": overall < 1e-5}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757099,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 784,
+    "prompt_tokens": 7814,
+    "total_tokens": 8598,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 347,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

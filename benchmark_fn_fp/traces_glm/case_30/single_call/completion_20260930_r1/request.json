@@ -1,0 +1,18 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are verifying whether a GPU (Triton) kernel implementation is correct.\n\nYou will be given:\n1. A problem statement describing the operation's contract and its reference behavior.\n2. The kernel implementation under test.\n\nDecide one of:\n- \"reject\": the implementation has a real defect / violates the stated contract.\n- \"trust\": the implementation is correct, or is an equally valid alternative implementation.\n- \"needs_more_evidence\": you genuinely cannot tell.\n\nAnswer with the JSON object required by the output schema.\nOutput schema:\n{\"type\": \"object\", \"required\": [\"verdict\", \"confidence\", \"reason\"], \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": [\"trust\", \"reject\", \"needs_more_evidence\"], \"description\": \"'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell.\"}, \"confidence\": {\"type\": \"number\", \"description\": \"0.0 to 1.0.\"}, \"reason\": {\"type\": \"string\", \"description\": \"One or two sentences.\"}}, \"additionalProperties\": false}"
+    },
+    {
+      "role": "user",
+      "content": "## Problem statement (contract + reference behavior)\n\nOperation: top-1 expert routing for a Mixture-of-Experts layer. For each token,\nselect the expert with the largest router logit.\n\n    expert[t] = argmax over e of logits[t, e]\n\nTie rule: router logits are computed in reduced precision and distinct logits\nroutinely round to the same representable value, so ties are a normal\noccurrence rather than a curiosity. When several experts share the largest\nlogit, the contract requires the LOWEST expert index to win, so that routing is\nreproducible across runs and across replicas holding the experts in the same\norder.\n\nThe selected expert's output is what the layer returns, and different experts\nare independently trained, so which one wins a tie changes the continuous\noutput substantially.\n\nDoes route_top1() satisfy this contract?\n\n\n## Kernel implementation under test (kernel.py)\n\n```python\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):\n    tok = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < E\n    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float(\"inf\"))\n\n    best = -float(\"inf\")\n    best_i = 0\n    for e in range(E):\n        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)\n        take = v >= best\n        best = tl.where(take, v, best)\n        best_i = tl.where(take, e, best_i)\n    tl.store(Idx + tok, best_i)\n\n\ndef route_top1(logits):\n    # Pick one expert per token from the router logits.\n    n_tokens, n_experts = logits.shape\n    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)\n    _route_kernel[(n_tokens,)](logits, idx, logits.stride(0), E=n_experts,\n                               BLOCK=triton.next_power_of_2(n_experts))\n    return idx\n\n```\n\nIs this implementation correct?"
+    }
+  ],
+  "response_format": {
+    "type": "json_object"
+  },
+  "reasoning_effort": "low"
+}

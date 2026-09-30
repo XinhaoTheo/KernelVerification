@@ -1,0 +1,104 @@
+[
+  {
+    "created_at": "2026-09-30T08:25:27Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:25:46Z",
+        "data": {
+          "K=100 (mod 4)": {
+            "max_abs_err": 10.81,
+            "rel_err": 0.288
+          },
+          "K=32 (mod 0)": {
+            "max_abs_err": 0.0,
+            "rel_err": 0.0
+          },
+          "K=33 (mod 1)": {
+            "max_abs_err": 9.31,
+            "rel_err": 0.331
+          },
+          "K=70 (mod 6)": {
+            "max_abs_err": 10.85,
+            "rel_err": 0.367
+          },
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "919cc9023c6a462c7fb85026553b45d4ecd4a6682a8669dc31994681f68129f3"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "74c6305ad8eaf07a7438b50b448cd4f0c89952bbd61de5e1483ba53cc08c5611"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t7_json_result.json",
+              "sha256": "26618613bb20caa8103ef2e78c99b1166825ece4835dcf81b431d6477ccf0c0a"
+            }
+          ],
+          "duration_s": 5.868607,
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": null,
+          "json_result": {
+            "100": {
+              "K_mod_32": 4,
+              "max_abs_err": 10.814072608947754,
+              "rel_err": 0.28837928852971684
+            },
+            "32": {
+              "K_mod_32": 0,
+              "max_abs_err": 0.0,
+              "rel_err": 0.0
+            },
+            "33": {
+              "K_mod_32": 1,
+              "max_abs_err": 9.309547424316406,
+              "rel_err": 0.3309977353818744
+            },
+            "70": {
+              "K_mod_32": 6,
+              "max_abs_err": 10.846141815185547,
+              "rel_err": 0.3666725967896992
+            }
+          },
+          "stderr": "",
+          "stdout": "{\"32\": {\"max_abs_err\": 0.0, \"rel_err\": 0.0, \"K_mod_32\": 0}, \"33\": {\"max_abs_err\": 9.309547424316406, \"rel_err\": 0.3309977353818744, \"K_mod_32\": 1}, \"70\": {\"max_abs_err\": 10.846141815185547, \"rel_err\": 0.3666725967896992, \"K_mod_32\": 6}, \"100\": {\"max_abs_err\": 10.814072608947754, \"rel_err\": 0.28837928852971684, \"K_mod_32\": 4}}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "For float32 GEMM vs torch reference: K=32 (multiple of BLOCK_K=32) gives max_abs_err 0.0; K=33, 70, 100 (K%32 != 0) give max_abs_err 9.31-10.85 and relative error 0.29-0.37, confirming the kernel drops the final partial K tile and produces incorrect C whenever K is not a multiple of 32.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The loop `for _ in range(0, K // BLOCK_K)` performs only floor(K/BLOCK_K) iterations with no partial-tile masking, so the last (K mod BLOCK_K) entries of the reduction are omitted whenever K is not a multiple of 32, violating C[m,n] = sum over all k.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+      }
+    ],
+    "scope_rationale": "The contract requires C[m,n] = sum over ALL k, and explicitly states K need not be a multiple of the K block size, with the partial final tile participating in the sum. A kernel that drops the remainder violates this required behavior.",
+    "statement": "matmul() produces incorrect results when K is not a multiple of BLOCK_K=32 because the kernel loop iterates only K//BLOCK_K times and never processes the K mod BLOCK_K remainder.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:25:46Z"
+  }
+]

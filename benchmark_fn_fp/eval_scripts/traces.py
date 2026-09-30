@@ -55,6 +55,13 @@ def update_trace_metadata(dest: Path, **updates: Any) -> None:
 
 def reserve_trace(case_id: str, arm: str, *, traces_dir: str, trial: str,
                   metadata: dict[str, Any] | None = None) -> Path:
+    try:
+        from .models import pricing_snapshot
+    except ImportError:
+        from models import pricing_snapshot
+    metadata = dict(metadata or {})
+    if metadata.get("model") and "pricing_snapshot" not in metadata:
+        metadata["pricing_snapshot"] = pricing_snapshot(metadata["model"])
     dest = trace_path(case_id, arm, traces_dir=traces_dir, trial=trial)
     dest.mkdir(parents=True, exist_ok=False)
     update_trace_metadata(dest, **{"schema_version": 2, "case": case_id, "arm": arm,

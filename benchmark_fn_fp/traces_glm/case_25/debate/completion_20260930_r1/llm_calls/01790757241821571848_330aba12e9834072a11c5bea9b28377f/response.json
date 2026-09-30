@@ -1,0 +1,81 @@
+{
+  "id": "chatcmpl-4da9e438760243acb32df91b968e0287",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent runtime probes for claims c1 (single-step nearest-level mismatch on random input), c2 (small-negative asymmetry), and c3 (repeated-application mean drift). These don't depend on each other, so I batch them.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9fe44873691f7b9e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_25/kernel.py\\\")\\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\\ntorch.manual_seed(0)\\nx = torch.randn(4096, device=\\\"cuda\\\")\\ny = mod.requantize(x)\\n# contract reference: per-1024-block scale, q = round-to-nearest\\nxflat = x.reshape(-1)\\nn = xflat.numel(); B = 1024\\nyref = torch.empty_like(xflat)\\nfor i in range(0, n, B):\\n    b = xflat[i:i+B]\\n    absmax = b.abs().max()\\n    scale = 1.0 if absmax == 0 else absmax / 127.0\\n    q = torch.round(b / scale)\\n    yref[i:i+B] = q * scale\\ndiff = (y - yref).abs()\\nscale = xflat.abs().max() / 127.0\\nmismatch = (diff > 1e-6 * scale).sum().item()\\nprint(json.dumps({\\\"metric\\\": \\\"elementwise error vs round-to-nearest reference\\\",\\n \\\"reason\\\": \\\"contract requires q=round(x/scale) to nearest; kernel uses floor\\\",\\n \\\"max_abs_err\\\": diff.max().item(), \\\"n_mismatched\\\": mismatch, \\\"n_total\\\": n,\\n \\\"frac_mismatched\\\": mismatch / n, \\\"max_err_in_quant_steps\\\": (diff.max() / scale).item()}))\", \"expected_signal\": \"many elements deviate from round-to-nearest reference, max error near one quantization step\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-9065dfcff127acb9",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_25/kernel.py\\\")\\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\\n# craft one block of 1024: absmax = 1.27 so scale = 0.01; values with x/scale in (-1,0) and (0,1)\\nneg_small = torch.full((512,), -0.005, device=\\\"cuda\\\")   # x/scale = -0.5\\npos_small = torch.full((512,), 0.005, device=\\\"cuda\\\")    # x/scale = +0.5\\nx = torch.cat([neg_small, pos_small])\\ny = mod.requantize(x)\\nscale = 1.27 / 127.0\\nyref = torch.zeros_like(x)  # nearest of +/-0.5 is 0 (tie, but magnitude equal); use unambiguous cases too\\n# unambiguous cases: fraction magnitude < 0.5\\nx2 = torch.cat([torch.full((512,), -0.004, device=\\\"cuda\\\"), torch.full((512,), 0.004, device=\\\"cuda\\\")])\\ny2 = mod.requantize(x2)\\nprint(json.dumps({\\n \\\"metric\\\": \\\"per-element output for small |x/scale| < 0.5 (nearest level is 0)\\\",\\n \\\"reason\\\": \\\"floor maps small negatives to -scale while nearest gives 0; sign asymmetry\\\",\\n \\\"neg_out_ambiguous(-0.5 levels)\\\": y[:512].mean().item(),\\n \\\"pos_out_ambiguous(+0.5 levels)\\\": y[512:].mean().item(),\\n \\\"neg_out_unambiguous(-0.4 levels)\\\": y2[:512].mean().item(),\\n \\\"pos_out_unambiguous(+0.4 levels)\\\": y2[512:].mean().item(),\\n \\\"scale\\\": scale,\\n \\\"neg_magnified\\\": bool(abs(y2[:512].mean().item()) > 0.005 * scale * 0.1 + 0.001),\\n \\\"pos_zero\\\": bool(abs(y2[512:].mean().item()) < 1e-9)}))\", \"expected_signal\": \"small negatives output -scale (nonzero) while small positives output 0\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-b891a69606ab447e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_25/kernel.py\\\")\\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\\ntorch.manual_seed(1)\\nx = torch.randn(1024, device=\\\"cuda\\\")  # one block\\nx0 = x.clone()\\ncur = x.clone()\\nmeans = [cur.mean().item()]\\nfor _ in range(5):\\n    cur = mod.requantize(cur)\\n    means.append(cur.mean().item())\\n# also positive-only tensor\\np = x.abs().clone()\\npm = [p.mean().item()]\\nfor _ in range(5):\\n    p = mod.requantize(p)\\n    pm.append(p.mean().item())\\nprint(json.dumps({\\n \\\"metric\\\": \\\"mean drift over repeated requantize applications\\\",\\n \\\"reason\\\": \\\"floor should pull positive values down by ~half a step on first application\\\",\\n \\\"mixed_means\\\": means, \\\"pos_only_means\\\": pm,\\n \\\"mixed_first_step_delta\\\": means[1] - means[0],\\n \\\"pos_first_step_delta\\\": pm[1] - pm[0],\\n \\\"pos_frac_drift\\\": (pm[-1] - pm[0]) / pm[0],\\n \\\"step_scale\\\": x0.abs().max().item() / 127.0}))\", \"expected_signal\": \"first application drops mean by roughly half a quantization step; subsequent applications stable\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757242,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1239,
+    "prompt_tokens": 21568,
+    "total_tokens": 22807,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 540,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are verifying whether a GPU (Triton) kernel implementation is correct.\n\nYou will be given:\n1. A problem statement describing the operation's contract and its reference behavior.\n2. The kernel implementation under test.\n\nDecide one of:\n- \"reject\": the implementation has a real defect / violates the stated contract.\n- \"trust\": the implementation is correct, or is an equally valid alternative implementation.\n- \"needs_more_evidence\": you genuinely cannot tell.\n\nAnswer with the JSON object required by the output schema.\nOutput schema:\n{\"type\": \"object\", \"required\": [\"verdict\", \"confidence\", \"reason\"], \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": [\"trust\", \"reject\", \"needs_more_evidence\"], \"description\": \"'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell.\"}, \"confidence\": {\"type\": \"number\", \"description\": \"0.0 to 1.0.\"}, \"reason\": {\"type\": \"string\", \"description\": \"One or two sentences.\"}}, \"additionalProperties\": false}"
+    },
+    {
+      "role": "user",
+      "content": "## Problem statement (contract + reference behavior)\n\nOperation: per-token INT8 activation quantization\n(sgl-project/sglang, python/sglang/kernels/ops/quantization/int8_kernel.py::_per_token_quant_int8).\n\nFor each row of the input, the kernel must quantize to int8 and return the\ndequantized reconstruction.\n\nContract: the scale is per-row and derived from THAT row's own magnitude:\n\n    absmax = max(max(|x_row|), 1e-10)\n    scale  = absmax / 127\n    q      = clamp(round(x_row / scale), -127, 127)\n    out    = q * scale\n\nso no value in the row is clipped by its own scale.\n\n\n## Kernel implementation under test (kernel.py)\n\n```python\nimport torch\nimport triton\nimport triton.language as tl\n\n_STALE_ABSMAX = 4.0  # simulates an EMA scale that hasn't caught up to the current batch\n\n\n@triton.jit\ndef _per_token_quant_int8(\n    x_ptr, xq_ptr, scale_ptr,\n    stride_x, stride_xq, N,\n    STALE_ABSMAX: tl.constexpr,\n    BLOCK: tl.constexpr,\n):\n    row_id = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    mask = cols < N\n    x = tl.load(x_ptr + row_id * stride_x + cols, mask=mask, other=0.0).to(tl.float32)\n    absmax = STALE_ABSMAX\n    scale_x = absmax / 127\n    x_q = x * (127 / absmax)\n    x_q = tl.clamp(tl.extra.cuda.libdevice.round(x_q), -127, 127).to(tl.int8)\n    tl.store(xq_ptr + row_id * stride_xq + cols, x_q, mask=mask)\n    tl.store(scale_ptr + row_id, scale_x.to(scale_ptr.dtype.element_ty))\n\n\ndef quant_dequant_int8(x: torch.Tensor) -> torch.Tensor:\n    M, N = x.shape\n    x_q = torch.empty_like(x, dtype=torch.int8)\n    scales = torch.empty(M, device=x.device, dtype=torch.float32)\n    BLOCK = triton.next_power_of_2(N)\n    _per_token_quant_int8[(M,)](x, x_q, scales, x.stride(0), x_q.stride(0), N, STALE_ABSMAX=_STALE_ABSMAX, BLOCK=BLOCK)\n    return x_q.float() * scales.unsqueeze(-1)\n\n```\n\nIs this implementation correct?"
+    }
+  ],
+  "response_format": {
+    "type": "json_object"
+  },
+  "reasoning_effort": "low"
+}

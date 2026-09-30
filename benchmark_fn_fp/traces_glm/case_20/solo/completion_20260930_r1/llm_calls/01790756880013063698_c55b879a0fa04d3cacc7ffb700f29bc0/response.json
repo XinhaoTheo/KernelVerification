@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-a4cce5c8faaf405d86c57571ba1450b7",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a numeric probe comparing the kernel's output to the contract formula, including a small-variance row where the eps placement matters most.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8beabd0db823a738",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_20\\\")\\nfrom kernel import layer_norm\\n\\ntorch.manual_seed(0)\\ndev = 'cuda'\\nN = 512\\n# row 0: standard random; row 1: small variance; row 2: constant row\\nx = torch.randn(2, N, device=dev)\\nx_small = (torch.full((N,), 2.0, device=dev) + torch.randn(N, device=dev) * 1e-4).unsqueeze(0)\\nx = torch.cat([x, x_small, torch.full((1, N), 3.0, device=dev)], dim=0)\\nw = torch.randn(N, device=dev)\\nb = torch.randn(N, device=dev)\\neps = 1e-5\\n\\ny = layer_norm(x.float(), w.float(), b.float(), eps)\\n\\ndef ref(xr):\\n    mean = xr.mean(-1, keepdim=True)\\n    var = ((xr - mean) ** 2).mean(-1, keepdim=True)\\n    rstd = 1.0 / torch.sqrt(var + eps)\\n    return (xr - mean) * rstd * w + b\\n\\nyr = ref(x.float())\\ndiff = (y - yr).abs()\\nrowwise = diff.max(dim=-1).values\\n\\n# expected relative error for small-variance row: rstd_kernel/rstd_ref\\nvar_small = ((x_small - x_small.mean())**2).mean()\\nratio = 1.0/(var_small.sqrt() + eps) / (1.0/(var_small + eps).sqrt())\\nprint(json.dumps({\\n    \\\"max_abs_err\\\": diff.max().item(),\\n    \\\"rowwise_max_abs_err\\\": rowwise.tolist(),\\n    \\\"small_var_row_var\\\": var_small.item(),\\n    \\\"small_var_rstd_ratio_kernel_over_ref\\\": ratio.item(),\\n    \\\"constant_row_out\\\": y[3, :3].tolist(),\\n    \\\"ref_constant_row_out\\\": yr[3, :3].tolist(),\\n}))\\n\", \"expected_signal\": \"max_abs_err > tolerance for the small-variance row; rstd ratio < 1\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756880,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 501,
+    "prompt_tokens": 9204,
+    "total_tokens": 9705,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

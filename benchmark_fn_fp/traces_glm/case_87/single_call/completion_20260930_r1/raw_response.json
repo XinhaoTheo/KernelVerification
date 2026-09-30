@@ -1,0 +1,50 @@
+{
+  "id": "chatcmpl-4c00f7c4a3c243029b8ee2b9ddd93742",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.85, \"reason\": \"Only the running state h is quantized to fp16 per step; a=0.999 and b are applied in fp32, so the only error is rounding of h (relative ~5e-4 per step, damped by the decay), which accumulates to a relative error orders of magnitude below the 0.003 budget for this workload.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "h stored in fp16 each step. a=0.999, b~N(0.01, 0.001). h accumulates toward ~b/(1-a)\u224810. T=768. fp16 rounding per step relative error ~2^-11 per step, accumulated errors random-ish; but b magnitude 0.001 noise \u2014 h values ~ up to 10? Actually recurrence: h_t = 0.999 h_{t-1} + b_t. Steady state ~0.01/0.001 = 10. fp16 has ~3 decimal digits, relative error 5e-4 per step. Error accumulates: rounding error each step ~0.001*h? h=10, eps=0.005 absolute per step, decayed... error grows roughly like sqrt(T)*eps*h? Random walk with decay: error variance ~ (eps*h)^2/(1-0.999\u00b2) \u2248 (0.005)\u00b2*500 \u2192 std ~0.11. Relative to reference norm ~10*sqrt(32*768)? Reference norm: sqrt(sum over t of h_t\u00b2\u00b7d)... h_t grows ~ approaching 10; norm ~ 10*sqrt(768*32)? Actually h varies over time approaching 10. Norm ~ maybe 10*sqrt(768)*sqrt(32)/something. Error relative likely ~0.01-ish? Hmm borderline.\n\nLet's estimate more carefully. h_t(t) \u2248 10(1-0.999^t) plus noise, deterministic same per d except b noise 0.001 \u2014 b noise contributes little. So h ranges 0\u2192~9.9. Reference norm\u00b2 = d * sum_t h_t\u00b2 \u2248 32 * sum. sum_t (10(1-0.999^t))\u00b2 \u2248 100*(768 - 2*1000*(1-0.999^768) + 10^6*(1-0.999^1536... )). Easier: integral \u222b0^768 100(1-e^{-t/1000})\u00b2 dt \u2248 100*(768 - 2*1000*(1-e^-0.768)+ 5*10^5*(1-e^-1.536)) \u2248 100*(768-2000*0.536+500000*0.785) huge. Compute: e^-0.768\u22480.464; 1-0.464=0.536; 2000*0.536=1072. e^-1.536\u22480.215; 500000*0.785=392500. Sum=768-1072+392500\u2248392196; \u00d7100=3.92e7; \u00d732=1.25e9. Norm\u224835400. Denominator also min 0.001*sqrt(elements)=0.001*sqrt(24576)\u22480.157, negligible.\n\nError: fp16 quantization of h each step. Quantization step for h~10 is 2^-11*16? fp16: h in [8,16), ulp=2^-10*8=0.0078. Rounding error uniform \u00b10.0039, std ~0.0023. Error propagation: err_t = 0.999*err_{t-1} + q_t. Variance \u03c3\u00b2/(1-0.999\u00b2)\u2248\u03c3\u00b2*500 \u2192 std\u22480.0023*22=0.05 per channel at end, typical over time smaller. Total error norm\u00b2 = d * sum err_t\u00b2. Roughly err std grows to 0.05; sum over t of err\u00b2 \u2248 768*avg. avg err\u00b2 maybe (0.03)\u00b2 \u2192 768*0.0009*32\u224822 \u2192 norm ~4.7. Also correlation: rounding errors are correlated (deterministic h same across d \u2192 quantization errors highly correlated across channels). That actually doesn't change norm (norm counts all channels). Relative error \u2248 5/35400 \u2248 1.4e-4. Well within 0.003. Also b noise 0.001 stored fine in fp16 (values 0.01\u00b10.001, ulp ~1e-5 fine). a=0.999 exact in fp16? 0.999 rounds to nearest fp16 ~0.999 with error ~1e-5 relative, causing h drift: h\u224810*(1 - a16/a diff)... a16 = 0.9990234375? Actually fp16 near 0.999: spacing 2^-10? 0.999 in [0.5,1): ulp=2^-11\u22480.000488. So a16 could be 0.99902344, error 2.3e-5. Steady state h = b/(1-a): 1-a16 = 0.0009766 vs 0.001. h16 \u2248 0.01/0.0009766 = 10.24 vs 10! That's 2.4% error relative per element... but wait, kernel loads a as fp32 (a is stored in A as float32 input; loaded as fp32, multiplied in fp32). Only h is cast to fp16. So a stays 0.999 fp32, b fp32. Good. But b also: b loaded fp32, fine. Only h quantized. So error ~1e-4 relative. Trust.\n\nWait\u2014does the fp16 cast of h break the store? stores fp32. Fine. Also T=768, D=32 as constexpr; grid (1,). Fine.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756215,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1335,
+    "prompt_tokens": 1292,
+    "total_tokens": 2627,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1240,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 1240
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-e7e8015f48d04312b48ec5d1cefffca1",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a numerical probe comparing the kernel to an independent dequantization + matmul reference, using the AutoGPTQ packing convention (zero effective = unpacked zero + 1) on representative shapes.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-aaf6aa91a2811dd0",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, '/root/cases/case_07')\\nfrom kernel import gptq_matmul\\n\\ntorch.manual_seed(0)\\ndev = 'cuda'\\nM, K, N = 64, 256, 128\\nbits = 4\\nmaxq = 15\\ngroupsize = 32\\nn_groups = K // groupsize\\n\\na = torch.randn(M, K, device=dev, dtype=torch.float16)\\nq = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\\n# pack 8 values per int32 along K (little-endian nibbles)\\nb_packed = torch.zeros((K // 8, N), device=dev, dtype=torch.int32)\\nfor k in range(K):\\n    word, off = k // 8, k % 8\\n    b_packed[word, :] |= q[k, :] << (off * bits)\\nscales = (torch.randn(n_groups, N, device=dev, dtype=torch.float16).abs() * 0.01 + 0.001)\\nzeros = torch.randint(0, 16, (n_groups, N), device=dev, dtype=torch.int32)  # packed zeros along N\\ng_idx = (torch.arange(K, device=dev) // groupsize).to(torch.int32)\\n\\nc = gptq_matmul(a, b_packed, scales, zeros, g_idx, bits=4)\\n\\n# reference: unpack zeros along N (8 per word), effective zero = unpacked + 1 (AutoGPTQ convention)\\nq_f = q.float()\\nzero_eff = torch.zeros_like(q_f)\\nfor n in range(N):\\n    word, off = n // 8, n % 8\\n    z_un = ((zeros[word, :] >> (off * bits)) & maxq).float()  # per column? careful\\n# do it vectorized: zero value for column n of group g\\nz_unpacked = ((zeros[:, (torch.arange(N, device=dev) // 8)] >> ((torch.arange(N, device=dev) % 8) * bits).unsqueeze(0)) & maxq).float()  # (n_groups, N)\\ndeq = torch.zeros(K, N, device=dev)\\nfor k in range(K):\\n    g = g_idx[k].item()\\n    deq[k] = (q_f[k] - (z_unpacked[g] + 1)) * scales[g].float()\\nref = (a.float() @ deq)\\n\\nerr = (c - ref).abs()\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"max abs error vs independent dequant reference (zero_eff = unpacked_zero + 1)\\\",\\n    \\\"max_abs_err\\\": float(err.max()),\\n    \\\"mean_abs_err\\\": float(err.mean()),\\n    \\\"shape\\\": [M, N],\\n    \\\"c_dtype\\\": str(c.dtype),\\n    \\\"allclose\\\": bool(torch.allclose(c, ref, atol=1e-2, rtol=1e-2)),\\n}))\\n\", \"expected_signal\": \"max abs err near float16 matmul rounding (~<0.1 for these scales)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run a probe comparing kernel to reference dequant+matmul. Note kernel adds +1 to zeros — that matches AutoGPTQ convention (zeros stored as zero-1). But contract formula says dequant = (q - zero)*scale. The AutoGPTQ kernel actually does zeros+1 because stored zeros are offset. Reference: AutoGPTQ stores zeros such that dequant = (q - (zero+1))*scale? Actually the original kernel does `zeros = zeros + 1`. To match, I should compute reference with zeros+1 (the original kernel's semantics). The claim is the kernel matches the contract formula... Actually contract formula says (q - zero)*scale. But the original AutoGPTQ kernel is the reference; the \"+1\" is part of packing convention. I'll test against reference with zero_eff = zero+1, i.e., replicating the upstream kernel. Also test whether plain (q-zero)*scale matches — it won't. Hmm, which is the contract's zero? Contract says dequant(B)[k,n]=(unpacked_q - zero)*scale where zero is the \"per-(group,column) zero-point\". The kernel adds 1 to the stored zero. In AutoGPTQ the stored zeros are actually (zero-1) packed, so unpacked zero = stored+1. The contract's \"zero\" likely means the effective zero. So compare kernel to reference computed as (q - (z_unpacked+1))*scale where z_unpacked = (zeros >> shift)&maxq. I'll build the probe accordingly.\n\nAlso test both shapes, e.g. M=64, K=256, N=128, g_idx = arange//32 (groupsize 32).",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756255,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1089,
+    "prompt_tokens": 10537,
+    "total_tokens": 11626,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 358,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 358
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are verifying whether a GPU (Triton) kernel implementation is correct.\n\nYou will be given:\n1. A problem statement describing the operation's contract and its reference behavior.\n2. The kernel implementation under test.\n\nDecide one of:\n- \"reject\": the implementation has a real defect / violates the stated contract.\n- \"trust\": the implementation is correct, or is an equally valid alternative implementation.\n- \"needs_more_evidence\": you genuinely cannot tell.\n\nAnswer with the JSON object required by the output schema.\nOutput schema:\n{\"type\": \"object\", \"required\": [\"verdict\", \"confidence\", \"reason\"], \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": [\"trust\", \"reject\", \"needs_more_evidence\"], \"description\": \"'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell.\"}, \"confidence\": {\"type\": \"number\", \"description\": \"0.0 to 1.0.\"}, \"reason\": {\"type\": \"string\", \"description\": \"One or two sentences.\"}}, \"additionalProperties\": false}"
+    },
+    {
+      "role": "user",
+      "content": "## Problem statement (contract + reference behavior)\n\nOperation: gather cached key/value tokens for a batch of sequences out of a\npaged KV cache, the block-table indirection used by paged-attention inference\nengines.\n\n    kv_cache     : [num_pages, page_size, head_dim]\n    block_table  : [num_seqs, max_blocks], int32\n                   block_table[s, b] is the PHYSICAL page holding logical block b\n                   of sequence s\n    result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]\n\nPages are allocated on demand, so the physical pages of one sequence are not\ncontiguous and are generally interleaved with those of other sequences.\n\nInput domain: `seq_len` may be any length that fits within `max_blocks` pages,\nand the block table may map any sequence to any physical page.\n\nDoes paged_gather() satisfy this contract?\n\n\n## Kernel implementation under test (kernel.py)\n\n```python\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _paged_gather_kernel(KV, BlockTable, Out, max_blocks, page_size,\n                         stride_kv_page, stride_out_seq,\n                         HEAD_DIM: tl.constexpr):\n    seq = tl.program_id(0)\n    slot = tl.program_id(1)\n    logical_block = slot // page_size\n    within = slot % page_size\n\n    physical = seq * max_blocks + logical_block\n    offs = tl.arange(0, HEAD_DIM)\n    src = KV + physical * stride_kv_page + within * HEAD_DIM + offs\n    dst = Out + seq * stride_out_seq + slot * HEAD_DIM + offs\n    tl.store(dst, tl.load(src))\n\n\ndef paged_gather(kv_cache: torch.Tensor, block_table: torch.Tensor,\n                 seq_len: int) -> torch.Tensor:\n    \"\"\"Gather `seq_len` cached tokens for each sequence through its block table.\"\"\"\n    num_pages, page_size, head_dim = kv_cache.shape\n    num_seqs, max_blocks = block_table.shape\n    out = torch.empty((num_seqs, seq_len, head_dim), device=kv_cache.device,\n                      dtype=kv_cache.dtype)\n    _paged_gather_kernel[(num_seqs, seq_len)](\n        kv_cache, block_table, out, max_blocks, page_size,\n        kv_cache.stride(0), out.stride(0), HEAD_DIM=head_dim)\n    return out\n\n```\n\nIs this implementation correct?"
+    }
+  ],
+  "response_format": {
+    "type": "json_object"
+  },
+  "reasoning_effort": "low"
+}

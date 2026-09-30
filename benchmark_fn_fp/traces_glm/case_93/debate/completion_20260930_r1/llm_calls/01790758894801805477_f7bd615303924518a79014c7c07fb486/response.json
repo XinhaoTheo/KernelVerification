@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-3d2de9c27beb4ad59c2cbd9bd0c15072",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The kernel is a symmetric per-row 7-level quantized matvec (y = quant(W) @ x) in Triton, while the contract permits any approximation as long as relative error E <= 0.12 on this one seeded workload. I'll record the description model now.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-91c9a77ae1df3a5d",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Operation is y = W @ x with W (32x256) and x (256), both produced by make_inputs() with fixed seed 1222 and rounded once to float32; no other inputs/shapes are in scope.\", \"Reference is the float64 mathematical matvec on the same float32 input values; only the single specified workload is judged.\", \"Compliance metric: E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.12 and all 32 outputs finite.\", \"Reduced precision and approximate arithmetic (including quantization) are explicitly permitted if the budget is met; the quantization itself is neither a defect nor compliance.\", \"Verdict options are trust/reject/needs_more_evidence; this is finite-workload compliance, not general correctness.\"], \"kernel_model\": [\"Triton kernel with grid (m,) i.e. 32 programs, one per row; each program loads the full row of W (K=256) and the whole x vector.\", \"Per-row symmetric quantization: scale = max(|w_row|)/7, qi = clamp(floor(w/scale + 0.5), -7, 7) in float, then y_row = sum(x * (qi * scale)); output stored as float32.\", \"run() allocates a float32 output of shape (m,) and launches with K as constexpr and enable_fp_fusion=False; no batching, no handling of non-power-of-two or other shapes (out of scope anyway).\", \"make_inputs constructs x as 0.75*normalized column-sum direction of W plus 0.25*random direction plus a unit-norm quantization-residual direction (residual=1.0) aligned with the total per-row quantization error -- i.e., the input is deliberately built to stress the quantization error.\"], \"risk_map\": [\"Quantization error direction: x contains the full normalized quantization residual vector (residual=1.0), so the input amplifies exactly the error the kernel introduces; whether E stays <= 0.12 is the central question and needs runtime measurement.\", \"Kernel computes scale and qi in float32 (Triton tl ops), whereas make_inputs computes the residual in float64; float32 vs float64 rounding of scale/qi could shift the effective quantization slightly relative to the intended quantized behavior, but only the error budget matters.\", \"Row-direction alignment: x also aligns 0.75 with w's column-sum direction, which may partially cancel or reinforce quantization error per row; distribution-dependent failure that benign random probes would miss.\", \"tl.floor(w/scale + 0.5) tie behavior and any w equal to the row max (qi = clamp(floor(7.5),-7,7) = 7, fine) — edge saturation at +/-7 is clamped correctly.\", \"Potential zero-scale only if a whole row of W were zero (not the case for Gaussian W, out of scope).\", \"Output is float32 while reference is float64; inherent float32 accumulation noise is permitted by the budget.\"], \"open_questions\": [\"Actual E value on the exact seeded workload (needs Experimenter runtime probe), and whether per-row relative error concentrates anywhere above 0.12.\", \"Whether Triton's float32 arithmetic for scale/quantize reproduces the float64-derived residual direction closely enough that the adversarial input component is faithfully stress-testing (affects probe design, not the verdict).\"], \"scope_notes\": [\"Single fixed workload: seed 1222, m=32, k=256, mix=0.75, residual=1.0; no other distributions or shapes count.\", \"Environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0, NumPy 2.2.6 PCG64 on CPU for input generation.\", \"Only numerical budget compliance is judged; approximate arithmetic is in-scope and permitted.\"], \"summary\": \"case_93: Triton per-row symmetric 7-level quantized matvec y = quant(W)@x on a single seeded workload; contract allows any approximation within relative error E <= 0.12.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Record description update with structured fields.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790758895,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 963,
+    "prompt_tokens": 5562,
+    "total_tokens": 6525,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 7,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 347,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 7
+    }
+  }
+}

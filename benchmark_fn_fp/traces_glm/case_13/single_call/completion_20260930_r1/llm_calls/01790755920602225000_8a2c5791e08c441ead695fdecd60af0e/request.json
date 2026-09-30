@@ -1,0 +1,18 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are verifying whether a GPU (Triton) kernel implementation is correct.\n\nYou will be given:\n1. A problem statement describing the operation's contract and its reference behavior.\n2. The kernel implementation under test.\n\nDecide one of:\n- \"reject\": the implementation has a real defect / violates the stated contract.\n- \"trust\": the implementation is correct, or is an equally valid alternative implementation.\n- \"needs_more_evidence\": you genuinely cannot tell.\n\nAnswer with the JSON object required by the output schema.\nOutput schema:\n{\"type\": \"object\", \"required\": [\"verdict\", \"confidence\", \"reason\"], \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": [\"trust\", \"reject\", \"needs_more_evidence\"], \"description\": \"'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell.\"}, \"confidence\": {\"type\": \"number\", \"description\": \"0.0 to 1.0.\"}, \"reason\": {\"type\": \"string\", \"description\": \"One or two sentences.\"}}, \"additionalProperties\": false}"
+    },
+    {
+      "role": "user",
+      "content": "## Problem statement (contract + reference behavior)\n\nOperation: the query-head to KV-head mapping of Grouped Query Attention, in\nthe style of the index arithmetic in vllm-project/vllm,\nvllm/v1/attention/ops/triton_unified_attention.py.\n\nWith num_q_heads query heads and num_kv_heads key/value heads\n(n_rep = num_q_heads // num_kv_heads), GQA groups CONSECUTIVE query heads onto\nthe same KV head: query heads 0..n_rep-1 read KV head 0, query heads\nn_rep..2*n_rep-1 read KV head 1, and so on.\n\n`gqa_gather(kv, num_q_heads)` must return, for each query head, the KV row\nthat query head is supposed to read.\n\n\n## Kernel implementation under test (kernel.py)\n\n```python\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef gqa_gather_kernel(kv_ptr, out_ptr, num_kv_heads, dim: tl.constexpr):\n    q_head = tl.program_id(0)\n    kv_head = q_head % num_kv_heads\n    offs_d = tl.arange(0, dim)\n    kv = tl.load(kv_ptr + kv_head * dim + offs_d)\n    tl.store(out_ptr + q_head * dim + offs_d, kv)\n\n\ndef gqa_gather(kv: torch.Tensor, num_q_heads: int) -> torch.Tensor:\n    num_kv_heads, dim = kv.shape\n    out = torch.empty(num_q_heads, dim, device=kv.device, dtype=kv.dtype)\n    gqa_gather_kernel[(num_q_heads,)](kv, out, num_kv_heads, dim=dim)\n    return out\n\n```\n\nIs this implementation correct?"
+    }
+  ],
+  "response_format": {
+    "type": "json_object"
+  },
+  "reasoning_effort": "low"
+}

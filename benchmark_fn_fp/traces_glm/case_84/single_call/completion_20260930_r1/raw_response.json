@@ -1,0 +1,50 @@
+{
+  "id": "chatcmpl-3894ad14676043478642760de96079ef",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.55, \"reason\": \"The fp16 rounding of softmax weights introduces per-weight relative error ~4.9e-4, which after random cancellation across the value dot product yields an estimated relative output error ~5e-4 (the 0.5 centering doubles it but it stays under the 1e-3 budget), and all intermediate math (fp32 exp, max-subtraction) is numerically sound. The margin is somewhat tight, but the expected error remains within budget.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "fp16 rounding of p: relative error ~5e-4 per element; softmax weights sum ~1. p cast to fp16 then back\u2014sum of p after quantization may deviate from 1 by up to ~1e-3-ish, causing output error. N=128 elements, each fp16 quantization error up to ~5e-4 relative. But p values small (sum 1 over 128), fp16 has ~1e-3 relative precision (2^-11 \u2248 4.9e-4). Sum of errors random ~sqrt(128)*small. Output error relative ~1e-3 possibly. Budget E \u2264 0.001. Hmm, borderline.\n\nActually fp16 relative error 2^-11 \u2248 4.88e-4. Each p_i quantized with relative error \u2264 4.88e-4. Then y = sum p_i v_i; errors partially cancel (positive p errors weighted by random v). Expected relative error in output ~ 4.88e-4 * sqrt(sum p_i^2 v_i^2)/||y||. With centering construction, y = (1-center)*p@v roughly... v was modified so p@v is reduced by factor 0.5. Output norm reduced, error unchanged \u2192 relative error doubles ~1e-3? Hmm.\n\nWait: v_new = v - 0.5*(p@v). Reference is computed with the same v_new and same p in float64 math, so the reference y is 0.5*(p@v_orig). Norm of reference ~0.5*||p@v_orig||. The fp16 error doesn't scale; relative error roughly doubles to ~1e-3 vs 5e-4. This is a deliberately adversarial test \u2014 the centering amplifies relative error. Likely the kernel fails budget. Hmm, but errors also partially cancel in the dot product.\n\nEstimate: error in y = sum \u03b4_i v_i where \u03b4_i \u2264 4.88e-4 * p_i. std of error \u2248 4.88e-4 * sqrt(3) * sqrt(sum p_i^2 * v_i^2) (uniform quantization error). Reference y = 0.5 * p@v_orig. If v random, sum p_i^2 v_i^2 vs (sum p_i v_i)^2: since p concentrated (scale 1.9, d=32, scores ~ N(0, 1.9^2)? scores = k\u00b7q/sqrt(d), k scale 1.9, q unit \u2192 each dot ~ sqrt(32)*1.9*1/sqrt(32)... variance of k\u00b7q per element 1.9^2, sum over 32: var = 32*1.9^2, /sqrt(32) \u2192 std ~ 1.9*sqrt(32)/sqrt(32)... wait scores std = 1.9*sqrt(32)/sqrt(32)? k\u00b7q std = 1.9*sqrt(32), divided by sqrt(32) \u2192 std 1.9. So softmax over 128 with std 1.9 scores: fairly peaked, effective ~ maybe 20 tokens.\n\nRatio sqrt(E[sum p^2 v^2]) / ||p@v||: if p spread over ~m tokens with roughly equal weights, numerator ~ sqrt(1/m)*||v||_rms*sqrt(d), denominator... for random v, p@v norm per output dim ~ sqrt(sum p^2)*1. So ratio ~ 1/1 = ... numerator per dim sqrt(sum p_i^2 E[v^2]) = sqrt(1/m), denominator per dim std sqrt(sum p_i^2) = sqrt(1/m). So ratio ~1! Random dot product doesn't grow relative error. So relative error ~ 4.88e-4/sqrt(3)*... ~ 3e-4, well within budget even after centering doubles it (~6e-4)... borderline but likely OK? Hmm 0.5 centering: relative error scales by 2 \u2192 ~6e-4 < 1e-3.\n\nHmm hard. Also denominator floor: ||y||_2 vs 0.001*sqrt(32)=0.0057. y norm: p@v per dim std sqrt(sum p^2). With peaked softmax sum p^2 maybe 0.1 \u2192 per-dim std 0.3, over 32 dims norm ~1.7, times 0.5 \u2192 0.85. Fine.\n\nBut wait \u2014 also the reference v modification used float64 exact p; the kernel computes p in fp32, differences tiny. Main issue fp16. Expected error: per-element quantization error uniform in \u00b12^-11 relative. Error in y_d = sum \u03b4_i v_id. std \u2248 (4.88e-4/sqrt(3)) * sqrt(sum p_i^2 v_id^2) \u2248 2.8e-4 * sqrt(sum p^2)*~1 per dim. Norm error over 32 dims: 2.8e-4*sqrt(sum p^2)*sqrt(32). Relative to ||y|| = 0.5*sqrt(sum p^2)*sqrt(32) (approx, since random). \u2192 5.6e-4 relative. Within 1e-3 budget. But worst-case (not std) could exceed. Random sign cancellation likely keeps it under.\n\nThis looks like a benchmark where the fp16 cast is a deliberate \"reduced precision permitted if budget met\". Given estimate 5.6e-4 < 1e-3, likely passes. But it's borderline; tail risk. Given the design (center=0.5 exactly halves), the designers likely tuned so this either passes or fails marginally. Hmm.\n\nAlso fp16 subnormals: p values can be tiny (exp of -large), fine.\n\nAnother consideration: p quantized to fp16 individually, but sum of quantized p \u2260 1, that's included in the \u03b4 analysis. Also y computed in fp32, fine.\n\nMy estimate says passes. I'll say trust with moderate confidence... but honestly needs_more_evidence could be argued. The estimate 5.6e-4 with ~random cancellation; probability of exceeding 1e-3 is low (needs ~2x bad luck). I'll go trust, confidence 0.55.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756186,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1479,
+    "prompt_tokens": 1342,
+    "total_tokens": 2821,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1363,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 10,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 1363
+    }
+  }
+}

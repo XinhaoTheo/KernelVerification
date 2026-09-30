@@ -1,0 +1,129 @@
+[
+  {
+    "created_at": "2026-09-30T08:48:49Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:50:13Z",
+        "data": {
+          "E": 0.0015762248348375875,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "2a6aaee207c3f8c8d9758b6b49aba984fa62eedfc604ac450c6ad872dd48317a"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "20766eaa704e3bc76f86b2290e2eb25122f4b2b0fddbff93d7deea1d65cb05eb"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t12_json_result.json",
+              "sha256": "2def74921a77e4c9a4bfe5e815409bad307210c9d11f754a48c71788f7bbeff2"
+            }
+          ],
+          "budget": 0.001,
+          "denominator": 0.17878792473572788,
+          "duration_s": 12.349354,
+          "exit_code": 0,
+          "expected_signal": "E value on the exact seed-815 workload vs the 0.001 budget; also ref_norm vs 0.001*sqrt(32) floor",
+          "floor": 0.005656854249492381,
+          "json_parse_error": null,
+          "json_result": {
+            "E": 0.0015762248348375875,
+            "E_exceeds_budget": true,
+            "all_finite": true,
+            "budget": 0.001,
+            "denominator": 0.17878792473572788,
+            "floor": 0.005656854249492381,
+            "floor_dominates": false,
+            "max_abs_err": 0.00012883970325741623,
+            "numerator_norm": 0.0002818099671375277,
+            "out_shape": [
+              32
+            ],
+            "ref_norm": 0.17878792473572788
+          },
+          "max_abs_err": 0.00012883970325741623,
+          "numerator_norm": 0.0002818099671375277,
+          "out_shape": [
+            32
+          ],
+          "ref_norm": 0.17878792473572788,
+          "stderr": "",
+          "stdout": "{\"E\": 0.0015762248348375875, \"budget\": 0.001, \"E_exceeds_budget\": true, \"numerator_norm\": 0.0002818099671375277, \"ref_norm\": 0.17878792473572788, \"floor\": 0.005656854249492381, \"floor_dominates\": false, \"denominator\": 0.17878792473572788, \"all_finite\": true, \"max_abs_err\": 0.00012883970325741623, \"out_shape\": [32]}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On the exact seed-815 workload (N=128, D=32), the kernel output vs the float64 reference gives E = 0.001576 > 0.001 budget, violating the contract. Denominator is ref_norm = 0.1788 (floor 0.00566 does not dominate). All outputs finite. fp16 probability rounding (line 15) is the dominant precision reduction, consistent with the observed error magnitude.",
+        "supports": "confirmed",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The kernel rounds softmax probabilities to fp16 (relative error ~2^-11) before the weighted V sum, and make_inputs deliberately recenters V by 0.9*(p@v) so the reference output is small via cancellation; the resulting absolute error scaled by max(||ref||, 0.001*sqrt(32)) may exceed the 0.001 relative budget on this exact workload.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(#outputs)) <= 0.001 on the exact make_inputs() workload (seed 815, N=128, D=32, K scaled 1.9, V recentered 0.9*(p@v)); reference is the operation in float64 on the same float32 inputs."
+      },
+      {
+        "source": "kernel.py lines 15, 38-43",
+        "summary": "Line 15 quantizes p to fp16; make_inputs' V recentering (v -= 0.9*(p@v)) engineers output cancellation, so this exact fixed workload is the case the budget applies to."
+      }
+    ],
+    "scope_rationale": "The claim concerns the exact single workload the contract defines (make_inputs, seed 815, N=128, D=32) and whether the E budget in problem.txt (E <= 0.001 vs float64 reference with denominator floor 0.001*sqrt(32)) is violated by the fp16 probability rounding \u2014 a condition the contract explicitly decides.",
+    "statement": "On the single seed-815 workload (N=128, D=32), the kernel's fp16 rounding of softmax probabilities (line 15) causes E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) to exceed 0.001, violating the contract's compliance budget.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:50:13Z"
+  },
+  {
+    "created_at": "2026-09-30T08:48:49Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:50:13Z",
+        "data": {
+          "E": 0.0015762248348375875,
+          "floor": 0.005656854249492381,
+          "floor_dominates": false,
+          "ref_norm": 0.17878792473572788
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Same probe as c1 (event t12): measured ||ref||_2 = 0.1788 on the exact workload, far above the 0.001*sqrt(32) = 0.00566 floor, so the E denominator is NOT dominated by the floor. The effective allowance is 0.001*||ref||_2 \u2248 1.79e-4, not ~5.7e-6. c2's floor-dominance premise is contradicted.",
+        "supports": "rebutted",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "If the recentering shrinks ||ref||_2 to near the floor, the absolute error tolerance is only ~5.7e-6, and fp16 probability rounding error times V entries of O(1) plausibly exceeds it.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "E denominator is max(||reference||_2, 0.001*sqrt(32)) with E <= 0.001 required; this floor term is part of the stated contract for the exact fixed workload."
+      }
+    ],
+    "scope_rationale": "The E denominator structure (floor 0.001*sqrt(32) vs reference norm) is explicitly stated in problem.txt and applies to the single fixed make_inputs() workload; whether the floor dominates determines the absolute error allowance of ~5.7e-6 under the contract.",
+    "statement": "The E denominator for this workload is dominated by the 0.001*sqrt(32) floor (~0.00566) because the 0.9-centered V makes ||ref||_2 small, so the effective absolute-error allowance is ~5.7e-6 per output element \u2014 which the fp16 probability rounding error alone can exceed.",
+    "status": "rebutted",
+    "updated_at": "2026-09-30T08:50:18Z"
+  }
+]

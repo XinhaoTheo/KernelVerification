@@ -1,0 +1,111 @@
+[
+  {
+    "created_at": "2026-09-30T08:16:57Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:17:17Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "a46315e815fb5a868113703592d640637cbc39a46f5177b30c1df28aeb1aa844"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "41db84c5ba8806430cdababeb0751c391d5b66daa4e94cea70879d29ceca4952"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t6_json_result.json",
+              "sha256": "260f349785a987c3c1301e183c639992f874eeb19621633548a54ac8ff02a8df"
+            }
+          ],
+          "duration_s": 7.178885,
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": null,
+          "json_result": {
+            "metric": "final_state abs error vs exact fp64 recurrence",
+            "results": [
+              {
+                "dim": 64,
+                "max_abs_err": 0.01163943675549417,
+                "mean_abs_err": 0.0029539403995678774,
+                "nchunks": 8,
+                "rel_err_max": 0.306779502428927
+              },
+              {
+                "dim": 128,
+                "max_abs_err": 0.016077021868287744,
+                "mean_abs_err": 0.004682033941330179,
+                "nchunks": 64,
+                "rel_err_max": 0.11881497963991228
+              },
+              {
+                "dim": 64,
+                "max_abs_err": 0.017791848401188304,
+                "mean_abs_err": 0.004658260417075829,
+                "nchunks": 256,
+                "rel_err_max": 1.0
+              }
+            ]
+          },
+          "max_abs_err": 0.017791848401188304,
+          "rel_err_max": 1.0,
+          "results": [
+            {
+              "dim": 64,
+              "max_abs_err": 0.0116,
+              "nchunks": 8
+            },
+            {
+              "dim": 128,
+              "max_abs_err": 0.0161,
+              "nchunks": 64
+            },
+            {
+              "dim": 64,
+              "max_abs_err": 0.0178,
+              "nchunks": 256
+            }
+          ],
+          "stderr": "",
+          "stdout": "{\"metric\": \"final_state abs error vs exact fp64 recurrence\", \"results\": [{\"nchunks\": 8, \"dim\": 64, \"max_abs_err\": 0.01163943675549417, \"mean_abs_err\": 0.0029539403995678774, \"rel_err_max\": 0.306779502428927}, {\"nchunks\": 64, \"dim\": 128, \"max_abs_err\": 0.016077021868287744, \"mean_abs_err\": 0.004682033941330179, \"rel_err_max\": 0.11881497963991228}, {\"nchunks\": 256, \"dim\": 64, \"max_abs_err\": 0.017791848401188304, \"mean_abs_err\": 0.004658260417075829, \"rel_err_max\": 1.0}]}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On random inputs (nchunks 8/64/256, dim 64/128, log-decays in (-0.06,-0.01)), the kernel's final state deviates from the exact fp64 recurrence by max abs error 0.0116/0.0161/0.0178 \u2014 orders of magnitude beyond ordinary FP32 arithmetic (eps~1e-7 for these magnitudes) \u2014 with max relative error up to 100%. This matches the 5e-3 round-to-grid quantization at line 32, an extra approximation the contract forbids.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Source line 32 rounds the state to a 5e-3 grid after each chunk, so the returned final state deviates from the exact recurrence by up to half the quantization step per chunk, growing with nchunks.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length."
+      }
+    ],
+    "scope_rationale": "The contract requires state <- exp(dA_cs[c])*state + new_states[c] carried out exactly with no approximation beyond ordinary floating-point arithmetic; line 32 adds a round-to-grid quantization that violates this.",
+    "statement": "The kernel's per-chunk quantization (floor(state/5e-3 + 0.5)*5e-3) makes the final state deviate from the exact recurrence by more than floating-point error.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:17:17Z"
+  }
+]

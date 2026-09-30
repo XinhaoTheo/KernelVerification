@@ -1,0 +1,129 @@
+[
+  {
+    "created_at": "2026-09-30T08:36:26Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:45:23Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "8ea33e9379958a6583802eb839a405ca9033e1fed7906ec0abf87bba50fc0741"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "55e2679bbd7bfae48b23cb5ca8b4983d983d5a31ee574131c08fe34cc7948e9c"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t7_json_result.json",
+              "sha256": "71494e03e72e5d404a8e9b1befb98ef8f511fd26c162e18c6b0066a57b0e5c73"
+            }
+          ],
+          "cases": {
+            "lens=[33,31]": {
+              "max_abs_err": 3.8825,
+              "per_seq_div": [
+                false,
+                false
+              ],
+              "total_div_by_32": true
+            },
+            "lens=[40,24]": {
+              "max_abs_err": 3.5407,
+              "per_seq_div": [
+                false,
+                false
+              ],
+              "total_div_by_32": true
+            },
+            "lens=[50,14]": {
+              "max_abs_err": 3.0143,
+              "per_seq_div": [
+                false,
+                false
+              ],
+              "total_div_by_32": true
+            }
+          },
+          "duration_s": 8.908524,
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": null,
+          "json_result": {
+            "lens=[33, 31]": {
+              "err_rows_seq0_end": 3.2064003944396973,
+              "err_rows_seq1": 3.882516384124756,
+              "max_abs_err": 3.882516384124756,
+              "per_seq_div": [
+                false,
+                false
+              ],
+              "total_div_by_32": true
+            },
+            "lens=[40, 24]": {
+              "err_rows_seq0_end": 3.3345274925231934,
+              "err_rows_seq1": 3.5407004356384277,
+              "max_abs_err": 3.5407004356384277,
+              "per_seq_div": [
+                false,
+                false
+              ],
+              "total_div_by_32": true
+            },
+            "lens=[50, 14]": {
+              "err_rows_seq0_end": 3.0143227577209473,
+              "err_rows_seq1": 2.805535316467285,
+              "max_abs_err": 3.0143227577209473,
+              "per_seq_div": [
+                false,
+                false
+              ],
+              "total_div_by_32": true
+            }
+          },
+          "metric": "max absolute error vs dense per-sequence non-causal reference (block_mask all True)",
+          "stderr": "",
+          "stdout": "{\"lens=[40, 24]\": {\"max_abs_err\": 3.5407004356384277, \"total_div_by_32\": true, \"per_seq_div\": [false, false], \"err_rows_seq0_end\": 3.3345274925231934, \"err_rows_seq1\": 3.5407004356384277}, \"lens=[50, 14]\": {\"max_abs_err\": 3.0143227577209473, \"total_div_by_32\": true, \"per_seq_div\": [false, false], \"err_rows_seq0_end\": 3.0143227577209473, \"err_rows_seq1\": 2.805535316467285}, \"lens=[33, 31]\": {\"max_abs_err\": 3.882516384124756, \"total_div_by_32\": true, \"per_seq_div\": [false, false], \"err_rows_seq0_end\": 3.2064003944396973, \"err_rows_seq1\": 3.882516384124756}}\n",
+          "timed_out": false,
+          "timeout_s": 240
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "With k_block_size=32, cu_k_seqlens giving lengths 40+24, 50+14, 33+31 (each per-sequence length NOT divisible by 32 but total 64 divisible by 32, so EVEN_SEQ_KBLOCK is wrongly True), the kernel output diverges from the per-sequence reference by max abs error 3.0-3.9 across rows of both sequences \u2014 keys past each sequence's end (belonging to the next sequence) enter the softmax unmasked. These are magnitude-of-output errors (O(1) values), not float noise.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The kernel computes this divisibility flag from the total key length, not per-batch, so with batch key lengths e.g. 5+3=8 and k_block_size 4 the flag is True while batch 0's last key block is partial; unmasked loads then read keys belonging to the next sequence into the softmax, which the problem statement explicitly forbids.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "A sequence length is NOT required to be a multiple of the block size; the final block is partial and 'positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
+      },
+      {
+        "source": "problem.txt",
+        "summary": "out[t] = softmax restricted to keys that belong to the same sequence as t and lie in a selected block."
+      }
+    ],
+    "scope_rationale": "Violates the contract clause that keys past a sequence's end (belonging to the next sequence) must not contribute to the softmax for that sequence.",
+    "statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting keys from the next sequence enter the softmax unmasked.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:45:23Z"
+  }
+]

@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-9e21caf24f734277a985177095235703",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I have all the context I need. The kernel is a linear recurrence h[t] = a[t]*h[t-1] + b[t] over t=512, d=32, implemented sequentially in a single Triton program, with each state rounded to float16 before storing — an explicit precision-loss risk worth flagging against the E <= 0.003 budget. Recording the description model now.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a61f56d9ff29ae21",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Single fixed workload: make_inputs() with seed 451, family=recurrence, t=512, d=32, a filled with decay=0.999 (float64 then rounded to float32), b = PCG64 normals*0.001 + 0.01 bias.\", \"Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; return all states (512x32 outputs).\", \"Reference: same recurrence evaluated in float64 on the same float32 inputs.\", \"Compliance: all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003, with N = 16384 elements.\", \"Reduced precision is explicitly permitted if budget is met; this is finite-workload compliance only, not general-input correctness.\"], \"kernel_model\": [\"_kernel runs one Triton program (grid (1,)) with a scalar loop over t=0..511 and vector lanes over d=0..31, so the recurrence is strictly sequential — no parallel-scan reordering issue.\", \"State h is float32; each step computes h = a*h + b in fp32, then forces h through fp16 round-trip (h.to(fp16).to(fp32)) before storing, injecting ~2^-11 relative rounding every timestep.\", \"run() reads shape from a, allocates out via empty_like(b), passes T and D as constexpr, and sets enable_fp_fusion=False (no fused multiply-add drift; error is purely the fp16 quantization).\", \"All intermediate and output tensors on this workload are small (b ~0.01 scale, h converges near b/(1-a) ≈ 10), well inside fp16 dynamic range, so no overflow/inf risk is expected from values alone.\"], \"risk_map\": [\"fp16 rounding of h at every one of 512 steps: accumulated rounding error grows like a random walk vs the fp64 reference — with effective steady state ~10 and fp16 ulp ~0.005-0.01, per-element error could accumulate to O(0.05-0.1), while the tolerance denominator max(||ref||_2, 0.001*128) ≈ ||ref||_2 ≈ sqrt(16384*~100) ≈ 1280, giving E budget ~3.84 absolute RMS; the key question is whether accumulated error stays within that.\", \"Note the denominator floor is 0.001*sqrt(N)=0.128 and ref norm is large, so E is likely dominated by relative comparison — Skeptic should compute both terms numerically rather than reason symbolically.\", \"Potential systematic bias: fp16 round-to-nearest is unbiased per step, but repeated rounding through a contraction (a=0.999) may or may not damp error; needs runtime evidence.\", \"Contiguity assumption: kernel indexes with flat t*D+d strides, assuming a, b contiguous row-major (make_inputs produces contiguous tensors, so low risk in scope).\"], \"scope_notes\": \"Only the single seeded workload (t=512, d=32, decay=0.999, noise=0.001, bias=0.01) is in scope; no other shapes, decays, or distributions count.\\\", \\\"Hardware/software pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; input generation on CPU NumPy 2.2.6 PCG64 rounded once to float32 before transfer.\\\", \\\"Verdict options are trust / reject / needs_more_evidence, judged on E <= 0.003 plus finiteness, not general correctness.\\\"]\", \"summary\": \"case_89: linear recurrence kernel (h[t]=a[t]*h[t-1]+b[t]) over t=512,d=32 with a=0.999 decay and b~0.01 bias; kernel runs one sequential Triton program that rounds h to float16 at every step. Compliance judged solely by relative L2 error E<=0.003 vs float64 reference on this exact workload.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790758721,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 971,
+    "prompt_tokens": 5681,
+    "total_tokens": 6652,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 1979,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

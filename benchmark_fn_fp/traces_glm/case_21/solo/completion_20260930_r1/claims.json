@@ -1,0 +1,64 @@
+[
+  {
+    "created_at": "2026-09-30T08:29:03Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:29:25Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "71098014120f5cca3e2339da2f60f4b372d1b5821457e2984b2fa9d68b689ea9"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "b74a8ca9f04ae3ded50e7cf15eba8b6b6948a9fe478e31535a33d2f5bc99d871"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 7.327347,
+          "exit_code": 0,
+          "expected_signal": "kernel output mismatches reference under non-identity block mapping",
+          "identity_mapping_correct": true,
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "max_abs_err": 4.337462425231934,
+          "mismatch_frac_non_identity": 1.0,
+          "stderr": "",
+          "stdout": "True\n{'max_abs_err': 4.337462425231934, 'mismatch_frac': 1.0}\nidentity_ok True\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "With a permuted (non-identity) block table over kv_cache[16,4,8], seq_len=13, the kernel output mismatches the contract reference on 100% of (seq,token) slots (max abs err 4.34), while an identity block mapping matches exactly \u2014 confirming the kernel ignores block_table indirection.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Source line 15 computes physical = seq*max_blocks+logical_block and never loads BlockTable, so the gather ignores the required paged indirection.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "result[s,t] = kv_cache[ block_table[s, t // page_size], t % page_size ]; block_table[s,b] is the PHYSICAL page holding logical block b, and the block table may map any sequence to any physical page (non-contiguous, interleaved)."
+      }
+    ],
+    "scope_rationale": "The contract requires result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size] with arbitrary (non-identity) block mappings allowed, so computing the physical page arithmetically without loading block_table violates the required indirection.",
+    "statement": "paged_gather ignores block_table: the physical page index is computed as seq*max_blocks+logical_block instead of block_table[seq, logical_block], producing wrong output for any non-identity block mapping.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:29:25Z"
+  }
+]

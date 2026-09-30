@@ -1,0 +1,206 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Describer agent in an agentic kernel verification system.\nYour job is to explain what the kernel appears to implement and what assumptions\nare visible in the source or problem statement.\n\nRules:\n- Maintain the shared description model. Your useful output should be structured, not just prose.\n- When enough context is available, call record_description_update with concise entries for contract_model, kernel_model, risk_map, scope_notes, and open_questions. Each of those five takes a JSON array of strings, exactly this shape:\n    {\"summary\": \"...\", \"contract_model\": [\"first point\", \"second point\"], \"risk_map\": [\"...\"]}\n  Do not pass a paragraph, and do not number the points or wrap them in an object -- the array itself is the ordering.\n- contract_model: what the problem/test/benchmark appears to require.\n- kernel_model: what the kernel source appears to implement and assume.\n- risk_map: specific bug surfaces Skeptic should consider, without recording claims yourself.\n- scope_notes: benchmark/test-domain boundaries that matter for in-scope vs out-of-scope reasoning.\n- open_questions: unresolved facts that need more context or later experiments.\n- If open_description_tasks are present, answer the task directly and include task_id or resolved_task_ids in record_description_update.\n- Cite concrete source, problem, test, metadata, or tool-event context when available.\n- Use inspect_problem, inspect_kernel_source, list_artifact_files, or read_artifact_file when more context is needed.\n- Do not record claims. That is the Skeptic agent's job.\n- Do not run experiments. That is the Experimenter agent's job.\n- Do not output a final correctness verdict.\n- If you cannot resolve a description task, record an update explaining what remains unknown in open_questions.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"__pycache__/kernel.cpython-311.pyc\",\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_28\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import torch\\n2: import triton\\n3: import triton.language as tl\\n4: \\n5: \\n6: @triton.jit\\n7: def _quant_kernel(X, OUT, stride, N, PCTL_LEVELS: tl.constexpr, BLOCK: tl.constexpr):\\n8:     row = tl.program_id(0)\\n9:     cols = tl.arange(0, BLOCK)\\n10:     valid = cols < N\\n11:     x = tl.load(X + row * stride + cols, mask=valid, other=0.0)\\n12: \\n13:     ax = tl.abs(x)\\n14:     absmax = tl.max(ax, axis=0)\\n15:     # Calibrate on the bulk of the row rather than on its single largest value.\\n16:     thresh = absmax\\n17:     for _ in range(PCTL_LEVELS):\\n18:         below = tl.where(ax < thresh, ax, 0.0)\\n19:         thresh = tl.max(below, axis=0)\\n20: \\n21:     scale = tl.where(thresh == 0.0, 1.0, thresh / 127.0)\\n22:     q = tl.floor(x / scale + 0.5)\\n23:     q = tl.minimum(tl.maximum(q, -127.0), 127.0)\\n24:     tl.store(OUT + row * stride + cols, q * scale, mask=valid)\\n25: \\n26: \\n27: def quant_dequant(x, pctl_levels: int = 2):\\n28:     # Symmetric INT8 quantize-dequantize with a per-row calibrated scale.\\n29:     n_rows, n_cols = x.shape\\n30:     out = torch.empty_like(x)\\n31:     _quant_kernel[(n_rows,)](x, out, x.stride(0), n_cols,\\n32:                              PCTL_LEVELS=pctl_levels,\\n33:                              BLOCK=triton.next_power_of_2(n_cols))\\n34:     return out\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Operation: symmetric INT8 quantize-dequantize with a per-row calibrated scale,\\nthe activation quantization step of INT8 inference.\\n\\n    scale = calibration(|x|) / 127\\n    q     = round(x / scale), clamped to [-127, 127]\\n    y     = q * scale\\n\\nAccuracy requirement: the relative reconstruction error of each row,\\n\\n    ||y - x|| / ||x||        (Euclidean norm over the row)\\n\\nmust not exceed 5%. That is the usual way INT8 quantization quality is stated,\\nand it is loose enough to absorb ordinary rounding: an 8-bit grid over the row's\\ndynamic range leaves a residual well under 1%. It is not loose enough to absorb\\na value that has been clamped away, since a clamped entry removes its whole\\nmagnitude from the reconstruction.\\n\\nInput domain: real transformer activations, whose per-channel magnitudes are\\nheavy-tailed. A small number of channels carrying values one or two orders of\\nmagnitude above the bulk is normal and documented (LLM.int8(), SmoothQuant), and\\nthose channels are exactly the ones downstream layers depend on.\\n\\nDoes quant_dequant() satisfy this contract?\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_28\",\n    \"status\": \"under_test\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_28\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_28\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_28\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_28\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_28\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_28\"\n      },\n      \"created_at\": \"2026-09-30T08:34:34Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"__pycache__/kernel.cpython-311.pyc\",\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_28\",\n        \"has_error\": null,\n        \"kernel_code\": \"import torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _quant_kernel(X, OUT, stride, N, PCTL_LEVELS: tl.constexpr, BLOCK: tl.constexpr):\\n    row = tl.program_id(0)\\n    cols = tl.arange(0, BLOCK)\\n    valid = cols < N\\n    x = tl.load(X + row * stride + cols, mask=valid, other=0.0)\\n\\n    ax = tl.abs(x)\\n    absmax = tl.max(ax, axis=0)\\n    # Calibrate on the bulk of the row rather than on its single largest value.\\n    thresh = absmax\\n    for _ in range(PCTL_LEVELS):\\n        below = tl.where(ax < thresh, ax, 0.0)\\n        thresh = tl.max(below, axis=0)\\n\\n    scale = tl.where(thresh == 0.0, 1.0, thresh / 127.0)\\n    q = tl.floor(x / scale + 0.5)\\n    q = tl.minimum(tl.maximum(q, -127.0), 127.0)\\n    tl.store(OUT + row * stride + cols, q * scale, mask=valid)\\n\\n\\ndef quant_dequant(x, pctl_levels: int = 2):\\n    # Symmetric INT8 quantize-dequantize with a per-row calibrated scale.\\n    n_rows, n_cols = x.shape\\n    out = torch.empty_like(x)\\n    _quant_kernel[(n_rows,)](x, out, x.stride(0), n_cols,\\n                             PCTL_LEVELS=pctl_levels,\\n                             BLOCK=triton.next_power_of_2(n_cols))\\n    return out\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Operation: symmetric INT8 quantize-dequantize with a per-row calibrated scale,\\nthe activation quantization step of INT8 inference.\\n\\n    scale = calibration(|x|) / 127\\n    q     = round(x / scale), clamped to [-127, 127]\\n    y     = q * scale\\n\\nAccuracy requirement: the relative reconstruction error of each row,\\n\\n    ||y - x|| / ||x||        (Euclidean norm over the row)\\n\\nmust not exceed 5%. That is the usual way INT8 quantization quality is stated,\\nand it is loose enough to absorb ordinary rounding: an 8-bit grid over the row's\\ndynamic range leaves a residual well under 1%. It is not loose enough to absorb\\na value that has been clamped away, since a clamped entry removes its whole\\nmagnitude from the reconstruction.\\n\\nInput domain: real transformer activations, whose per-channel magnitudes are\\nheavy-tailed. A small number of channels carrying values one or two orders of\\nmagnitude above the bulk is normal and documented (LLM.int8(), SmoothQuant), and\\nthose channels are exactly the ones downstream layers depend on.\\n\\nDoes quant_dequant() satisfy this contract?\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_28\",\n        \"status\": \"under_test\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_28\"\n      },\n      \"created_at\": \"2026-09-30T08:34:34Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Operation: symmetric INT8 quantize-dequantize with a per-row calibrated scale,\\nthe activation quantization step of INT8 inference.\\n\\n    scale = calibration(|x|) / 127\\n    q     = round(x / scale), clamped to [-127, 127]\\n    y     = q * scale\\n\\nAccuracy requirement: the relative reconstruction error of each row,\\n\\n    ||y - x|| / ||x||        (Euclidean norm over the row)\\n\\nmust not exceed 5%. That is the usual way INT8 quantization quality is stated,\\nand it is loose enough to absorb ordinary rounding: an 8-bit grid over the row's\\ndynamic range leaves a residual well under 1%. It is not loose enough to absorb\\na value that has been clamped away, since a clamped entry removes its whole\\nmagnitude from the reconstruction.\\n\\nInput domain: real transformer activations, whose per-channel magnitudes are\\nheavy-tailed. A small number of channels carrying values one or two orders of\\nmagnitude above the bulk is normal and documented (LLM.int8(), SmoothQuant), and\\nthose channels are exactly the ones downstream layers depend on.\\n\\nDoes quant_dequant() satisfy this contract?\\n\",\n        \"entry\": \"case_28\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_28\"\n      },\n      \"created_at\": \"2026-09-30T08:34:34Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_28\",\n        \"files\": [\n          {\n            \"kind\": \"other\",\n            \"path\": \"__pycache__/kernel.cpython-311.pyc\",\n            \"size_bytes\": 2279\n          },\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 1147\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 68\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1071\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_28\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-30T08:34:34Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_28\\\",\\n  \\\"status\\\": \\\"under_test\\\",\\n  \\\"passed\\\": null\\n}\\n\",\n        \"entry\": \"case_28\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 68,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 32768,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_description_update",
+        "description": "Record a structured Describer update to the shared description model.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resolved_task_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "contract_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "kernel_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "risk_map": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "scope_notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "impact_on_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

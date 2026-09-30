@@ -88,6 +88,21 @@ def test_exhaustion_abstention_and_unknown_price_are_not_wrong_or_free(tmp_path)
         assert group["unpriced"] == 1
 
 
+def test_dated_price_snapshot_does_not_reprice_historical_trials(tmp_path):
+    reader = _reader()
+    model = "accounts/fireworks/models/glm-5p3"
+    old = _single(tmp_path, provider="fireworks", model=model, trial="legacy")
+    new = _single(tmp_path, provider="fireworks", model=model, trial="completion")
+    new["metadata"]["pricing_snapshot"] = {
+        "input_per_million": 1.4, "output_per_million": 4.4,
+        "checked_at": "2026-09-30"}
+    report = reader.build_report(records=[old, new], benchmark_dir=tmp_path,
+                                 labels={"benchmark_fn_fp": {"case_a": "trust"}})
+    costs = {group["trial"]: group["usd"] for group in report["arms"].values()}
+    assert costs["legacy"] == pytest.approx(0.00248)
+    assert costs["completion"] == pytest.approx(0.0102)
+
+
 def test_reads_legacy_flat_usage_and_raw_provider_fallback(tmp_path):
     reader = _reader()
     profile = reader.profile_for("accounts/fireworks/models/glm-5p3")

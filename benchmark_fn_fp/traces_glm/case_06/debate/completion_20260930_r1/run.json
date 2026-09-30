@@ -1,0 +1,1893 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_06",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n_QUANT_STEP = 5e-3  # coarse quantization grid for the compressed recurrent state\n\n\n@triton.jit\ndef _state_passing_fwd_kernel(\n    states_ptr, out_ptr, final_states_ptr, dA_cs_ptr,\n    dim, nchunks,\n    stride_states_chunk, stride_states_dim,\n    stride_out_chunk, stride_out_dim,\n    stride_final_dim,\n    stride_dA_cs_chunk,\n    QUANT_STEP: tl.constexpr,\n    BLOCK_SIZE: tl.constexpr,\n):\n    offs_m = tl.arange(0, BLOCK_SIZE)\n    states_ptrs = states_ptr + offs_m * stride_states_dim\n    out_ptrs = out_ptr + offs_m * stride_out_dim\n    final_states_ptrs = final_states_ptr + offs_m * stride_final_dim\n\n    states = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)\n    tl.store(out_ptrs, states, mask=offs_m < dim)\n    out_ptrs += stride_out_chunk\n    for c in range(nchunks):\n        new_states = tl.load(states_ptrs, mask=offs_m < dim, other=0.0).to(tl.float32)\n        dA_cs = tl.load(dA_cs_ptr).to(tl.float32)\n        scale = tl.exp(dA_cs)\n        states = scale * states + new_states  # real mamba recurrence\n        states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP\n        if c < nchunks - 1:\n            tl.store(out_ptrs, states, mask=offs_m < dim)\n        else:\n            tl.store(final_states_ptrs, states, mask=offs_m < dim)\n        states_ptrs += stride_states_chunk\n        dA_cs_ptr += stride_dA_cs_chunk\n        out_ptrs += stride_out_chunk\n\n\ndef state_passing_lowbit(new_states: torch.Tensor, dA_cs: torch.Tensor) -> torch.Tensor:\n    nchunks, dim = new_states.shape\n    out = torch.empty(nchunks, dim, device=new_states.device, dtype=torch.float32)\n    final_states = torch.empty(dim, device=new_states.device, dtype=torch.float32)\n    BLOCK_SIZE = triton.next_power_of_2(dim)\n    _state_passing_fwd_kernel[(1,)](\n        new_states, out, final_states, dA_cs,\n        dim, nchunks,\n        new_states.stride(0), new_states.stride(1),\n        out.stride(0), out.stride(1),\n        final_states.stride(0),\n        dA_cs.stride(0),\n        QUANT_STEP=_QUANT_STEP, BLOCK_SIZE=BLOCK_SIZE,\n    )\n    return final_states\n",
+    "passed": null,
+    "problem_text": "Operation: the chunked state-passing recurrence of Mamba2/SSD\n(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).\n\nGiven per-chunk local states `new_states[c]` and per-chunk cumulative\nlog-decays `dA_cs[c]`, the kernel must carry the recurrent state across chunks\nexactly:\n\n    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1\n\nstarting from state = 0, and return the final state after the last chunk.\n\nThe recurrence is exact: it introduces no approximation of its own beyond\nordinary floating-point arithmetic, at any sequence length.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_06",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:17:22Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:17:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6c97042f5ec33aec6db4013fc94cc3900e549c694910ae588b7783bee0a9e5a3"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "a80a4cdee80bd03cc945be8a7e1445c959d1b36a96bd683def7bfdc004c8255e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "9ab8d609aaf04479812b462050050e1a7bb768edba0374b51a914216a0e7fdcd"
+              }
+            ],
+            "duration_s": 5.33958,
+            "exit_code": 0,
+            "expected_signal": "final state deviates from exact FP reference by up to ~2.5e-3 per chunk, error growing with nchunks",
+            "json_parse_error": null,
+            "json_result": {
+              "nchunks256_dim8": {
+                "dim": 8,
+                "max_abs_err": 0.00567057728767395,
+                "max_rel_err": 0.042213961482048035,
+                "mean_abs_err": 0.0035548917949199677,
+                "n_chunks": 256,
+                "on_grid_frac": 1.0
+              },
+              "nchunks64_dim32": {
+                "dim": 32,
+                "max_abs_err": 0.020241260528564453,
+                "max_rel_err": 0.04379585012793541,
+                "mean_abs_err": 0.006441847421228886,
+                "n_chunks": 64,
+                "on_grid_frac": 1.0
+              },
+              "nchunks8_dim16": {
+                "dim": 16,
+                "max_abs_err": 0.004717707633972168,
+                "max_rel_err": 0.015723776072263718,
+                "mean_abs_err": 0.00233918777666986,
+                "n_chunks": 8,
+                "on_grid_frac": 1.0
+              }
+            },
+            "max_abs_err_256c": 0.00567057728767395,
+            "max_abs_err_64c": 0.020241260528564453,
+            "max_abs_err_8c": 0.004717707633972168,
+            "max_rel_err_64c": 0.04379585012793541,
+            "on_grid_frac": 1.0,
+            "quant_step": 0.005,
+            "stderr": "",
+            "stdout": "{\"nchunks8_dim16\": {\"max_abs_err\": 0.004717707633972168, \"mean_abs_err\": 0.00233918777666986, \"max_rel_err\": 0.015723776072263718, \"n_chunks\": 8, \"dim\": 16, \"on_grid_frac\": 1.0}, \"nchunks64_dim32\": {\"max_abs_err\": 0.020241260528564453, \"mean_abs_err\": 0.006441847421228886, \"max_rel_err\": 0.04379585012793541, \"n_chunks\": 64, \"dim\": 32, \"on_grid_frac\": 1.0}, \"nchunks256_dim8\": {\"max_abs_err\": 0.00567057728767395, \"mean_abs_err\": 0.0035548917949199677, \"max_rel_err\": 0.042213961482048035, \"n_chunks\": 256, \"dim\": 8, \"on_grid_frac\": 1.0}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Final state deviates from exact FP reference for generic random inputs at all tested sequence lengths: max abs err 4.7e-3 at 8 chunks, 2.0e-2 at 64 chunks, 5.7e-3 at 256 chunks; outputs are exactly on the 5e-3 grid (on_grid_frac=1.0), confirming the round-to-grid quantization as the error source, with error far above FP rounding scale and growing with nchunks.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "Problem text says \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length,\" yet kernel lines 5 and 32 implement tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP after every chunk update, which is an approximation step, so the final state can deviate from the reference by up to 2.5e-3 per chunk (accumulating).",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\""
+        },
+        {
+          "source": "kernel.py line 32",
+          "summary": "states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP applied unconditionally after each chunk update, before the final-state store."
+        }
+      ],
+      "scope_rationale": "problem.txt requires exactness at any sequence length for any contract-admitted input (e.g. nchunks>=2, dim>=1, generic random values), so a nonzero grid-rounding error in the returned final state is a contract violation.",
+      "statement": "The kernel's unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence state <- exp(dA_cs[c])*state + new_states[c] whenever any chunk update produces a state value not already on the 5e-3 grid.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:17:59Z"
+    },
+    {
+      "created_at": "2026-09-30T08:17:22Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:17:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "76fa0ba7b9aa5675599acc76643483a783a644bbd0f1a26134765bb7e839bdc7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "b178cc5549dab4628a3c17bc2dce9d0460864edaf17c1d37dfa63d69573e20c1"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "bc21dc64a8a8fc22d54e765df96d4127b23987e4551002578364562a37056a86"
+              }
+            ],
+            "duration_s": 5.100973,
+            "exit_code": 0,
+            "expected_signal": "small-magnitude true states snap to 0.0, producing large (up to 100%) relative error",
+            "json_parse_error": null,
+            "json_result": {
+              "strong_decay": {
+                "kernel_final": [
+                  -0.6549999713897705,
+                  1.649999976158142,
+                  -0.6100000143051147,
+                  -0.5,
+                  1.25,
+                  -0.3100000023841858,
+                  0.03999999910593033,
+                  -0.06499999761581421
+                ],
+                "max_abs_err": 0.002222936600446701,
+                "max_rel_err": 0.052647609263658524,
+                "ref_final": [
+                  -0.6534335017204285,
+                  1.6494196653366089,
+                  -0.610783576965332,
+                  -0.5012956261634827,
+                  1.2486979961395264,
+                  -0.3115837872028351,
+                  0.04222293570637703,
+                  -0.06656432151794434
+                ],
+                "ref_max_abs": 1.6494196653366089
+              },
+              "tiny_new_states": {
+                "kernel_final": [
+                  0.0,
+                  0.0,
+                  0.004999999888241291,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "max_abs_err": 0.003461373969912529,
+                "max_rel_err": 2.249652862548828,
+                "ref_final": [
+                  -0.0001952950842678547,
+                  0.0009007854387164116,
+                  0.0015386258019134402,
+                  0.0011158442357555032,
+                  -0.0005514519289135933,
+                  -0.0003086308133788407,
+                  -0.002993066795170307,
+                  0.001024095923639834
+                ],
+                "ref_max_abs": 0.002993066795170307,
+                "zeros_in_kernel": 7,
+                "zeros_in_ref": 0
+              }
+            },
+            "kernel_final_example": [
+              0.0,
+              0.0,
+              0.004999999888241291,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "kernel_zeros": 7,
+            "max_rel_err_tiny": 2.249652862548828,
+            "ref_final_example": [
+              -0.000195,
+              0.000901,
+              0.001539,
+              0.001116,
+              -0.000551,
+              -0.000309,
+              -0.002993,
+              0.001024
+            ],
+            "ref_max_abs": 0.002993066795170307,
+            "ref_zeros": 0,
+            "stderr": "",
+            "stdout": "{\"tiny_new_states\": {\"kernel_final\": [0.0, 0.0, 0.004999999888241291, 0.0, 0.0, 0.0, 0.0, 0.0], \"ref_final\": [-0.0001952950842678547, 0.0009007854387164116, 0.0015386258019134402, 0.0011158442357555032, -0.0005514519289135933, -0.0003086308133788407, -0.002993066795170307, 0.001024095923639834], \"zeros_in_kernel\": 7, \"zeros_in_ref\": 0, \"max_abs_err\": 0.003461373969912529, \"max_rel_err\": 2.249652862548828, \"ref_max_abs\": 0.002993066795170307}, \"strong_decay\": {\"kernel_final\": [-0.6549999713897705, 1.649999976158142, -0.6100000143051147, -0.5, 1.25, -0.3100000023841858, 0.03999999910593033, -0.06499999761581421], \"ref_final\": [-0.6534335017204285, 1.6494196653366089, -0.610783576965332, -0.5012956261634827, 1.2486979961395264, -0.3115837872028351, 0.04222293570637703, -0.06656432151794434], \"max_abs_err\": 0.002222936600446701, \"max_rel_err\": 0.052647609263658524, \"ref_max_abs\": 1.6494196653366089}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Flush-to-zero confirmed: with tiny new_states (ref final magnitudes ~3e-4 to 3e-3), kernel output is 0.0 for 7 of 8 lanes while the exact reference has no zeros (max_rel_err 2.25, i.e. 225% relative error); remaining lane snapped to 0.005, also off the exact value. This is a snap-to-zero of true sub-half-grid states.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "The fixed absolute grid step means tiny (contract-admissible) state magnitudes get snapped to 0, a relative error of up to 100% in the final state; this is the flush-to-zero tail of the same quantization bug and may not show up in large-magnitude random probes.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Exact recurrence with no approximation at any sequence length; no restriction is placed on state magnitudes, so small-magnitude states are contract-admitted."
+        }
+      ],
+      "scope_rationale": "Inputs that decay the state toward zero (e.g. strongly negative dA_cs) are ordinary contract inputs; the problem demands exactness there too, and relative error of the final state is unbounded.",
+      "statement": "For contract-admitted inputs where the true carried state magnitude is below 2.5e-3 at any chunk (e.g. small new_states or strongly decaying dA_cs), the kernel's floor-based quantization snaps the state to 0.0, producing up to 100% relative error in the returned final state even for short sequences.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:17:59Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Contract: exact chunked state-passing recurrence state <- exp(dA_cs[c]) * state + new_states[c], state initialized to 0, c = 0..nchunks-1, returning the final state after the last chunk (problem.txt).",
+      "The recurrence must be exact at any sequence length: no approximation beyond ordinary floating-point arithmetic is allowed.",
+      "Output of interest is the final state (dim vector); per-chunk intermediate `out` is written but the wrapper returns only final_states.",
+      "Reference is the upstream mamba_ssm ssd_state_passing kernel semantics, i.e. plain FP arithmetic."
+    ],
+    "kernel_model": [
+      "Kernel is a single-block sequential Triton loop over chunks (lines 27-39), single program (grid (1,)) over BLOCK_SIZE = next_power_of_2(dim) lanes, masked to dim.",
+      "It computes the correct recurrence (line 31: scale*states + new_states) but then rounds the state to a 5e-3 grid: tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP (line 32), with QUANT_STEP=5e-3 (line 5).",
+      "Quantization is unconditional at every chunk, including before the final-state store (line 36), so accumulated error grows with nchunks.",
+      "Inputs are upcast to fp32; dA_cs is loaded per chunk as a scalar (line 29); the first `out` row is initialized to zeros (lines 24-25).",
+      "The wrapper state_passing_lowbit allocates out and final_states, launches with (1,) grid, returns final_states only (lines 42-56)."
+    ],
+    "open_questions": [
+      "Do the hidden tests exercise long sequences (large nchunks) or tolerance thresholds loose enough to mask the 2.5e-3 per-step rounding error?",
+      "Is dA_cs guaranteed 1-D with stride given as stride(0), i.e. per-chunk scalars? Problem statement implies per-chunk log-decays, consistent.",
+      "Are dim values assumed small enough that a single program handles all lanes (BLOCK_SIZE covers dim)?"
+    ],
+    "risk_map": [
+      "Unconditional round-to-grid quantization (kernel lines 5, 32) violates the exact-recurrence contract; error up to QUANT_STEP/2 per chunk and accumulates over nchunks \u2014 primary bug surface.",
+      "Quantization error can be hidden by small nchunks or near-grid values, so benign short-sequence probes may pass while long sequences fail (adversarial-precision concern).",
+      "Scale-free floor semantics: states can quantize to 0 for small magnitudes (< 2.5e-3) regardless of true values; flush-to-zero behavior differs from FP reference.",
+      "Final state is stored after quantization at the last chunk (lines 32-36), so the returned value carries the quantization error, not just intermediates.",
+      "Single-block sequential design: correct only if tests treat nchunks/dim as given; no correctness risk per se but limits scope to single-batch 2D (nchunks, dim) inputs."
+    ],
+    "scope_notes": [
+      "In scope: numerical fidelity of the carried state at any sequence length, since the problem explicitly demands exactness.\", \"Function name state_passing_lowbit and _QUANT_STEP suggest a lowbit variant, but the problem text is the operative contract: no approximation is allowed.\", \"Inputs assumed 2D (nchunks, dim) contiguous or strided per given strides; dA_cs is 1D (nchunks,).\", \"Only the returned final_states matter per the wrapper API; intermediate out rows are dead output for testing purposes unless tests inspect them.\"]"
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Contract: exact chunked state-passing recurrence state <- exp(dA_cs[c]) * state + new_states[c], state initialized to 0, c = 0..nchunks-1, returning the final state after the last chunk (problem.txt).",
+        "The recurrence must be exact at any sequence length: no approximation beyond ordinary floating-point arithmetic is allowed.",
+        "Output of interest is the final state (dim vector); per-chunk intermediate `out` is written but the wrapper returns only final_states.",
+        "Reference is the upstream mamba_ssm ssd_state_passing kernel semantics, i.e. plain FP arithmetic."
+      ],
+      "created_at": "2026-09-30T08:17:09Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Kernel is a single-block sequential Triton loop over chunks (lines 27-39), single program (grid (1,)) over BLOCK_SIZE = next_power_of_2(dim) lanes, masked to dim.",
+        "It computes the correct recurrence (line 31: scale*states + new_states) but then rounds the state to a 5e-3 grid: tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP (line 32), with QUANT_STEP=5e-3 (line 5).",
+        "Quantization is unconditional at every chunk, including before the final-state store (line 36), so accumulated error grows with nchunks.",
+        "Inputs are upcast to fp32; dA_cs is loaded per chunk as a scalar (line 29); the first `out` row is initialized to zeros (lines 24-25).",
+        "The wrapper state_passing_lowbit allocates out and final_states, launches with (1,) grid, returns final_states only (lines 42-56)."
+      ],
+      "open_questions": [
+        "Do the hidden tests exercise long sequences (large nchunks) or tolerance thresholds loose enough to mask the 2.5e-3 per-step rounding error?",
+        "Is dA_cs guaranteed 1-D with stride given as stride(0), i.e. per-chunk scalars? Problem statement implies per-chunk log-decays, consistent.",
+        "Are dim values assumed small enough that a single program handles all lanes (BLOCK_SIZE covers dim)?"
+      ],
+      "risk_map": [
+        "Unconditional round-to-grid quantization (kernel lines 5, 32) violates the exact-recurrence contract; error up to QUANT_STEP/2 per chunk and accumulates over nchunks \u2014 primary bug surface.",
+        "Quantization error can be hidden by small nchunks or near-grid values, so benign short-sequence probes may pass while long sequences fail (adversarial-precision concern).",
+        "Scale-free floor semantics: states can quantize to 0 for small magnitudes (< 2.5e-3) regardless of true values; flush-to-zero behavior differs from FP reference.",
+        "Final state is stored after quantization at the last chunk (lines 32-36), so the returned value carries the quantization error, not just intermediates.",
+        "Single-block sequential design: correct only if tests treat nchunks/dim as given; no correctness risk per se but limits scope to single-batch 2D (nchunks, dim) inputs."
+      ],
+      "scope_notes": [
+        "In scope: numerical fidelity of the carried state at any sequence length, since the problem explicitly demands exactness.\", \"Function name state_passing_lowbit and _QUANT_STEP suggest a lowbit variant, but the problem text is the operative contract: no approximation is allowed.\", \"Inputs assumed 2D (nchunks, dim) contiguous or strided per given strides; dA_cs is 1D (nchunks,).\", \"Only the returned final_states matter per the wrapper API; intermediate out rows are dead output for testing purposes unless tests inspect them.\"]"
+      ],
+      "summary": "Described case_06: contract requires an exact state-passing recurrence; kernel implements the correct recurrence but injects an unconditional 5e-3 round-to-grid quantization at every chunk, directly contradicting the 'exact, no approximation' contract.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_06",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_06"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_06"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_06"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_06",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 18.571395835999994,
+      "role": "describer",
+      "round": 2,
+      "text": "The kernel matches the correct recurrence structure but adds an unconditional round-to-grid quantization (step 5e-3) after every chunk update, which the problem statement explicitly forbids (\"the recurrence is exact\"). Recording the description model now.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Contract: exact chunked state-passing recurrence state <- exp(dA_cs[c]) * state + new_states[c], state initialized to 0, c = 0..nchunks-1, returning the final state after the last chunk (problem.txt).",
+              "The recurrence must be exact at any sequence length: no approximation beyond ordinary floating-point arithmetic is allowed.",
+              "Output of interest is the final state (dim vector); per-chunk intermediate `out` is written but the wrapper returns only final_states.",
+              "Reference is the upstream mamba_ssm ssd_state_passing kernel semantics, i.e. plain FP arithmetic."
+            ],
+            "kernel_model": [
+              "Kernel is a single-block sequential Triton loop over chunks (lines 27-39), single program (grid (1,)) over BLOCK_SIZE = next_power_of_2(dim) lanes, masked to dim.",
+              "It computes the correct recurrence (line 31: scale*states + new_states) but then rounds the state to a 5e-3 grid: tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP (line 32), with QUANT_STEP=5e-3 (line 5).",
+              "Quantization is unconditional at every chunk, including before the final-state store (line 36), so accumulated error grows with nchunks.",
+              "Inputs are upcast to fp32; dA_cs is loaded per chunk as a scalar (line 29); the first `out` row is initialized to zeros (lines 24-25).",
+              "The wrapper state_passing_lowbit allocates out and final_states, launches with (1,) grid, returns final_states only (lines 42-56)."
+            ],
+            "open_questions": [
+              "Do the hidden tests exercise long sequences (large nchunks) or tolerance thresholds loose enough to mask the 2.5e-3 per-step rounding error?",
+              "Is dA_cs guaranteed 1-D with stride given as stride(0), i.e. per-chunk scalars? Problem statement implies per-chunk log-decays, consistent.",
+              "Are dim values assumed small enough that a single program handles all lanes (BLOCK_SIZE covers dim)?"
+            ],
+            "risk_map": [
+              "Unconditional round-to-grid quantization (kernel lines 5, 32) violates the exact-recurrence contract; error up to QUANT_STEP/2 per chunk and accumulates over nchunks \u2014 primary bug surface.",
+              "Quantization error can be hidden by small nchunks or near-grid values, so benign short-sequence probes may pass while long sequences fail (adversarial-precision concern).",
+              "Scale-free floor semantics: states can quantize to 0 for small magnitudes (< 2.5e-3) regardless of true values; flush-to-zero behavior differs from FP reference.",
+              "Final state is stored after quantization at the last chunk (lines 32-36), so the returned value carries the quantization error, not just intermediates.",
+              "Single-block sequential design: correct only if tests treat nchunks/dim as given; no correctness risk per se but limits scope to single-batch 2D (nchunks, dim) inputs."
+            ],
+            "scope_notes": "In scope: numerical fidelity of the carried state at any sequence length, since the problem explicitly demands exactness.\", \"Function name state_passing_lowbit and _QUANT_STEP suggest a lowbit variant, but the problem text is the operative contract: no approximation is allowed.\", \"Inputs assumed 2D (nchunks, dim) contiguous or strided per given strides; dA_cs is 1D (nchunks,).\", \"Only the returned final_states matter per the wrapper API; intermediate out rows are dead output for testing purposes unless tests inspect them.\"]",
+            "summary": "Described case_06: contract requires an exact state-passing recurrence; kernel implements the correct recurrence but injects an unconditional 5e-3 round-to-grid quantization at every chunk, directly contradicting the 'exact, no approximation' contract."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.571,
+        "input_tokens": 4842,
+        "output_tokens": 906
+      }
+    },
+    {
+      "duration_s": 12.292011833000004,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The contract explicitly requires an exact recurrence, while the kernel quantizes the state to a 5e-3 grid after every chunk. Recording the primary bug hypothesis plus the small-magnitude flush case.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Problem text says \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length,\" yet kernel lines 5 and 32 implement tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP after every chunk update, which is an approximation step, so the final state can deviate from the reference by up to 2.5e-3 per chunk (accumulating).",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\""
+              },
+              {
+                "source": "kernel.py line 32",
+                "summary": "states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP applied unconditionally after each chunk update, before the final-state store."
+              }
+            ],
+            "scope_rationale": "problem.txt requires exactness at any sequence length for any contract-admitted input (e.g. nchunks>=2, dim>=1, generic random values), so a nonzero grid-rounding error in the returned final state is a contract violation.",
+            "statement": "The kernel's unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence state <- exp(dA_cs[c])*state + new_states[c] whenever any chunk update produces a state value not already on the 5e-3 grid."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The fixed absolute grid step means tiny (contract-admissible) state magnitudes get snapped to 0, a relative error of up to 100% in the final state; this is the flush-to-zero tail of the same quantization bug and may not show up in large-magnitude random probes.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Exact recurrence with no approximation at any sequence length; no restriction is placed on state magnitudes, so small-magnitude states are contract-admitted."
+              }
+            ],
+            "scope_rationale": "Inputs that decay the state toward zero (e.g. strongly negative dA_cs) are ordinary contract inputs; the problem demands exactness there too, and relative error of the final state is unbounded.",
+            "statement": "For contract-admitted inputs where the true carried state magnitude is below 2.5e-3 at any chunk (e.g. small new_states or strongly decaying dA_cs), the kernel's floor-based quantization snaps the state to 0.0, producing up to 100% relative error in the returned final state even for short sequences."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.292,
+        "input_tokens": 11904,
+        "output_tokens": 658
+      }
+    },
+    {
+      "duration_s": 15.228625439000012,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'll run two independent runtime probes: c1 with generic random inputs (moderate/long sequences) to measure accumulated quantization error in the final state, and c2 with small-magnitude inputs to test flush-to-zero. Both compare against a plain FP reference recurrence.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_06/kernel.py\")\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\n\ntorch.manual_seed(0)\nresults = {}\nfor nchunks, dim in [(8, 16), (64, 32), (256, 8)]:\n    new_states = torch.randn(nchunks, dim, device=\"cuda\", dtype=torch.float32)\n    dA_cs = torch.randn(nchunks, device=\"cuda\", dtype=torch.float32) * 0.5 - 0.2\n    ref = torch.zeros(dim, device=\"cuda\", dtype=torch.float32)\n    for c in range(nchunks):\n        ref = torch.exp(dA_cs[c]) * ref + new_states[c]\n    out = mod.state_passing_lowbit(new_states, dA_cs)\n    err = (out - ref).abs()\n    rel = (err / ref.abs().clamp_min(1e-12))\n    results[f\"nchunks{nchunks}_dim{dim}\"] = {\n        \"max_abs_err\": float(err.max()),\n        \"mean_abs_err\": float(err.mean()),\n        \"max_rel_err\": float(rel.max()),\n        \"n_chunks\": nchunks, \"dim\": dim,\n        \"on_grid_frac\": float(((out / 5e-3).round() - out / 5e-3).abs().max() < 1e-3),\n    }\nprint(json.dumps(results))",
+            "expected_signal": "final state deviates from exact FP reference by up to ~2.5e-3 per chunk, error growing with nchunks"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_06/kernel.py\")\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\n\ntorch.manual_seed(1)\nresults = {}\n# Case A: tiny new_states (magnitude < 2.5e-3)\nnchunks, dim = 4, 8\nnew_states = torch.randn(nchunks, dim, device=\"cuda\", dtype=torch.float32) * 1e-3\ndA_cs = -torch.ones(nchunks, device=\"cuda\", dtype=torch.float32) * 0.5\nref = torch.zeros(dim, device=\"cuda\", dtype=torch.float32)\nfor c in range(nchunks):\n    ref = torch.exp(dA_cs[c]) * ref + new_states[c]\nout = mod.state_passing_lowbit(new_states, dA_cs)\nrel = ((out - ref).abs() / ref.abs().clamp_min(1e-12))\nresults[\"tiny_new_states\"] = {\n    \"kernel_final\": out.tolist(), \"ref_final\": ref.tolist(),\n    \"zeros_in_kernel\": int((out == 0).sum()), \"zeros_in_ref\": int((ref == 0).sum()),\n    \"max_abs_err\": float((out - ref).abs().max()),\n    \"max_rel_err\": float(rel.max()), \"ref_max_abs\": float(ref.abs().max()),\n}\n# Case B: strong decay\nnchunks, dim = 3, 8\nnew_states = torch.randn(nchunks, dim, device=\"cuda\", dtype=torch.float32)\ndA_cs = -torch.full((nchunks,), 5.0, device=\"cuda\", dtype=torch.float32)\nref = torch.zeros(dim, device=\"cuda\", dtype=torch.float32)\nfor c in range(nchunks):\n    ref = torch.exp(dA_cs[c]) * ref + new_states[c]\nout = mod.state_passing_lowbit(new_states, dA_cs)\nrel = ((out - ref).abs() / ref.abs().clamp_min(1e-12))\nresults[\"strong_decay\"] = {\n    \"kernel_final\": out.tolist(), \"ref_final\": ref.tolist(),\n    \"max_abs_err\": float((out - ref).abs().max()),\n    \"max_rel_err\": float(rel.max()), \"ref_max_abs\": float(ref.abs().max()),\n}\nprint(json.dumps(results))",
+            "expected_signal": "small-magnitude true states snap to 0.0, producing large (up to 100%) relative error"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.229,
+        "input_tokens": 15090,
+        "output_tokens": 1013
+      }
+    },
+    {
+      "duration_s": 11.992768567999974,
+      "role": "experimenter",
+      "round": 5,
+      "text": "Both probes succeeded and clearly confirm the claims: quantization error up to 2.02e-2 at 64 chunks, and flush-to-zero with 7/8 zeros and 225% relative error in the tiny-magnitude case. Finalizing both evidence entries now.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "max_abs_err_256c": 0.00567057728767395,
+              "max_abs_err_64c": 0.020241260528564453,
+              "max_abs_err_8c": 0.004717707633972168,
+              "max_rel_err_64c": 0.04379585012793541,
+              "on_grid_frac": 1.0,
+              "quant_step": 0.005
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "Final state deviates from exact FP reference for generic random inputs at all tested sequence lengths: max abs err 4.7e-3 at 8 chunks, 2.0e-2 at 64 chunks, 5.7e-3 at 256 chunks; outputs are exactly on the 5e-3 grid (on_grid_frac=1.0), confirming the round-to-grid quantization as the error source, with error far above FP rounding scale and growing with nchunks.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "kernel_final_example": [
+                0.0,
+                0.0,
+                0.004999999888241291,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "kernel_zeros": 7,
+              "max_rel_err_tiny": 2.249652862548828,
+              "ref_final_example": [
+                -0.000195,
+                0.000901,
+                0.001539,
+                0.001116,
+                -0.000551,
+                -0.000309,
+                -0.002993,
+                0.001024
+              ],
+              "ref_max_abs": 0.002993066795170307,
+              "ref_zeros": 0
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "Flush-to-zero confirmed: with tiny new_states (ref final magnitudes ~3e-4 to 3e-3), kernel output is 0.0 for 7 of 8 lanes while the exact reference has no zeros (max_rel_err 2.25, i.e. 225% relative error); remaining lane snapped to 0.005, also off the exact value. This is a snap-to-zero of true sub-half-grid states.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.993,
+        "input_tokens": 22974,
+        "output_tokens": 611
+      }
+    },
+    {
+      "duration_s": 6.9687480489999984,
+      "role": "skeptic",
+      "round": 6,
+      "text": "This is the final review turn. Both in-scope claims (c1: unconditional 5e-3 grid quantization deviating from the exact recurrence; c2: flush-to-zero of small-magnitude states) are confirmed with direct runtime evidence against the exact FP reference, and no new evidence exposes any uncovered problem. Recording no new claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: both confirmed in-scope claims (c1 grid-quantization deviation up to 2e-2 abs at 64 chunks, c2 flush-to-zero with 225% relative error) already cover the material contract violation of the 'exact recurrence' requirement; the new probe evidence confirms rather than contradicts them, and no additional testable in-scope problem is exposed.",
+            "reviewed_claims": [
+              "c1: unconditional round-to-grid quantization (QUANT_STEP=5e-3) makes the returned final state deviate from the exact recurrence",
+              "c2: small-magnitude true states (< 2.5e-3) snap to 0.0, producing up to 100%+ relative error in the final state"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.969,
+        "input_tokens": 34553,
+        "output_tokens": 257
+      }
+    },
+    {
+      "duration_s": 18.586116613,
+      "role": "judge",
+      "round": 7,
+      "text": "The evidence is decisive: the problem.txt contract explicitly requires an exact recurrence with \"no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length,\" yet the kernel applies an unconditional 5e-3 round-to-grid quantization at every chunk (lines 5, 32), including before the final-state store. Runtime probes confirm deviation up to 2.0e-2 absolute error at 64 chunks with all outputs snapped to the 5e-3 grid, and flush-to-zero of small-magnitude states (7/8 zeros, 225% relative error). No test.py/get_inputs narrow the domain, so problem.txt is the operative contract, and this quantization is not a declared low-precision format \u2014 it directly violates the explicit exactness clause.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1: unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence for generic random inputs at all tested sequence lengths (max abs err up to 2.0e-2 at 64 chunks, outputs exactly on the 5e-3 grid)",
+              "c2: small-magnitude true states (< 2.5e-3) snap to 0.0, producing up to 225% relative error in the returned final state (flush-to-zero)"
+            ],
+            "reason": "The operative contract (problem.txt; the artifact has no test.py/get_inputs) explicitly requires the state-passing recurrence to be exact: \"it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" The kernel implements the correct recurrence structure but unconditionally rounds the carried state to a 5e-3 grid (tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP, kernel.py lines 5, 32) at every chunk, including before the final-state store (line 36). Two confirmed in-scope runtime probes against a plain FP reference show this is a real contract violation, not a tolerance artifact: (c1) generic random inputs give final-state errors up to 4.7e-3 (8 chunks), 2.0e-2 (64 chunks), and 5.7e-3 (256 chunks), far above FP rounding scale, growing with nchunks, with outputs exactly on the 5e-3 grid; (c2) small-magnitude contract-admissible states flush to zero (7 of 8 lanes 0.0 vs a zero-free reference, 225% relative error). This quantization is not part of any declared low-precision output format in the contract, so it is not an accounted-for deviation; it is an approximation step the contract explicitly forbids. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.586,
+        "input_tokens": 35492,
+        "output_tokens": 634
+      }
+    },
+    {
+      "duration_s": 8.554032742000004,
+      "role": "judge",
+      "round": 8,
+      "text": "The prior verdict attempt failed only because decisive_claims must reference claim IDs, not full statements. Both claims are confirmed, in-scope, backed by probe evidence, and the Skeptic signed off with no new claims. I'll record the verdict using the claim IDs.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The operative contract (problem.txt; the artifact has no test.py/get_inputs) explicitly requires the state-passing recurrence to be exact: \"it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" The kernel implements the correct recurrence structure but unconditionally rounds the carried state to a 5e-3 grid (tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP, kernel.py lines 5, 32) at every chunk, including before the final-state store (line 36). Two confirmed in-scope runtime probes against a plain FP reference show this is a real contract violation, not a tolerance artifact: (c1) generic random inputs give final-state errors up to 4.7e-3 (8 chunks), 2.0e-2 (64 chunks), and 5.7e-3 (256 chunks), far above FP rounding scale, growing with nchunks, with outputs exactly on the 5e-3 grid; (c2) small-magnitude contract-admissible states flush to zero (7 of 8 lanes 0.0 vs a zero-free reference, 225% relative error). This quantization is not part of any declared low-precision output format in the contract, so it is not an accounted-for deviation; it is an approximation step the contract explicitly forbids. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.554,
+        "input_tokens": 35935,
+        "output_tokens": 424
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-30T08:18:06Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: both confirmed in-scope claims (c1 grid-quantization deviation up to 2e-2 abs at 64 chunks, c2 flush-to-zero with 225% relative error) already cover the material contract violation of the 'exact recurrence' requirement; the new probe evidence confirms rather than contradicts them, and no additional testable in-scope problem is exposed.",
+    "reviewed_claims": [
+      "c1: unconditional round-to-grid quantization (QUANT_STEP=5e-3) makes the returned final state deviate from the exact recurrence",
+      "c2: small-magnitude true states (< 2.5e-3) snap to 0.0, producing up to 100%+ relative error in the final state"
+    ],
+    "reviewed_tool_event_count": 11,
+    "tool_event_id": "t12",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_06"
+      },
+      "created_at": "2026-09-30T08:16:51Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_06",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n_QUANT_STEP = 5e-3  # coarse quantization grid for the compressed recurrent state\n\n\n@triton.jit\ndef _state_passing_fwd_kernel(\n    states_ptr, out_ptr, final_states_ptr, dA_cs_ptr,\n    dim, nchunks,\n    stride_states_chunk, stride_states_dim,\n    stride_out_chunk, stride_out_dim,\n    stride_final_dim,\n    stride_dA_cs_chunk,\n    QUANT_STEP: tl.constexpr,\n    BLOCK_SIZE: tl.constexpr,\n):\n    offs_m = tl.arange(0, BLOCK_SIZE)\n    states_ptrs = states_ptr + offs_m * stride_states_dim\n    out_ptrs = out_ptr + offs_m * stride_out_dim\n    final_states_ptrs = final_states_ptr + offs_m * stride_final_dim\n\n    states = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)\n    tl.store(out_ptrs, states, mask=offs_m < dim)\n    out_ptrs += stride_out_chunk\n    for c in range(nchunks):\n        new_states = tl.load(states_ptrs, mask=offs_m < dim, other=0.0).to(tl.float32)\n        dA_cs = tl.load(dA_cs_ptr).to(tl.float32)\n        scale = tl.exp(dA_cs)\n        states = scale * states + new_states  # real mamba recurrence\n        states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP\n        if c < nchunks - 1:\n            tl.store(out_ptrs, states, mask=offs_m < dim)\n        else:\n            tl.store(final_states_ptrs, states, mask=offs_m < dim)\n        states_ptrs += stride_states_chunk\n        dA_cs_ptr += stride_dA_cs_chunk\n        out_ptrs += stride_out_chunk\n\n\ndef state_passing_lowbit(new_states: torch.Tensor, dA_cs: torch.Tensor) -> torch.Tensor:\n    nchunks, dim = new_states.shape\n    out = torch.empty(nchunks, dim, device=new_states.device, dtype=torch.float32)\n    final_states = torch.empty(dim, device=new_states.device, dtype=torch.float32)\n    BLOCK_SIZE = triton.next_power_of_2(dim)\n    _state_passing_fwd_kernel[(1,)](\n        new_states, out, final_states, dA_cs,\n        dim, nchunks,\n        new_states.stride(0), new_states.stride(1),\n        out.stride(0), out.stride(1),\n        final_states.stride(0),\n        dA_cs.stride(0),\n        QUANT_STEP=_QUANT_STEP, BLOCK_SIZE=BLOCK_SIZE,\n    )\n    return final_states\n",
+        "passed": null,
+        "problem_text": "Operation: the chunked state-passing recurrence of Mamba2/SSD\n(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).\n\nGiven per-chunk local states `new_states[c]` and per-chunk cumulative\nlog-decays `dA_cs[c]`, the kernel must carry the recurrent state across chunks\nexactly:\n\n    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1\n\nstarting from state = 0, and return the final state after the last chunk.\n\nThe recurrence is exact: it introduces no approximation of its own beyond\nordinary floating-point arithmetic, at any sequence length.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_06",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_06"
+      },
+      "created_at": "2026-09-30T08:16:51Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: the chunked state-passing recurrence of Mamba2/SSD\n(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).\n\nGiven per-chunk local states `new_states[c]` and per-chunk cumulative\nlog-decays `dA_cs[c]`, the kernel must carry the recurrent state across chunks\nexactly:\n\n    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1\n\nstarting from state = 0, and return the final state after the last chunk.\n\nThe recurrence is exact: it introduces no approximation of its own beyond\nordinary floating-point arithmetic, at any sequence length.\n",
+        "entry": "case_06",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_06"
+      },
+      "created_at": "2026-09-30T08:16:51Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_06",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2094
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 603
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_06",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:16:51Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_06\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_06",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Contract: exact chunked state-passing recurrence state <- exp(dA_cs[c]) * state + new_states[c], state initialized to 0, c = 0..nchunks-1, returning the final state after the last chunk (problem.txt).",
+          "The recurrence must be exact at any sequence length: no approximation beyond ordinary floating-point arithmetic is allowed.",
+          "Output of interest is the final state (dim vector); per-chunk intermediate `out` is written but the wrapper returns only final_states.",
+          "Reference is the upstream mamba_ssm ssd_state_passing kernel semantics, i.e. plain FP arithmetic."
+        ],
+        "kernel_model": [
+          "Kernel is a single-block sequential Triton loop over chunks (lines 27-39), single program (grid (1,)) over BLOCK_SIZE = next_power_of_2(dim) lanes, masked to dim.",
+          "It computes the correct recurrence (line 31: scale*states + new_states) but then rounds the state to a 5e-3 grid: tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP (line 32), with QUANT_STEP=5e-3 (line 5).",
+          "Quantization is unconditional at every chunk, including before the final-state store (line 36), so accumulated error grows with nchunks.",
+          "Inputs are upcast to fp32; dA_cs is loaded per chunk as a scalar (line 29); the first `out` row is initialized to zeros (lines 24-25).",
+          "The wrapper state_passing_lowbit allocates out and final_states, launches with (1,) grid, returns final_states only (lines 42-56)."
+        ],
+        "open_questions": [
+          "Do the hidden tests exercise long sequences (large nchunks) or tolerance thresholds loose enough to mask the 2.5e-3 per-step rounding error?",
+          "Is dA_cs guaranteed 1-D with stride given as stride(0), i.e. per-chunk scalars? Problem statement implies per-chunk log-decays, consistent.",
+          "Are dim values assumed small enough that a single program handles all lanes (BLOCK_SIZE covers dim)?"
+        ],
+        "risk_map": [
+          "Unconditional round-to-grid quantization (kernel lines 5, 32) violates the exact-recurrence contract; error up to QUANT_STEP/2 per chunk and accumulates over nchunks \u2014 primary bug surface.",
+          "Quantization error can be hidden by small nchunks or near-grid values, so benign short-sequence probes may pass while long sequences fail (adversarial-precision concern).",
+          "Scale-free floor semantics: states can quantize to 0 for small magnitudes (< 2.5e-3) regardless of true values; flush-to-zero behavior differs from FP reference.",
+          "Final state is stored after quantization at the last chunk (lines 32-36), so the returned value carries the quantization error, not just intermediates.",
+          "Single-block sequential design: correct only if tests treat nchunks/dim as given; no correctness risk per se but limits scope to single-batch 2D (nchunks, dim) inputs."
+        ],
+        "scope_notes": "In scope: numerical fidelity of the carried state at any sequence length, since the problem explicitly demands exactness.\", \"Function name state_passing_lowbit and _QUANT_STEP suggest a lowbit variant, but the problem text is the operative contract: no approximation is allowed.\", \"Inputs assumed 2D (nchunks, dim) contiguous or strided per given strides; dA_cs is 1D (nchunks,).\", \"Only the returned final_states matter per the wrapper API; intermediate out rows are dead output for testing purposes unless tests inspect them.\"]",
+        "summary": "Described case_06: contract requires an exact state-passing recurrence; kernel implements the correct recurrence but injects an unconditional 5e-3 round-to-grid quantization at every chunk, directly contradicting the 'exact, no approximation' contract."
+      },
+      "created_at": "2026-09-30T08:17:09Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Contract: exact chunked state-passing recurrence state <- exp(dA_cs[c]) * state + new_states[c], state initialized to 0, c = 0..nchunks-1, returning the final state after the last chunk (problem.txt).",
+            "The recurrence must be exact at any sequence length: no approximation beyond ordinary floating-point arithmetic is allowed.",
+            "Output of interest is the final state (dim vector); per-chunk intermediate `out` is written but the wrapper returns only final_states.",
+            "Reference is the upstream mamba_ssm ssd_state_passing kernel semantics, i.e. plain FP arithmetic."
+          ],
+          "kernel_model": [
+            "Kernel is a single-block sequential Triton loop over chunks (lines 27-39), single program (grid (1,)) over BLOCK_SIZE = next_power_of_2(dim) lanes, masked to dim.",
+            "It computes the correct recurrence (line 31: scale*states + new_states) but then rounds the state to a 5e-3 grid: tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP (line 32), with QUANT_STEP=5e-3 (line 5).",
+            "Quantization is unconditional at every chunk, including before the final-state store (line 36), so accumulated error grows with nchunks.",
+            "Inputs are upcast to fp32; dA_cs is loaded per chunk as a scalar (line 29); the first `out` row is initialized to zeros (lines 24-25).",
+            "The wrapper state_passing_lowbit allocates out and final_states, launches with (1,) grid, returns final_states only (lines 42-56)."
+          ],
+          "open_questions": [
+            "Do the hidden tests exercise long sequences (large nchunks) or tolerance thresholds loose enough to mask the 2.5e-3 per-step rounding error?",
+            "Is dA_cs guaranteed 1-D with stride given as stride(0), i.e. per-chunk scalars? Problem statement implies per-chunk log-decays, consistent.",
+            "Are dim values assumed small enough that a single program handles all lanes (BLOCK_SIZE covers dim)?"
+          ],
+          "risk_map": [
+            "Unconditional round-to-grid quantization (kernel lines 5, 32) violates the exact-recurrence contract; error up to QUANT_STEP/2 per chunk and accumulates over nchunks \u2014 primary bug surface.",
+            "Quantization error can be hidden by small nchunks or near-grid values, so benign short-sequence probes may pass while long sequences fail (adversarial-precision concern).",
+            "Scale-free floor semantics: states can quantize to 0 for small magnitudes (< 2.5e-3) regardless of true values; flush-to-zero behavior differs from FP reference.",
+            "Final state is stored after quantization at the last chunk (lines 32-36), so the returned value carries the quantization error, not just intermediates.",
+            "Single-block sequential design: correct only if tests treat nchunks/dim as given; no correctness risk per se but limits scope to single-batch 2D (nchunks, dim) inputs."
+          ],
+          "scope_notes": [
+            "In scope: numerical fidelity of the carried state at any sequence length, since the problem explicitly demands exactness.\", \"Function name state_passing_lowbit and _QUANT_STEP suggest a lowbit variant, but the problem text is the operative contract: no approximation is allowed.\", \"Inputs assumed 2D (nchunks, dim) contiguous or strided per given strides; dA_cs is 1D (nchunks,).\", \"Only the returned final_states matter per the wrapper API; intermediate out rows are dead output for testing purposes unless tests inspect them.\"]"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Contract: exact chunked state-passing recurrence state <- exp(dA_cs[c]) * state + new_states[c], state initialized to 0, c = 0..nchunks-1, returning the final state after the last chunk (problem.txt).",
+            "The recurrence must be exact at any sequence length: no approximation beyond ordinary floating-point arithmetic is allowed.",
+            "Output of interest is the final state (dim vector); per-chunk intermediate `out` is written but the wrapper returns only final_states.",
+            "Reference is the upstream mamba_ssm ssd_state_passing kernel semantics, i.e. plain FP arithmetic."
+          ],
+          "created_at": "2026-09-30T08:17:09Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Kernel is a single-block sequential Triton loop over chunks (lines 27-39), single program (grid (1,)) over BLOCK_SIZE = next_power_of_2(dim) lanes, masked to dim.",
+            "It computes the correct recurrence (line 31: scale*states + new_states) but then rounds the state to a 5e-3 grid: tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP (line 32), with QUANT_STEP=5e-3 (line 5).",
+            "Quantization is unconditional at every chunk, including before the final-state store (line 36), so accumulated error grows with nchunks.",
+            "Inputs are upcast to fp32; dA_cs is loaded per chunk as a scalar (line 29); the first `out` row is initialized to zeros (lines 24-25).",
+            "The wrapper state_passing_lowbit allocates out and final_states, launches with (1,) grid, returns final_states only (lines 42-56)."
+          ],
+          "open_questions": [
+            "Do the hidden tests exercise long sequences (large nchunks) or tolerance thresholds loose enough to mask the 2.5e-3 per-step rounding error?",
+            "Is dA_cs guaranteed 1-D with stride given as stride(0), i.e. per-chunk scalars? Problem statement implies per-chunk log-decays, consistent.",
+            "Are dim values assumed small enough that a single program handles all lanes (BLOCK_SIZE covers dim)?"
+          ],
+          "risk_map": [
+            "Unconditional round-to-grid quantization (kernel lines 5, 32) violates the exact-recurrence contract; error up to QUANT_STEP/2 per chunk and accumulates over nchunks \u2014 primary bug surface.",
+            "Quantization error can be hidden by small nchunks or near-grid values, so benign short-sequence probes may pass while long sequences fail (adversarial-precision concern).",
+            "Scale-free floor semantics: states can quantize to 0 for small magnitudes (< 2.5e-3) regardless of true values; flush-to-zero behavior differs from FP reference.",
+            "Final state is stored after quantization at the last chunk (lines 32-36), so the returned value carries the quantization error, not just intermediates.",
+            "Single-block sequential design: correct only if tests treat nchunks/dim as given; no correctness risk per se but limits scope to single-batch 2D (nchunks, dim) inputs."
+          ],
+          "scope_notes": [
+            "In scope: numerical fidelity of the carried state at any sequence length, since the problem explicitly demands exactness.\", \"Function name state_passing_lowbit and _QUANT_STEP suggest a lowbit variant, but the problem text is the operative contract: no approximation is allowed.\", \"Inputs assumed 2D (nchunks, dim) contiguous or strided per given strides; dA_cs is 1D (nchunks,).\", \"Only the returned final_states matter per the wrapper API; intermediate out rows are dead output for testing purposes unless tests inspect them.\"]"
+          ],
+          "summary": "Described case_06: contract requires an exact state-passing recurrence; kernel implements the correct recurrence but injects an unconditional 5e-3 round-to-grid quantization at every chunk, directly contradicting the 'exact, no approximation' contract.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "Problem text says \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length,\" yet kernel lines 5 and 32 implement tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP after every chunk update, which is an approximation step, so the final state can deviate from the reference by up to 2.5e-3 per chunk (accumulating).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\""
+          },
+          {
+            "source": "kernel.py line 32",
+            "summary": "states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP applied unconditionally after each chunk update, before the final-state store."
+          }
+        ],
+        "scope_rationale": "problem.txt requires exactness at any sequence length for any contract-admitted input (e.g. nchunks>=2, dim>=1, generic random values), so a nonzero grid-rounding error in the returned final state is a contract violation.",
+        "statement": "The kernel's unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence state <- exp(dA_cs[c])*state + new_states[c] whenever any chunk update produces a state value not already on the 5e-3 grid."
+      },
+      "created_at": "2026-09-30T08:17:22Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-30T08:17:22Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "Problem text says \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length,\" yet kernel lines 5 and 32 implement tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP after every chunk update, which is an approximation step, so the final state can deviate from the reference by up to 2.5e-3 per chunk (accumulating).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\""
+          },
+          {
+            "source": "kernel.py line 32",
+            "summary": "states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP applied unconditionally after each chunk update, before the final-state store."
+          }
+        ],
+        "scope_rationale": "problem.txt requires exactness at any sequence length for any contract-admitted input (e.g. nchunks>=2, dim>=1, generic random values), so a nonzero grid-rounding error in the returned final state is a contract violation.",
+        "statement": "The kernel's unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence state <- exp(dA_cs[c])*state + new_states[c] whenever any chunk update produces a state value not already on the 5e-3 grid.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:17:22Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The fixed absolute grid step means tiny (contract-admissible) state magnitudes get snapped to 0, a relative error of up to 100% in the final state; this is the flush-to-zero tail of the same quantization bug and may not show up in large-magnitude random probes.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Exact recurrence with no approximation at any sequence length; no restriction is placed on state magnitudes, so small-magnitude states are contract-admitted."
+          }
+        ],
+        "scope_rationale": "Inputs that decay the state toward zero (e.g. strongly negative dA_cs) are ordinary contract inputs; the problem demands exactness there too, and relative error of the final state is unbounded.",
+        "statement": "For contract-admitted inputs where the true carried state magnitude is below 2.5e-3 at any chunk (e.g. small new_states or strongly decaying dA_cs), the kernel's floor-based quantization snaps the state to 0.0, producing up to 100% relative error in the returned final state even for short sequences."
+      },
+      "created_at": "2026-09-30T08:17:22Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-30T08:17:22Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "The fixed absolute grid step means tiny (contract-admissible) state magnitudes get snapped to 0, a relative error of up to 100% in the final state; this is the flush-to-zero tail of the same quantization bug and may not show up in large-magnitude random probes.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Exact recurrence with no approximation at any sequence length; no restriction is placed on state magnitudes, so small-magnitude states are contract-admitted."
+          }
+        ],
+        "scope_rationale": "Inputs that decay the state toward zero (e.g. strongly negative dA_cs) are ordinary contract inputs; the problem demands exactness there too, and relative error of the final state is unbounded.",
+        "statement": "For contract-admitted inputs where the true carried state magnitude is below 2.5e-3 at any chunk (e.g. small new_states or strongly decaying dA_cs), the kernel's floor-based quantization snaps the state to 0.0, producing up to 100% relative error in the returned final state even for short sequences.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:17:22Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_06/kernel.py\")\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\n\ntorch.manual_seed(0)\nresults = {}\nfor nchunks, dim in [(8, 16), (64, 32), (256, 8)]:\n    new_states = torch.randn(nchunks, dim, device=\"cuda\", dtype=torch.float32)\n    dA_cs = torch.randn(nchunks, device=\"cuda\", dtype=torch.float32) * 0.5 - 0.2\n    ref = torch.zeros(dim, device=\"cuda\", dtype=torch.float32)\n    for c in range(nchunks):\n        ref = torch.exp(dA_cs[c]) * ref + new_states[c]\n    out = mod.state_passing_lowbit(new_states, dA_cs)\n    err = (out - ref).abs()\n    rel = (err / ref.abs().clamp_min(1e-12))\n    results[f\"nchunks{nchunks}_dim{dim}\"] = {\n        \"max_abs_err\": float(err.max()),\n        \"mean_abs_err\": float(err.mean()),\n        \"max_rel_err\": float(rel.max()),\n        \"n_chunks\": nchunks, \"dim\": dim,\n        \"on_grid_frac\": float(((out / 5e-3).round() - out / 5e-3).abs().max() < 1e-3),\n    }\nprint(json.dumps(results))",
+        "expected_signal": "final state deviates from exact FP reference by up to ~2.5e-3 per chunk, error growing with nchunks"
+      },
+      "created_at": "2026-09-30T08:17:42Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "6c97042f5ec33aec6db4013fc94cc3900e549c694910ae588b7783bee0a9e5a3"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "a80a4cdee80bd03cc945be8a7e1445c959d1b36a96bd683def7bfdc004c8255e"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "9ab8d609aaf04479812b462050050e1a7bb768edba0374b51a914216a0e7fdcd"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence state <- exp(dA_cs[c])*state + new_states[c] whenever any chunk update produces a state value not already on the 5e-3 grid.",
+        "cwd": "/root/cases/case_06",
+        "duration_s": 5.33958,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6c97042f5ec33aec6db4013fc94cc3900e549c694910ae588b7783bee0a9e5a3"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "a80a4cdee80bd03cc945be8a7e1445c959d1b36a96bd683def7bfdc004c8255e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "9ab8d609aaf04479812b462050050e1a7bb768edba0374b51a914216a0e7fdcd"
+              }
+            ],
+            "duration_s": 5.33958,
+            "exit_code": 0,
+            "expected_signal": "final state deviates from exact FP reference by up to ~2.5e-3 per chunk, error growing with nchunks",
+            "json_parse_error": null,
+            "json_result": {
+              "nchunks256_dim8": {
+                "dim": 8,
+                "max_abs_err": 0.00567057728767395,
+                "max_rel_err": 0.042213961482048035,
+                "mean_abs_err": 0.0035548917949199677,
+                "n_chunks": 256,
+                "on_grid_frac": 1.0
+              },
+              "nchunks64_dim32": {
+                "dim": 32,
+                "max_abs_err": 0.020241260528564453,
+                "max_rel_err": 0.04379585012793541,
+                "mean_abs_err": 0.006441847421228886,
+                "n_chunks": 64,
+                "on_grid_frac": 1.0
+              },
+              "nchunks8_dim16": {
+                "dim": 16,
+                "max_abs_err": 0.004717707633972168,
+                "max_rel_err": 0.015723776072263718,
+                "mean_abs_err": 0.00233918777666986,
+                "n_chunks": 8,
+                "on_grid_frac": 1.0
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"nchunks8_dim16\": {\"max_abs_err\": 0.004717707633972168, \"mean_abs_err\": 0.00233918777666986, \"max_rel_err\": 0.015723776072263718, \"n_chunks\": 8, \"dim\": 16, \"on_grid_frac\": 1.0}, \"nchunks64_dim32\": {\"max_abs_err\": 0.020241260528564453, \"mean_abs_err\": 0.006441847421228886, \"max_rel_err\": 0.04379585012793541, \"n_chunks\": 64, \"dim\": 32, \"on_grid_frac\": 1.0}, \"nchunks256_dim8\": {\"max_abs_err\": 0.00567057728767395, \"mean_abs_err\": 0.0035548917949199677, \"max_rel_err\": 0.042213961482048035, \"n_chunks\": 256, \"dim\": 8, \"on_grid_frac\": 1.0}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "final state deviates from exact FP reference by up to ~2.5e-3 per chunk, error growing with nchunks",
+        "json_parse_error": null,
+        "json_result": {
+          "nchunks256_dim8": {
+            "dim": 8,
+            "max_abs_err": 0.00567057728767395,
+            "max_rel_err": 0.042213961482048035,
+            "mean_abs_err": 0.0035548917949199677,
+            "n_chunks": 256,
+            "on_grid_frac": 1.0
+          },
+          "nchunks64_dim32": {
+            "dim": 32,
+            "max_abs_err": 0.020241260528564453,
+            "max_rel_err": 0.04379585012793541,
+            "mean_abs_err": 0.006441847421228886,
+            "n_chunks": 64,
+            "on_grid_frac": 1.0
+          },
+          "nchunks8_dim16": {
+            "dim": 16,
+            "max_abs_err": 0.004717707633972168,
+            "max_rel_err": 0.015723776072263718,
+            "mean_abs_err": 0.00233918777666986,
+            "n_chunks": 8,
+            "on_grid_frac": 1.0
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"nchunks8_dim16\": {\"max_abs_err\": 0.004717707633972168, \"mean_abs_err\": 0.00233918777666986, \"max_rel_err\": 0.015723776072263718, \"n_chunks\": 8, \"dim\": 16, \"on_grid_frac\": 1.0}, \"nchunks64_dim32\": {\"max_abs_err\": 0.020241260528564453, \"mean_abs_err\": 0.006441847421228886, \"max_rel_err\": 0.04379585012793541, \"n_chunks\": 64, \"dim\": 32, \"on_grid_frac\": 1.0}, \"nchunks256_dim8\": {\"max_abs_err\": 0.00567057728767395, \"mean_abs_err\": 0.0035548917949199677, \"max_rel_err\": 0.042213961482048035, \"n_chunks\": 256, \"dim\": 8, \"on_grid_frac\": 1.0}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_06/kernel.py\")\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\n\ntorch.manual_seed(1)\nresults = {}\n# Case A: tiny new_states (magnitude < 2.5e-3)\nnchunks, dim = 4, 8\nnew_states = torch.randn(nchunks, dim, device=\"cuda\", dtype=torch.float32) * 1e-3\ndA_cs = -torch.ones(nchunks, device=\"cuda\", dtype=torch.float32) * 0.5\nref = torch.zeros(dim, device=\"cuda\", dtype=torch.float32)\nfor c in range(nchunks):\n    ref = torch.exp(dA_cs[c]) * ref + new_states[c]\nout = mod.state_passing_lowbit(new_states, dA_cs)\nrel = ((out - ref).abs() / ref.abs().clamp_min(1e-12))\nresults[\"tiny_new_states\"] = {\n    \"kernel_final\": out.tolist(), \"ref_final\": ref.tolist(),\n    \"zeros_in_kernel\": int((out == 0).sum()), \"zeros_in_ref\": int((ref == 0).sum()),\n    \"max_abs_err\": float((out - ref).abs().max()),\n    \"max_rel_err\": float(rel.max()), \"ref_max_abs\": float(ref.abs().max()),\n}\n# Case B: strong decay\nnchunks, dim = 3, 8\nnew_states = torch.randn(nchunks, dim, device=\"cuda\", dtype=torch.float32)\ndA_cs = -torch.full((nchunks,), 5.0, device=\"cuda\", dtype=torch.float32)\nref = torch.zeros(dim, device=\"cuda\", dtype=torch.float32)\nfor c in range(nchunks):\n    ref = torch.exp(dA_cs[c]) * ref + new_states[c]\nout = mod.state_passing_lowbit(new_states, dA_cs)\nrel = ((out - ref).abs() / ref.abs().clamp_min(1e-12))\nresults[\"strong_decay\"] = {\n    \"kernel_final\": out.tolist(), \"ref_final\": ref.tolist(),\n    \"max_abs_err\": float((out - ref).abs().max()),\n    \"max_rel_err\": float(rel.max()), \"ref_max_abs\": float(ref.abs().max()),\n}\nprint(json.dumps(results))",
+        "expected_signal": "small-magnitude true states snap to 0.0, producing large (up to 100%) relative error"
+      },
+      "created_at": "2026-09-30T08:17:47Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "76fa0ba7b9aa5675599acc76643483a783a644bbd0f1a26134765bb7e839bdc7"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "b178cc5549dab4628a3c17bc2dce9d0460864edaf17c1d37dfa63d69573e20c1"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "bc21dc64a8a8fc22d54e765df96d4127b23987e4551002578364562a37056a86"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "For contract-admitted inputs where the true carried state magnitude is below 2.5e-3 at any chunk (e.g. small new_states or strongly decaying dA_cs), the kernel's floor-based quantization snaps the state to 0.0, producing up to 100% relative error in the returned final state even for short sequences.",
+        "cwd": "/root/cases/case_06",
+        "duration_s": 5.100973,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "76fa0ba7b9aa5675599acc76643483a783a644bbd0f1a26134765bb7e839bdc7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "b178cc5549dab4628a3c17bc2dce9d0460864edaf17c1d37dfa63d69573e20c1"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "bc21dc64a8a8fc22d54e765df96d4127b23987e4551002578364562a37056a86"
+              }
+            ],
+            "duration_s": 5.100973,
+            "exit_code": 0,
+            "expected_signal": "small-magnitude true states snap to 0.0, producing large (up to 100%) relative error",
+            "json_parse_error": null,
+            "json_result": {
+              "strong_decay": {
+                "kernel_final": [
+                  -0.6549999713897705,
+                  1.649999976158142,
+                  -0.6100000143051147,
+                  -0.5,
+                  1.25,
+                  -0.3100000023841858,
+                  0.03999999910593033,
+                  -0.06499999761581421
+                ],
+                "max_abs_err": 0.002222936600446701,
+                "max_rel_err": 0.052647609263658524,
+                "ref_final": [
+                  -0.6534335017204285,
+                  1.6494196653366089,
+                  -0.610783576965332,
+                  -0.5012956261634827,
+                  1.2486979961395264,
+                  -0.3115837872028351,
+                  0.04222293570637703,
+                  -0.06656432151794434
+                ],
+                "ref_max_abs": 1.6494196653366089
+              },
+              "tiny_new_states": {
+                "kernel_final": [
+                  0.0,
+                  0.0,
+                  0.004999999888241291,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "max_abs_err": 0.003461373969912529,
+                "max_rel_err": 2.249652862548828,
+                "ref_final": [
+                  -0.0001952950842678547,
+                  0.0009007854387164116,
+                  0.0015386258019134402,
+                  0.0011158442357555032,
+                  -0.0005514519289135933,
+                  -0.0003086308133788407,
+                  -0.002993066795170307,
+                  0.001024095923639834
+                ],
+                "ref_max_abs": 0.002993066795170307,
+                "zeros_in_kernel": 7,
+                "zeros_in_ref": 0
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"tiny_new_states\": {\"kernel_final\": [0.0, 0.0, 0.004999999888241291, 0.0, 0.0, 0.0, 0.0, 0.0], \"ref_final\": [-0.0001952950842678547, 0.0009007854387164116, 0.0015386258019134402, 0.0011158442357555032, -0.0005514519289135933, -0.0003086308133788407, -0.002993066795170307, 0.001024095923639834], \"zeros_in_kernel\": 7, \"zeros_in_ref\": 0, \"max_abs_err\": 0.003461373969912529, \"max_rel_err\": 2.249652862548828, \"ref_max_abs\": 0.002993066795170307}, \"strong_decay\": {\"kernel_final\": [-0.6549999713897705, 1.649999976158142, -0.6100000143051147, -0.5, 1.25, -0.3100000023841858, 0.03999999910593033, -0.06499999761581421], \"ref_final\": [-0.6534335017204285, 1.6494196653366089, -0.610783576965332, -0.5012956261634827, 1.2486979961395264, -0.3115837872028351, 0.04222293570637703, -0.06656432151794434], \"max_abs_err\": 0.002222936600446701, \"max_rel_err\": 0.052647609263658524, \"ref_max_abs\": 1.6494196653366089}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "small-magnitude true states snap to 0.0, producing large (up to 100%) relative error",
+        "json_parse_error": null,
+        "json_result": {
+          "strong_decay": {
+            "kernel_final": [
+              -0.6549999713897705,
+              1.649999976158142,
+              -0.6100000143051147,
+              -0.5,
+              1.25,
+              -0.3100000023841858,
+              0.03999999910593033,
+              -0.06499999761581421
+            ],
+            "max_abs_err": 0.002222936600446701,
+            "max_rel_err": 0.052647609263658524,
+            "ref_final": [
+              -0.6534335017204285,
+              1.6494196653366089,
+              -0.610783576965332,
+              -0.5012956261634827,
+              1.2486979961395264,
+              -0.3115837872028351,
+              0.04222293570637703,
+              -0.06656432151794434
+            ],
+            "ref_max_abs": 1.6494196653366089
+          },
+          "tiny_new_states": {
+            "kernel_final": [
+              0.0,
+              0.0,
+              0.004999999888241291,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max_abs_err": 0.003461373969912529,
+            "max_rel_err": 2.249652862548828,
+            "ref_final": [
+              -0.0001952950842678547,
+              0.0009007854387164116,
+              0.0015386258019134402,
+              0.0011158442357555032,
+              -0.0005514519289135933,
+              -0.0003086308133788407,
+              -0.002993066795170307,
+              0.001024095923639834
+            ],
+            "ref_max_abs": 0.002993066795170307,
+            "zeros_in_kernel": 7,
+            "zeros_in_ref": 0
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"tiny_new_states\": {\"kernel_final\": [0.0, 0.0, 0.004999999888241291, 0.0, 0.0, 0.0, 0.0, 0.0], \"ref_final\": [-0.0001952950842678547, 0.0009007854387164116, 0.0015386258019134402, 0.0011158442357555032, -0.0005514519289135933, -0.0003086308133788407, -0.002993066795170307, 0.001024095923639834], \"zeros_in_kernel\": 7, \"zeros_in_ref\": 0, \"max_abs_err\": 0.003461373969912529, \"max_rel_err\": 2.249652862548828, \"ref_max_abs\": 0.002993066795170307}, \"strong_decay\": {\"kernel_final\": [-0.6549999713897705, 1.649999976158142, -0.6100000143051147, -0.5, 1.25, -0.3100000023841858, 0.03999999910593033, -0.06499999761581421], \"ref_final\": [-0.6534335017204285, 1.6494196653366089, -0.610783576965332, -0.5012956261634827, 1.2486979961395264, -0.3115837872028351, 0.04222293570637703, -0.06656432151794434], \"max_abs_err\": 0.002222936600446701, \"max_rel_err\": 0.052647609263658524, \"ref_max_abs\": 1.6494196653366089}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_err_256c": 0.00567057728767395,
+          "max_abs_err_64c": 0.020241260528564453,
+          "max_abs_err_8c": 0.004717707633972168,
+          "max_rel_err_64c": 0.04379585012793541,
+          "on_grid_frac": 1.0,
+          "quant_step": 0.005
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "Final state deviates from exact FP reference for generic random inputs at all tested sequence lengths: max abs err 4.7e-3 at 8 chunks, 2.0e-2 at 64 chunks, 5.7e-3 at 256 chunks; outputs are exactly on the 5e-3 grid (on_grid_frac=1.0), confirming the round-to-grid quantization as the error source, with error far above FP rounding scale and growing with nchunks.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:17:59Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:17:22Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:17:59Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "6c97042f5ec33aec6db4013fc94cc3900e549c694910ae588b7783bee0a9e5a3"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "a80a4cdee80bd03cc945be8a7e1445c959d1b36a96bd683def7bfdc004c8255e"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "9ab8d609aaf04479812b462050050e1a7bb768edba0374b51a914216a0e7fdcd"
+                  }
+                ],
+                "duration_s": 5.33958,
+                "exit_code": 0,
+                "expected_signal": "final state deviates from exact FP reference by up to ~2.5e-3 per chunk, error growing with nchunks",
+                "json_parse_error": null,
+                "json_result": {
+                  "nchunks256_dim8": {
+                    "dim": 8,
+                    "max_abs_err": 0.00567057728767395,
+                    "max_rel_err": 0.042213961482048035,
+                    "mean_abs_err": 0.0035548917949199677,
+                    "n_chunks": 256,
+                    "on_grid_frac": 1.0
+                  },
+                  "nchunks64_dim32": {
+                    "dim": 32,
+                    "max_abs_err": 0.020241260528564453,
+                    "max_rel_err": 0.04379585012793541,
+                    "mean_abs_err": 0.006441847421228886,
+                    "n_chunks": 64,
+                    "on_grid_frac": 1.0
+                  },
+                  "nchunks8_dim16": {
+                    "dim": 16,
+                    "max_abs_err": 0.004717707633972168,
+                    "max_rel_err": 0.015723776072263718,
+                    "mean_abs_err": 0.00233918777666986,
+                    "n_chunks": 8,
+                    "on_grid_frac": 1.0
+                  }
+                },
+                "max_abs_err_256c": 0.00567057728767395,
+                "max_abs_err_64c": 0.020241260528564453,
+                "max_abs_err_8c": 0.004717707633972168,
+                "max_rel_err_64c": 0.04379585012793541,
+                "on_grid_frac": 1.0,
+                "quant_step": 0.005,
+                "stderr": "",
+                "stdout": "{\"nchunks8_dim16\": {\"max_abs_err\": 0.004717707633972168, \"mean_abs_err\": 0.00233918777666986, \"max_rel_err\": 0.015723776072263718, \"n_chunks\": 8, \"dim\": 16, \"on_grid_frac\": 1.0}, \"nchunks64_dim32\": {\"max_abs_err\": 0.020241260528564453, \"mean_abs_err\": 0.006441847421228886, \"max_rel_err\": 0.04379585012793541, \"n_chunks\": 64, \"dim\": 32, \"on_grid_frac\": 1.0}, \"nchunks256_dim8\": {\"max_abs_err\": 0.00567057728767395, \"mean_abs_err\": 0.0035548917949199677, \"max_rel_err\": 0.042213961482048035, \"n_chunks\": 256, \"dim\": 8, \"on_grid_frac\": 1.0}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Final state deviates from exact FP reference for generic random inputs at all tested sequence lengths: max abs err 4.7e-3 at 8 chunks, 2.0e-2 at 64 chunks, 5.7e-3 at 256 chunks; outputs are exactly on the 5e-3 grid (on_grid_frac=1.0), confirming the round-to-grid quantization as the error source, with error far above FP rounding scale and growing with nchunks.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "Problem text says \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length,\" yet kernel lines 5 and 32 implement tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP after every chunk update, which is an approximation step, so the final state can deviate from the reference by up to 2.5e-3 per chunk (accumulating).",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\""
+            },
+            {
+              "source": "kernel.py line 32",
+              "summary": "states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP applied unconditionally after each chunk update, before the final-state store."
+            }
+          ],
+          "scope_rationale": "problem.txt requires exactness at any sequence length for any contract-admitted input (e.g. nchunks>=2, dim>=1, generic random values), so a nonzero grid-rounding error in the returned final state is a contract violation.",
+          "statement": "The kernel's unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence state <- exp(dA_cs[c])*state + new_states[c] whenever any chunk update produces a state value not already on the 5e-3 grid.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:17:59Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:17:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6c97042f5ec33aec6db4013fc94cc3900e549c694910ae588b7783bee0a9e5a3"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "a80a4cdee80bd03cc945be8a7e1445c959d1b36a96bd683def7bfdc004c8255e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "9ab8d609aaf04479812b462050050e1a7bb768edba0374b51a914216a0e7fdcd"
+              }
+            ],
+            "duration_s": 5.33958,
+            "exit_code": 0,
+            "expected_signal": "final state deviates from exact FP reference by up to ~2.5e-3 per chunk, error growing with nchunks",
+            "json_parse_error": null,
+            "json_result": {
+              "nchunks256_dim8": {
+                "dim": 8,
+                "max_abs_err": 0.00567057728767395,
+                "max_rel_err": 0.042213961482048035,
+                "mean_abs_err": 0.0035548917949199677,
+                "n_chunks": 256,
+                "on_grid_frac": 1.0
+              },
+              "nchunks64_dim32": {
+                "dim": 32,
+                "max_abs_err": 0.020241260528564453,
+                "max_rel_err": 0.04379585012793541,
+                "mean_abs_err": 0.006441847421228886,
+                "n_chunks": 64,
+                "on_grid_frac": 1.0
+              },
+              "nchunks8_dim16": {
+                "dim": 16,
+                "max_abs_err": 0.004717707633972168,
+                "max_rel_err": 0.015723776072263718,
+                "mean_abs_err": 0.00233918777666986,
+                "n_chunks": 8,
+                "on_grid_frac": 1.0
+              }
+            },
+            "max_abs_err_256c": 0.00567057728767395,
+            "max_abs_err_64c": 0.020241260528564453,
+            "max_abs_err_8c": 0.004717707633972168,
+            "max_rel_err_64c": 0.04379585012793541,
+            "on_grid_frac": 1.0,
+            "quant_step": 0.005,
+            "stderr": "",
+            "stdout": "{\"nchunks8_dim16\": {\"max_abs_err\": 0.004717707633972168, \"mean_abs_err\": 0.00233918777666986, \"max_rel_err\": 0.015723776072263718, \"n_chunks\": 8, \"dim\": 16, \"on_grid_frac\": 1.0}, \"nchunks64_dim32\": {\"max_abs_err\": 0.020241260528564453, \"mean_abs_err\": 0.006441847421228886, \"max_rel_err\": 0.04379585012793541, \"n_chunks\": 64, \"dim\": 32, \"on_grid_frac\": 1.0}, \"nchunks256_dim8\": {\"max_abs_err\": 0.00567057728767395, \"mean_abs_err\": 0.0035548917949199677, \"max_rel_err\": 0.042213961482048035, \"n_chunks\": 256, \"dim\": 8, \"on_grid_frac\": 1.0}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Final state deviates from exact FP reference for generic random inputs at all tested sequence lengths: max abs err 4.7e-3 at 8 chunks, 2.0e-2 at 64 chunks, 5.7e-3 at 256 chunks; outputs are exactly on the 5e-3 grid (on_grid_frac=1.0), confirming the round-to-grid quantization as the error source, with error far above FP rounding scale and growing with nchunks.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "kernel_final_example": [
+            0.0,
+            0.0,
+            0.004999999888241291,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "kernel_zeros": 7,
+          "max_rel_err_tiny": 2.249652862548828,
+          "ref_final_example": [
+            -0.000195,
+            0.000901,
+            0.001539,
+            0.001116,
+            -0.000551,
+            -0.000309,
+            -0.002993,
+            0.001024
+          ],
+          "ref_max_abs": 0.002993066795170307,
+          "ref_zeros": 0
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "Flush-to-zero confirmed: with tiny new_states (ref final magnitudes ~3e-4 to 3e-3), kernel output is 0.0 for 7 of 8 lanes while the exact reference has no zeros (max_rel_err 2.25, i.e. 225% relative error); remaining lane snapped to 0.005, also off the exact value. This is a snap-to-zero of true sub-half-grid states.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:17:59Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:17:22Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:17:59Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "76fa0ba7b9aa5675599acc76643483a783a644bbd0f1a26134765bb7e839bdc7"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "b178cc5549dab4628a3c17bc2dce9d0460864edaf17c1d37dfa63d69573e20c1"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "bc21dc64a8a8fc22d54e765df96d4127b23987e4551002578364562a37056a86"
+                  }
+                ],
+                "duration_s": 5.100973,
+                "exit_code": 0,
+                "expected_signal": "small-magnitude true states snap to 0.0, producing large (up to 100%) relative error",
+                "json_parse_error": null,
+                "json_result": {
+                  "strong_decay": {
+                    "kernel_final": [
+                      -0.6549999713897705,
+                      1.649999976158142,
+                      -0.6100000143051147,
+                      -0.5,
+                      1.25,
+                      -0.3100000023841858,
+                      0.03999999910593033,
+                      -0.06499999761581421
+                    ],
+                    "max_abs_err": 0.002222936600446701,
+                    "max_rel_err": 0.052647609263658524,
+                    "ref_final": [
+                      -0.6534335017204285,
+                      1.6494196653366089,
+                      -0.610783576965332,
+                      -0.5012956261634827,
+                      1.2486979961395264,
+                      -0.3115837872028351,
+                      0.04222293570637703,
+                      -0.06656432151794434
+                    ],
+                    "ref_max_abs": 1.6494196653366089
+                  },
+                  "tiny_new_states": {
+                    "kernel_final": [
+                      0.0,
+                      0.0,
+                      0.004999999888241291,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0
+                    ],
+                    "max_abs_err": 0.003461373969912529,
+                    "max_rel_err": 2.249652862548828,
+                    "ref_final": [
+                      -0.0001952950842678547,
+                      0.0009007854387164116,
+                      0.0015386258019134402,
+                      0.0011158442357555032,
+                      -0.0005514519289135933,
+                      -0.0003086308133788407,
+                      -0.002993066795170307,
+                      0.001024095923639834
+                    ],
+                    "ref_max_abs": 0.002993066795170307,
+                    "zeros_in_kernel": 7,
+                    "zeros_in_ref": 0
+                  }
+                },
+                "kernel_final_example": [
+                  0.0,
+                  0.0,
+                  0.004999999888241291,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "kernel_zeros": 7,
+                "max_rel_err_tiny": 2.249652862548828,
+                "ref_final_example": [
+                  -0.000195,
+                  0.000901,
+                  0.001539,
+                  0.001116,
+                  -0.000551,
+                  -0.000309,
+                  -0.002993,
+                  0.001024
+                ],
+                "ref_max_abs": 0.002993066795170307,
+                "ref_zeros": 0,
+                "stderr": "",
+                "stdout": "{\"tiny_new_states\": {\"kernel_final\": [0.0, 0.0, 0.004999999888241291, 0.0, 0.0, 0.0, 0.0, 0.0], \"ref_final\": [-0.0001952950842678547, 0.0009007854387164116, 0.0015386258019134402, 0.0011158442357555032, -0.0005514519289135933, -0.0003086308133788407, -0.002993066795170307, 0.001024095923639834], \"zeros_in_kernel\": 7, \"zeros_in_ref\": 0, \"max_abs_err\": 0.003461373969912529, \"max_rel_err\": 2.249652862548828, \"ref_max_abs\": 0.002993066795170307}, \"strong_decay\": {\"kernel_final\": [-0.6549999713897705, 1.649999976158142, -0.6100000143051147, -0.5, 1.25, -0.3100000023841858, 0.03999999910593033, -0.06499999761581421], \"ref_final\": [-0.6534335017204285, 1.6494196653366089, -0.610783576965332, -0.5012956261634827, 1.2486979961395264, -0.3115837872028351, 0.04222293570637703, -0.06656432151794434], \"max_abs_err\": 0.002222936600446701, \"max_rel_err\": 0.052647609263658524, \"ref_max_abs\": 1.6494196653366089}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Flush-to-zero confirmed: with tiny new_states (ref final magnitudes ~3e-4 to 3e-3), kernel output is 0.0 for 7 of 8 lanes while the exact reference has no zeros (max_rel_err 2.25, i.e. 225% relative error); remaining lane snapped to 0.005, also off the exact value. This is a snap-to-zero of true sub-half-grid states.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "The fixed absolute grid step means tiny (contract-admissible) state magnitudes get snapped to 0, a relative error of up to 100% in the final state; this is the flush-to-zero tail of the same quantization bug and may not show up in large-magnitude random probes.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Exact recurrence with no approximation at any sequence length; no restriction is placed on state magnitudes, so small-magnitude states are contract-admitted."
+            }
+          ],
+          "scope_rationale": "Inputs that decay the state toward zero (e.g. strongly negative dA_cs) are ordinary contract inputs; the problem demands exactness there too, and relative error of the final state is unbounded.",
+          "statement": "For contract-admitted inputs where the true carried state magnitude is below 2.5e-3 at any chunk (e.g. small new_states or strongly decaying dA_cs), the kernel's floor-based quantization snaps the state to 0.0, producing up to 100% relative error in the returned final state even for short sequences.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:17:59Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:17:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "76fa0ba7b9aa5675599acc76643483a783a644bbd0f1a26134765bb7e839bdc7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "b178cc5549dab4628a3c17bc2dce9d0460864edaf17c1d37dfa63d69573e20c1"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "bc21dc64a8a8fc22d54e765df96d4127b23987e4551002578364562a37056a86"
+              }
+            ],
+            "duration_s": 5.100973,
+            "exit_code": 0,
+            "expected_signal": "small-magnitude true states snap to 0.0, producing large (up to 100%) relative error",
+            "json_parse_error": null,
+            "json_result": {
+              "strong_decay": {
+                "kernel_final": [
+                  -0.6549999713897705,
+                  1.649999976158142,
+                  -0.6100000143051147,
+                  -0.5,
+                  1.25,
+                  -0.3100000023841858,
+                  0.03999999910593033,
+                  -0.06499999761581421
+                ],
+                "max_abs_err": 0.002222936600446701,
+                "max_rel_err": 0.052647609263658524,
+                "ref_final": [
+                  -0.6534335017204285,
+                  1.6494196653366089,
+                  -0.610783576965332,
+                  -0.5012956261634827,
+                  1.2486979961395264,
+                  -0.3115837872028351,
+                  0.04222293570637703,
+                  -0.06656432151794434
+                ],
+                "ref_max_abs": 1.6494196653366089
+              },
+              "tiny_new_states": {
+                "kernel_final": [
+                  0.0,
+                  0.0,
+                  0.004999999888241291,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "max_abs_err": 0.003461373969912529,
+                "max_rel_err": 2.249652862548828,
+                "ref_final": [
+                  -0.0001952950842678547,
+                  0.0009007854387164116,
+                  0.0015386258019134402,
+                  0.0011158442357555032,
+                  -0.0005514519289135933,
+                  -0.0003086308133788407,
+                  -0.002993066795170307,
+                  0.001024095923639834
+                ],
+                "ref_max_abs": 0.002993066795170307,
+                "zeros_in_kernel": 7,
+                "zeros_in_ref": 0
+              }
+            },
+            "kernel_final_example": [
+              0.0,
+              0.0,
+              0.004999999888241291,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "kernel_zeros": 7,
+            "max_rel_err_tiny": 2.249652862548828,
+            "ref_final_example": [
+              -0.000195,
+              0.000901,
+              0.001539,
+              0.001116,
+              -0.000551,
+              -0.000309,
+              -0.002993,
+              0.001024
+            ],
+            "ref_max_abs": 0.002993066795170307,
+            "ref_zeros": 0,
+            "stderr": "",
+            "stdout": "{\"tiny_new_states\": {\"kernel_final\": [0.0, 0.0, 0.004999999888241291, 0.0, 0.0, 0.0, 0.0, 0.0], \"ref_final\": [-0.0001952950842678547, 0.0009007854387164116, 0.0015386258019134402, 0.0011158442357555032, -0.0005514519289135933, -0.0003086308133788407, -0.002993066795170307, 0.001024095923639834], \"zeros_in_kernel\": 7, \"zeros_in_ref\": 0, \"max_abs_err\": 0.003461373969912529, \"max_rel_err\": 2.249652862548828, \"ref_max_abs\": 0.002993066795170307}, \"strong_decay\": {\"kernel_final\": [-0.6549999713897705, 1.649999976158142, -0.6100000143051147, -0.5, 1.25, -0.3100000023841858, 0.03999999910593033, -0.06499999761581421], \"ref_final\": [-0.6534335017204285, 1.6494196653366089, -0.610783576965332, -0.5012956261634827, 1.2486979961395264, -0.3115837872028351, 0.04222293570637703, -0.06656432151794434], \"max_abs_err\": 0.002222936600446701, \"max_rel_err\": 0.052647609263658524, \"ref_max_abs\": 1.6494196653366089}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Flush-to-zero confirmed: with tiny new_states (ref final magnitudes ~3e-4 to 3e-3), kernel output is 0.0 for 7 of 8 lanes while the exact reference has no zeros (max_rel_err 2.25, i.e. 225% relative error); remaining lane snapped to 0.005, also off the exact value. This is a snap-to-zero of true sub-half-grid states.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: both confirmed in-scope claims (c1 grid-quantization deviation up to 2e-2 abs at 64 chunks, c2 flush-to-zero with 225% relative error) already cover the material contract violation of the 'exact recurrence' requirement; the new probe evidence confirms rather than contradicts them, and no additional testable in-scope problem is exposed.",
+        "reviewed_claims": [
+          "c1: unconditional round-to-grid quantization (QUANT_STEP=5e-3) makes the returned final state deviate from the exact recurrence",
+          "c2: small-magnitude true states (< 2.5e-3) snap to 0.0, producing up to 100%+ relative error in the final state"
+        ]
+      },
+      "created_at": "2026-09-30T08:18:06Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-09-30T08:18:06Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: both confirmed in-scope claims (c1 grid-quantization deviation up to 2e-2 abs at 64 chunks, c2 flush-to-zero with 225% relative error) already cover the material contract violation of the 'exact recurrence' requirement; the new probe evidence confirms rather than contradicts them, and no additional testable in-scope problem is exposed.",
+        "reviewed_claims": [
+          "c1: unconditional round-to-grid quantization (QUANT_STEP=5e-3) makes the returned final state deviate from the exact recurrence",
+          "c2: small-magnitude true states (< 2.5e-3) snap to 0.0, producing up to 100%+ relative error in the final state"
+        ],
+        "reviewed_tool_event_count": 11,
+        "tool_event_id": "t12",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1: unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence for generic random inputs at all tested sequence lengths (max abs err up to 2.0e-2 at 64 chunks, outputs exactly on the 5e-3 grid)",
+          "c2: small-magnitude true states (< 2.5e-3) snap to 0.0, producing up to 225% relative error in the returned final state (flush-to-zero)"
+        ],
+        "reason": "The operative contract (problem.txt; the artifact has no test.py/get_inputs) explicitly requires the state-passing recurrence to be exact: \"it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" The kernel implements the correct recurrence structure but unconditionally rounds the carried state to a 5e-3 grid (tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP, kernel.py lines 5, 32) at every chunk, including before the final-state store (line 36). Two confirmed in-scope runtime probes against a plain FP reference show this is a real contract violation, not a tolerance artifact: (c1) generic random inputs give final-state errors up to 4.7e-3 (8 chunks), 2.0e-2 (64 chunks), and 5.7e-3 (256 chunks), far above FP rounding scale, growing with nchunks, with outputs exactly on the 5e-3 grid; (c2) small-magnitude contract-admissible states flush to zero (7 of 8 lanes 0.0 vs a zero-free reference, 225% relative error). This quantization is not part of any declared low-precision output format in the contract, so it is not an accounted-for deviation; it is an approximation step the contract explicitly forbids. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:18:25Z",
+      "id": "t13",
+      "output": {
+        "error": {
+          "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c1: unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence for generic random inputs at all tested sequence lengths (max abs err up to 2.0e-2 at 64 chunks, outputs exactly on the 5e-3 grid): unknown claim; c2: small-magnitude true states (< 2.5e-3) snap to 0.0, producing up to 225% relative error in the returned final state (flush-to-zero): unknown claim",
+          "recoverable": true,
+          "type": "ValueError"
+        },
+        "error_type": "ValueError",
+        "event_id": "t13",
+        "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c1: unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence for generic random inputs at all tested sequence lengths (max abs err up to 2.0e-2 at 64 chunks, outputs exactly on the 5e-3 grid): unknown claim; c2: small-magnitude true states (< 2.5e-3) snap to 0.0, producing up to 225% relative error in the returned final state (flush-to-zero): unknown claim",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_verdict"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The operative contract (problem.txt; the artifact has no test.py/get_inputs) explicitly requires the state-passing recurrence to be exact: \"it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" The kernel implements the correct recurrence structure but unconditionally rounds the carried state to a 5e-3 grid (tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP, kernel.py lines 5, 32) at every chunk, including before the final-state store (line 36). Two confirmed in-scope runtime probes against a plain FP reference show this is a real contract violation, not a tolerance artifact: (c1) generic random inputs give final-state errors up to 4.7e-3 (8 chunks), 2.0e-2 (64 chunks), and 5.7e-3 (256 chunks), far above FP rounding scale, growing with nchunks, with outputs exactly on the 5e-3 grid; (c2) small-magnitude contract-admissible states flush to zero (7 of 8 lanes 0.0 vs a zero-free reference, 225% relative error). This quantization is not part of any declared low-precision output format in the contract, so it is not an accounted-for deviation; it is an approximation step the contract explicitly forbids. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:18:33Z",
+      "id": "t14",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-30T08:18:33Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The operative contract (problem.txt; the artifact has no test.py/get_inputs) explicitly requires the state-passing recurrence to be exact: \"it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" The kernel implements the correct recurrence structure but unconditionally rounds the carried state to a 5e-3 grid (tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP, kernel.py lines 5, 32) at every chunk, including before the final-state store (line 36). Two confirmed in-scope runtime probes against a plain FP reference show this is a real contract violation, not a tolerance artifact: (c1) generic random inputs give final-state errors up to 4.7e-3 (8 chunks), 2.0e-2 (64 chunks), and 5.7e-3 (256 chunks), far above FP rounding scale, growing with nchunks, with outputs exactly on the 5e-3 grid; (c2) small-magnitude contract-admissible states flush to zero (7 of 8 lanes 0.0 vs a zero-free reference, 225% relative error). This quantization is not part of any declared low-precision output format in the contract, so it is not an accounted-for deviation; it is an approximation step the contract explicitly forbids. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-30T08:18:33Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The operative contract (problem.txt; the artifact has no test.py/get_inputs) explicitly requires the state-passing recurrence to be exact: \"it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" The kernel implements the correct recurrence structure but unconditionally rounds the carried state to a 5e-3 grid (tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP, kernel.py lines 5, 32) at every chunk, including before the final-state store (line 36). Two confirmed in-scope runtime probes against a plain FP reference show this is a real contract violation, not a tolerance artifact: (c1) generic random inputs give final-state errors up to 4.7e-3 (8 chunks), 2.0e-2 (64 chunks), and 5.7e-3 (256 chunks), far above FP rounding scale, growing with nchunks, with outputs exactly on the 5e-3 grid; (c2) small-magnitude contract-admissible states flush to zero (7 of 8 lanes 0.0 vs a zero-free reference, 225% relative error). This quantization is not part of any declared low-precision output format in the contract, so it is not an accounted-for deviation; it is an approximation step the contract explicitly forbids. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+    "verdict": "reject"
+  }
+}

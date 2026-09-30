@@ -1,0 +1,1171 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "__pycache__/kernel.cpython-311.pyc",
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_12",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\ntry:\n    from triton.language.extra.libdevice import sqrt as _sqrt\nexcept ModuleNotFoundError:\n    from triton.language.extra.cuda.libdevice import sqrt as _sqrt\n\n\n@triton.jit\ndef _rms_norm_forward_kernel(\n    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,\n    n_cols, eps,\n    BLOCK_SIZE: tl.constexpr,\n):\n    row_idx = tl.program_id(0).to(tl.int64)\n    col_offsets = tl.arange(0, BLOCK_SIZE)\n    mask = col_offsets < n_cols\n\n    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0)\n    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols\n    rstd = 1.0 / (_sqrt(mean_square) + eps)\n\n    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)\n    Y_row = X_row * rstd\n    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)\n\n\ndef rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:\n    num_rows, n_cols = X.shape\n    BLOCK_SIZE = triton.next_power_of_2(n_cols)\n    Y = torch.empty_like(X)\n    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)\n    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X, X.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)\n    return Y\n",
+    "passed": null,
+    "problem_text": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\nThe epsilon is the standard RMSNorm stabilizer: it must keep the normalizer\nfinite as the row norm approaches zero, so that a row of (near-)zero input\ndoes not blow the output up.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_12",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:23:04Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:23:48Z",
+          "data": {
+            "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+            "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "5d85735124ecdd284ea7949f4801afe6ed1bc5a144d1f1338419ee764ed66569"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "5df8dd8b394f02f46942b20a2fb6a9ca47f546235e28d3cb8142477309376467"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "aa46b381445e41536d0401933bf78d95ab3a18e407ec3a8f4578ac93cdf81a1e"
+              }
+            ],
+            "duration_s": 5.561635,
+            "eps": 1e-06,
+            "exit_code": 0,
+            "expected_signal": "zero/tiny-row rstd off by ~1/sqrt(eps) factor vs contract",
+            "json_parse_error": null,
+            "json_result": {
+              "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+              "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+              "Y_zero_row_max_abs": 0.0,
+              "eps": 1e-06,
+              "kernel_impl": "1/(sqrt(ms)+eps)",
+              "kernel_rstd_zero_row": 1000000.0,
+              "max_abs_err_normal_rows": 1.430511474609375e-06,
+              "max_rel_err_all_rows": 989.0990600585938,
+              "ref_rstd_zero_row": 1000.0,
+              "rstd_ratio_zero_row": 1000.0,
+              "tiny_row_out_ratio": 990.0989990234375
+            },
+            "kernel_impl": "1/(sqrt(ms)+eps)",
+            "max_abs_err_normal_rows": 1.430511474609375e-06,
+            "max_rel_err_all_rows": 989.0990600585938,
+            "ref_rstd_zero_row": 1000.0,
+            "rstd_ratio_zero_row": 1000.0,
+            "stderr": "",
+            "stdout": "{\"kernel_impl\": \"1/(sqrt(ms)+eps)\", \"eps\": 1e-06, \"max_abs_err_normal_rows\": 1.430511474609375e-06, \"kernel_rstd_zero_row\": 1000000.0, \"ref_rstd_zero_row\": 1000.0, \"rstd_ratio_zero_row\": 1000.0, \"Y_zero_row_max_abs\": 0.0, \"Y_tiny_row_max_abs_kernel\": 0.009900989942252636, \"Y_tiny_row_max_abs_ref\": 9.999999747378752e-06, \"tiny_row_out_ratio\": 990.0989990234375, \"max_rel_err_all_rows\": 989.0990600585938}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tiny_row_out_ratio": 990.0989990234375
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Runtime probe confirms eps-placement defect (claim c1). Kernel output on a tiny row (all 1e-8) with eps=1e-6 is 990.1x the contract reference (0.00990 vs 1.0e-5), matching the predicted ~1/sqrt(eps) blowup; implied kernel rstd on a zero row is 1e6 vs contract 1e3 (ratio 1000). Normal randn rows show only 1.43e-6 max abs error, consistent with rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps). Contract explicitly requires near-zero-row stability, so this is an in-scope correctness violation.",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps) instead of 1.0/_sqrt(mean_square + eps). For an all-zero row with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 ~316x divergence exactly where the contract demands stability; this may also fail tolerances on typical rows for larger eps.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract formula: 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly: 'it must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up.'"
+        }
+      ],
+      "scope_rationale": "The contract in problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that a near-zero row does not blow up; the kernel's eps-outside-sqrt variant violates both the stated formula and the near-zero-row stability requirement, so near-zero rows are in-scope conditions.",
+      "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving rstd and outputs off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:23:48Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "RMSNorm forward per Liger-Kernel contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd",
+      "Epsilon must be inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+      "Contract also produces a per-row rstd value alongside y"
+    ],
+    "kernel_model": [
+      "kernel.py line 22 computes mean_square = sum(X_row*X_row)/n_cols with masked loads (other=0), matching the contract",
+      "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps): eps is added OUTSIDE the sqrt, deviating from the contract formula 1/sqrt(mean_square + eps)",
+      "Single program per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes 2D input (num_rows, n_cols = X.shape) and one row fits in one Triton block",
+      "Y = torch.empty_like(X) preserves dtype/strides; RSTD stored fp32; row_idx cast to int64 for large tensors; only Y is returned (RSTD allocated but unused by the wrapper return)"
+    ],
+    "open_questions": [
+      "Does the benchmark test suite include near-zero rows or only typical random inputs, and what eps and tolerance values does it use?",
+      "Is the RSTD tensor expected as an output anywhere, or is it internal-only?"
+    ],
+    "risk_map": [
+      "Epsilon placement mismatch: 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). For typical random rows the difference is small and may pass tight tolerances, but for near-zero rows divergence is large: contract rstd -> 1/sqrt(eps) while kernel rstd -> 1/eps, a factor of ~1/sqrt(eps) (~316x for eps=1e-6), exactly where the contract demands stability",
+      "Tolerance-based random tests with typical eps (1e-5/1e-6) may not surface the error since it shrinks as sqrt(ms) grows; probe all-zero and tiny rows (already raised as claim c1)",
+      "eps value semantics: relative error of kernel rstd vs contract rstd is ~eps/sqrt(ms), so large eps values would also fail typical rows",
+      "Non-2D inputs would fail unpacking at X.shape; scope appears limited to 2D",
+      "Very large n_cols (beyond a single block / next_power_of_2 register limits) could fail to compile or run; masked reduction itself is correct"
+    ],
+    "scope_notes": [
+      "Only RMSNorm forward is in scope; no weight/bias (contract mentions none)",
+      "Contract explicitly emphasizes near-zero-row behavior, so all-zero/near-zero rows are in-scope conditions, not adversarial extras",
+      "No test_code provided; verification domain is the problem.txt formula plus typical Liger RMSNorm forward usage"
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "RMSNorm forward per Liger-Kernel contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd",
+        "Epsilon must be inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+        "Contract also produces a per-row rstd value alongside y"
+      ],
+      "created_at": "2026-09-30T08:23:17Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "kernel.py line 22 computes mean_square = sum(X_row*X_row)/n_cols with masked loads (other=0), matching the contract",
+        "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps): eps is added OUTSIDE the sqrt, deviating from the contract formula 1/sqrt(mean_square + eps)",
+        "Single program per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes 2D input (num_rows, n_cols = X.shape) and one row fits in one Triton block",
+        "Y = torch.empty_like(X) preserves dtype/strides; RSTD stored fp32; row_idx cast to int64 for large tensors; only Y is returned (RSTD allocated but unused by the wrapper return)"
+      ],
+      "open_questions": [
+        "Does the benchmark test suite include near-zero rows or only typical random inputs, and what eps and tolerance values does it use?",
+        "Is the RSTD tensor expected as an output anywhere, or is it internal-only?"
+      ],
+      "risk_map": [
+        "Epsilon placement mismatch: 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). For typical random rows the difference is small and may pass tight tolerances, but for near-zero rows divergence is large: contract rstd -> 1/sqrt(eps) while kernel rstd -> 1/eps, a factor of ~1/sqrt(eps) (~316x for eps=1e-6), exactly where the contract demands stability",
+        "Tolerance-based random tests with typical eps (1e-5/1e-6) may not surface the error since it shrinks as sqrt(ms) grows; probe all-zero and tiny rows (already raised as claim c1)",
+        "eps value semantics: relative error of kernel rstd vs contract rstd is ~eps/sqrt(ms), so large eps values would also fail typical rows",
+        "Non-2D inputs would fail unpacking at X.shape; scope appears limited to 2D",
+        "Very large n_cols (beyond a single block / next_power_of_2 register limits) could fail to compile or run; masked reduction itself is correct"
+      ],
+      "scope_notes": [
+        "Only RMSNorm forward is in scope; no weight/bias (contract mentions none)",
+        "Contract explicitly emphasizes near-zero-row behavior, so all-zero/near-zero rows are in-scope conditions, not adversarial extras",
+        "No test_code provided; verification domain is the problem.txt formula plus typical Liger RMSNorm forward usage"
+      ],
+      "summary": "Described case_12: RMSNorm forward Triton kernel vs Liger-Kernel contract. Kernel implements eps OUTSIDE the sqrt (rstd = 1/(sqrt(mean_square)+eps)) whereas contract requires 1/sqrt(mean_square+eps), causing large divergence on near-zero rows; matches claim c1 already raised by the Skeptic.",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_12",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_12"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_12"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_12"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_12",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 13.066508912000018,
+      "role": "describer",
+      "round": 2,
+      "text": "The key contract discrepancy is visible: the kernel adds eps *outside* the sqrt (`1/(sqrt(ms)+eps)`) while the contract specifies `1/sqrt(ms+eps)`. I'll record this in the description model.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "RMSNorm forward per Liger-Kernel: mean_square = sum(x*x)/n_cols, rstd = 1/sqrt(mean_square + eps), y = x*rstd",
+              "Epsilon is inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+              "Also produces/stores a per-row rstd output alongside y"
+            ],
+            "kernel_model</arg_key>[\"kernel.py computes mean_square = sum(x*x)/n_cols with masked loads (other=0), matching contract\", \"rstd = 1.0/(_sqrt(mean_square) + eps) at line 23: eps is added AFTER the sqrt, not inside it (rstd = 1/(sqrt(ms)+eps)), deviating from the contract formula 1/sqrt(ms+eps)\", \"Single-block per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes each row fits in one block and num_rows, n_cols = X.shape (2D only)\", \"Assumes X is float (torch.empty_like preserves dtype/strides); rstd stored as fp32; row_idx cast to int64 for large tensors\"]</arg_value><arg_key>risk_map</arg_key>[\"Epsilon placement mismatch: 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). For normal rows the difference is small (may pass tight-ish tolerances), but for near-zero rows the divergence is large: contract rstd -> 1/sqrt(eps) while kernel rstd -> 1/eps, a factor sqrt(eps) off, potentially blowing output up exactly where the contract says it must not\", \"Tolerance-based random tests with typical eps (1e-5, 1e-6) may not surface this since eps placement error scales with eps relative to sqrt(ms); probe tail case of all-zero or tiny rows\", \"Non-2D inputs (1D/3D) would fail unpacking at X.shape; scope may be limited to 2D\", \"Large n_cols beyond a single Triton block or num_warps limits could fail; masked reduction is correct for padded lanes\"]</arg_value><arg_key>scope_notes</arg_key>[\"Only forward RMSNorm is in scope; no weight/bias (Liger supports optional weight, contract here does not mention it)\", \"Contract emphasizes near-zero row behavior, so zero/near-zero rows are in-scope test conditions, not adversarial extras\", \"No test_code provided; verification domain is the problem.txt formula plus typical Liger RMSNorm forward usage\"]</arg_value><arg_key>summary": "Described case_12: RMSNorm forward Triton kernel vs Liger-Kernel contract. Kernel implements eps OUTSIDE the sqrt (rstd = 1/(sqrt(mean_square)+eps)) whereas contract requires 1/sqrt(mean_square+eps), so near-zero-row behavior diverges strongly from spec."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.067,
+        "input_tokens": 4323,
+        "output_tokens": 673
+      }
+    },
+    {
+      "duration_s": 7.8037911590000135,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The kernel clearly computes rstd = 1/(sqrt(mean_square) + eps) at line 23, while the contract requires 1/sqrt(mean_square + eps). This is the primary risk, especially for near-zero rows where the contract explicitly demands stable behavior. I'll record this claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Line 23 of kernel.py computes rstd = 1.0/(_sqrt(mean_square) + eps), which is mathematically different from the contract's 1/sqrt(mean_square + eps). For a row of zeros with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 a 1000x divergence exactly where the contract demands stability.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract states 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly requires that 'a row of (near-)zero input does not blow the output up'. The kernel's placement of eps outside sqrt (kernel.py line 23: 1.0/(_sqrt(mean_square)+eps)) violates the stated formula and this near-zero-row requirement."
+              }
+            ],
+            "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving output/rstd values off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.804,
+        "input_tokens": 7487,
+        "output_tokens": 385
+      }
+    },
+    {
+      "duration_s": 7.086260466999988,
+      "role": "skeptic",
+      "round": 4,
+      "text": "The prior claim failed to record due to a missing scope_rationale; I'll re-send it correctly.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps) instead of 1.0/_sqrt(mean_square + eps). For an all-zero row with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 ~316x divergence exactly where the contract demands stability; this may also fail tolerances on typical rows for larger eps.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract formula: 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly: 'it must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up.'"
+              }
+            ],
+            "scope_rationale": "The contract in problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that a near-zero row does not blow up; the kernel's eps-outside-sqrt variant violates both the stated formula and the near-zero-row stability requirement, so near-zero rows are in-scope conditions.",
+            "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving rstd and outputs off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.086,
+        "input_tokens": 8445,
+        "output_tokens": 404
+      }
+    },
+    {
+      "duration_s": 12.235516272999973,
+      "role": "describer",
+      "round": 5,
+      "text": "My previous description update failed due to malformed args, so I'm re-recording the structured description of case_12 now.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "RMSNorm forward per Liger-Kernel contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd",
+              "Epsilon must be inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+              "Contract also produces a per-row rstd value alongside y"
+            ],
+            "kernel_model": [
+              "kernel.py line 22 computes mean_square = sum(X_row*X_row)/n_cols with masked loads (other=0), matching the contract",
+              "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps): eps is added OUTSIDE the sqrt, deviating from the contract formula 1/sqrt(mean_square + eps)",
+              "Single program per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes 2D input (num_rows, n_cols = X.shape) and one row fits in one Triton block",
+              "Y = torch.empty_like(X) preserves dtype/strides; RSTD stored fp32; row_idx cast to int64 for large tensors; only Y is returned (RSTD allocated but unused by the wrapper return)"
+            ],
+            "open_questions": [
+              "Does the benchmark test suite include near-zero rows or only typical random inputs, and what eps and tolerance values does it use?",
+              "Is the RSTD tensor expected as an output anywhere, or is it internal-only?"
+            ],
+            "risk_map": [
+              "Epsilon placement mismatch: 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). For typical random rows the difference is small and may pass tight tolerances, but for near-zero rows divergence is large: contract rstd -> 1/sqrt(eps) while kernel rstd -> 1/eps, a factor of ~1/sqrt(eps) (~316x for eps=1e-6), exactly where the contract demands stability",
+              "Tolerance-based random tests with typical eps (1e-5/1e-6) may not surface the error since it shrinks as sqrt(ms) grows; probe all-zero and tiny rows (already raised as claim c1)",
+              "eps value semantics: relative error of kernel rstd vs contract rstd is ~eps/sqrt(ms), so large eps values would also fail typical rows",
+              "Non-2D inputs would fail unpacking at X.shape; scope appears limited to 2D",
+              "Very large n_cols (beyond a single block / next_power_of_2 register limits) could fail to compile or run; masked reduction itself is correct"
+            ],
+            "scope_notes": [
+              "Only RMSNorm forward is in scope; no weight/bias (contract mentions none)",
+              "Contract explicitly emphasizes near-zero-row behavior, so all-zero/near-zero rows are in-scope conditions, not adversarial extras",
+              "No test_code provided; verification domain is the problem.txt formula plus typical Liger RMSNorm forward usage"
+            ],
+            "summary": "Described case_12: RMSNorm forward Triton kernel vs Liger-Kernel contract. Kernel implements eps OUTSIDE the sqrt (rstd = 1/(sqrt(mean_square)+eps)) whereas contract requires 1/sqrt(mean_square+eps), causing large divergence on near-zero rows; matches claim c1 already raised by the Skeptic."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.236,
+        "input_tokens": 8565,
+        "output_tokens": 751
+      }
+    },
+    {
+      "duration_s": 5.9146417210000095,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The primary in-scope defect (eps placed outside the sqrt at line 23) is already recorded as claim c1 with contract evidence. I've reviewed the rest of the kernel: the masked reduction, mean_square division, RSTD storage, and row indexing all match the contract; remaining risks (non-2D inputs, very large n_cols) are outside the stated 2D RMSNorm forward domain and not contract-backed. No new high-quality in-scope claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The only material contract violation \u2014 eps added outside the sqrt (line 23) \u2014 is already captured as in-scope claim c1. Remaining kernel paths (masked reduction, mean_square, RSTD store, indexing) match the contract; other potential edge cases (non-2D inputs, huge n_cols) are not supported by any contract source here and would be out-of-scope generality notes, not decisive claims.",
+            "reviewed_claims": [
+              "c1"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.915,
+        "input_tokens": 14672,
+        "output_tokens": 261
+      }
+    },
+    {
+      "duration_s": 10.933456231000036,
+      "role": "experimenter",
+      "round": 7,
+      "text": "I'll probe claim c1 directly: run the kernel on an all-zero row and tiny rows with eps=1e-6 and compare rstd/output against the contract formula.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_12\")\nfrom kernel import rms_norm_forward\n\ndef ref(X, eps):\n    ms = (X * X).sum(dim=1, dtype=torch.float32) / X.shape[1]\n    rstd = 1.0 / torch.sqrt(ms + eps)\n    return X * rstd.unsqueeze(1), rstd\n\neps = 1e-6\n# rows: all-zero, tiny (1e-8 scale), normal randn\nX = torch.cat([\n    torch.zeros(1, 64),\n    torch.full((1, 64), 1e-8),\n    torch.randn(4, 64),\n]).cuda()\n\nY = rms_norm_forward(X, eps)\nYr, rstd_ref = ref(X, eps)\n# kernel rstd implied from Y/X where nonzero\nX32 = X.float()\nratio = (Y.float() / X32).nan_to_num(0)  # zero rows give 0/0\n# compute kernel rstd analytically for the all-zero row: 1/(0+eps)=1e6 vs ref 1/sqrt(eps)=1e3\nk_rstd_zero = 1.0 / (0.0 + eps)\nref_rstd_zero = 1.0 / (eps ** 0.5)\nd = {\n    \"kernel_impl\": \"1/(sqrt(ms)+eps)\",\n    \"eps\": eps,\n    \"max_abs_err_normal_rows\": float((Y[2:] - Yr[2:]).abs().max()),\n    \"kernel_rstd_zero_row\": k_rstd_zero,\n    \"ref_rstd_zero_row\": ref_rstd_zero,\n    \"rstd_ratio_zero_row\": k_rstd_zero / ref_rstd_zero,\n    \"Y_zero_row_max_abs\": float(Y[0].abs().max()),\n    \"Y_tiny_row_max_abs_kernel\": float(Y[1].abs().max()),\n    \"Y_tiny_row_max_abs_ref\": float(Yr[1].abs().max()),\n    \"tiny_row_out_ratio\": float(Y[1].abs().max() / Yr[1].abs().max()),\n    \"max_rel_err_all_rows\": float(((Y.float() - Yr).abs() / Yr.abs().clamp_min(1e-30)).max()),\n}\nprint(json.dumps(d))",
+            "expected_signal": "zero/tiny-row rstd off by ~1/sqrt(eps) factor vs contract"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.933,
+        "input_tokens": 15715,
+        "output_tokens": 600
+      }
+    },
+    {
+      "duration_s": 9.15062178100004,
+      "role": "experimenter",
+      "round": 8,
+      "text": "The probe confirms c1: on a tiny row (all elements 1e-8) with eps=1e-6, the kernel's output is ~990x the reference (0.0099 vs 1e-5), and the analytic zero-row rstd ratio is 1000x, matching the predicted ~1/sqrt(eps) divergence. Normal rows show only 1.4e-6 error, consistent with the eps-outside-sqrt implementation. I'll finalize this evidence.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+              "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+              "eps": 1e-06,
+              "kernel_impl": "1/(sqrt(ms)+eps)",
+              "max_abs_err_normal_rows": 1.430511474609375e-06,
+              "max_rel_err_all_rows": 989.0990600585938,
+              "ref_rstd_zero_row": 1000.0,
+              "rstd_ratio_zero_row": 1000.0,
+              "tiny_row_out_ratio": 990.0989990234375
+            },
+            "event_id": "t10",
+            "status": "confirmed",
+            "summary": "Runtime probe confirms eps-placement defect (claim c1). Kernel output on a tiny row (all 1e-8) with eps=1e-6 is 990.1x the contract reference (0.00990 vs 1.0e-5), matching the predicted ~1/sqrt(eps) blowup; implied kernel rstd on a zero row is 1e6 vs contract 1e3 (ratio 1000). Normal randn rows show only 1.43e-6 max abs error, consistent with rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps). Contract explicitly requires near-zero-row stability, so this is an in-scope correctness violation.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.151,
+        "input_tokens": 18786,
+        "output_tokens": 478
+      }
+    },
+    {
+      "duration_s": 5.6506950250000045,
+      "role": "skeptic",
+      "round": 9,
+      "text": "The confirmed in-scope claim c1 fully captures the eps-placement defect, backed by a runtime probe showing 990x output divergence on tiny rows. No new evidence exposes anything not already covered.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Claim c1 (eps outside the sqrt, rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps)) is confirmed with runtime evidence: on a tiny row (1e-8) with eps=1e-6 the kernel output is ~990x the contract reference, and the zero-row rstd diverges by 1000x, exactly where problem.txt requires near-zero-row stability. The rest of the kernel (masked reduction, mean_square, RSTD store, indexing) matches the contract. No new evidence suggests any additional in-scope, testable problem.",
+            "reviewed_claims": [
+              "c1"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.651,
+        "input_tokens": 22839,
+        "output_tokens": 202
+      }
+    },
+    {
+      "duration_s": 10.273221185000011,
+      "role": "judge",
+      "round": 10,
+      "text": "The evidence is decisive: the kernel places eps outside the sqrt (rstd = 1/(sqrt(ms)+eps)) while the contract explicitly requires 1/sqrt(ms+eps) with near-zero-row stability. The runtime probe confirms a ~990x output divergence on tiny rows. Claim c1 is confirmed, in-scope, and the Skeptic has signed off with no new claims. Since no test.py exists, problem.txt is the operative contract, and this violates its stated formula directly.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), but the problem.txt contract explicitly states rstd = 1/sqrt(mean_square + eps) \u2014 eps must be inside the sqrt \u2014 and explicitly requires that a row of (near-)zero input does not blow the output up. Runtime probe (t10) confirmed the defect: on a tiny row (all 1e-8) with eps=1e-6, the kernel output is ~990x the contract reference (0.00990 vs 1e-5), and the zero-row rstd diverges by 1000x (1e6 vs 1e3). No test.py/get_inputs exist, so problem.txt is the operative contract; the violated formula and near-zero-row stability requirement are stated directly in it. Normal rows show only ~1.4e-6 error, confirming this is exactly the eps-placement bug, not a metric artifact. The kernel implements a different formula than the one the contract explicitly requires, which is a defect regardless of small deviations on typical inputs. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.273,
+        "input_tokens": 22989,
+        "output_tokens": 420
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-30T08:23:54Z",
+    "decision": "no_new_claims",
+    "reason": "Claim c1 (eps outside the sqrt, rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps)) is confirmed with runtime evidence: on a tiny row (1e-8) with eps=1e-6 the kernel output is ~990x the contract reference, and the zero-row rstd diverges by 1000x, exactly where problem.txt requires near-zero-row stability. The rest of the kernel (masked reduction, mean_square, RSTD store, indexing) matches the contract. No new evidence suggests any additional in-scope, testable problem.",
+    "reviewed_claims": [
+      "c1"
+    ],
+    "reviewed_tool_event_count": 11,
+    "tool_event_id": "t12",
+    "turn": 9
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_12"
+      },
+      "created_at": "2026-09-30T08:22:36Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "__pycache__/kernel.cpython-311.pyc",
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_12",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\ntry:\n    from triton.language.extra.libdevice import sqrt as _sqrt\nexcept ModuleNotFoundError:\n    from triton.language.extra.cuda.libdevice import sqrt as _sqrt\n\n\n@triton.jit\ndef _rms_norm_forward_kernel(\n    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,\n    n_cols, eps,\n    BLOCK_SIZE: tl.constexpr,\n):\n    row_idx = tl.program_id(0).to(tl.int64)\n    col_offsets = tl.arange(0, BLOCK_SIZE)\n    mask = col_offsets < n_cols\n\n    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0)\n    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols\n    rstd = 1.0 / (_sqrt(mean_square) + eps)\n\n    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)\n    Y_row = X_row * rstd\n    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)\n\n\ndef rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:\n    num_rows, n_cols = X.shape\n    BLOCK_SIZE = triton.next_power_of_2(n_cols)\n    Y = torch.empty_like(X)\n    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)\n    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X, X.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)\n    return Y\n",
+        "passed": null,
+        "problem_text": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\nThe epsilon is the standard RMSNorm stabilizer: it must keep the normalizer\nfinite as the row norm approaches zero, so that a row of (near-)zero input\ndoes not blow the output up.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_12",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_12"
+      },
+      "created_at": "2026-09-30T08:22:36Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\nThe epsilon is the standard RMSNorm stabilizer: it must keep the normalizer\nfinite as the row norm approaches zero, so that a row of (near-)zero input\ndoes not blow the output up.\n",
+        "entry": "case_12",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_12"
+      },
+      "created_at": "2026-09-30T08:22:36Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_12",
+        "files": [
+          {
+            "kind": "other",
+            "path": "__pycache__/kernel.cpython-311.pyc",
+            "size_bytes": 2568
+          },
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1247
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 422
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_12",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:22:36Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_12\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_12",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "RMSNorm forward per Liger-Kernel: mean_square = sum(x*x)/n_cols, rstd = 1/sqrt(mean_square + eps), y = x*rstd",
+          "Epsilon is inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+          "Also produces/stores a per-row rstd output alongside y"
+        ],
+        "kernel_model</arg_key>[\"kernel.py computes mean_square = sum(x*x)/n_cols with masked loads (other=0), matching contract\", \"rstd = 1.0/(_sqrt(mean_square) + eps) at line 23: eps is added AFTER the sqrt, not inside it (rstd = 1/(sqrt(ms)+eps)), deviating from the contract formula 1/sqrt(ms+eps)\", \"Single-block per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes each row fits in one block and num_rows, n_cols = X.shape (2D only)\", \"Assumes X is float (torch.empty_like preserves dtype/strides); rstd stored as fp32; row_idx cast to int64 for large tensors\"]</arg_value><arg_key>risk_map</arg_key>[\"Epsilon placement mismatch: 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). For normal rows the difference is small (may pass tight-ish tolerances), but for near-zero rows the divergence is large: contract rstd -> 1/sqrt(eps) while kernel rstd -> 1/eps, a factor sqrt(eps) off, potentially blowing output up exactly where the contract says it must not\", \"Tolerance-based random tests with typical eps (1e-5, 1e-6) may not surface this since eps placement error scales with eps relative to sqrt(ms); probe tail case of all-zero or tiny rows\", \"Non-2D inputs (1D/3D) would fail unpacking at X.shape; scope may be limited to 2D\", \"Large n_cols beyond a single Triton block or num_warps limits could fail; masked reduction is correct for padded lanes\"]</arg_value><arg_key>scope_notes</arg_key>[\"Only forward RMSNorm is in scope; no weight/bias (Liger supports optional weight, contract here does not mention it)\", \"Contract emphasizes near-zero row behavior, so zero/near-zero rows are in-scope test conditions, not adversarial extras\", \"No test_code provided; verification domain is the problem.txt formula plus typical Liger RMSNorm forward usage\"]</arg_value><arg_key>summary": "Described case_12: RMSNorm forward Triton kernel vs Liger-Kernel contract. Kernel implements eps OUTSIDE the sqrt (rstd = 1/(sqrt(mean_square)+eps)) whereas contract requires 1/sqrt(mean_square+eps), so near-zero-row behavior diverges strongly from spec."
+      },
+      "created_at": "2026-09-30T08:22:50Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "tool record_description_update missing required arg: summary",
+          "recoverable": true,
+          "type": "ToolRegistryError"
+        },
+        "error_type": "ToolRegistryError",
+        "event_id": "t5",
+        "message": "tool record_description_update missing required arg: summary",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "Line 23 of kernel.py computes rstd = 1.0/(_sqrt(mean_square) + eps), which is mathematically different from the contract's 1/sqrt(mean_square + eps). For a row of zeros with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 a 1000x divergence exactly where the contract demands stability.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract states 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly requires that 'a row of (near-)zero input does not blow the output up'. The kernel's placement of eps outside sqrt (kernel.py line 23: 1.0/(_sqrt(mean_square)+eps)) violates the stated formula and this near-zero-row requirement."
+          }
+        ],
+        "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving output/rstd values off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference."
+      },
+      "created_at": "2026-09-30T08:22:57Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps) instead of 1.0/_sqrt(mean_square + eps). For an all-zero row with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 ~316x divergence exactly where the contract demands stability; this may also fail tolerances on typical rows for larger eps.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract formula: 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly: 'it must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up.'"
+          }
+        ],
+        "scope_rationale": "The contract in problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that a near-zero row does not blow up; the kernel's eps-outside-sqrt variant violates both the stated formula and the near-zero-row stability requirement, so near-zero rows are in-scope conditions.",
+        "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving rstd and outputs off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference."
+      },
+      "created_at": "2026-09-30T08:23:04Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-30T08:23:04Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps) instead of 1.0/_sqrt(mean_square + eps). For an all-zero row with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 ~316x divergence exactly where the contract demands stability; this may also fail tolerances on typical rows for larger eps.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract formula: 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly: 'it must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up.'"
+          }
+        ],
+        "scope_rationale": "The contract in problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that a near-zero row does not blow up; the kernel's eps-outside-sqrt variant violates both the stated formula and the near-zero-row stability requirement, so near-zero rows are in-scope conditions.",
+        "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving rstd and outputs off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:23:04Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "RMSNorm forward per Liger-Kernel contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd",
+          "Epsilon must be inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+          "Contract also produces a per-row rstd value alongside y"
+        ],
+        "kernel_model": [
+          "kernel.py line 22 computes mean_square = sum(X_row*X_row)/n_cols with masked loads (other=0), matching the contract",
+          "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps): eps is added OUTSIDE the sqrt, deviating from the contract formula 1/sqrt(mean_square + eps)",
+          "Single program per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes 2D input (num_rows, n_cols = X.shape) and one row fits in one Triton block",
+          "Y = torch.empty_like(X) preserves dtype/strides; RSTD stored fp32; row_idx cast to int64 for large tensors; only Y is returned (RSTD allocated but unused by the wrapper return)"
+        ],
+        "open_questions": [
+          "Does the benchmark test suite include near-zero rows or only typical random inputs, and what eps and tolerance values does it use?",
+          "Is the RSTD tensor expected as an output anywhere, or is it internal-only?"
+        ],
+        "risk_map": [
+          "Epsilon placement mismatch: 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). For typical random rows the difference is small and may pass tight tolerances, but for near-zero rows divergence is large: contract rstd -> 1/sqrt(eps) while kernel rstd -> 1/eps, a factor of ~1/sqrt(eps) (~316x for eps=1e-6), exactly where the contract demands stability",
+          "Tolerance-based random tests with typical eps (1e-5/1e-6) may not surface the error since it shrinks as sqrt(ms) grows; probe all-zero and tiny rows (already raised as claim c1)",
+          "eps value semantics: relative error of kernel rstd vs contract rstd is ~eps/sqrt(ms), so large eps values would also fail typical rows",
+          "Non-2D inputs would fail unpacking at X.shape; scope appears limited to 2D",
+          "Very large n_cols (beyond a single block / next_power_of_2 register limits) could fail to compile or run; masked reduction itself is correct"
+        ],
+        "scope_notes": [
+          "Only RMSNorm forward is in scope; no weight/bias (contract mentions none)",
+          "Contract explicitly emphasizes near-zero-row behavior, so all-zero/near-zero rows are in-scope conditions, not adversarial extras",
+          "No test_code provided; verification domain is the problem.txt formula plus typical Liger RMSNorm forward usage"
+        ],
+        "summary": "Described case_12: RMSNorm forward Triton kernel vs Liger-Kernel contract. Kernel implements eps OUTSIDE the sqrt (rstd = 1/(sqrt(mean_square)+eps)) whereas contract requires 1/sqrt(mean_square+eps), causing large divergence on near-zero rows; matches claim c1 already raised by the Skeptic."
+      },
+      "created_at": "2026-09-30T08:23:17Z",
+      "id": "t8",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "RMSNorm forward per Liger-Kernel contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd",
+            "Epsilon must be inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+            "Contract also produces a per-row rstd value alongside y"
+          ],
+          "kernel_model": [
+            "kernel.py line 22 computes mean_square = sum(X_row*X_row)/n_cols with masked loads (other=0), matching the contract",
+            "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps): eps is added OUTSIDE the sqrt, deviating from the contract formula 1/sqrt(mean_square + eps)",
+            "Single program per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes 2D input (num_rows, n_cols = X.shape) and one row fits in one Triton block",
+            "Y = torch.empty_like(X) preserves dtype/strides; RSTD stored fp32; row_idx cast to int64 for large tensors; only Y is returned (RSTD allocated but unused by the wrapper return)"
+          ],
+          "open_questions": [
+            "Does the benchmark test suite include near-zero rows or only typical random inputs, and what eps and tolerance values does it use?",
+            "Is the RSTD tensor expected as an output anywhere, or is it internal-only?"
+          ],
+          "risk_map": [
+            "Epsilon placement mismatch: 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). For typical random rows the difference is small and may pass tight tolerances, but for near-zero rows divergence is large: contract rstd -> 1/sqrt(eps) while kernel rstd -> 1/eps, a factor of ~1/sqrt(eps) (~316x for eps=1e-6), exactly where the contract demands stability",
+            "Tolerance-based random tests with typical eps (1e-5/1e-6) may not surface the error since it shrinks as sqrt(ms) grows; probe all-zero and tiny rows (already raised as claim c1)",
+            "eps value semantics: relative error of kernel rstd vs contract rstd is ~eps/sqrt(ms), so large eps values would also fail typical rows",
+            "Non-2D inputs would fail unpacking at X.shape; scope appears limited to 2D",
+            "Very large n_cols (beyond a single block / next_power_of_2 register limits) could fail to compile or run; masked reduction itself is correct"
+          ],
+          "scope_notes": [
+            "Only RMSNorm forward is in scope; no weight/bias (contract mentions none)",
+            "Contract explicitly emphasizes near-zero-row behavior, so all-zero/near-zero rows are in-scope conditions, not adversarial extras",
+            "No test_code provided; verification domain is the problem.txt formula plus typical Liger RMSNorm forward usage"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "RMSNorm forward per Liger-Kernel contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd",
+            "Epsilon must be inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+            "Contract also produces a per-row rstd value alongside y"
+          ],
+          "created_at": "2026-09-30T08:23:17Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "kernel.py line 22 computes mean_square = sum(X_row*X_row)/n_cols with masked loads (other=0), matching the contract",
+            "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps): eps is added OUTSIDE the sqrt, deviating from the contract formula 1/sqrt(mean_square + eps)",
+            "Single program per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes 2D input (num_rows, n_cols = X.shape) and one row fits in one Triton block",
+            "Y = torch.empty_like(X) preserves dtype/strides; RSTD stored fp32; row_idx cast to int64 for large tensors; only Y is returned (RSTD allocated but unused by the wrapper return)"
+          ],
+          "open_questions": [
+            "Does the benchmark test suite include near-zero rows or only typical random inputs, and what eps and tolerance values does it use?",
+            "Is the RSTD tensor expected as an output anywhere, or is it internal-only?"
+          ],
+          "risk_map": [
+            "Epsilon placement mismatch: 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). For typical random rows the difference is small and may pass tight tolerances, but for near-zero rows divergence is large: contract rstd -> 1/sqrt(eps) while kernel rstd -> 1/eps, a factor of ~1/sqrt(eps) (~316x for eps=1e-6), exactly where the contract demands stability",
+            "Tolerance-based random tests with typical eps (1e-5/1e-6) may not surface the error since it shrinks as sqrt(ms) grows; probe all-zero and tiny rows (already raised as claim c1)",
+            "eps value semantics: relative error of kernel rstd vs contract rstd is ~eps/sqrt(ms), so large eps values would also fail typical rows",
+            "Non-2D inputs would fail unpacking at X.shape; scope appears limited to 2D",
+            "Very large n_cols (beyond a single block / next_power_of_2 register limits) could fail to compile or run; masked reduction itself is correct"
+          ],
+          "scope_notes": [
+            "Only RMSNorm forward is in scope; no weight/bias (contract mentions none)",
+            "Contract explicitly emphasizes near-zero-row behavior, so all-zero/near-zero rows are in-scope conditions, not adversarial extras",
+            "No test_code provided; verification domain is the problem.txt formula plus typical Liger RMSNorm forward usage"
+          ],
+          "summary": "Described case_12: RMSNorm forward Triton kernel vs Liger-Kernel contract. Kernel implements eps OUTSIDE the sqrt (rstd = 1/(sqrt(mean_square)+eps)) whereas contract requires 1/sqrt(mean_square+eps), causing large divergence on near-zero rows; matches claim c1 already raised by the Skeptic.",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "The only material contract violation \u2014 eps added outside the sqrt (line 23) \u2014 is already captured as in-scope claim c1. Remaining kernel paths (masked reduction, mean_square, RSTD store, indexing) match the contract; other potential edge cases (non-2D inputs, huge n_cols) are not supported by any contract source here and would be out-of-scope generality notes, not decisive claims.",
+        "reviewed_claims": [
+          "c1"
+        ]
+      },
+      "created_at": "2026-09-30T08:23:23Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-30T08:23:23Z",
+        "decision": "no_new_claims",
+        "reason": "The only material contract violation \u2014 eps added outside the sqrt (line 23) \u2014 is already captured as in-scope claim c1. Remaining kernel paths (masked reduction, mean_square, RSTD store, indexing) match the contract; other potential edge cases (non-2D inputs, huge n_cols) are not supported by any contract source here and would be out-of-scope generality notes, not decisive claims.",
+        "reviewed_claims": [
+          "c1"
+        ],
+        "reviewed_tool_event_count": 8,
+        "tool_event_id": "t9",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_12\")\nfrom kernel import rms_norm_forward\n\ndef ref(X, eps):\n    ms = (X * X).sum(dim=1, dtype=torch.float32) / X.shape[1]\n    rstd = 1.0 / torch.sqrt(ms + eps)\n    return X * rstd.unsqueeze(1), rstd\n\neps = 1e-6\n# rows: all-zero, tiny (1e-8 scale), normal randn\nX = torch.cat([\n    torch.zeros(1, 64),\n    torch.full((1, 64), 1e-8),\n    torch.randn(4, 64),\n]).cuda()\n\nY = rms_norm_forward(X, eps)\nYr, rstd_ref = ref(X, eps)\n# kernel rstd implied from Y/X where nonzero\nX32 = X.float()\nratio = (Y.float() / X32).nan_to_num(0)  # zero rows give 0/0\n# compute kernel rstd analytically for the all-zero row: 1/(0+eps)=1e6 vs ref 1/sqrt(eps)=1e3\nk_rstd_zero = 1.0 / (0.0 + eps)\nref_rstd_zero = 1.0 / (eps ** 0.5)\nd = {\n    \"kernel_impl\": \"1/(sqrt(ms)+eps)\",\n    \"eps\": eps,\n    \"max_abs_err_normal_rows\": float((Y[2:] - Yr[2:]).abs().max()),\n    \"kernel_rstd_zero_row\": k_rstd_zero,\n    \"ref_rstd_zero_row\": ref_rstd_zero,\n    \"rstd_ratio_zero_row\": k_rstd_zero / ref_rstd_zero,\n    \"Y_zero_row_max_abs\": float(Y[0].abs().max()),\n    \"Y_tiny_row_max_abs_kernel\": float(Y[1].abs().max()),\n    \"Y_tiny_row_max_abs_ref\": float(Yr[1].abs().max()),\n    \"tiny_row_out_ratio\": float(Y[1].abs().max() / Yr[1].abs().max()),\n    \"max_rel_err_all_rows\": float(((Y.float() - Yr).abs() / Yr.abs().clamp_min(1e-30)).max()),\n}\nprint(json.dumps(d))",
+        "expected_signal": "zero/tiny-row rstd off by ~1/sqrt(eps) factor vs contract"
+      },
+      "created_at": "2026-09-30T08:23:39Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "5d85735124ecdd284ea7949f4801afe6ed1bc5a144d1f1338419ee764ed66569"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "5df8dd8b394f02f46942b20a2fb6a9ca47f546235e28d3cb8142477309376467"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t10_json_result.json",
+            "sha256": "aa46b381445e41536d0401933bf78d95ab3a18e407ec3a8f4578ac93cdf81a1e"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving rstd and outputs off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference.",
+        "cwd": "/root/cases/case_12",
+        "duration_s": 5.561635,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "5d85735124ecdd284ea7949f4801afe6ed1bc5a144d1f1338419ee764ed66569"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "5df8dd8b394f02f46942b20a2fb6a9ca47f546235e28d3cb8142477309376467"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "aa46b381445e41536d0401933bf78d95ab3a18e407ec3a8f4578ac93cdf81a1e"
+              }
+            ],
+            "duration_s": 5.561635,
+            "exit_code": 0,
+            "expected_signal": "zero/tiny-row rstd off by ~1/sqrt(eps) factor vs contract",
+            "json_parse_error": null,
+            "json_result": {
+              "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+              "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+              "Y_zero_row_max_abs": 0.0,
+              "eps": 1e-06,
+              "kernel_impl": "1/(sqrt(ms)+eps)",
+              "kernel_rstd_zero_row": 1000000.0,
+              "max_abs_err_normal_rows": 1.430511474609375e-06,
+              "max_rel_err_all_rows": 989.0990600585938,
+              "ref_rstd_zero_row": 1000.0,
+              "rstd_ratio_zero_row": 1000.0,
+              "tiny_row_out_ratio": 990.0989990234375
+            },
+            "stderr": "",
+            "stdout": "{\"kernel_impl\": \"1/(sqrt(ms)+eps)\", \"eps\": 1e-06, \"max_abs_err_normal_rows\": 1.430511474609375e-06, \"kernel_rstd_zero_row\": 1000000.0, \"ref_rstd_zero_row\": 1000.0, \"rstd_ratio_zero_row\": 1000.0, \"Y_zero_row_max_abs\": 0.0, \"Y_tiny_row_max_abs_kernel\": 0.009900989942252636, \"Y_tiny_row_max_abs_ref\": 9.999999747378752e-06, \"tiny_row_out_ratio\": 990.0989990234375, \"max_rel_err_all_rows\": 989.0990600585938}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": "zero/tiny-row rstd off by ~1/sqrt(eps) factor vs contract",
+        "json_parse_error": null,
+        "json_result": {
+          "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+          "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+          "Y_zero_row_max_abs": 0.0,
+          "eps": 1e-06,
+          "kernel_impl": "1/(sqrt(ms)+eps)",
+          "kernel_rstd_zero_row": 1000000.0,
+          "max_abs_err_normal_rows": 1.430511474609375e-06,
+          "max_rel_err_all_rows": 989.0990600585938,
+          "ref_rstd_zero_row": 1000.0,
+          "rstd_ratio_zero_row": 1000.0,
+          "tiny_row_out_ratio": 990.0989990234375
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"kernel_impl\": \"1/(sqrt(ms)+eps)\", \"eps\": 1e-06, \"max_abs_err_normal_rows\": 1.430511474609375e-06, \"kernel_rstd_zero_row\": 1000000.0, \"ref_rstd_zero_row\": 1000.0, \"rstd_ratio_zero_row\": 1000.0, \"Y_zero_row_max_abs\": 0.0, \"Y_tiny_row_max_abs_kernel\": 0.009900989942252636, \"Y_tiny_row_max_abs_ref\": 9.999999747378752e-06, \"tiny_row_out_ratio\": 990.0989990234375, \"max_rel_err_all_rows\": 989.0990600585938}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+          "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+          "eps": 1e-06,
+          "kernel_impl": "1/(sqrt(ms)+eps)",
+          "max_abs_err_normal_rows": 1.430511474609375e-06,
+          "max_rel_err_all_rows": 989.0990600585938,
+          "ref_rstd_zero_row": 1000.0,
+          "rstd_ratio_zero_row": 1000.0,
+          "tiny_row_out_ratio": 990.0989990234375
+        },
+        "event_id": "t10",
+        "status": "confirmed",
+        "summary": "Runtime probe confirms eps-placement defect (claim c1). Kernel output on a tiny row (all 1e-8) with eps=1e-6 is 990.1x the contract reference (0.00990 vs 1.0e-5), matching the predicted ~1/sqrt(eps) blowup; implied kernel rstd on a zero row is 1e6 vs contract 1e3 (ratio 1000). Normal randn rows show only 1.43e-6 max abs error, consistent with rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps). Contract explicitly requires near-zero-row stability, so this is an in-scope correctness violation.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:23:48Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:23:04Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:23:48Z",
+              "data": {
+                "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+                "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "5d85735124ecdd284ea7949f4801afe6ed1bc5a144d1f1338419ee764ed66569"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "5df8dd8b394f02f46942b20a2fb6a9ca47f546235e28d3cb8142477309376467"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t10_json_result.json",
+                    "sha256": "aa46b381445e41536d0401933bf78d95ab3a18e407ec3a8f4578ac93cdf81a1e"
+                  }
+                ],
+                "duration_s": 5.561635,
+                "eps": 1e-06,
+                "exit_code": 0,
+                "expected_signal": "zero/tiny-row rstd off by ~1/sqrt(eps) factor vs contract",
+                "json_parse_error": null,
+                "json_result": {
+                  "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+                  "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+                  "Y_zero_row_max_abs": 0.0,
+                  "eps": 1e-06,
+                  "kernel_impl": "1/(sqrt(ms)+eps)",
+                  "kernel_rstd_zero_row": 1000000.0,
+                  "max_abs_err_normal_rows": 1.430511474609375e-06,
+                  "max_rel_err_all_rows": 989.0990600585938,
+                  "ref_rstd_zero_row": 1000.0,
+                  "rstd_ratio_zero_row": 1000.0,
+                  "tiny_row_out_ratio": 990.0989990234375
+                },
+                "kernel_impl": "1/(sqrt(ms)+eps)",
+                "max_abs_err_normal_rows": 1.430511474609375e-06,
+                "max_rel_err_all_rows": 989.0990600585938,
+                "ref_rstd_zero_row": 1000.0,
+                "rstd_ratio_zero_row": 1000.0,
+                "stderr": "",
+                "stdout": "{\"kernel_impl\": \"1/(sqrt(ms)+eps)\", \"eps\": 1e-06, \"max_abs_err_normal_rows\": 1.430511474609375e-06, \"kernel_rstd_zero_row\": 1000000.0, \"ref_rstd_zero_row\": 1000.0, \"rstd_ratio_zero_row\": 1000.0, \"Y_zero_row_max_abs\": 0.0, \"Y_tiny_row_max_abs_kernel\": 0.009900989942252636, \"Y_tiny_row_max_abs_ref\": 9.999999747378752e-06, \"tiny_row_out_ratio\": 990.0989990234375, \"max_rel_err_all_rows\": 989.0990600585938}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tiny_row_out_ratio": 990.0989990234375
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Runtime probe confirms eps-placement defect (claim c1). Kernel output on a tiny row (all 1e-8) with eps=1e-6 is 990.1x the contract reference (0.00990 vs 1.0e-5), matching the predicted ~1/sqrt(eps) blowup; implied kernel rstd on a zero row is 1e6 vs contract 1e3 (ratio 1000). Normal randn rows show only 1.43e-6 max abs error, consistent with rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps). Contract explicitly requires near-zero-row stability, so this is an in-scope correctness violation.",
+              "supports": "confirmed",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps) instead of 1.0/_sqrt(mean_square + eps). For an all-zero row with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 ~316x divergence exactly where the contract demands stability; this may also fail tolerances on typical rows for larger eps.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract formula: 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly: 'it must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up.'"
+            }
+          ],
+          "scope_rationale": "The contract in problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that a near-zero row does not blow up; the kernel's eps-outside-sqrt variant violates both the stated formula and the near-zero-row stability requirement, so near-zero rows are in-scope conditions.",
+          "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving rstd and outputs off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:23:48Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:23:48Z",
+          "data": {
+            "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+            "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "5d85735124ecdd284ea7949f4801afe6ed1bc5a144d1f1338419ee764ed66569"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "5df8dd8b394f02f46942b20a2fb6a9ca47f546235e28d3cb8142477309376467"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "aa46b381445e41536d0401933bf78d95ab3a18e407ec3a8f4578ac93cdf81a1e"
+              }
+            ],
+            "duration_s": 5.561635,
+            "eps": 1e-06,
+            "exit_code": 0,
+            "expected_signal": "zero/tiny-row rstd off by ~1/sqrt(eps) factor vs contract",
+            "json_parse_error": null,
+            "json_result": {
+              "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+              "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+              "Y_zero_row_max_abs": 0.0,
+              "eps": 1e-06,
+              "kernel_impl": "1/(sqrt(ms)+eps)",
+              "kernel_rstd_zero_row": 1000000.0,
+              "max_abs_err_normal_rows": 1.430511474609375e-06,
+              "max_rel_err_all_rows": 989.0990600585938,
+              "ref_rstd_zero_row": 1000.0,
+              "rstd_ratio_zero_row": 1000.0,
+              "tiny_row_out_ratio": 990.0989990234375
+            },
+            "kernel_impl": "1/(sqrt(ms)+eps)",
+            "max_abs_err_normal_rows": 1.430511474609375e-06,
+            "max_rel_err_all_rows": 989.0990600585938,
+            "ref_rstd_zero_row": 1000.0,
+            "rstd_ratio_zero_row": 1000.0,
+            "stderr": "",
+            "stdout": "{\"kernel_impl\": \"1/(sqrt(ms)+eps)\", \"eps\": 1e-06, \"max_abs_err_normal_rows\": 1.430511474609375e-06, \"kernel_rstd_zero_row\": 1000000.0, \"ref_rstd_zero_row\": 1000.0, \"rstd_ratio_zero_row\": 1000.0, \"Y_zero_row_max_abs\": 0.0, \"Y_tiny_row_max_abs_kernel\": 0.009900989942252636, \"Y_tiny_row_max_abs_ref\": 9.999999747378752e-06, \"tiny_row_out_ratio\": 990.0989990234375, \"max_rel_err_all_rows\": 989.0990600585938}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tiny_row_out_ratio": 990.0989990234375
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Runtime probe confirms eps-placement defect (claim c1). Kernel output on a tiny row (all 1e-8) with eps=1e-6 is 990.1x the contract reference (0.00990 vs 1.0e-5), matching the predicted ~1/sqrt(eps) blowup; implied kernel rstd on a zero row is 1e6 vs contract 1e3 (ratio 1000). Normal randn rows show only 1.43e-6 max abs error, consistent with rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps). Contract explicitly requires near-zero-row stability, so this is an in-scope correctness violation.",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Claim c1 (eps outside the sqrt, rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps)) is confirmed with runtime evidence: on a tiny row (1e-8) with eps=1e-6 the kernel output is ~990x the contract reference, and the zero-row rstd diverges by 1000x, exactly where problem.txt requires near-zero-row stability. The rest of the kernel (masked reduction, mean_square, RSTD store, indexing) matches the contract. No new evidence suggests any additional in-scope, testable problem.",
+        "reviewed_claims": [
+          "c1"
+        ]
+      },
+      "created_at": "2026-09-30T08:23:54Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-09-30T08:23:54Z",
+        "decision": "no_new_claims",
+        "reason": "Claim c1 (eps outside the sqrt, rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps)) is confirmed with runtime evidence: on a tiny row (1e-8) with eps=1e-6 the kernel output is ~990x the contract reference, and the zero-row rstd diverges by 1000x, exactly where problem.txt requires near-zero-row stability. The rest of the kernel (masked reduction, mean_square, RSTD store, indexing) matches the contract. No new evidence suggests any additional in-scope, testable problem.",
+        "reviewed_claims": [
+          "c1"
+        ],
+        "reviewed_tool_event_count": 11,
+        "tool_event_id": "t12",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), but the problem.txt contract explicitly states rstd = 1/sqrt(mean_square + eps) \u2014 eps must be inside the sqrt \u2014 and explicitly requires that a row of (near-)zero input does not blow the output up. Runtime probe (t10) confirmed the defect: on a tiny row (all 1e-8) with eps=1e-6, the kernel output is ~990x the contract reference (0.00990 vs 1e-5), and the zero-row rstd diverges by 1000x (1e6 vs 1e3). No test.py/get_inputs exist, so problem.txt is the operative contract; the violated formula and near-zero-row stability requirement are stated directly in it. Normal rows show only ~1.4e-6 error, confirming this is exactly the eps-placement bug, not a metric artifact. The kernel implements a different formula than the one the contract explicitly requires, which is a defect regardless of small deviations on typical inputs. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:24:04Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-30T08:24:04Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), but the problem.txt contract explicitly states rstd = 1/sqrt(mean_square + eps) \u2014 eps must be inside the sqrt \u2014 and explicitly requires that a row of (near-)zero input does not blow the output up. Runtime probe (t10) confirmed the defect: on a tiny row (all 1e-8) with eps=1e-6, the kernel output is ~990x the contract reference (0.00990 vs 1e-5), and the zero-row rstd diverges by 1000x (1e6 vs 1e3). No test.py/get_inputs exist, so problem.txt is the operative contract; the violated formula and near-zero-row stability requirement are stated directly in it. Normal rows show only ~1.4e-6 error, confirming this is exactly the eps-placement bug, not a metric artifact. The kernel implements a different formula than the one the contract explicitly requires, which is a defect regardless of small deviations on typical inputs. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-30T08:24:04Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), but the problem.txt contract explicitly states rstd = 1/sqrt(mean_square + eps) \u2014 eps must be inside the sqrt \u2014 and explicitly requires that a row of (near-)zero input does not blow the output up. Runtime probe (t10) confirmed the defect: on a tiny row (all 1e-8) with eps=1e-6, the kernel output is ~990x the contract reference (0.00990 vs 1e-5), and the zero-row rstd diverges by 1000x (1e6 vs 1e3). No test.py/get_inputs exist, so problem.txt is the operative contract; the violated formula and near-zero-row stability requirement are stated directly in it. Normal rows show only ~1.4e-6 error, confirming this is exactly the eps-placement bug, not a metric artifact. The kernel implements a different formula than the one the contract explicitly requires, which is a defect regardless of small deviations on typical inputs. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+    "verdict": "reject"
+  }
+}

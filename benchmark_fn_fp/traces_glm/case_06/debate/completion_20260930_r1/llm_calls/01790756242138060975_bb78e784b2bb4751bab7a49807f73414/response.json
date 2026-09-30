@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-203d1a8c7ca945b1bf8ac6381ecedd47",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run two independent runtime probes: c1 with generic random inputs (moderate/long sequences) to measure accumulated quantization error in the final state, and c2 with small-magnitude inputs to test flush-to-zero. Both compare against a plain FP reference recurrence.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b728deddbb262657",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_06/kernel.py\\\")\\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\\n\\ntorch.manual_seed(0)\\nresults = {}\\nfor nchunks, dim in [(8, 16), (64, 32), (256, 8)]:\\n    new_states = torch.randn(nchunks, dim, device=\\\"cuda\\\", dtype=torch.float32)\\n    dA_cs = torch.randn(nchunks, device=\\\"cuda\\\", dtype=torch.float32) * 0.5 - 0.2\\n    ref = torch.zeros(dim, device=\\\"cuda\\\", dtype=torch.float32)\\n    for c in range(nchunks):\\n        ref = torch.exp(dA_cs[c]) * ref + new_states[c]\\n    out = mod.state_passing_lowbit(new_states, dA_cs)\\n    err = (out - ref).abs()\\n    rel = (err / ref.abs().clamp_min(1e-12))\\n    results[f\\\"nchunks{nchunks}_dim{dim}\\\"] = {\\n        \\\"max_abs_err\\\": float(err.max()),\\n        \\\"mean_abs_err\\\": float(err.mean()),\\n        \\\"max_rel_err\\\": float(rel.max()),\\n        \\\"n_chunks\\\": nchunks, \\\"dim\\\": dim,\\n        \\\"on_grid_frac\\\": float(((out / 5e-3).round() - out / 5e-3).abs().max() < 1e-3),\\n    }\\nprint(json.dumps(results))\", \"expected_signal\": \"final state deviates from exact FP reference by up to ~2.5e-3 per chunk, error growing with nchunks\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-941ecd1027f89042",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_06/kernel.py\\\")\\nmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\\n\\ntorch.manual_seed(1)\\nresults = {}\\n# Case A: tiny new_states (magnitude < 2.5e-3)\\nnchunks, dim = 4, 8\\nnew_states = torch.randn(nchunks, dim, device=\\\"cuda\\\", dtype=torch.float32) * 1e-3\\ndA_cs = -torch.ones(nchunks, device=\\\"cuda\\\", dtype=torch.float32) * 0.5\\nref = torch.zeros(dim, device=\\\"cuda\\\", dtype=torch.float32)\\nfor c in range(nchunks):\\n    ref = torch.exp(dA_cs[c]) * ref + new_states[c]\\nout = mod.state_passing_lowbit(new_states, dA_cs)\\nrel = ((out - ref).abs() / ref.abs().clamp_min(1e-12))\\nresults[\\\"tiny_new_states\\\"] = {\\n    \\\"kernel_final\\\": out.tolist(), \\\"ref_final\\\": ref.tolist(),\\n    \\\"zeros_in_kernel\\\": int((out == 0).sum()), \\\"zeros_in_ref\\\": int((ref == 0).sum()),\\n    \\\"max_abs_err\\\": float((out - ref).abs().max()),\\n    \\\"max_rel_err\\\": float(rel.max()), \\\"ref_max_abs\\\": float(ref.abs().max()),\\n}\\n# Case B: strong decay\\nnchunks, dim = 3, 8\\nnew_states = torch.randn(nchunks, dim, device=\\\"cuda\\\", dtype=torch.float32)\\ndA_cs = -torch.full((nchunks,), 5.0, device=\\\"cuda\\\", dtype=torch.float32)\\nref = torch.zeros(dim, device=\\\"cuda\\\", dtype=torch.float32)\\nfor c in range(nchunks):\\n    ref = torch.exp(dA_cs[c]) * ref + new_states[c]\\nout = mod.state_passing_lowbit(new_states, dA_cs)\\nrel = ((out - ref).abs() / ref.abs().clamp_min(1e-12))\\nresults[\\\"strong_decay\\\"] = {\\n    \\\"kernel_final\\\": out.tolist(), \\\"ref_final\\\": ref.tolist(),\\n    \\\"max_abs_err\\\": float((out - ref).abs().max()),\\n    \\\"max_rel_err\\\": float(rel.max()), \\\"ref_max_abs\\\": float(ref.abs().max()),\\n}\\nprint(json.dumps(results))\", \"expected_signal\": \"small-magnitude true states snap to 0.0, producing large (up to 100%) relative error\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Two claims, both about the quantization. Launch two probes: c1 with generic random inputs and long nchunks; c2 with tiny states. Independent — launch both together.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756243,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1013,
+    "prompt_tokens": 15090,
+    "total_tokens": 16103,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 36,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 36
+    }
+  }
+}

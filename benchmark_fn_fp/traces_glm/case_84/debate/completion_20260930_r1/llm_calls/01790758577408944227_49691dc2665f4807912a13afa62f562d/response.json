@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-88a6fb7be99f4af68de084f537e8e882",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run two independent probes on the exact seed-815 workload: one measuring the kernel's full E vs the float64 reference (c1), and one isolating the fp32-softmax path error by simulating the kernel without the fp16 cast (c2).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b033e56b825250f7",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json, sys, math\\nsys.path.insert(0, \\\"/root/pilot_cases/case_84\\\")\\nimport torch, numpy as np\\nimport kernel as K\\n\\nq, k, v = K.make_inputs(\\\"cuda\\\")\\nout = K.run(q, k, v).double().cpu().numpy()\\n\\n# float64 reference on the same float32 inputs\\nq64 = q.double().cpu().numpy(); k64 = k.double().cpu().numpy(); v64 = v.double().cpu().numpy()\\nz = k64 @ q64 / math.sqrt(q64.shape[0])\\nz = z - z.max(); p = np.exp(z); p /= p.sum()\\nref = p @ v64\\n\\nerr = np.linalg.norm(out - ref)\\nrefn = np.linalg.norm(ref)\\ndenom = max(refn, 0.001*math.sqrt(32))\\nE = err/denom\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"contract E on exact workload\\\",\\n    \\\"E\\\": E, \\\"err_l2\\\": err, \\\"ref_norm\\\": refn, \\\"denominator\\\": denom,\\n    \\\"floor\\\": 0.001*math.sqrt(32),\\n    \\\"finite\\\": bool(np.isfinite(out).all()),\\n    \\\"E_le_0.001\\\": bool(E <= 0.001)\\n}))\", \"expected_signal\": \"E computed for the full kernel (with fp16 cast) vs fp64 reference on exact workload; decisive for the >0.001 claim\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-bd293f2d5b627e1e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import json, sys, math\\nsys.path.insert(0, \\\"/root/pilot_cases/case_84\\\")\\nimport torch, numpy as np\\nimport kernel as K\\n\\nq, k, v = K.make_inputs(\\\"cuda\\\")\\n\\n# fp64 reference\\nq64 = q.double().cpu().numpy(); k64 = k.double().cpu().numpy(); v64 = v.double().cpu().numpy()\\nz = k64 @ q64 / math.sqrt(32); z -= z.max(); p = np.exp(z); p /= p.sum()\\nref = p @ v64\\n\\n# fp32-softmax-only simulation (no fp16 cast): replicate lines 12-14,16 in fp32\\nq32 = q.float().cpu().numpy(); k32 = k.float().cpu().numpy(); v32 = v.float().cpu().numpy()\\ns = (k32.astype(np.float64) @ q32) if False else None\\n# mimic Triton: dot in fp32 accumulation order ~ pairwise; use numpy float32 matmul with float64 accumulate not allowed -> use float32 GEMM\\ns32 = (k32 @ q32.astype(np.float32)) * (32 ** -0.5)\\ns32 = s32 - s32.max()\\ne = np.exp(s32.astype(np.float64)); e /= e.sum()\\n# keep softmax in fp32 precision\\ne32 = np.exp(s32); e32 = e32 / e32.sum()\\ny32 = (e32[:, None] * v32).sum(axis=0)  # fp32-ish accumulation\\n\\nerr = np.linalg.norm(y32.astype(np.float64) - ref)\\nrefn = np.linalg.norm(ref)\\ndenom = max(refn, 0.001*math.sqrt(32))\\nE2 = err/denom\\n# also with fp64 accumulate of the final weighted sum (isolating softmax from final sum)\\ny32b = (e32[:, None].astype(np.float64) * v64).sum(axis=0)\\nE2b = np.linalg.norm(y32b - ref)/denom\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"E of fp32-softmax path (no fp16 cast) vs fp64 reference\\\",\\n    \\\"E_fp32_softmax\\\": E2, \\\"E_fp32_softmax_fp64sum\\\": E2b,\\n    \\\"ref_norm\\\": refn, \\\"denominator\\\": denom, \\\"finite\\\": bool(np.isfinite(y32).all())\\n}))\", \"expected_signal\": \"E of a softmax-without-fp16-cast simulation vs fp64 reference; decides whether fp32 softmax alone exceeds 0.001\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run probes for c1 and c2 on the exact workload: compute reference in fp64, kernel output on GPU, and also a simulated fp32-only (no fp16 cast) output to separate effects. Two independent probes can be batched.\n\nProbe 1 (c1): run kernel via import from session dir, compute ref fp64, report E. Probe 2 (c2): compute E using fp32 softmax without fp16 cast (reference simulation) vs fp64 ref. Both independent — batch.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790758578,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1044,
+    "prompt_tokens": 27135,
+    "total_tokens": 28179,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 104,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 540,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 104
+    }
+  }
+}

@@ -1,0 +1,753 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_28",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _quant_kernel(X, OUT, stride, N, PCTL_LEVELS: tl.constexpr, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < N\n    x = tl.load(X + row * stride + cols, mask=valid, other=0.0)\n\n    ax = tl.abs(x)\n    absmax = tl.max(ax, axis=0)\n    # Calibrate on the bulk of the row rather than on its single largest value.\n    thresh = absmax\n    for _ in range(PCTL_LEVELS):\n        below = tl.where(ax < thresh, ax, 0.0)\n        thresh = tl.max(below, axis=0)\n\n    scale = tl.where(thresh == 0.0, 1.0, thresh / 127.0)\n    q = tl.floor(x / scale + 0.5)\n    q = tl.minimum(tl.maximum(q, -127.0), 127.0)\n    tl.store(OUT + row * stride + cols, q * scale, mask=valid)\n\n\ndef quant_dequant(x, pctl_levels: int = 2):\n    # Symmetric INT8 quantize-dequantize with a per-row calibrated scale.\n    n_rows, n_cols = x.shape\n    out = torch.empty_like(x)\n    _quant_kernel[(n_rows,)](x, out, x.stride(0), n_cols,\n                             PCTL_LEVELS=pctl_levels,\n                             BLOCK=triton.next_power_of_2(n_cols))\n    return out\n",
+    "passed": null,
+    "problem_text": "Operation: symmetric INT8 quantize-dequantize with a per-row calibrated scale,\nthe activation quantization step of INT8 inference.\n\n    scale = calibration(|x|) / 127\n    q     = round(x / scale), clamped to [-127, 127]\n    y     = q * scale\n\nAccuracy requirement: the relative reconstruction error of each row,\n\n    ||y - x|| / ||x||        (Euclidean norm over the row)\n\nmust not exceed 5%. That is the usual way INT8 quantization quality is stated,\nand it is loose enough to absorb ordinary rounding: an 8-bit grid over the row's\ndynamic range leaves a residual well under 1%. It is not loose enough to absorb\na value that has been clamped away, since a clamped entry removes its whole\nmagnitude from the reconstruction.\n\nInput domain: real transformer activations, whose per-channel magnitudes are\nheavy-tailed. A small number of channels carrying values one or two orders of\nmagnitude above the bulk is normal and documented (LLM.int8(), SmoothQuant), and\nthose channels are exactly the ones downstream layers depend on.\n\nDoes quant_dequant() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_28",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:34:10Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:34:28Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "164703ff359aa8296d3aa92e3d3dea55696ecfc6a93b42167da5a172a84294a4"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "4c95741bc4ab766aad74d19190b249c5a01b477c3909e3043a7c17e660d8fd88"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "2f831b500f88c8656c907f64c96299edb470e49505add5f317f561f3cd5a3979"
+              }
+            ],
+            "duration_s": 6.694412,
+            "exit_code": 0,
+            "expected_signal": "rows with relative error > 0.05 due to clamped outliers",
+            "frac_rows_over_5pct": 1.0,
+            "json_parse_error": null,
+            "json_result": {
+              "frac_rows_over_5pct": 1.0,
+              "max_rel_err": 0.9815006852149963,
+              "mean_rel_err": 0.6887933015823364,
+              "metric": "per-row relative reconstruction error",
+              "min_rel_err": 0.13322266936302185
+            },
+            "max_rel_err": 0.9815006852149963,
+            "mean_rel_err": 0.6887933015823364,
+            "metric": "per-row relative reconstruction error",
+            "min_rel_err": 0.13322266936302185,
+            "probe": "64x512 randn*0.5 rows with 3 outlier channels per row multiplied by 30/60/100",
+            "stderr": "",
+            "stdout": "{\"metric\": \"per-row relative reconstruction error\", \"max_rel_err\": 0.9815006852149963, \"mean_rel_err\": 0.6887933015823364, \"frac_rows_over_5pct\": 1.0, \"min_rel_err\": 0.13322266936302185}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On heavy-tailed rows (bulk ~0.5, 3 outlier channels 1-2 orders above bulk, matching the contract's declared domain), every row's relative reconstruction error exceeded 5%: mean 68.9%, max 98.2%, min 13.3%. Outliers are clamped to 127*scale where scale is calibrated on the ~3rd-largest |x|, removing nearly their full magnitude, exactly the failure mode the contract says the 5% bound cannot absorb.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "scale = thresh/127 with thresh a lower-order statistic of |x| (after PCTL_LEVELS=2 iterations, roughly the 3rd-largest |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs (outliers 1-2 orders above the bulk) are in the declared domain.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Relative row error ||y-x||/||x|| must not exceed 5%; \"It is not loose enough to absorb a value that has been clamped away\"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude."
+        }
+      ],
+      "scope_rationale": "The contract requires per-row relative reconstruction error \u22645% on heavy-tailed activation inputs; with a scale calibrated on the bulk rather than the row max, outlier channels are clamped, which the contract explicitly says violates the 5% bound.",
+      "statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is calibrated on a lower-order statistic of |x| rather than the row max.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:34:28Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_28",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_28"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_28"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_28"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_28",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 7.860217498999873,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel calibrates the scale on the bulk of the row (with `pctl_levels=2`, the threshold ends up being roughly the 3rd-largest |x|) and then clamps to \u00b1127\u00b7scale. On heavy-tailed rows, outlier channels get clamped away entirely, which the contract explicitly says the 5% bound cannot absorb. I'll record that claim and probe it.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "scale = thresh/127 with thresh well below the row max (after PCTL_LEVELS iterations thresh is a lower-order statistic of |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs are in the declared domain.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Relative row error ||y-x||/||x|| must not exceed 5%; \"It is not loose enough to absorb a value that has been clamped away\"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude."
+              }
+            ],
+            "statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is calibrated on a lower-order statistic of |x| rather than the row max."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.86,
+        "input_tokens": 7248,
+        "output_tokens": 390
+      }
+    },
+    {
+      "duration_s": 5.061484878999863,
+      "role": "solo",
+      "round": 3,
+      "text": "Record the claim again with scope_rationale, then run probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "scale = thresh/127 with thresh a lower-order statistic of |x| (after PCTL_LEVELS=2 iterations, roughly the 3rd-largest |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs (outliers 1-2 orders above the bulk) are in the declared domain.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Relative row error ||y-x||/||x|| must not exceed 5%; \"It is not loose enough to absorb a value that has been clamped away\"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude."
+              }
+            ],
+            "scope_rationale": "The contract requires per-row relative reconstruction error \u22645% on heavy-tailed activation inputs; with a scale calibrated on the bulk rather than the row max, outlier channels are clamped, which the contract explicitly says violates the 5% bound.",
+            "statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is calibrated on a lower-order statistic of |x| rather than the row max."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.061,
+        "input_tokens": 8056,
+        "output_tokens": 316
+      }
+    },
+    {
+      "duration_s": 5.371422378000034,
+      "role": "solo",
+      "round": 4,
+      "text": "Running the probe on heavy-tailed inputs matching the contract's domain.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_28\")\nfrom kernel import quant_dequant\n\ntorch.manual_seed(0)\nrows, cols = 64, 512\nx = torch.randn(rows, cols, device=\"cuda\") * 0.5\n# heavy-tailed: 3 outlier channels per row, 1-2 orders of magnitude above bulk\nfor r in range(rows):\n    idx = torch.randperm(cols, device=\"cuda\")[:3]\n    x[r, idx] *= torch.tensor([30.0, 60.0, 100.0], device=\"cuda\")\n\ny = quant_dequant(x)\nerr = (y - x).norm(dim=1) / x.norm(dim=1)\nprint(json.dumps({\n    \"metric\": \"per-row relative reconstruction error\",\n    \"max_rel_err\": err.max().item(),\n    \"mean_rel_err\": err.mean().item(),\n    \"frac_rows_over_5pct\": (err > 0.05).float().mean().item(),\n    \"min_rel_err\": err.min().item(),\n}))",
+            "expected_signal": "rows with relative error > 0.05 due to clamped outliers"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.371,
+        "input_tokens": 9562,
+        "output_tokens": 287
+      }
+    },
+    {
+      "duration_s": 6.138650668000082,
+      "role": "solo",
+      "round": 5,
+      "text": "The probe confirmed the claim decisively: every row exceeded 5% error (mean 69%, max 98%) because outlier channels are clamped. I'll finalize the evidence and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "frac_rows_over_5pct": 1.0,
+              "max_rel_err": 0.9815006852149963,
+              "mean_rel_err": 0.6887933015823364,
+              "metric": "per-row relative reconstruction error",
+              "min_rel_err": 0.13322266936302185,
+              "probe": "64x512 randn*0.5 rows with 3 outlier channels per row multiplied by 30/60/100"
+            },
+            "event_id": "t7",
+            "status": "confirmed",
+            "summary": "On heavy-tailed rows (bulk ~0.5, 3 outlier channels 1-2 orders above bulk, matching the contract's declared domain), every row's relative reconstruction error exceeded 5%: mean 68.9%, max 98.2%, min 13.3%. Outliers are clamped to 127*scale where scale is calibrated on the ~3rd-largest |x|, removing nearly their full magnitude, exactly the failure mode the contract says the 5% bound cannot absorb.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.139,
+        "input_tokens": 11715,
+        "output_tokens": 305
+      }
+    },
+    {
+      "duration_s": 5.891579849999971,
+      "role": "solo",
+      "round": 6,
+      "text": "The claim is confirmed and fully evidenced: on the contract's declared heavy-tailed domain, every row exceeded the 5% relative error bound because outlier channels are clamped. I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The kernel calibrates scale on a lower-order statistic of |x| (with default pctl_levels=2, roughly the 3rd-largest magnitude) rather than the row max, so outlier channels with |x| > 127*scale are clamped away. Probe t7 on the contract's declared heavy-tailed domain (64x512 activations, bulk ~0.5, 3 outlier channels per row 1-2 orders of magnitude above the bulk) showed every row violating the 5% relative reconstruction error bound: mean 68.9%, max 98.2%, min 13.3% (frac_rows_over_5pct = 1.0). The contract explicitly states the 5% bound is not loose enough to absorb a clamped-away value, so this is an in-scope contract violation.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.892,
+        "input_tokens": 15380,
+        "output_tokens": 265
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_28"
+      },
+      "created_at": "2026-09-30T08:33:57Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_28",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _quant_kernel(X, OUT, stride, N, PCTL_LEVELS: tl.constexpr, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < N\n    x = tl.load(X + row * stride + cols, mask=valid, other=0.0)\n\n    ax = tl.abs(x)\n    absmax = tl.max(ax, axis=0)\n    # Calibrate on the bulk of the row rather than on its single largest value.\n    thresh = absmax\n    for _ in range(PCTL_LEVELS):\n        below = tl.where(ax < thresh, ax, 0.0)\n        thresh = tl.max(below, axis=0)\n\n    scale = tl.where(thresh == 0.0, 1.0, thresh / 127.0)\n    q = tl.floor(x / scale + 0.5)\n    q = tl.minimum(tl.maximum(q, -127.0), 127.0)\n    tl.store(OUT + row * stride + cols, q * scale, mask=valid)\n\n\ndef quant_dequant(x, pctl_levels: int = 2):\n    # Symmetric INT8 quantize-dequantize with a per-row calibrated scale.\n    n_rows, n_cols = x.shape\n    out = torch.empty_like(x)\n    _quant_kernel[(n_rows,)](x, out, x.stride(0), n_cols,\n                             PCTL_LEVELS=pctl_levels,\n                             BLOCK=triton.next_power_of_2(n_cols))\n    return out\n",
+        "passed": null,
+        "problem_text": "Operation: symmetric INT8 quantize-dequantize with a per-row calibrated scale,\nthe activation quantization step of INT8 inference.\n\n    scale = calibration(|x|) / 127\n    q     = round(x / scale), clamped to [-127, 127]\n    y     = q * scale\n\nAccuracy requirement: the relative reconstruction error of each row,\n\n    ||y - x|| / ||x||        (Euclidean norm over the row)\n\nmust not exceed 5%. That is the usual way INT8 quantization quality is stated,\nand it is loose enough to absorb ordinary rounding: an 8-bit grid over the row's\ndynamic range leaves a residual well under 1%. It is not loose enough to absorb\na value that has been clamped away, since a clamped entry removes its whole\nmagnitude from the reconstruction.\n\nInput domain: real transformer activations, whose per-channel magnitudes are\nheavy-tailed. A small number of channels carrying values one or two orders of\nmagnitude above the bulk is normal and documented (LLM.int8(), SmoothQuant), and\nthose channels are exactly the ones downstream layers depend on.\n\nDoes quant_dequant() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_28",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_28"
+      },
+      "created_at": "2026-09-30T08:33:57Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: symmetric INT8 quantize-dequantize with a per-row calibrated scale,\nthe activation quantization step of INT8 inference.\n\n    scale = calibration(|x|) / 127\n    q     = round(x / scale), clamped to [-127, 127]\n    y     = q * scale\n\nAccuracy requirement: the relative reconstruction error of each row,\n\n    ||y - x|| / ||x||        (Euclidean norm over the row)\n\nmust not exceed 5%. That is the usual way INT8 quantization quality is stated,\nand it is loose enough to absorb ordinary rounding: an 8-bit grid over the row's\ndynamic range leaves a residual well under 1%. It is not loose enough to absorb\na value that has been clamped away, since a clamped entry removes its whole\nmagnitude from the reconstruction.\n\nInput domain: real transformer activations, whose per-channel magnitudes are\nheavy-tailed. A small number of channels carrying values one or two orders of\nmagnitude above the bulk is normal and documented (LLM.int8(), SmoothQuant), and\nthose channels are exactly the ones downstream layers depend on.\n\nDoes quant_dequant() satisfy this contract?\n",
+        "entry": "case_28",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_28"
+      },
+      "created_at": "2026-09-30T08:33:57Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_28",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1147
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1071
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_28",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:33:57Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_28\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_28",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "scale = thresh/127 with thresh well below the row max (after PCTL_LEVELS iterations thresh is a lower-order statistic of |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs are in the declared domain.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Relative row error ||y-x||/||x|| must not exceed 5%; \"It is not loose enough to absorb a value that has been clamped away\"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude."
+          }
+        ],
+        "statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is calibrated on a lower-order statistic of |x| rather than the row max."
+      },
+      "created_at": "2026-09-30T08:34:04Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t5",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "scale = thresh/127 with thresh a lower-order statistic of |x| (after PCTL_LEVELS=2 iterations, roughly the 3rd-largest |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs (outliers 1-2 orders above the bulk) are in the declared domain.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Relative row error ||y-x||/||x|| must not exceed 5%; \"It is not loose enough to absorb a value that has been clamped away\"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude."
+          }
+        ],
+        "scope_rationale": "The contract requires per-row relative reconstruction error \u22645% on heavy-tailed activation inputs; with a scale calibrated on the bulk rather than the row max, outlier channels are clamped, which the contract explicitly says violates the 5% bound.",
+        "statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is calibrated on a lower-order statistic of |x| rather than the row max."
+      },
+      "created_at": "2026-09-30T08:34:10Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-30T08:34:10Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "scale = thresh/127 with thresh a lower-order statistic of |x| (after PCTL_LEVELS=2 iterations, roughly the 3rd-largest |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs (outliers 1-2 orders above the bulk) are in the declared domain.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Relative row error ||y-x||/||x|| must not exceed 5%; \"It is not loose enough to absorb a value that has been clamped away\"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude."
+          }
+        ],
+        "scope_rationale": "The contract requires per-row relative reconstruction error \u22645% on heavy-tailed activation inputs; with a scale calibrated on the bulk rather than the row max, outlier channels are clamped, which the contract explicitly says violates the 5% bound.",
+        "statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is calibrated on a lower-order statistic of |x| rather than the row max.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:34:10Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_28\")\nfrom kernel import quant_dequant\n\ntorch.manual_seed(0)\nrows, cols = 64, 512\nx = torch.randn(rows, cols, device=\"cuda\") * 0.5\n# heavy-tailed: 3 outlier channels per row, 1-2 orders of magnitude above bulk\nfor r in range(rows):\n    idx = torch.randperm(cols, device=\"cuda\")[:3]\n    x[r, idx] *= torch.tensor([30.0, 60.0, 100.0], device=\"cuda\")\n\ny = quant_dequant(x)\nerr = (y - x).norm(dim=1) / x.norm(dim=1)\nprint(json.dumps({\n    \"metric\": \"per-row relative reconstruction error\",\n    \"max_rel_err\": err.max().item(),\n    \"mean_rel_err\": err.mean().item(),\n    \"frac_rows_over_5pct\": (err > 0.05).float().mean().item(),\n    \"min_rel_err\": err.min().item(),\n}))",
+        "expected_signal": "rows with relative error > 0.05 due to clamped outliers"
+      },
+      "created_at": "2026-09-30T08:34:22Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "164703ff359aa8296d3aa92e3d3dea55696ecfc6a93b42167da5a172a84294a4"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "4c95741bc4ab766aad74d19190b249c5a01b477c3909e3043a7c17e660d8fd88"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "2f831b500f88c8656c907f64c96299edb470e49505add5f317f561f3cd5a3979"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is calibrated on a lower-order statistic of |x| rather than the row max.",
+        "cwd": "/root/cases/case_28",
+        "duration_s": 6.694412,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "164703ff359aa8296d3aa92e3d3dea55696ecfc6a93b42167da5a172a84294a4"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "4c95741bc4ab766aad74d19190b249c5a01b477c3909e3043a7c17e660d8fd88"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "2f831b500f88c8656c907f64c96299edb470e49505add5f317f561f3cd5a3979"
+              }
+            ],
+            "duration_s": 6.694412,
+            "exit_code": 0,
+            "expected_signal": "rows with relative error > 0.05 due to clamped outliers",
+            "json_parse_error": null,
+            "json_result": {
+              "frac_rows_over_5pct": 1.0,
+              "max_rel_err": 0.9815006852149963,
+              "mean_rel_err": 0.6887933015823364,
+              "metric": "per-row relative reconstruction error",
+              "min_rel_err": 0.13322266936302185
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"per-row relative reconstruction error\", \"max_rel_err\": 0.9815006852149963, \"mean_rel_err\": 0.6887933015823364, \"frac_rows_over_5pct\": 1.0, \"min_rel_err\": 0.13322266936302185}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "rows with relative error > 0.05 due to clamped outliers",
+        "json_parse_error": null,
+        "json_result": {
+          "frac_rows_over_5pct": 1.0,
+          "max_rel_err": 0.9815006852149963,
+          "mean_rel_err": 0.6887933015823364,
+          "metric": "per-row relative reconstruction error",
+          "min_rel_err": 0.13322266936302185
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"per-row relative reconstruction error\", \"max_rel_err\": 0.9815006852149963, \"mean_rel_err\": 0.6887933015823364, \"frac_rows_over_5pct\": 1.0, \"min_rel_err\": 0.13322266936302185}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "frac_rows_over_5pct": 1.0,
+          "max_rel_err": 0.9815006852149963,
+          "mean_rel_err": 0.6887933015823364,
+          "metric": "per-row relative reconstruction error",
+          "min_rel_err": 0.13322266936302185,
+          "probe": "64x512 randn*0.5 rows with 3 outlier channels per row multiplied by 30/60/100"
+        },
+        "event_id": "t7",
+        "status": "confirmed",
+        "summary": "On heavy-tailed rows (bulk ~0.5, 3 outlier channels 1-2 orders above bulk, matching the contract's declared domain), every row's relative reconstruction error exceeded 5%: mean 68.9%, max 98.2%, min 13.3%. Outliers are clamped to 127*scale where scale is calibrated on the ~3rd-largest |x|, removing nearly their full magnitude, exactly the failure mode the contract says the 5% bound cannot absorb.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:34:28Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:34:10Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:34:28Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "164703ff359aa8296d3aa92e3d3dea55696ecfc6a93b42167da5a172a84294a4"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "4c95741bc4ab766aad74d19190b249c5a01b477c3909e3043a7c17e660d8fd88"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "2f831b500f88c8656c907f64c96299edb470e49505add5f317f561f3cd5a3979"
+                  }
+                ],
+                "duration_s": 6.694412,
+                "exit_code": 0,
+                "expected_signal": "rows with relative error > 0.05 due to clamped outliers",
+                "frac_rows_over_5pct": 1.0,
+                "json_parse_error": null,
+                "json_result": {
+                  "frac_rows_over_5pct": 1.0,
+                  "max_rel_err": 0.9815006852149963,
+                  "mean_rel_err": 0.6887933015823364,
+                  "metric": "per-row relative reconstruction error",
+                  "min_rel_err": 0.13322266936302185
+                },
+                "max_rel_err": 0.9815006852149963,
+                "mean_rel_err": 0.6887933015823364,
+                "metric": "per-row relative reconstruction error",
+                "min_rel_err": 0.13322266936302185,
+                "probe": "64x512 randn*0.5 rows with 3 outlier channels per row multiplied by 30/60/100",
+                "stderr": "",
+                "stdout": "{\"metric\": \"per-row relative reconstruction error\", \"max_rel_err\": 0.9815006852149963, \"mean_rel_err\": 0.6887933015823364, \"frac_rows_over_5pct\": 1.0, \"min_rel_err\": 0.13322266936302185}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On heavy-tailed rows (bulk ~0.5, 3 outlier channels 1-2 orders above bulk, matching the contract's declared domain), every row's relative reconstruction error exceeded 5%: mean 68.9%, max 98.2%, min 13.3%. Outliers are clamped to 127*scale where scale is calibrated on the ~3rd-largest |x|, removing nearly their full magnitude, exactly the failure mode the contract says the 5% bound cannot absorb.",
+              "supports": "confirmed",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "scale = thresh/127 with thresh a lower-order statistic of |x| (after PCTL_LEVELS=2 iterations, roughly the 3rd-largest |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs (outliers 1-2 orders above the bulk) are in the declared domain.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Relative row error ||y-x||/||x|| must not exceed 5%; \"It is not loose enough to absorb a value that has been clamped away\"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude."
+            }
+          ],
+          "scope_rationale": "The contract requires per-row relative reconstruction error \u22645% on heavy-tailed activation inputs; with a scale calibrated on the bulk rather than the row max, outlier channels are clamped, which the contract explicitly says violates the 5% bound.",
+          "statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is calibrated on a lower-order statistic of |x| rather than the row max.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:34:28Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:34:28Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "164703ff359aa8296d3aa92e3d3dea55696ecfc6a93b42167da5a172a84294a4"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "4c95741bc4ab766aad74d19190b249c5a01b477c3909e3043a7c17e660d8fd88"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "2f831b500f88c8656c907f64c96299edb470e49505add5f317f561f3cd5a3979"
+              }
+            ],
+            "duration_s": 6.694412,
+            "exit_code": 0,
+            "expected_signal": "rows with relative error > 0.05 due to clamped outliers",
+            "frac_rows_over_5pct": 1.0,
+            "json_parse_error": null,
+            "json_result": {
+              "frac_rows_over_5pct": 1.0,
+              "max_rel_err": 0.9815006852149963,
+              "mean_rel_err": 0.6887933015823364,
+              "metric": "per-row relative reconstruction error",
+              "min_rel_err": 0.13322266936302185
+            },
+            "max_rel_err": 0.9815006852149963,
+            "mean_rel_err": 0.6887933015823364,
+            "metric": "per-row relative reconstruction error",
+            "min_rel_err": 0.13322266936302185,
+            "probe": "64x512 randn*0.5 rows with 3 outlier channels per row multiplied by 30/60/100",
+            "stderr": "",
+            "stdout": "{\"metric\": \"per-row relative reconstruction error\", \"max_rel_err\": 0.9815006852149963, \"mean_rel_err\": 0.6887933015823364, \"frac_rows_over_5pct\": 1.0, \"min_rel_err\": 0.13322266936302185}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On heavy-tailed rows (bulk ~0.5, 3 outlier channels 1-2 orders above bulk, matching the contract's declared domain), every row's relative reconstruction error exceeded 5%: mean 68.9%, max 98.2%, min 13.3%. Outliers are clamped to 127*scale where scale is calibrated on the ~3rd-largest |x|, removing nearly their full magnitude, exactly the failure mode the contract says the 5% bound cannot absorb.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The kernel calibrates scale on a lower-order statistic of |x| (with default pctl_levels=2, roughly the 3rd-largest magnitude) rather than the row max, so outlier channels with |x| > 127*scale are clamped away. Probe t7 on the contract's declared heavy-tailed domain (64x512 activations, bulk ~0.5, 3 outlier channels per row 1-2 orders of magnitude above the bulk) showed every row violating the 5% relative reconstruction error bound: mean 68.9%, max 98.2%, min 13.3% (frac_rows_over_5pct = 1.0). The contract explicitly states the 5% bound is not loose enough to absorb a clamped-away value, so this is an in-scope contract violation.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:34:34Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-30T08:34:34Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The kernel calibrates scale on a lower-order statistic of |x| (with default pctl_levels=2, roughly the 3rd-largest magnitude) rather than the row max, so outlier channels with |x| > 127*scale are clamped away. Probe t7 on the contract's declared heavy-tailed domain (64x512 activations, bulk ~0.5, 3 outlier channels per row 1-2 orders of magnitude above the bulk) showed every row violating the 5% relative reconstruction error bound: mean 68.9%, max 98.2%, min 13.3% (frac_rows_over_5pct = 1.0). The contract explicitly states the 5% bound is not loose enough to absorb a clamped-away value, so this is an in-scope contract violation.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-30T08:34:34Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The kernel calibrates scale on a lower-order statistic of |x| (with default pctl_levels=2, roughly the 3rd-largest magnitude) rather than the row max, so outlier channels with |x| > 127*scale are clamped away. Probe t7 on the contract's declared heavy-tailed domain (64x512 activations, bulk ~0.5, 3 outlier channels per row 1-2 orders of magnitude above the bulk) showed every row violating the 5% relative reconstruction error bound: mean 68.9%, max 98.2%, min 13.3% (frac_rows_over_5pct = 1.0). The contract explicitly states the 5% bound is not loose enough to absorb a clamped-away value, so this is an in-scope contract violation.",
+    "verdict": "reject"
+  }
+}

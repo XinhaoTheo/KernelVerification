@@ -1,0 +1,49 @@
+## Problem statement (contract + reference behavior)
+
+Operation: sum of a float32 tensor, partitioned across blocks and combined with
+one atomic add per block, the reduction strategy used by split-K GEMM and
+all-reduce kernels.
+
+    out = sum over i of x[i]
+
+The sum is a per-tensor statistic over an activation buffer carried in full
+float32. Every element of x is an ordinary activation value drawn from the
+layer's own distribution, standard normal in the shipped workload, and x holds
+N = 65536 elements. No quantisation grid, common scale, or shared exponent
+applies to them.
+
+Contract: two calls on the same input must return bitwise identical results. The
+statistic is compared across replicas holding the same shard and is pinned as a
+golden value in CI, so two runs that disagree in their last bits are not
+interchangeable. How the sum is partitioned across blocks, and in what order the
+partial sums are combined, are performance choices the contract leaves free; only
+the returned bits are constrained.
+
+Does blocked_sum() satisfy this contract?
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _blocked_sum_kernel(X, Out, N, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    idx = pid * BLOCK + tl.arange(0, BLOCK)
+    x = tl.load(X + idx, mask=idx < N, other=0.0)
+    tl.atomic_add(Out, tl.sum(x, axis=0))
+
+
+def blocked_sum(x: torch.Tensor, block: int = 1024) -> torch.Tensor:
+    """Sum of a float32 tensor, one atomic accumulation per block."""
+    out = torch.zeros(1, device=x.device, dtype=torch.float32)
+    _blocked_sum_kernel[(triton.cdiv(x.numel(), block),)](x, out, x.numel(), BLOCK=block)
+    return out
+
+```
+
+Is this implementation correct?

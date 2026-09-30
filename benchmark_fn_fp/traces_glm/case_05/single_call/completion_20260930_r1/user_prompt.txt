@@ -1,0 +1,66 @@
+## Problem statement (contract + reference behavior)
+
+Operation: the near-pivot tie-counting primitive used by top-k/top-p sampling
+(vllm-project/vllm, vllm/v1/sample/ops/topk_topp_triton.py::_update_min_larger_stats).
+
+`count_tied_at_boundary(scores, pivot)` must return how many of the values
+strictly above `pivot` are tied with the smallest of them.
+
+Because scores are floating point, "tied" is decided with a tolerance rather
+than exact equality. The specification requires only that values equal at the
+boundary be counted together; it does not fix the numeric value of that
+tolerance.
+
+Downstream, the returned count determines how a remaining unit of selection
+budget is split among the boundary candidates (1 / count each).
+
+Input domain: `scores` is a single tile whose length is a power of two; the
+vocabulary-length case is handled by the caller, which feeds this primitive one
+tile at a time.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+import torch
+import triton
+import triton.language as tl
+
+_TIE_EPS = 1e-3
+
+
+@triton.jit
+def _update_min_larger_stats(data, above_mask, min_larger, num_min_larger, sentinel, EPS: tl.constexpr):
+    tile_min = tl.min(tl.where(above_mask, data, sentinel))
+    tile_eq = above_mask & (tl.abs(data - tile_min) < EPS)
+    tile_cnt = tl.sum(tile_eq)
+    is_new = tile_min < min_larger
+    is_same = tl.abs(tile_min - min_larger) < EPS
+    num_min_larger = tl.where(is_new, tile_cnt, num_min_larger + tile_cnt * is_same)
+    min_larger = tl.minimum(min_larger, tile_min)
+    return min_larger, num_min_larger
+
+
+@triton.jit
+def _count_tied_at_boundary_kernel(scores_ptr, count_ptr, N: tl.constexpr, pivot, EPS: tl.constexpr):
+    offs = tl.arange(0, N)
+    data = tl.load(scores_ptr + offs)
+    above_mask = data > pivot
+    min_larger = tl.full((), float("inf"), tl.float32)
+    num_min_larger = tl.zeros((), tl.int32)
+    min_larger, num_min_larger = _update_min_larger_stats(data, above_mask, min_larger, num_min_larger, float("inf"), EPS)
+    tl.store(count_ptr, num_min_larger)
+
+
+def count_tied_at_boundary(scores: torch.Tensor, pivot: float) -> int:
+    """Real vLLM primitive: how many values above `pivot` are tied with the
+    smallest of them (within EPS). A real multi-pass top-k kernel uses this
+    count to know how many boundary candidates remain to fill the last slots."""
+    N = scores.shape[0]
+    count = torch.empty(1, dtype=torch.int32, device=scores.device)
+    _count_tied_at_boundary_kernel[(1,)](scores, count, N=N, pivot=pivot, EPS=_TIE_EPS)
+    return int(count.item())
+
+```
+
+Is this implementation correct?

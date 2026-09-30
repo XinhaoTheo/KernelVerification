@@ -1,0 +1,1584 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_02",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _state_passing_fwd_kernel(\n    states_ptr, out_ptr, final_states_ptr, dA_cs_ptr,\n    dim, nchunks,\n    stride_states_chunk, stride_states_dim,\n    stride_out_chunk, stride_out_dim,\n    stride_final_dim,\n    stride_dA_cs_chunk,\n    BLOCK_SIZE: tl.constexpr,\n):\n    offs_m = tl.arange(0, BLOCK_SIZE)\n    states_ptrs = states_ptr + offs_m * stride_states_dim\n    out_ptrs = out_ptr + offs_m * stride_out_dim\n    final_states_ptrs = final_states_ptr + offs_m * stride_final_dim\n\n    states = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)\n    tl.store(out_ptrs, states, mask=offs_m < dim)\n    out_ptrs += stride_out_chunk\n    for c in range(nchunks):\n        new_states = tl.load(states_ptrs, mask=offs_m < dim, other=0.0).to(tl.float32)\n        dA_cs = tl.load(dA_cs_ptr).to(tl.float32)\n        scale = tl.exp(dA_cs)\n        states = scale * states + new_states\n        if c < nchunks - 1:\n            tl.store(out_ptrs, states, mask=offs_m < dim)\n        else:\n            tl.store(final_states_ptrs, states, mask=offs_m < dim)\n        states_ptrs += stride_states_chunk\n        dA_cs_ptr += stride_dA_cs_chunk\n        out_ptrs += stride_out_chunk\n\n\ndef state_passing(new_states: torch.Tensor, dA_cs: torch.Tensor) -> torch.Tensor:\n    nchunks, dim = new_states.shape\n    out = torch.empty(nchunks, dim, device=new_states.device, dtype=torch.float32)\n    final_states = torch.empty(dim, device=new_states.device, dtype=torch.float32)\n    BLOCK_SIZE = triton.next_power_of_2(dim)\n    _state_passing_fwd_kernel[(1,)](\n        new_states, out, final_states, dA_cs,\n        dim, nchunks,\n        new_states.stride(0), new_states.stride(1),\n        out.stride(0), out.stride(1),\n        final_states.stride(0),\n        dA_cs.stride(0),\n        BLOCK_SIZE=BLOCK_SIZE,\n    )\n    return final_states\n",
+    "passed": null,
+    "problem_text": "Operation: the chunked state-passing recurrence of Mamba2/SSD\n(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).\n\nGiven per-chunk local states `new_states[c]` and per-chunk cumulative\nlog-decays `dA_cs[c]`:\n\n    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1\n\nstarting from state = 0, returning the final state.\n\nThe chunk boundaries are a partitioning choice, not part of the mathematical\ndefinition: subdividing one chunk into several sub-chunks whose log-decays sum\nto the original, with the local-state contribution placed on the last\nsub-chunk, describes the same recurrence.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_02",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:13:45Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:14:07Z",
+          "data": {
+            "all_pass": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "698d928eb26646ac9e8693ad3364a0d4db13d5e742785f8e7ea7f8b232bf0d50"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "65bc7c52f74e0ff58912499d26709db3ff2aaee53effb11c551d78a95c577716"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "c0741c6b15d6316e3c8b31bd2e0245630dbb28dce0109780265e6f504a18ea06"
+              }
+            ],
+            "cases": 15,
+            "duration_s": 8.77252,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "all_pass": true,
+              "metric": "max abs & rel error vs sequential fp32 reference",
+              "results": [
+                {
+                  "decay_scale": 0.1,
+                  "dim": 1,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 1,
+                  "shape": [
+                    1
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 1,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 1,
+                  "shape": [
+                    1
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 1,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 1,
+                  "shape": [
+                    1
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 8,
+                  "dtype": "torch.float32",
+                  "max_abs": 9.5367431640625e-07,
+                  "max_rel": 1.4054060670787294e-07,
+                  "nan": false,
+                  "nchunks": 4,
+                  "shape": [
+                    8
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 8,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.8743019104003906e-07,
+                  "max_rel": 1.8976280671267887e-06,
+                  "nan": false,
+                  "nchunks": 4,
+                  "shape": [
+                    8
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 8,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 4,
+                  "shape": [
+                    8
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 64,
+                  "dtype": "torch.float32",
+                  "max_abs": 1.52587890625e-05,
+                  "max_rel": 1.0651810953277163e-06,
+                  "nan": false,
+                  "nchunks": 16,
+                  "shape": [
+                    64
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 64,
+                  "dtype": "torch.float32",
+                  "max_abs": 1.9073486328125e-06,
+                  "max_rel": 1.4746185570402304e-06,
+                  "nan": false,
+                  "nchunks": 16,
+                  "shape": [
+                    64
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 64,
+                  "dtype": "torch.float32",
+                  "max_abs": 1.9073486328125e-06,
+                  "max_rel": 1.7413661907994538e-06,
+                  "nan": false,
+                  "nchunks": 16,
+                  "shape": [
+                    64
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 128,
+                  "dtype": "torch.float32",
+                  "max_abs": 4.1961669921875e-05,
+                  "max_rel": 1.4983808796387166e-05,
+                  "nan": false,
+                  "nchunks": 33,
+                  "shape": [
+                    128
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 128,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.814697265625e-06,
+                  "max_rel": 1.8968094082083553e-05,
+                  "nan": false,
+                  "nchunks": 33,
+                  "shape": [
+                    128
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 128,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.814697265625e-06,
+                  "max_rel": 2.024942432399257e-06,
+                  "nan": false,
+                  "nchunks": 33,
+                  "shape": [
+                    128
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 256,
+                  "dtype": "torch.float32",
+                  "max_abs": 8.392333984375e-05,
+                  "max_rel": 0.00040539089241065085,
+                  "nan": false,
+                  "nchunks": 128,
+                  "shape": [
+                    256
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 256,
+                  "dtype": "torch.float32",
+                  "max_abs": 7.62939453125e-06,
+                  "max_rel": 3.5647924505610717e-06,
+                  "nan": false,
+                  "nchunks": 128,
+                  "shape": [
+                    256
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 256,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.814697265625e-06,
+                  "max_rel": 2.104330633301288e-06,
+                  "nan": false,
+                  "nchunks": 128,
+                  "shape": [
+                    256
+                  ]
+                }
+              ]
+            },
+            "max_abs_error_overall": 8.39e-05,
+            "metric": "max abs & rel error vs sequential fp32 reference",
+            "nan": false,
+            "stderr": "",
+            "stdout": "[{\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 0.1, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 1.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 0.1, \"max_abs\": 9.5367431640625e-07, \"max_rel\": 1.4054060670787294e-07, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 1.0, \"max_abs\": 3.8743019104003906e-07, \"max_rel\": 1.8976280671267887e-06, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 0.1, \"max_abs\": 1.52587890625e-05, \"max_rel\": 1.0651810953277163e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 1.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.4746185570402304e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 3.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.7413661907994538e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 0.1, \"max_abs\": 4.1961669921875e-05, \"max_rel\": 1.4983808796387166e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 1.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 1.8968094082083553e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.024942432399257e-06, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 0.1, \"max_abs\": 8.392333984375e-05, \"max_rel\": 0.00040539089241065085, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 1.0, \"max_abs\": 7.62939453125e-06, \"max_rel\": 3.5647924505610717e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.104330633301288e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}]\n{\"metric\": \"max abs & rel error vs sequential fp32 reference\", \"all_pass\": true, \"results\": [{\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 0.1, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 1.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 0.1, \"max_abs\": 9.5367431640625e-07, \"max_rel\": 1.4054060670787294e-07, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 1.0, \"max_abs\": 3.8743019104003906e-07, \"max_rel\": 1.8976280671267887e-06, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 0.1, \"max_abs\": 1.52587890625e-05, \"max_rel\": 1.0651810953277163e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 1.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.4746185570402304e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 3.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.7413661907994538e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 0.1, \"max_abs\": 4.1961669921875e-05, \"max_rel\": 1.4983808796387166e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 1.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 1.8968094082083553e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.024942432399257e-06, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 0.1, \"max_abs\": 8.392333984375e-05, \"max_rel\": 0.00040539089241065085, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 1.0, \"max_abs\": 7.62939453125e-06, \"max_rel\": 3.5647924505610717e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.104330633301288e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel final_states matched the sequential PyTorch reference across 15 cases (nchunks 1-128, dim 1-256, decay scales 0.1-3.0); all max abs errors <= 8.4e-5, max rel ~4e-4, no NaNs \u2014 consistent with fp32 rounding, not a contract violation.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel implements state = exp(dA_cs[c]) * state + new_states[c] with state initialized to zero; a runtime comparison against a sequential PyTorch reference over representative nchunks/dim values will confirm or refute it.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract: 'state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0, returning the final state.'"
+        }
+      ],
+      "scope_rationale": "The contract explicitly requires the recurrence state <- exp(dA_cs[c])*state + new_states[c] from state=0 and the final state as return value.",
+      "statement": "The kernel's final_states matches the reference recurrence final = sum_c new_states[c] * exp(sum_{k>c} dA_cs[k]) computed sequentially from state=0.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:14:07Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_02",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_02"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_02"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_02"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_02",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 7.801344436999999,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll record a claim that the final-state recurrence is computed correctly (the kernel looks straightforward but the loop order \u2014 updating state then storing \u2014 deserves a runtime check against a reference).",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel implements state = exp(dA_cs[c]) * state + new_states[c] with state initialized to zero; a runtime comparison against a sequential PyTorch reference over representative nchunks/dim values will confirm or refute it.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract: 'state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0, returning the final state.'"
+              }
+            ],
+            "scope_rationale": "The contract explicitly requires the recurrence state <- exp(dA_cs[c])*state + new_states[c] from state=0 and the final state as return value.",
+            "statement": "The kernel's final_states matches the reference recurrence final = sum_c new_states[c] * exp(sum_{k>c} dA_cs[k]) computed sequentially from state=0."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.801,
+        "input_tokens": 7350,
+        "output_tokens": 309
+      }
+    },
+    {
+      "duration_s": 7.0359250100000015,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run a probe comparing the kernel's final state against a sequential PyTorch reference across several shapes and decay magnitudes.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_02\")\nfrom kernel import state_passing\n\ntorch.manual_seed(0)\ndev = \"cuda\"\nresults = []\nfor nchunks, dim in [(1,1),(4,8),(16,64),(33,128),(128,256)]:\n    for decay_scale in [0.1, 1.0, 3.0]:\n        new_states = torch.randn(nchunks, dim, device=dev) * (dim**0.5)\n        dA_cs = -torch.rand(nchunks, device=dev) * decay_scale\n        ref = torch.zeros(dim, device=dev)\n        for c in range(nchunks):\n            ref = torch.exp(dA_cs[c]) * ref + new_states[c]\n        out = state_passing(new_states, dA_cs)\n        diff = (out - ref).abs()\n        rel = (diff / (ref.abs() + 1e-6)).max().item()\n        results.append(dict(nchunks=nchunks, dim=dim, decay_scale=decay_scale,\n                            max_abs=diff.max().item(), max_rel=rel,\n                            dtype=str(out.dtype), shape=tuple(out.shape),\n                            nan=bool(torch.isnan(out).any())))\nprint(json.dumps(results))\nreport = dict(metric=\"max abs & rel error vs sequential fp32 reference\",\n              all_pass=all(r[\"max_abs\"] < 1e-4 and not r[\"nan\"] for r in results),\n              results=results)\nprint(json.dumps(report))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.036,
+        "input_tokens": 8494,
+        "output_tokens": 371
+      }
+    },
+    {
+      "duration_s": 6.353819751000003,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe across shapes and decay magnitudes passed with negligible fp32-level error; I'll finalize the claim evidence and record a trust verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "all_pass": true,
+              "cases": 15,
+              "max_abs_error_overall": 8.39e-05,
+              "metric": "max abs & rel error vs sequential fp32 reference",
+              "nan": false
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "Kernel final_states matched the sequential PyTorch reference across 15 cases (nchunks 1-128, dim 1-256, decay scales 0.1-3.0); all max abs errors <= 8.4e-5, max rel ~4e-4, no NaNs \u2014 consistent with fp32 rounding, not a contract violation.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.354,
+        "input_tokens": 14773,
+        "output_tokens": 207
+      }
+    },
+    {
+      "duration_s": 8.756097186999995,
+      "role": "solo",
+      "round": 5,
+      "text": "The sole claim is resolved: the kernel's final state matches the sequential reference recurrence across a broad range of in-scope shapes and decay magnitudes (max abs error \u2264 8.4e-5, fp32 rounding-level). No open claims remain, so I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Verified the kernel against the contract recurrence (state <- exp(dA_cs[c])*state + new_states[c], from state=0, returning the final state). Runtime probe t6 compared kernel final_states to a sequential PyTorch reference across 15 cases (nchunks 1-128, dim 1-256, decay scales 0.1/1.0/3.0): all max abs errors <= 8.4e-5 with max rel ~4e-4 and no NaNs, consistent with fp32 rounding, not a contract violation. Source inspection confirms the kernel implements exactly the required recurrence with state initialized to zero (tl.zeros) and the final chunk stored to final_states. No contract-required behavior is violated.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.756,
+        "input_tokens": 25402,
+        "output_tokens": 288
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_02"
+      },
+      "created_at": "2026-09-30T08:13:35Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_02",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _state_passing_fwd_kernel(\n    states_ptr, out_ptr, final_states_ptr, dA_cs_ptr,\n    dim, nchunks,\n    stride_states_chunk, stride_states_dim,\n    stride_out_chunk, stride_out_dim,\n    stride_final_dim,\n    stride_dA_cs_chunk,\n    BLOCK_SIZE: tl.constexpr,\n):\n    offs_m = tl.arange(0, BLOCK_SIZE)\n    states_ptrs = states_ptr + offs_m * stride_states_dim\n    out_ptrs = out_ptr + offs_m * stride_out_dim\n    final_states_ptrs = final_states_ptr + offs_m * stride_final_dim\n\n    states = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)\n    tl.store(out_ptrs, states, mask=offs_m < dim)\n    out_ptrs += stride_out_chunk\n    for c in range(nchunks):\n        new_states = tl.load(states_ptrs, mask=offs_m < dim, other=0.0).to(tl.float32)\n        dA_cs = tl.load(dA_cs_ptr).to(tl.float32)\n        scale = tl.exp(dA_cs)\n        states = scale * states + new_states\n        if c < nchunks - 1:\n            tl.store(out_ptrs, states, mask=offs_m < dim)\n        else:\n            tl.store(final_states_ptrs, states, mask=offs_m < dim)\n        states_ptrs += stride_states_chunk\n        dA_cs_ptr += stride_dA_cs_chunk\n        out_ptrs += stride_out_chunk\n\n\ndef state_passing(new_states: torch.Tensor, dA_cs: torch.Tensor) -> torch.Tensor:\n    nchunks, dim = new_states.shape\n    out = torch.empty(nchunks, dim, device=new_states.device, dtype=torch.float32)\n    final_states = torch.empty(dim, device=new_states.device, dtype=torch.float32)\n    BLOCK_SIZE = triton.next_power_of_2(dim)\n    _state_passing_fwd_kernel[(1,)](\n        new_states, out, final_states, dA_cs,\n        dim, nchunks,\n        new_states.stride(0), new_states.stride(1),\n        out.stride(0), out.stride(1),\n        final_states.stride(0),\n        dA_cs.stride(0),\n        BLOCK_SIZE=BLOCK_SIZE,\n    )\n    return final_states\n",
+        "passed": null,
+        "problem_text": "Operation: the chunked state-passing recurrence of Mamba2/SSD\n(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).\n\nGiven per-chunk local states `new_states[c]` and per-chunk cumulative\nlog-decays `dA_cs[c]`:\n\n    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1\n\nstarting from state = 0, returning the final state.\n\nThe chunk boundaries are a partitioning choice, not part of the mathematical\ndefinition: subdividing one chunk into several sub-chunks whose log-decays sum\nto the original, with the local-state contribution placed on the last\nsub-chunk, describes the same recurrence.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_02",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_02"
+      },
+      "created_at": "2026-09-30T08:13:35Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: the chunked state-passing recurrence of Mamba2/SSD\n(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).\n\nGiven per-chunk local states `new_states[c]` and per-chunk cumulative\nlog-decays `dA_cs[c]`:\n\n    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1\n\nstarting from state = 0, returning the final state.\n\nThe chunk boundaries are a partitioning choice, not part of the mathematical\ndefinition: subdividing one chunk into several sub-chunks whose log-decays sum\nto the original, with the local-state contribution placed on the last\nsub-chunk, describes the same recurrence.\n",
+        "entry": "case_02",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_02"
+      },
+      "created_at": "2026-09-30T08:13:35Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_02",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1859
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 650
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_02",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:13:35Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_02\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_02",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel implements state = exp(dA_cs[c]) * state + new_states[c] with state initialized to zero; a runtime comparison against a sequential PyTorch reference over representative nchunks/dim values will confirm or refute it.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: 'state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0, returning the final state.'"
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires the recurrence state <- exp(dA_cs[c])*state + new_states[c] from state=0 and the final state as return value.",
+        "statement": "The kernel's final_states matches the reference recurrence final = sum_c new_states[c] * exp(sum_{k>c} dA_cs[k]) computed sequentially from state=0."
+      },
+      "created_at": "2026-09-30T08:13:45Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-30T08:13:45Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel implements state = exp(dA_cs[c]) * state + new_states[c] with state initialized to zero; a runtime comparison against a sequential PyTorch reference over representative nchunks/dim values will confirm or refute it.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: 'state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0, returning the final state.'"
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires the recurrence state <- exp(dA_cs[c])*state + new_states[c] from state=0 and the final state as return value.",
+        "statement": "The kernel's final_states matches the reference recurrence final = sum_c new_states[c] * exp(sum_{k>c} dA_cs[k]) computed sequentially from state=0.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:13:45Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_02\")\nfrom kernel import state_passing\n\ntorch.manual_seed(0)\ndev = \"cuda\"\nresults = []\nfor nchunks, dim in [(1,1),(4,8),(16,64),(33,128),(128,256)]:\n    for decay_scale in [0.1, 1.0, 3.0]:\n        new_states = torch.randn(nchunks, dim, device=dev) * (dim**0.5)\n        dA_cs = -torch.rand(nchunks, device=dev) * decay_scale\n        ref = torch.zeros(dim, device=dev)\n        for c in range(nchunks):\n            ref = torch.exp(dA_cs[c]) * ref + new_states[c]\n        out = state_passing(new_states, dA_cs)\n        diff = (out - ref).abs()\n        rel = (diff / (ref.abs() + 1e-6)).max().item()\n        results.append(dict(nchunks=nchunks, dim=dim, decay_scale=decay_scale,\n                            max_abs=diff.max().item(), max_rel=rel,\n                            dtype=str(out.dtype), shape=tuple(out.shape),\n                            nan=bool(torch.isnan(out).any())))\nprint(json.dumps(results))\nreport = dict(metric=\"max abs & rel error vs sequential fp32 reference\",\n              all_pass=all(r[\"max_abs\"] < 1e-4 and not r[\"nan\"] for r in results),\n              results=results)\nprint(json.dumps(report))\n"
+      },
+      "created_at": "2026-09-30T08:14:01Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "698d928eb26646ac9e8693ad3364a0d4db13d5e742785f8e7ea7f8b232bf0d50"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "65bc7c52f74e0ff58912499d26709db3ff2aaee53effb11c551d78a95c577716"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "c0741c6b15d6316e3c8b31bd2e0245630dbb28dce0109780265e6f504a18ea06"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's final_states matches the reference recurrence final = sum_c new_states[c] * exp(sum_{k>c} dA_cs[k]) computed sequentially from state=0.",
+        "cwd": "/root/cases/case_02",
+        "duration_s": 8.77252,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "698d928eb26646ac9e8693ad3364a0d4db13d5e742785f8e7ea7f8b232bf0d50"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "65bc7c52f74e0ff58912499d26709db3ff2aaee53effb11c551d78a95c577716"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "c0741c6b15d6316e3c8b31bd2e0245630dbb28dce0109780265e6f504a18ea06"
+              }
+            ],
+            "duration_s": 8.77252,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "all_pass": true,
+              "metric": "max abs & rel error vs sequential fp32 reference",
+              "results": [
+                {
+                  "decay_scale": 0.1,
+                  "dim": 1,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 1,
+                  "shape": [
+                    1
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 1,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 1,
+                  "shape": [
+                    1
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 1,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 1,
+                  "shape": [
+                    1
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 8,
+                  "dtype": "torch.float32",
+                  "max_abs": 9.5367431640625e-07,
+                  "max_rel": 1.4054060670787294e-07,
+                  "nan": false,
+                  "nchunks": 4,
+                  "shape": [
+                    8
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 8,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.8743019104003906e-07,
+                  "max_rel": 1.8976280671267887e-06,
+                  "nan": false,
+                  "nchunks": 4,
+                  "shape": [
+                    8
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 8,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 4,
+                  "shape": [
+                    8
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 64,
+                  "dtype": "torch.float32",
+                  "max_abs": 1.52587890625e-05,
+                  "max_rel": 1.0651810953277163e-06,
+                  "nan": false,
+                  "nchunks": 16,
+                  "shape": [
+                    64
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 64,
+                  "dtype": "torch.float32",
+                  "max_abs": 1.9073486328125e-06,
+                  "max_rel": 1.4746185570402304e-06,
+                  "nan": false,
+                  "nchunks": 16,
+                  "shape": [
+                    64
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 64,
+                  "dtype": "torch.float32",
+                  "max_abs": 1.9073486328125e-06,
+                  "max_rel": 1.7413661907994538e-06,
+                  "nan": false,
+                  "nchunks": 16,
+                  "shape": [
+                    64
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 128,
+                  "dtype": "torch.float32",
+                  "max_abs": 4.1961669921875e-05,
+                  "max_rel": 1.4983808796387166e-05,
+                  "nan": false,
+                  "nchunks": 33,
+                  "shape": [
+                    128
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 128,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.814697265625e-06,
+                  "max_rel": 1.8968094082083553e-05,
+                  "nan": false,
+                  "nchunks": 33,
+                  "shape": [
+                    128
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 128,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.814697265625e-06,
+                  "max_rel": 2.024942432399257e-06,
+                  "nan": false,
+                  "nchunks": 33,
+                  "shape": [
+                    128
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 256,
+                  "dtype": "torch.float32",
+                  "max_abs": 8.392333984375e-05,
+                  "max_rel": 0.00040539089241065085,
+                  "nan": false,
+                  "nchunks": 128,
+                  "shape": [
+                    256
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 256,
+                  "dtype": "torch.float32",
+                  "max_abs": 7.62939453125e-06,
+                  "max_rel": 3.5647924505610717e-06,
+                  "nan": false,
+                  "nchunks": 128,
+                  "shape": [
+                    256
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 256,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.814697265625e-06,
+                  "max_rel": 2.104330633301288e-06,
+                  "nan": false,
+                  "nchunks": 128,
+                  "shape": [
+                    256
+                  ]
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "[{\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 0.1, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 1.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 0.1, \"max_abs\": 9.5367431640625e-07, \"max_rel\": 1.4054060670787294e-07, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 1.0, \"max_abs\": 3.8743019104003906e-07, \"max_rel\": 1.8976280671267887e-06, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 0.1, \"max_abs\": 1.52587890625e-05, \"max_rel\": 1.0651810953277163e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 1.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.4746185570402304e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 3.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.7413661907994538e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 0.1, \"max_abs\": 4.1961669921875e-05, \"max_rel\": 1.4983808796387166e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 1.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 1.8968094082083553e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.024942432399257e-06, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 0.1, \"max_abs\": 8.392333984375e-05, \"max_rel\": 0.00040539089241065085, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 1.0, \"max_abs\": 7.62939453125e-06, \"max_rel\": 3.5647924505610717e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.104330633301288e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}]\n{\"metric\": \"max abs & rel error vs sequential fp32 reference\", \"all_pass\": true, \"results\": [{\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 0.1, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 1.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 0.1, \"max_abs\": 9.5367431640625e-07, \"max_rel\": 1.4054060670787294e-07, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 1.0, \"max_abs\": 3.8743019104003906e-07, \"max_rel\": 1.8976280671267887e-06, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 0.1, \"max_abs\": 1.52587890625e-05, \"max_rel\": 1.0651810953277163e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 1.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.4746185570402304e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 3.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.7413661907994538e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 0.1, \"max_abs\": 4.1961669921875e-05, \"max_rel\": 1.4983808796387166e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 1.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 1.8968094082083553e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.024942432399257e-06, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 0.1, \"max_abs\": 8.392333984375e-05, \"max_rel\": 0.00040539089241065085, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 1.0, \"max_abs\": 7.62939453125e-06, \"max_rel\": 3.5647924505610717e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.104330633301288e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "all_pass": true,
+          "metric": "max abs & rel error vs sequential fp32 reference",
+          "results": [
+            {
+              "decay_scale": 0.1,
+              "dim": 1,
+              "dtype": "torch.float32",
+              "max_abs": 0.0,
+              "max_rel": 0.0,
+              "nan": false,
+              "nchunks": 1,
+              "shape": [
+                1
+              ]
+            },
+            {
+              "decay_scale": 1.0,
+              "dim": 1,
+              "dtype": "torch.float32",
+              "max_abs": 0.0,
+              "max_rel": 0.0,
+              "nan": false,
+              "nchunks": 1,
+              "shape": [
+                1
+              ]
+            },
+            {
+              "decay_scale": 3.0,
+              "dim": 1,
+              "dtype": "torch.float32",
+              "max_abs": 0.0,
+              "max_rel": 0.0,
+              "nan": false,
+              "nchunks": 1,
+              "shape": [
+                1
+              ]
+            },
+            {
+              "decay_scale": 0.1,
+              "dim": 8,
+              "dtype": "torch.float32",
+              "max_abs": 9.5367431640625e-07,
+              "max_rel": 1.4054060670787294e-07,
+              "nan": false,
+              "nchunks": 4,
+              "shape": [
+                8
+              ]
+            },
+            {
+              "decay_scale": 1.0,
+              "dim": 8,
+              "dtype": "torch.float32",
+              "max_abs": 3.8743019104003906e-07,
+              "max_rel": 1.8976280671267887e-06,
+              "nan": false,
+              "nchunks": 4,
+              "shape": [
+                8
+              ]
+            },
+            {
+              "decay_scale": 3.0,
+              "dim": 8,
+              "dtype": "torch.float32",
+              "max_abs": 0.0,
+              "max_rel": 0.0,
+              "nan": false,
+              "nchunks": 4,
+              "shape": [
+                8
+              ]
+            },
+            {
+              "decay_scale": 0.1,
+              "dim": 64,
+              "dtype": "torch.float32",
+              "max_abs": 1.52587890625e-05,
+              "max_rel": 1.0651810953277163e-06,
+              "nan": false,
+              "nchunks": 16,
+              "shape": [
+                64
+              ]
+            },
+            {
+              "decay_scale": 1.0,
+              "dim": 64,
+              "dtype": "torch.float32",
+              "max_abs": 1.9073486328125e-06,
+              "max_rel": 1.4746185570402304e-06,
+              "nan": false,
+              "nchunks": 16,
+              "shape": [
+                64
+              ]
+            },
+            {
+              "decay_scale": 3.0,
+              "dim": 64,
+              "dtype": "torch.float32",
+              "max_abs": 1.9073486328125e-06,
+              "max_rel": 1.7413661907994538e-06,
+              "nan": false,
+              "nchunks": 16,
+              "shape": [
+                64
+              ]
+            },
+            {
+              "decay_scale": 0.1,
+              "dim": 128,
+              "dtype": "torch.float32",
+              "max_abs": 4.1961669921875e-05,
+              "max_rel": 1.4983808796387166e-05,
+              "nan": false,
+              "nchunks": 33,
+              "shape": [
+                128
+              ]
+            },
+            {
+              "decay_scale": 1.0,
+              "dim": 128,
+              "dtype": "torch.float32",
+              "max_abs": 3.814697265625e-06,
+              "max_rel": 1.8968094082083553e-05,
+              "nan": false,
+              "nchunks": 33,
+              "shape": [
+                128
+              ]
+            },
+            {
+              "decay_scale": 3.0,
+              "dim": 128,
+              "dtype": "torch.float32",
+              "max_abs": 3.814697265625e-06,
+              "max_rel": 2.024942432399257e-06,
+              "nan": false,
+              "nchunks": 33,
+              "shape": [
+                128
+              ]
+            },
+            {
+              "decay_scale": 0.1,
+              "dim": 256,
+              "dtype": "torch.float32",
+              "max_abs": 8.392333984375e-05,
+              "max_rel": 0.00040539089241065085,
+              "nan": false,
+              "nchunks": 128,
+              "shape": [
+                256
+              ]
+            },
+            {
+              "decay_scale": 1.0,
+              "dim": 256,
+              "dtype": "torch.float32",
+              "max_abs": 7.62939453125e-06,
+              "max_rel": 3.5647924505610717e-06,
+              "nan": false,
+              "nchunks": 128,
+              "shape": [
+                256
+              ]
+            },
+            {
+              "decay_scale": 3.0,
+              "dim": 256,
+              "dtype": "torch.float32",
+              "max_abs": 3.814697265625e-06,
+              "max_rel": 2.104330633301288e-06,
+              "nan": false,
+              "nchunks": 128,
+              "shape": [
+                256
+              ]
+            }
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "[{\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 0.1, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 1.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 0.1, \"max_abs\": 9.5367431640625e-07, \"max_rel\": 1.4054060670787294e-07, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 1.0, \"max_abs\": 3.8743019104003906e-07, \"max_rel\": 1.8976280671267887e-06, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 0.1, \"max_abs\": 1.52587890625e-05, \"max_rel\": 1.0651810953277163e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 1.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.4746185570402304e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 3.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.7413661907994538e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 0.1, \"max_abs\": 4.1961669921875e-05, \"max_rel\": 1.4983808796387166e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 1.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 1.8968094082083553e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.024942432399257e-06, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 0.1, \"max_abs\": 8.392333984375e-05, \"max_rel\": 0.00040539089241065085, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 1.0, \"max_abs\": 7.62939453125e-06, \"max_rel\": 3.5647924505610717e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.104330633301288e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}]\n{\"metric\": \"max abs & rel error vs sequential fp32 reference\", \"all_pass\": true, \"results\": [{\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 0.1, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 1.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 0.1, \"max_abs\": 9.5367431640625e-07, \"max_rel\": 1.4054060670787294e-07, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 1.0, \"max_abs\": 3.8743019104003906e-07, \"max_rel\": 1.8976280671267887e-06, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 0.1, \"max_abs\": 1.52587890625e-05, \"max_rel\": 1.0651810953277163e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 1.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.4746185570402304e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 3.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.7413661907994538e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 0.1, \"max_abs\": 4.1961669921875e-05, \"max_rel\": 1.4983808796387166e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 1.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 1.8968094082083553e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.024942432399257e-06, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 0.1, \"max_abs\": 8.392333984375e-05, \"max_rel\": 0.00040539089241065085, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 1.0, \"max_abs\": 7.62939453125e-06, \"max_rel\": 3.5647924505610717e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.104330633301288e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "all_pass": true,
+          "cases": 15,
+          "max_abs_error_overall": 8.39e-05,
+          "metric": "max abs & rel error vs sequential fp32 reference",
+          "nan": false
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "Kernel final_states matched the sequential PyTorch reference across 15 cases (nchunks 1-128, dim 1-256, decay scales 0.1-3.0); all max abs errors <= 8.4e-5, max rel ~4e-4, no NaNs \u2014 consistent with fp32 rounding, not a contract violation.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:14:07Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:13:45Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:14:07Z",
+              "data": {
+                "all_pass": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "698d928eb26646ac9e8693ad3364a0d4db13d5e742785f8e7ea7f8b232bf0d50"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "65bc7c52f74e0ff58912499d26709db3ff2aaee53effb11c551d78a95c577716"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "c0741c6b15d6316e3c8b31bd2e0245630dbb28dce0109780265e6f504a18ea06"
+                  }
+                ],
+                "cases": 15,
+                "duration_s": 8.77252,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "all_pass": true,
+                  "metric": "max abs & rel error vs sequential fp32 reference",
+                  "results": [
+                    {
+                      "decay_scale": 0.1,
+                      "dim": 1,
+                      "dtype": "torch.float32",
+                      "max_abs": 0.0,
+                      "max_rel": 0.0,
+                      "nan": false,
+                      "nchunks": 1,
+                      "shape": [
+                        1
+                      ]
+                    },
+                    {
+                      "decay_scale": 1.0,
+                      "dim": 1,
+                      "dtype": "torch.float32",
+                      "max_abs": 0.0,
+                      "max_rel": 0.0,
+                      "nan": false,
+                      "nchunks": 1,
+                      "shape": [
+                        1
+                      ]
+                    },
+                    {
+                      "decay_scale": 3.0,
+                      "dim": 1,
+                      "dtype": "torch.float32",
+                      "max_abs": 0.0,
+                      "max_rel": 0.0,
+                      "nan": false,
+                      "nchunks": 1,
+                      "shape": [
+                        1
+                      ]
+                    },
+                    {
+                      "decay_scale": 0.1,
+                      "dim": 8,
+                      "dtype": "torch.float32",
+                      "max_abs": 9.5367431640625e-07,
+                      "max_rel": 1.4054060670787294e-07,
+                      "nan": false,
+                      "nchunks": 4,
+                      "shape": [
+                        8
+                      ]
+                    },
+                    {
+                      "decay_scale": 1.0,
+                      "dim": 8,
+                      "dtype": "torch.float32",
+                      "max_abs": 3.8743019104003906e-07,
+                      "max_rel": 1.8976280671267887e-06,
+                      "nan": false,
+                      "nchunks": 4,
+                      "shape": [
+                        8
+                      ]
+                    },
+                    {
+                      "decay_scale": 3.0,
+                      "dim": 8,
+                      "dtype": "torch.float32",
+                      "max_abs": 0.0,
+                      "max_rel": 0.0,
+                      "nan": false,
+                      "nchunks": 4,
+                      "shape": [
+                        8
+                      ]
+                    },
+                    {
+                      "decay_scale": 0.1,
+                      "dim": 64,
+                      "dtype": "torch.float32",
+                      "max_abs": 1.52587890625e-05,
+                      "max_rel": 1.0651810953277163e-06,
+                      "nan": false,
+                      "nchunks": 16,
+                      "shape": [
+                        64
+                      ]
+                    },
+                    {
+                      "decay_scale": 1.0,
+                      "dim": 64,
+                      "dtype": "torch.float32",
+                      "max_abs": 1.9073486328125e-06,
+                      "max_rel": 1.4746185570402304e-06,
+                      "nan": false,
+                      "nchunks": 16,
+                      "shape": [
+                        64
+                      ]
+                    },
+                    {
+                      "decay_scale": 3.0,
+                      "dim": 64,
+                      "dtype": "torch.float32",
+                      "max_abs": 1.9073486328125e-06,
+                      "max_rel": 1.7413661907994538e-06,
+                      "nan": false,
+                      "nchunks": 16,
+                      "shape": [
+                        64
+                      ]
+                    },
+                    {
+                      "decay_scale": 0.1,
+                      "dim": 128,
+                      "dtype": "torch.float32",
+                      "max_abs": 4.1961669921875e-05,
+                      "max_rel": 1.4983808796387166e-05,
+                      "nan": false,
+                      "nchunks": 33,
+                      "shape": [
+                        128
+                      ]
+                    },
+                    {
+                      "decay_scale": 1.0,
+                      "dim": 128,
+                      "dtype": "torch.float32",
+                      "max_abs": 3.814697265625e-06,
+                      "max_rel": 1.8968094082083553e-05,
+                      "nan": false,
+                      "nchunks": 33,
+                      "shape": [
+                        128
+                      ]
+                    },
+                    {
+                      "decay_scale": 3.0,
+                      "dim": 128,
+                      "dtype": "torch.float32",
+                      "max_abs": 3.814697265625e-06,
+                      "max_rel": 2.024942432399257e-06,
+                      "nan": false,
+                      "nchunks": 33,
+                      "shape": [
+                        128
+                      ]
+                    },
+                    {
+                      "decay_scale": 0.1,
+                      "dim": 256,
+                      "dtype": "torch.float32",
+                      "max_abs": 8.392333984375e-05,
+                      "max_rel": 0.00040539089241065085,
+                      "nan": false,
+                      "nchunks": 128,
+                      "shape": [
+                        256
+                      ]
+                    },
+                    {
+                      "decay_scale": 1.0,
+                      "dim": 256,
+                      "dtype": "torch.float32",
+                      "max_abs": 7.62939453125e-06,
+                      "max_rel": 3.5647924505610717e-06,
+                      "nan": false,
+                      "nchunks": 128,
+                      "shape": [
+                        256
+                      ]
+                    },
+                    {
+                      "decay_scale": 3.0,
+                      "dim": 256,
+                      "dtype": "torch.float32",
+                      "max_abs": 3.814697265625e-06,
+                      "max_rel": 2.104330633301288e-06,
+                      "nan": false,
+                      "nchunks": 128,
+                      "shape": [
+                        256
+                      ]
+                    }
+                  ]
+                },
+                "max_abs_error_overall": 8.39e-05,
+                "metric": "max abs & rel error vs sequential fp32 reference",
+                "nan": false,
+                "stderr": "",
+                "stdout": "[{\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 0.1, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 1.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 0.1, \"max_abs\": 9.5367431640625e-07, \"max_rel\": 1.4054060670787294e-07, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 1.0, \"max_abs\": 3.8743019104003906e-07, \"max_rel\": 1.8976280671267887e-06, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 0.1, \"max_abs\": 1.52587890625e-05, \"max_rel\": 1.0651810953277163e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 1.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.4746185570402304e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 3.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.7413661907994538e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 0.1, \"max_abs\": 4.1961669921875e-05, \"max_rel\": 1.4983808796387166e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 1.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 1.8968094082083553e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.024942432399257e-06, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 0.1, \"max_abs\": 8.392333984375e-05, \"max_rel\": 0.00040539089241065085, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 1.0, \"max_abs\": 7.62939453125e-06, \"max_rel\": 3.5647924505610717e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.104330633301288e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}]\n{\"metric\": \"max abs & rel error vs sequential fp32 reference\", \"all_pass\": true, \"results\": [{\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 0.1, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 1.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 0.1, \"max_abs\": 9.5367431640625e-07, \"max_rel\": 1.4054060670787294e-07, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 1.0, \"max_abs\": 3.8743019104003906e-07, \"max_rel\": 1.8976280671267887e-06, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 0.1, \"max_abs\": 1.52587890625e-05, \"max_rel\": 1.0651810953277163e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 1.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.4746185570402304e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 3.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.7413661907994538e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 0.1, \"max_abs\": 4.1961669921875e-05, \"max_rel\": 1.4983808796387166e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 1.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 1.8968094082083553e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.024942432399257e-06, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 0.1, \"max_abs\": 8.392333984375e-05, \"max_rel\": 0.00040539089241065085, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 1.0, \"max_abs\": 7.62939453125e-06, \"max_rel\": 3.5647924505610717e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.104330633301288e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}]}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Kernel final_states matched the sequential PyTorch reference across 15 cases (nchunks 1-128, dim 1-256, decay scales 0.1-3.0); all max abs errors <= 8.4e-5, max rel ~4e-4, no NaNs \u2014 consistent with fp32 rounding, not a contract violation.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel implements state = exp(dA_cs[c]) * state + new_states[c] with state initialized to zero; a runtime comparison against a sequential PyTorch reference over representative nchunks/dim values will confirm or refute it.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract: 'state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0, returning the final state.'"
+            }
+          ],
+          "scope_rationale": "The contract explicitly requires the recurrence state <- exp(dA_cs[c])*state + new_states[c] from state=0 and the final state as return value.",
+          "statement": "The kernel's final_states matches the reference recurrence final = sum_c new_states[c] * exp(sum_{k>c} dA_cs[k]) computed sequentially from state=0.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:14:07Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:14:07Z",
+          "data": {
+            "all_pass": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "698d928eb26646ac9e8693ad3364a0d4db13d5e742785f8e7ea7f8b232bf0d50"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "65bc7c52f74e0ff58912499d26709db3ff2aaee53effb11c551d78a95c577716"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "c0741c6b15d6316e3c8b31bd2e0245630dbb28dce0109780265e6f504a18ea06"
+              }
+            ],
+            "cases": 15,
+            "duration_s": 8.77252,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "all_pass": true,
+              "metric": "max abs & rel error vs sequential fp32 reference",
+              "results": [
+                {
+                  "decay_scale": 0.1,
+                  "dim": 1,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 1,
+                  "shape": [
+                    1
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 1,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 1,
+                  "shape": [
+                    1
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 1,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 1,
+                  "shape": [
+                    1
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 8,
+                  "dtype": "torch.float32",
+                  "max_abs": 9.5367431640625e-07,
+                  "max_rel": 1.4054060670787294e-07,
+                  "nan": false,
+                  "nchunks": 4,
+                  "shape": [
+                    8
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 8,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.8743019104003906e-07,
+                  "max_rel": 1.8976280671267887e-06,
+                  "nan": false,
+                  "nchunks": 4,
+                  "shape": [
+                    8
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 8,
+                  "dtype": "torch.float32",
+                  "max_abs": 0.0,
+                  "max_rel": 0.0,
+                  "nan": false,
+                  "nchunks": 4,
+                  "shape": [
+                    8
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 64,
+                  "dtype": "torch.float32",
+                  "max_abs": 1.52587890625e-05,
+                  "max_rel": 1.0651810953277163e-06,
+                  "nan": false,
+                  "nchunks": 16,
+                  "shape": [
+                    64
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 64,
+                  "dtype": "torch.float32",
+                  "max_abs": 1.9073486328125e-06,
+                  "max_rel": 1.4746185570402304e-06,
+                  "nan": false,
+                  "nchunks": 16,
+                  "shape": [
+                    64
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 64,
+                  "dtype": "torch.float32",
+                  "max_abs": 1.9073486328125e-06,
+                  "max_rel": 1.7413661907994538e-06,
+                  "nan": false,
+                  "nchunks": 16,
+                  "shape": [
+                    64
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 128,
+                  "dtype": "torch.float32",
+                  "max_abs": 4.1961669921875e-05,
+                  "max_rel": 1.4983808796387166e-05,
+                  "nan": false,
+                  "nchunks": 33,
+                  "shape": [
+                    128
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 128,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.814697265625e-06,
+                  "max_rel": 1.8968094082083553e-05,
+                  "nan": false,
+                  "nchunks": 33,
+                  "shape": [
+                    128
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 128,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.814697265625e-06,
+                  "max_rel": 2.024942432399257e-06,
+                  "nan": false,
+                  "nchunks": 33,
+                  "shape": [
+                    128
+                  ]
+                },
+                {
+                  "decay_scale": 0.1,
+                  "dim": 256,
+                  "dtype": "torch.float32",
+                  "max_abs": 8.392333984375e-05,
+                  "max_rel": 0.00040539089241065085,
+                  "nan": false,
+                  "nchunks": 128,
+                  "shape": [
+                    256
+                  ]
+                },
+                {
+                  "decay_scale": 1.0,
+                  "dim": 256,
+                  "dtype": "torch.float32",
+                  "max_abs": 7.62939453125e-06,
+                  "max_rel": 3.5647924505610717e-06,
+                  "nan": false,
+                  "nchunks": 128,
+                  "shape": [
+                    256
+                  ]
+                },
+                {
+                  "decay_scale": 3.0,
+                  "dim": 256,
+                  "dtype": "torch.float32",
+                  "max_abs": 3.814697265625e-06,
+                  "max_rel": 2.104330633301288e-06,
+                  "nan": false,
+                  "nchunks": 128,
+                  "shape": [
+                    256
+                  ]
+                }
+              ]
+            },
+            "max_abs_error_overall": 8.39e-05,
+            "metric": "max abs & rel error vs sequential fp32 reference",
+            "nan": false,
+            "stderr": "",
+            "stdout": "[{\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 0.1, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 1.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 0.1, \"max_abs\": 9.5367431640625e-07, \"max_rel\": 1.4054060670787294e-07, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 1.0, \"max_abs\": 3.8743019104003906e-07, \"max_rel\": 1.8976280671267887e-06, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 0.1, \"max_abs\": 1.52587890625e-05, \"max_rel\": 1.0651810953277163e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 1.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.4746185570402304e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 3.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.7413661907994538e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 0.1, \"max_abs\": 4.1961669921875e-05, \"max_rel\": 1.4983808796387166e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 1.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 1.8968094082083553e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.024942432399257e-06, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 0.1, \"max_abs\": 8.392333984375e-05, \"max_rel\": 0.00040539089241065085, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 1.0, \"max_abs\": 7.62939453125e-06, \"max_rel\": 3.5647924505610717e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.104330633301288e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}]\n{\"metric\": \"max abs & rel error vs sequential fp32 reference\", \"all_pass\": true, \"results\": [{\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 0.1, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 1.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 1, \"dim\": 1, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [1], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 0.1, \"max_abs\": 9.5367431640625e-07, \"max_rel\": 1.4054060670787294e-07, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 1.0, \"max_abs\": 3.8743019104003906e-07, \"max_rel\": 1.8976280671267887e-06, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 4, \"dim\": 8, \"decay_scale\": 3.0, \"max_abs\": 0.0, \"max_rel\": 0.0, \"dtype\": \"torch.float32\", \"shape\": [8], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 0.1, \"max_abs\": 1.52587890625e-05, \"max_rel\": 1.0651810953277163e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 1.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.4746185570402304e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 16, \"dim\": 64, \"decay_scale\": 3.0, \"max_abs\": 1.9073486328125e-06, \"max_rel\": 1.7413661907994538e-06, \"dtype\": \"torch.float32\", \"shape\": [64], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 0.1, \"max_abs\": 4.1961669921875e-05, \"max_rel\": 1.4983808796387166e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 1.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 1.8968094082083553e-05, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 33, \"dim\": 128, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.024942432399257e-06, \"dtype\": \"torch.float32\", \"shape\": [128], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 0.1, \"max_abs\": 8.392333984375e-05, \"max_rel\": 0.00040539089241065085, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 1.0, \"max_abs\": 7.62939453125e-06, \"max_rel\": 3.5647924505610717e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}, {\"nchunks\": 128, \"dim\": 256, \"decay_scale\": 3.0, \"max_abs\": 3.814697265625e-06, \"max_rel\": 2.104330633301288e-06, \"dtype\": \"torch.float32\", \"shape\": [256], \"nan\": false}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel final_states matched the sequential PyTorch reference across 15 cases (nchunks 1-128, dim 1-256, decay scales 0.1-3.0); all max abs errors <= 8.4e-5, max rel ~4e-4, no NaNs \u2014 consistent with fp32 rounding, not a contract violation.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Verified the kernel against the contract recurrence (state <- exp(dA_cs[c])*state + new_states[c], from state=0, returning the final state). Runtime probe t6 compared kernel final_states to a sequential PyTorch reference across 15 cases (nchunks 1-128, dim 1-256, decay scales 0.1/1.0/3.0): all max abs errors <= 8.4e-5 with max rel ~4e-4 and no NaNs, consistent with fp32 rounding, not a contract violation. Source inspection confirms the kernel implements exactly the required recurrence with state initialized to zero (tl.zeros) and the final chunk stored to final_states. No contract-required behavior is violated.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-30T08:14:16Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-30T08:14:16Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Verified the kernel against the contract recurrence (state <- exp(dA_cs[c])*state + new_states[c], from state=0, returning the final state). Runtime probe t6 compared kernel final_states to a sequential PyTorch reference across 15 cases (nchunks 1-128, dim 1-256, decay scales 0.1/1.0/3.0): all max abs errors <= 8.4e-5 with max rel ~4e-4 and no NaNs, consistent with fp32 rounding, not a contract violation. Source inspection confirms the kernel implements exactly the required recurrence with state initialized to zero (tl.zeros) and the final chunk stored to final_states. No contract-required behavior is violated.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-30T08:14:16Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Verified the kernel against the contract recurrence (state <- exp(dA_cs[c])*state + new_states[c], from state=0, returning the final state). Runtime probe t6 compared kernel final_states to a sequential PyTorch reference across 15 cases (nchunks 1-128, dim 1-256, decay scales 0.1/1.0/3.0): all max abs errors <= 8.4e-5 with max rel ~4e-4 and no NaNs, consistent with fp32 rounding, not a contract violation. Source inspection confirms the kernel implements exactly the required recurrence with state initialized to zero (tl.zeros) and the final chunk stored to final_states. No contract-required behavior is violated.",
+    "verdict": "trust"
+  }
+}

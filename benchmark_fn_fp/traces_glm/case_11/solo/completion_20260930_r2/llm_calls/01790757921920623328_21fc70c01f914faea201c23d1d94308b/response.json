@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-7632fdf8121b49cdb385cec0694ae3a3",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a runtime comparison of the kernel against a PyTorch reference RoPE for both pairing modes, plus check the relative-position invariant and odd shapes.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b31a37fcf360f104",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, math, sys\\nsys.path.insert(0, \\\"/root/cases/case_11\\\")\\nfrom kernel import apply_rotary\\n\\ndef ref_rope(x, cos, sin, interleaved):\\n    # x: (seqlen, nheads, headdim), cos/sin: (seqlen, headdim//2)\\n    h = x.shape[-1] // 2\\n    c = cos[:, None, :]; s = sin[:, None, :]\\n    x0 = x[..., :h]; x1 = x[..., h:]\\n    if not interleaved:\\n        o0 = x0 * c - x1 * s\\n        o1 = x0 * s + x1 * c\\n        return torch.cat([o0, o1], dim=-1)\\n    else:\\n        x0 = x[..., 0::2].contiguous(); x1 = x[..., 1::2].contiguous()\\n        o0 = x0 * c - x1 * s\\n        o1 = x0 * s + x1 * c\\n        out = torch.empty_like(x)\\n        out[..., 0::2] = o0; out[..., 1::2] = o1\\n        return out\\n\\nresults = {}\\ntorch.manual_seed(0)\\nfor interleaved in (False, True):\\n    for (seqlen, nheads, headdim) in [(128, 8, 64), (3, 5, 32), (17, 2, 128), (2, 1, 6)]:\\n        x = torch.randn(seqlen, nheads, headdim, device=\\\"cuda\\\", dtype=torch.float32)\\n        # position-dependent angles\\n        pos = torch.arange(seqlen, device=\\\"cuda\\\").float()\\n        inv = 1.0 / (10000 ** (torch.arange(headdim//2, device=\\\"cuda\\\").float() * 2 / headdim))\\n        ang = pos[:, None] * inv[None, :]\\n        cos = torch.cos(ang); sin = torch.sin(ang)\\n        out = apply_rotary(x, cos, sin, interleaved)\\n        ref = ref_rope(x, cos, sin, interleaved)\\n        err = (out - ref).abs().max().item()\\n        results[f\\\"il={interleaved},{seqlen},{nheads},{headdim}\\\"] = err\\n\\n# relative-position invariant: dot(R_q_m q, R_k_n k) depends on m-n\\nseqlen, nheads, headdim = 64, 4, 64\\npos = torch.arange(seqlen, device=\\\"cuda\\\").float()\\ninv = 1.0 / (10000 ** (torch.arange(headdim//2, device=\\\"cuda\\\").float() * 2 / headdim))\\nang = pos[:, None] * inv[None, :]\\ncos = torch.cos(ang); sin = torch.sin(ang)\\nq = torch.randn(seqlen, nheads, headdim, device=\\\"cuda\\\")\\nk = torch.randn(seqlen, nheads, headdim, device=\\\"cuda\\\")\\nrel_ok = True\\nmaxrel = 0.0\\nfor interleaved in (False, True):\\n    qr = apply_rotary(q, cos, sin, interleaved)\\n    kr = apply_rotary(k, cos, sin, interleaved)\\n    dots = (qr[:, None] * kr[None, :]).sum(-1)  # (m, n, nheads)\\n    for n in range(seqlen):\\n        d = dots[0, n]  # m=0\\n        dref = dots[seqlen-1, n]  # m=S-1 -> shift; compare same relative offset\\n        # compute reference for relative offset n-0 via direct rotation formula\\n        pass\\n    # check invariance: dot(m,n) should equal dot(m+1,n+1)\\n    diff = (dots[:-1, :-1] - dots[1:, 1:]).abs().max().item()\\n    maxrel = max(maxrel, diff)\\n    rel_ok = rel_ok and diff < 1e-3\\n\\nprint(json.dumps({\\\"elementwise_max_abs_err\\\": results, \\\"invariance_max_diff\\\": maxrel, \\\"invariance_ok\\\": rel_ok}))\\n\", \"expected_signal\": \"all elementwise errors ~0 and invariance holds\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run a probe comparing kernel output to reference for both interleaved modes, odd seqlen/dims maybe. Note: kernel loads cos/sin assuming contiguous layout (seqlen*headdim/2) — strides not passed for cos/sin; but inputs contiguous likely fine. Also grid dims (nheads, seqlen) fine.\n\nPotential issue: cos/sin indexing uses row-major contiguous with rotary_dim_half, fine for contiguous cos/sin. Reference test with contiguous inputs.\n\nRun claim probe.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757922,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1088,
+    "prompt_tokens": 9817,
+    "total_tokens": 10905,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 104,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4608,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 104
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-2fc43ec024b04a2e9fd1b11e768f0145",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a runtime probe for claim c1, testing tied maxima (all-equal rows, partial ties, and bf16 quantization-induced ties) against the lowest-index-wins contract.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-907c02aa0c977876",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json\\nimport sys\\nsys.path.insert(0, \\\"/root/cases/case_30\\\")\\nfrom kernel import route_top1\\n\\ndev = \\\"cuda\\\"\\nresults = {}\\n\\n# Case A: all-equal logits row (full tie) - fp32\\nE = 8; T = 4\\nlg = torch.full((T, E), 0.5, device=dev, dtype=torch.float32)\\nidx = route_top1(lg)\\nexpect = torch.zeros(T, dtype=torch.long, device=dev)\\nresults[\\\"all_equal_fp32_kernel\\\"] = idx.tolist()\\nresults[\\\"all_equal_fp32_expected\\\"] = expect.tolist()\\nresults[\\\"all_equal_fp32_mismatch_rows\\\"] = int((idx.long() != expect).sum().item())\\n\\n# Case B: partial tie - max shared by experts 2 and 5, lowest should win\\nlg2 = torch.randn(T, E, device=dev, dtype=torch.float32)\\nlg2[:, :] = torch.linspace(-1, 1, E, device=dev).unsqueeze(0)\\nlg2[:, 2] = 1.0; lg2[:, 5] = 1.0  # tied max at indices 2 and 5\\nidx2 = route_top1(lg2)\\nresults[\\\"partial_tie_fp32_kernel\\\"] = idx2.tolist()\\nresults[\\\"partial_tie_fp32_expected\\\"] = [2]*T\\nresults[\\\"partial_tie_fp32_mismatch_rows\\\"] = int((idx2.long() != 2).sum().item())\\n\\n# Case C: bf16 quantization-induced ties (in-scope primary distribution)\\nlg3 = torch.randn(256, E, device=dev, dtype=torch.float32).to(torch.bfloat16)\\nidx3 = route_top1(lg3)\\n# reference: lowest tied index wins\\nref3 = torch.argmax(lg3.float(), dim=1)  # torch.argmax returns first occurrence of max\\n# verify ref picks lowest tied index by explicit check\\nvals = lg3.float()\\nmx = vals.max(dim=1, keepdim=True).values\\nlowest = ((vals == mx).float() * torch.arange(E, device=dev).unsqueeze(0)).masked_fill(vals != mx, float(\\\"inf\\\")).min(dim=1).values.long()\\nresults[\\\"bf16_ties_rows_with_tied_max\\\"] = int(((vals == mx).sum(dim=1) > 1).sum().item())\\nresults[\\\"bf16_kernel_mismatch_vs_lowest\\\"] = int((idx3.long() != lowest).sum().item())\\nresults[\\\"bf16_kernel_mismatch_vs_torchargmax\\\"] = int((idx3.long() != ref3).sum().item())\\nresults[\\\"bf16_rows\\\"] = int(lg3.shape[0])\\n\\n# Case D: no ties (distinct logits) - sanity that argmax value itself is right\\nlg4 = torch.randn(T, E, device=dev, dtype=torch.float32)\\nidx4 = route_top1(lg4)\\nref4 = lg4.argmax(dim=1)\\nresults[\\\"distinct_fp32_correct_rows\\\"] = int((idx4.long() == ref4).sum().item())\\n\\nprint(json.dumps(results))\\n\", \"expected_signal\": \"With tied maxima, kernel returns highest tied index (e.g. E-1 for all-equal rows) instead of lowest tied index 0.\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "One open claim c1. Run a probe with all-equal logits and partial ties, bf16 too.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757367,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 779,
+    "prompt_tokens": 15792,
+    "total_tokens": 16571,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 22,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3925,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 22
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-63a5450a518d44cab94c3a614faa4645",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The elementwise comparison passed (max error ~2e-7 for both interleaved modes), but my invariance probe crashed with a shape error before printing. I'll re-run a corrected invariance check on both the reference and the kernel to determine whether the earlier large invariance diff (53) was a probe artifact.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9d5822c9e11221bb",
+            "function": {
+              "arguments": "{\"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_11\\\")\\nfrom kernel import apply_rotary\\n\\ndef ref_rope(x, cos, sin, interleaved):\\n    h = x.shape[-1] // 2\\n    c = cos[:, None, :]; s = sin[:, None, :]\\n    if not interleaved:\\n        x0 = x[..., :h]; x1 = x[..., h:]\\n        return torch.cat([x0*c - x1*s, x0*s + x1*c], dim=-1)\\n    x0 = x[..., 0::2]; x1 = x[..., 1::2]\\n    out = torch.empty_like(x)\\n    out[..., 0::2] = x0*c - x1*s; out[..., 1::2] = x0*s + x1*c\\n    return out\\n\\nseqlen, nheads, headdim = 64, 4, 64\\npos = torch.arange(seqlen, device=\\\"cuda\\\").float()\\ninv = 1.0/(10000**(torch.arange(headdim//2, device=\\\"cuda\\\").float()*2/headdim))\\nang = pos[:, None]*inv[None, :]\\ncos = torch.cos(ang); sin = torch.sin(ang)\\ntorch.manual_seed(0)\\nq = torch.randn(seqlen, nheads, headdim, device=\\\"cuda\\\")\\nk = torch.randn(seqlen, nheads, headdim, device=\\\"cuda\\\")\\n\\nres = {}\\nfor name, fn in [(\\\"ref\\\", ref_rope), (\\\"kernel\\\", apply_rotary)]:\\n    for interleaved in (False, True):\\n        qr = fn(q, cos, sin, interleaved)\\n        kr = fn(k, cos, sin, interleaved)\\n        dots = torch.einsum(\\\"mhd,nhd->mnh\\\", qr, kr)\\n        # shift invariance: dot(m,n) == dot(m+1,n+1)\\n        shift = (dots[:-1, :-1] - dots[1:, 1:]).abs().max().item()\\n        # exact offset invariance: all (m, m+off) equal across m\\n        maxinv = 0.0\\n        for offv in range(1, seqlen):\\n            vals = dots[torch.arange(seqlen-offv), torch.arange(offv, seqlen)]  # (S-off, nheads)\\n            maxinv = max(maxinv, (vals - vals[0]).abs().max().item())\\n        # cross-check kernel vs ref elementwise again here\\n        res[f\\\"{name},il={interleaved}\\\"] = {\\\"shift\\\": shift, \\\"offset_inv\\\": maxinv}\\n\\n# elementwise kernel vs ref, fp32\\nfor interleaved in (False, True):\\n    out = apply_rotary(q, cos, sin, interleaved)\\n    ref = ref_rope(q, cos, sin, interleaved)\\n    res[f\\\"elemerr,il={interleaved}\\\"] = (out - ref).abs().max().item()\\n\\nprint(json.dumps(res))\\n\"}",
+              "name": "run_python_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Fix the probe (t7 failed due to stack sizes). Run a simpler invariance check on both ref and kernel. Also the t6 invariance failure is a probe artifact (dsum includes head sum? No — dots shape (m,n,nheads) sum over last dim... wait qr[:,None]*kr[None,:] gives (m,n,nheads,headdim), sum(-1) → (m,n,nheads). Then dots[:-1,:-1]-dots[1:,1:] compares... that should be small if invariant. Actually invariance only holds when cos/sin depend on relative position — they do (ang = pos*inv), so it should hold. But diff 53 suggests... hmm, maybe comparing wrong? dot(m,n) = f(m-n)? Only if rotation by θ_m and θ_n: dot = q·R(θ_n-θ_m)k, depends on n-m. Should hold. Large diff for both ref and kernel? t7 crashed before printing. Re-run clean check.\n\nActually the earlier failing check: dots[:-1,:-1] - dots[1:,1:] — that IS comparing same offset pairs (m,n) vs (m+1,n+1), offset n-m vs n-m. Same. So diff 53 for kernel? If ref also shows 53, it's a probe/reference issue... Let's check: for interleaved=False with cos as (seqlen, headdim//2)... yes fine. Hmm wait maybe the issue: with inv exponent base 10000 and headdim 64, angles grow large and fp32 rounding breaks invariance? At pos 63, angle = 63 for first pair; cos(63) fp32 fine. dot invariance should hold to ~1e-4 relative, not 53. But note q·Rk summed over heads? No, sum(-1) over headdim only, dots (m,n,nheads) fine.\n\nHmm, actually large diff may be real for kernel? But elementwise error vs ref was 2e-7... if kernel matches ref elementwise, invariance must match ref's. So the 53 must also appear for ref → probe bug. Let me recompute: dots[:-1,:-1] vs dots[1:,1:] — wait maybe I summed wrong: (qr[:,None]*kr[None,:]) shapes (S,1,4,64)*(1,S,4,64) = (S,S,4,64), sum(-1) = (S,S,4). Then diff fine. Should be small. Unless... broadcasting fine.\n\nLet me just re-run the simple check on both.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757975,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1291,
+    "prompt_tokens": 15965,
+    "total_tokens": 17256,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 560,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4608,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 560
+    }
+  }
+}

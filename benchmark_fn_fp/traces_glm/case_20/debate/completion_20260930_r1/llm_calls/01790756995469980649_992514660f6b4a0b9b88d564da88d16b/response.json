@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-7ea36f491f964293886e0253b6b1a40c",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a runtime probe for open claim c2: build a row with small nonzero variance (constant row plus one perturbed element, and also a symmetric ±δ pattern), call the kernel, and compare its output y against the exact contract formula 1/sqrt(var+eps).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b44592e2e35a952c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, math, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_20\\\")\\nfrom kernel import layer_norm\\n\\neps = 1e-5\\nN = 512\\ntorch.manual_seed(0)\\n\\ndef ref(x, w, b, eps):\\n    xf = x.float()\\n    mean = xf.mean(-1, keepdim=True)\\n    var = ((xf - mean) ** 2).mean(-1, keepdim=True)\\n    rstd = 1.0 / torch.sqrt(var + eps)\\n    return (xf - mean) * rstd * w.float() + b.float()\\n\\nresults = {}\\nrows = []\\ndeltas = [1e-4, 1e-3, 1e-2]\\nfor d in deltas:\\n    # constant row + single perturbed element\\n    r = torch.full((N,), 0.7)\\n    r[3] = 0.7 + d\\n    rows.append((\\\"single_perturb\\\", d, r))\\n    # symmetric pattern: two elements perturbed +-d (mean stays 0.7)\\n    r2 = torch.full((N,), 0.7)\\n    r2[0] = 0.7 + d\\n    r2[1] = 0.7 - d\\n    rows.append((\\\"symmetric\\\", d, r2))\\n\\nw = torch.randn(N)\\nb = torch.randn(N)\\n\\nworst = {\\\"max_abs_err\\\": 0.0, \\\"max_rel_err\\\": 0.0, \\\"label\\\": None}\\nfor label, d, r in rows:\\n    x = r.unsqueeze(0).contiguous()\\n    y = layer_norm(x, w, b, eps)\\n    yr = ref(x, w, b, eps)\\n    xf = x.float()\\n    mean = xf.mean().item()\\n    var = ((xf - mean) ** 2).mean().item()\\n    contract_rstd = 1.0 / math.sqrt(var + eps)\\n    kernel_rstd_implied = 1.0 / (math.sqrt(var) + eps)\\n    diff = (y.float() - yr).abs()\\n    denom = yr.abs().clamp_min(1e-12)\\n    rel = (diff / denom).max().item()\\n    abs_err = diff.max().item()\\n    ratio = kernel_rstd_implied / contract_rstd\\n    results[f\\\"{label}_delta={d}\\\"] = {\\n        \\\"var\\\": var, \\\"contract_rstd\\\": contract_rstd,\\n        \\\"kernel_formula_rstd\\\": kernel_rstd_implied,\\n        \\\"rstd_ratio\\\": ratio,\\n        \\\"max_abs_err\\\": abs_err, \\\"max_rel_err\\\": rel,\\n    }\\n    if abs_err > worst[\\\"max_abs_err\\\"]:\\n        worst = {\\\"max_abs_err\\\": abs_err, \\\"max_rel_err\\\": rel, \\\"label\\\": f\\\"{label}_delta={d}\\\"}\\n\\n# benign control: randn row (should agree)\\nx = torch.randn(1, N)\\ny = layer_norm(x, w, b, eps); yr = ref(x, w, b, eps)\\nresults[\\\"randn_control_max_abs_err\\\"] = (y.float() - yr).abs().max().item()\\n\\n# check allclose at typical tolerance 1e-5 on the adversarial case\\nr = torch.full((N,), 0.7); r[0] = 0.7 + 1e-3; r[1] = 0.7 - 1e-3\\nx = r.unsqueeze(0).contiguous()\\ny = layer_norm(x, w, b, eps); yr = ref(x, w, b, eps)\\nresults[\\\"allclose_1e-5_small_var\\\"] = bool(torch.allclose(y.float(), yr, atol=1e-5, rtol=1e-5))\\n\\nprint(json.dumps({\\\"metric\\\": \\\"elementwise abs/rel error of kernel y vs contract formula y with eps=1e-5, controlled-variance rows\\\",\\n                  \\\"rationale\\\": \\\"claim c2 states y deviates from contract 1/sqrt(var+eps) for small nonzero var; direct y comparison is authoritative\\\",\\n                  \\\"worst\\\": worst, \\\"cases\\\": results}))\\n\", \"expected_signal\": \"kernel y deviates from contract-formula y by orders of magnitude for small-variance rows while randn control agrees\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "The only open claim is c2. Launch a runtime probe: row with small variance, compare y against exact contract formula. Use run_claim_probe.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756996,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1017,
+    "prompt_tokens": 24108,
+    "total_tokens": 25125,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 30,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 540,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 30
+    }
+  }
+}

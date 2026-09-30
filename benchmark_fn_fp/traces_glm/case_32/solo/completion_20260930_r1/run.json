@@ -1,0 +1,4859 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_32",
+    "has_error": null,
+    "kernel_code": "# Copyright (c) Meta Platforms, Inc. and affiliates.\n\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _stable_argsort_kernel(\n    keys_ptr,       # [N, W] int64 input (modified in-place: sorted)\n    perm_ptr,       # [N, W] int64 output (permutation indices)\n    N: tl.constexpr,\n    W: tl.constexpr,\n    BLOCK_W: tl.constexpr,\n):\n    \"\"\"Ascending bitonic sort of each row, returning the permutation.\"\"\"\n    pid = tl.program_id(0)\n    if pid >= N:\n        return\n\n    offs = tl.arange(0, BLOCK_W)\n    mask = offs < W\n    base = pid * W\n\n    keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)\n    perm = offs.to(tl.int64)\n\n    size = 1\n    while size < BLOCK_W:\n        stride = size\n        while stride > 0:\n            partner = offs ^ stride\n            ascending = ((offs & (size << 1)) == 0)\n\n            p_key = tl.load(keys_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)\n            p_perm = tl.load(perm_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)\n\n            is_lower_idx = offs < partner\n            want_smaller = (is_lower_idx & ascending) | ((~is_lower_idx) & (~ascending))\n\n            my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm))\n\n            should_take_partner = (want_smaller & (~my_is_smaller) & (partner < W)) | \\\n                                  ((~want_smaller) & my_is_smaller & (partner < W))\n\n            keys = tl.where(should_take_partner, p_key, keys)\n            perm = tl.where(should_take_partner, p_perm, perm)\n\n            tl.store(keys_ptr + base + offs, keys, mask=mask)\n            tl.store(perm_ptr + base + offs, perm, mask=mask)\n            tl.debug_barrier()\n\n            keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)\n            perm = tl.load(perm_ptr + base + offs, mask=mask, other=0)\n\n            stride = stride >> 1\n        size = size << 1\n\n\ndef triton_argsort(keys: torch.Tensor):\n    \"\"\"Ascending argsort for small rows. Returns (sorted_keys, permutation).\"\"\"\n    N, W = keys.shape\n    BLOCK_W = triton.next_power_of_2(W)\n    keys_out = keys.clone()\n    perm = torch.arange(W, device=keys.device, dtype=torch.int64).unsqueeze(0).expand(N, -1).contiguous()\n    _stable_argsort_kernel[(N,)](keys_out, perm, N=N, W=W, BLOCK_W=BLOCK_W, num_warps=1)\n    return keys_out, perm\n",
+    "passed": null,
+    "problem_text": "Operation: per-row ascending argsort of small integer keys\n(facebookresearch/sparse-delta-memory, lingua/sparse_delta_memory/triton_argsort.py).\n\n`triton_argsort(keys)` takes an [N, W] int64 tensor and returns the sorted keys\ntogether with the permutation that produces them:\n\n    sorted_keys[n, i] = keys[n, perm[n, i]]\n    sorted_keys[n, :] is non-decreasing\n\nTie rule: the sort must be STABLE. When two entries of a row hold the same key,\nthe one with the LOWER original index must come first. The permutation is used\nto gather memory slots whose contents differ, so which of two tied entries is\nplaced first changes the values that are read out afterwards, and stability is\nwhat makes the read reproducible across runs and across replicas.\n\nInput domain: keys are arbitrary int64 values. Duplicate keys within a row are\nexpected -- the keys are quantized scores, and quantization is what makes two\ndifferent underlying values land on the same key.\n\nDoes triton_argsort() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_32",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:46:02Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:46:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "2de547b7b6bb52991c18608c1f8d69b2775d262a587965ca7ae9b0d25f6729da"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "30913ccddf404516703ca0126e4284cee6cedf7fd30f0aca9dca57af69cfe973"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "d2c7a11e50b9efe6638ad46cd0a58eb849fc2af7f9242dbb474bb8e6ffba0646"
+              }
+            ],
+            "duration_s": 9.496593,
+            "exit_code": 0,
+            "expected_signal": null,
+            "gather_ok": "true everywhere (perm is a valid permutation of row)",
+            "json_parse_error": null,
+            "json_result": {
+              "W10_all_equal": [
+                true,
+                true,
+                false
+              ],
+              "W11_extremes": [
+                false,
+                true,
+                false
+              ],
+              "W13_dup": [
+                false,
+                true,
+                false
+              ],
+              "W16_dup": [
+                true,
+                true,
+                false
+              ],
+              "W1_rand": [
+                true,
+                true,
+                true
+              ],
+              "W3_rand": [
+                false,
+                true,
+                false
+              ],
+              "W9_rand": [
+                false,
+                true,
+                false
+              ],
+              "sweep_bad": [
+                [
+                  2,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  9,
+                  false,
+                  true,
+                  false
+                ]
+              ]
+            },
+            "sorted_ok": "false for all non-power-of-2 W (3,5,6,7,9,12,13,17,33); true for power-of-2 W (1,2,4,8,16,32)",
+            "stable_ok": "false for every W with duplicates except W=1; e.g. W16_dup [true,true,false], W4 duplicates false, W10 all-equal row false, W11 with INT64_MAX/INT64_MIN keys false",
+            "stderr": "",
+            "stdout": "{\"W16_dup\": [true, true, false], \"W13_dup\": [false, true, false], \"W9_rand\": [false, true, false], \"W3_rand\": [false, true, false], \"W1_rand\": [true, true, true], \"W11_extremes\": [false, true, false], \"W10_all_equal\": [true, true, false], \"sweep_bad\": [[2, 0, true, true, false], [2, 1, true, true, false], [2, 2, true, true, false], [2, 3, true, true, false], [2, 4, true, true, false], [2, 5, true, true, false], [2, 6, true, true, false], [2, 7, true, true, false], [2, 8, true, true, false], [2, 9, true, true, false], [3, 0, false, true, false], [3, 1, false, true, false], [3, 2, false, true, false], [3, 3, false, true, false], [3, 4, false, true, false], [3, 5, false, true, false], [3, 6, false, true, false], [3, 7, false, true, false], [3, 8, false, true, false], [3, 9, false, true, false], [4, 0, true, true, false], [4, 1, true, true, false], [4, 2, true, true, false], [4, 3, true, true, false], [4, 4, true, true, false], [4, 5, true, true, false], [4, 6, true, true, false], [4, 7, true, true, false], [4, 8, true, true, false], [4, 9, true, true, false], [5, 0, false, true, false], [5, 1, false, true, false], [5, 2, false, true, false], [5, 3, false, true, false], [5, 4, false, true, false], [5, 5, false, true, false], [5, 6, false, true, false], [5, 7, false, true, false], [5, 8, false, true, false], [5, 9, false, true, false], [6, 0, false, true, false], [6, 1, false, true, false], [6, 2, false, true, false], [6, 3, false, true, false], [6, 4, false, true, false], [6, 5, false, true, false], [6, 6, false, true, false], [6, 7, false, true, false], [6, 8, false, true, false], [6, 9, false, true, false], [7, 0, false, true, false], [7, 1, false, true, false], [7, 2, false, true, false], [7, 3, false, true, false], [7, 4, false, true, false], [7, 5, false, true, false], [7, 6, false, true, false], [7, 7, false, true, false], [7, 8, false, true, false], [7, 9, false, true, false], [8, 0, true, true, false], [8, 1, true, true, false], [8, 2, true, true, false], [8, 3, true, true, false], [8, 4, true, true, false], [8, 5, true, true, false], [8, 6, true, true, false], [8, 7, true, true, false], [8, 8, true, true, false], [8, 9, true, true, false], [12, 0, false, true, false], [12, 1, false, true, false], [12, 2, false, true, false], [12, 3, false, true, false], [12, 4, false, true, false], [12, 5, false, true, false], [12, 6, false, true, false], [12, 7, false, true, false], [12, 8, false, true, false], [12, 9, false, true, false], [17, 0, false, true, false], [17, 1, false, true, false], [17, 2, false, true, false], [17, 3, false, true, false], [17, 4, false, true, false], [17, 5, false, true, false], [17, 6, false, true, false], [17, 7, false, true, false], [17, 8, false, true, false], [17, 9, false, true, false], [32, 0, true, true, false], [32, 1, true, true, false], [32, 2, true, true, false], [32, 3, true, true, false], [32, 4, true, true, false], [32, 5, true, true, false], [32, 6, true, true, false], [32, 7, true, true, false], [32, 8, true, true, false], [32, 9, true, true, false], [33, 0, false, true, false], [33, 1, false, true, false], [33, 2, false, true, false], [33, 3, false, true, false], [33, 4, false, true, false], [33, 5, false, true, false], [33, 6, false, true, false], [33, 7, false, true, false], [33, 8, false, true, false], [33, 9, false, true, false]]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel fails the contract on admissible inputs: for non-power-of-2 W (3,5,6,7,9,12,13,17,33) rows are not even non-decreasing (sorted_ok=false) though perm is a valid permutation (gather_ok=true); for power-of-2 W with duplicate keys (including an all-equal row of 10s, and rows containing INT64_MAX/INT64_MIN) the permutation is not the stable order (stable_ok=false vs torch stable argsort), violating the lower-original-index-first tie rule.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier sync, masked padding using INT64_MAX (which is also a legal key value), and per-compare tie-breaking on carried original index; any of these could produce wrong sorted order or unstable permutations for admissible inputs.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicate keys within a row are expected."
+        }
+      ],
+      "scope_rationale": "The contract requires per-row ascending stable argsort of arbitrary int64 keys with duplicates, so any admissible input producing non-sorted rows or a permutation that does not order tied keys by lower original index first directly violates the contract.",
+      "statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:46:55Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_32",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_32"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_32"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_32"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_32",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 417.6798612560001,
+      "role": "solo",
+      "round": 2,
+      "text": "I've reviewed the kernel: a bitonic sort with in-place global-memory compare-exchange, tie-broken by carried original index (a total order, which suggests stability may work). The empirical behavior needs testing, especially for non-power-of-2 W, duplicates, and INT64 extreme values. Let me record a claim and probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier synchronization and per-compare tie-breaking on the carried original index; bitonic networks with masking for W<BLOCK_W and extreme sentinel values (INT64_MAX used for padding, which is also a legal input) could produce wrong sorted order or unstable permutations.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicates within a row are expected."
+              }
+            ],
+            "statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 417.68,
+        "input_tokens": 7944,
+        "output_tokens": 1341
+      }
+    },
+    {
+      "duration_s": 5.839614928000174,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll record the claim properly this time with a scope_rationale, then run a probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier sync, masked padding using INT64_MAX (which is also a legal key value), and per-compare tie-breaking on carried original index; any of these could produce wrong sorted order or unstable permutations for admissible inputs.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicate keys within a row are expected."
+              }
+            ],
+            "scope_rationale": "The contract requires per-row ascending stable argsort of arbitrary int64 keys with duplicates, so any admissible input producing non-sorted rows or a permutation that does not order tied keys by lower original index first directly violates the contract.",
+            "statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.84,
+        "input_tokens": 8700,
+        "output_tokens": 302
+      }
+    },
+    {
+      "duration_s": 11.412853527999914,
+      "role": "solo",
+      "round": 4,
+      "text": "I'll run a probe covering varied W (power-of-2 and not), duplicate-heavy rows, and extreme int64 values, checking sortedness and stability.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_32')\nfrom kernel import triton_argsort\n\ndef check(keys):\n    N, W = keys.shape\n    s, p = triton_argsort(keys.cuda())\n    s = s.cpu(); p = p.cpu()\n    sorted_ok = bool(torch.all(s[:, :-1] <= s[:, 1:]))\n    gather_ok = bool(torch.all(s == torch.gather(keys.cpu(), 1, p)))\n    # stability: reference stable argsort\n    ref = torch.argsort(keys.cpu(), dim=1, stable=True)\n    stable_ok = bool(torch.all(p == ref))\n    return sorted_ok, gather_ok, stable_ok\n\nresults = {}\ntorch.manual_seed(0)\n\n# 1: power-of-2 W, duplicates\nk = torch.randint(0, 5, (64, 16), dtype=torch.int64)\nresults['W16_dup'] = check(k)\n# 2: non-power-of-2 W\nk = torch.randint(0, 7, (64, 13), dtype=torch.int64)\nresults['W13_dup'] = check(k)\nk = torch.randint(-100, 100, (32, 9), dtype=torch.int64)\nresults['W9_rand'] = check(k)\nk = torch.randint(-100, 100, (16, 3), dtype=torch.int64)\nresults['W3_rand'] = check(k)\nk = torch.randint(-100, 100, (16, 1), dtype=torch.int64)\nresults['W1_rand'] = check(k)\n# 3: extreme values including INT64_MAX/MIN as actual keys\nk = torch.randint(-2**62, 2**62, (32, 11), dtype=torch.int64)\nk[0, :] = torch.tensor([2**63-1]*5 + [0]*3 + [-2**63]*3)\nk[1, :] = torch.tensor([2**63-1, -2**63, 2**63-1, -2**63, 5, 5])\nresults['W11_extremes'] = check(k)\n# 4: all-equal row\nk = torch.full((8, 10), 42, dtype=torch.int64)\nresults['W10_all_equal'] = check(k)\n# 5: many random sizes\nbad = []\nfor W in [2,3,4,5,6,7,8,12,17,32,33]:\n    for t in range(10):\n        k = torch.randint(-3, 3, (16, W), dtype=torch.int64)\n        s_ok, g_ok, st_ok = check(k)\n        if not (s_ok and g_ok and st_ok):\n            bad.append((W, t, s_ok, g_ok, st_ok))\nresults['sweep_bad'] = bad\n\nprint(json.dumps({k: (list(v) if isinstance(v, tuple) else v) for k, v in results.items()}))"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.413,
+        "input_tokens": 10036,
+        "output_tokens": 693
+      }
+    },
+    {
+      "duration_s": 10.833456354999953,
+      "role": "solo",
+      "round": 5,
+      "text": "The probe crashed on a shape mismatch in my own test code (row of 6 values assigned to an 11-wide row), so nothing was tested yet. I'll fix the probe and rerun.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_32')\nfrom kernel import triton_argsort\n\ndef check(keys):\n    N, W = keys.shape\n    s, p = triton_argsort(keys.cuda())\n    s = s.cpu(); p = p.cpu()\n    kc = keys.cpu()\n    sorted_ok = bool(torch.all(s[:, :-1] <= s[:, 1:]))\n    gather_ok = bool(torch.all(s == torch.gather(kc, 1, p)))\n    ref = torch.argsort(kc, dim=1, stable=True)\n    stable_ok = bool(torch.all(p == ref))\n    return sorted_ok, gather_ok, stable_ok\n\nresults = {}\ntorch.manual_seed(0)\n\nresults['W16_dup'] = check(torch.randint(0, 5, (64, 16), dtype=torch.int64))\nresults['W13_dup'] = check(torch.randint(0, 7, (64, 13), dtype=torch.int64))\nresults['W9_rand'] = check(torch.randint(-100, 100, (32, 9), dtype=torch.int64))\nresults['W3_rand'] = check(torch.randint(-100, 100, (16, 3), dtype=torch.int64))\nresults['W1_rand'] = check(torch.randint(-100, 100, (16, 1), dtype=torch.int64))\nk = torch.randint(-2**62, 2**62, (32, 11), dtype=torch.int64)\nk[0, :] = torch.tensor([2**63-1]*5 + [0]*3 + [-2**63]*3, dtype=torch.int64)\nk[1, :] = torch.tensor([2**63-1, -2**63, 2**63-1, -2**63, 5, 5, 0, 0, 5, -2**63, 2**63-1], dtype=torch.int64)\nresults['W11_extremes'] = check(k)\nresults['W10_all_equal'] = check(torch.full((8, 10), 42, dtype=torch.int64))\nbad = []\nfor W in [2,3,4,5,6,7,8,12,17,32,33]:\n    for t in range(10):\n        kk = torch.randint(-3, 3, (16, W), dtype=torch.int64)\n        s_ok, g_ok, st_ok = check(kk)\n        if not (s_ok and g_ok and st_ok):\n            bad.append((W, t, s_ok, g_ok, st_ok))\nresults['sweep_bad'] = bad\n\nprint(json.dumps({k2: (list(v) if isinstance(v, tuple) else v) for k2, v in results.items()}))"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.833,
+        "input_tokens": 12758,
+        "output_tokens": 665
+      }
+    },
+    {
+      "duration_s": 11.479240459000039,
+      "role": "solo",
+      "round": 6,
+      "text": "The t8 probe results are decisive: sortedness fails for non-power-of-2 W (e.g. W=3,5,6,7,9,12,13,17,33 all show sorted_ok=false while gather_ok=true, meaning rows are permuted wrongly), and even for power-of-2 W the stability requirement fails (W16_dup shows stable_ok=false, and W=2 rows with duplicates fail stability). I'll record this evidence and resolve the claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "gather_ok": "true everywhere (perm is a valid permutation of row)",
+              "sorted_ok": "false for all non-power-of-2 W (3,5,6,7,9,12,13,17,33); true for power-of-2 W (1,2,4,8,16,32)",
+              "stable_ok": "false for every W with duplicates except W=1; e.g. W16_dup [true,true,false], W4 duplicates false, W10 all-equal row false, W11 with INT64_MAX/INT64_MIN keys false"
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "Kernel fails the contract on admissible inputs: for non-power-of-2 W (3,5,6,7,9,12,13,17,33) rows are not even non-decreasing (sorted_ok=false) though perm is a valid permutation (gather_ok=true); for power-of-2 W with duplicate keys (including an all-equal row of 10s, and rows containing INT64_MAX/INT64_MIN) the permutation is not the stable order (stable_ok=false vs torch stable argsort), violating the lower-original-index-first tie rule.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.479,
+        "input_tokens": 20516,
+        "output_tokens": 531
+      }
+    },
+    {
+      "duration_s": 8.018270814000061,
+      "role": "solo",
+      "round": 7,
+      "text": "The investigation is complete: claim c1 is confirmed in-scope with decisive runtime evidence (t8) \u2014 the kernel fails both sortedness (non-power-of-2 W) and the required stable tie rule (duplicates, all-equal rows, INT64 extremes). I'll record the final verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Contract (problem.txt) requires per-row ascending STABLE argsort of arbitrary int64 keys with duplicates expected. Probe t8 (run on real GPU, exit 0) showed: (1) for every non-power-of-2 W tested (3,5,6,7,9,12,13,17,33) sorted_keys rows are not even non-decreasing (sorted_ok=false) while the perm is a valid permutation (gather_ok=true) \u2014 e.g. W9_rand [false,true,false], W13_dup [false,true,false]; (2) even for power-of-2 W the required stable tie rule fails whenever duplicates exist (stable_ok=false vs torch stable argsort), including W16_dup [true,true,false], an all-equal W=10 row [true,true,false], and a W=11 row containing INT64_MAX/INT64_MIN [false,true,false]; a 110-run sweep over W in {2..33} with duplicate keys found 0/10 passes for every W except W=1. These inputs are squarely in the declared domain (arbitrary int64 keys, duplicates expected, any [N,W]). The kernel violates both the non-decreasing requirement and the lower-original-index-first stability tie rule, so it must be rejected.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.018,
+        "input_tokens": 31632,
+        "output_tokens": 377
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_32"
+      },
+      "created_at": "2026-09-30T08:38:59Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_32",
+        "has_error": null,
+        "kernel_code": "# Copyright (c) Meta Platforms, Inc. and affiliates.\n\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _stable_argsort_kernel(\n    keys_ptr,       # [N, W] int64 input (modified in-place: sorted)\n    perm_ptr,       # [N, W] int64 output (permutation indices)\n    N: tl.constexpr,\n    W: tl.constexpr,\n    BLOCK_W: tl.constexpr,\n):\n    \"\"\"Ascending bitonic sort of each row, returning the permutation.\"\"\"\n    pid = tl.program_id(0)\n    if pid >= N:\n        return\n\n    offs = tl.arange(0, BLOCK_W)\n    mask = offs < W\n    base = pid * W\n\n    keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)\n    perm = offs.to(tl.int64)\n\n    size = 1\n    while size < BLOCK_W:\n        stride = size\n        while stride > 0:\n            partner = offs ^ stride\n            ascending = ((offs & (size << 1)) == 0)\n\n            p_key = tl.load(keys_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)\n            p_perm = tl.load(perm_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)\n\n            is_lower_idx = offs < partner\n            want_smaller = (is_lower_idx & ascending) | ((~is_lower_idx) & (~ascending))\n\n            my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm))\n\n            should_take_partner = (want_smaller & (~my_is_smaller) & (partner < W)) | \\\n                                  ((~want_smaller) & my_is_smaller & (partner < W))\n\n            keys = tl.where(should_take_partner, p_key, keys)\n            perm = tl.where(should_take_partner, p_perm, perm)\n\n            tl.store(keys_ptr + base + offs, keys, mask=mask)\n            tl.store(perm_ptr + base + offs, perm, mask=mask)\n            tl.debug_barrier()\n\n            keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)\n            perm = tl.load(perm_ptr + base + offs, mask=mask, other=0)\n\n            stride = stride >> 1\n        size = size << 1\n\n\ndef triton_argsort(keys: torch.Tensor):\n    \"\"\"Ascending argsort for small rows. Returns (sorted_keys, permutation).\"\"\"\n    N, W = keys.shape\n    BLOCK_W = triton.next_power_of_2(W)\n    keys_out = keys.clone()\n    perm = torch.arange(W, device=keys.device, dtype=torch.int64).unsqueeze(0).expand(N, -1).contiguous()\n    _stable_argsort_kernel[(N,)](keys_out, perm, N=N, W=W, BLOCK_W=BLOCK_W, num_warps=1)\n    return keys_out, perm\n",
+        "passed": null,
+        "problem_text": "Operation: per-row ascending argsort of small integer keys\n(facebookresearch/sparse-delta-memory, lingua/sparse_delta_memory/triton_argsort.py).\n\n`triton_argsort(keys)` takes an [N, W] int64 tensor and returns the sorted keys\ntogether with the permutation that produces them:\n\n    sorted_keys[n, i] = keys[n, perm[n, i]]\n    sorted_keys[n, :] is non-decreasing\n\nTie rule: the sort must be STABLE. When two entries of a row hold the same key,\nthe one with the LOWER original index must come first. The permutation is used\nto gather memory slots whose contents differ, so which of two tied entries is\nplaced first changes the values that are read out afterwards, and stability is\nwhat makes the read reproducible across runs and across replicas.\n\nInput domain: keys are arbitrary int64 values. Duplicate keys within a row are\nexpected -- the keys are quantized scores, and quantization is what makes two\ndifferent underlying values land on the same key.\n\nDoes triton_argsort() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_32",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_32"
+      },
+      "created_at": "2026-09-30T08:38:59Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: per-row ascending argsort of small integer keys\n(facebookresearch/sparse-delta-memory, lingua/sparse_delta_memory/triton_argsort.py).\n\n`triton_argsort(keys)` takes an [N, W] int64 tensor and returns the sorted keys\ntogether with the permutation that produces them:\n\n    sorted_keys[n, i] = keys[n, perm[n, i]]\n    sorted_keys[n, :] is non-decreasing\n\nTie rule: the sort must be STABLE. When two entries of a row hold the same key,\nthe one with the LOWER original index must come first. The permutation is used\nto gather memory slots whose contents differ, so which of two tied entries is\nplaced first changes the values that are read out afterwards, and stability is\nwhat makes the read reproducible across runs and across replicas.\n\nInput domain: keys are arbitrary int64 values. Duplicate keys within a row are\nexpected -- the keys are quantized scores, and quantization is what makes two\ndifferent underlying values land on the same key.\n\nDoes triton_argsort() satisfy this contract?\n",
+        "entry": "case_32",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_32"
+      },
+      "created_at": "2026-09-30T08:38:59Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_32",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2373
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 998
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_32",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:38:59Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_32\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_32",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier synchronization and per-compare tie-breaking on the carried original index; bitonic networks with masking for W<BLOCK_W and extreme sentinel values (INT64_MAX used for padding, which is also a legal input) could produce wrong sorted order or unstable permutations.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicates within a row are expected."
+          }
+        ],
+        "statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys."
+      },
+      "created_at": "2026-09-30T08:45:56Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t5",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier sync, masked padding using INT64_MAX (which is also a legal key value), and per-compare tie-breaking on carried original index; any of these could produce wrong sorted order or unstable permutations for admissible inputs.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicate keys within a row are expected."
+          }
+        ],
+        "scope_rationale": "The contract requires per-row ascending stable argsort of arbitrary int64 keys with duplicates, so any admissible input producing non-sorted rows or a permutation that does not order tied keys by lower original index first directly violates the contract.",
+        "statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys."
+      },
+      "created_at": "2026-09-30T08:46:02Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-30T08:46:02Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier sync, masked padding using INT64_MAX (which is also a legal key value), and per-compare tie-breaking on carried original index; any of these could produce wrong sorted order or unstable permutations for admissible inputs.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicate keys within a row are expected."
+          }
+        ],
+        "scope_rationale": "The contract requires per-row ascending stable argsort of arbitrary int64 keys with duplicates, so any admissible input producing non-sorted rows or a permutation that does not order tied keys by lower original index first directly violates the contract.",
+        "statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:46:02Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_32')\nfrom kernel import triton_argsort\n\ndef check(keys):\n    N, W = keys.shape\n    s, p = triton_argsort(keys.cuda())\n    s = s.cpu(); p = p.cpu()\n    sorted_ok = bool(torch.all(s[:, :-1] <= s[:, 1:]))\n    gather_ok = bool(torch.all(s == torch.gather(keys.cpu(), 1, p)))\n    # stability: reference stable argsort\n    ref = torch.argsort(keys.cpu(), dim=1, stable=True)\n    stable_ok = bool(torch.all(p == ref))\n    return sorted_ok, gather_ok, stable_ok\n\nresults = {}\ntorch.manual_seed(0)\n\n# 1: power-of-2 W, duplicates\nk = torch.randint(0, 5, (64, 16), dtype=torch.int64)\nresults['W16_dup'] = check(k)\n# 2: non-power-of-2 W\nk = torch.randint(0, 7, (64, 13), dtype=torch.int64)\nresults['W13_dup'] = check(k)\nk = torch.randint(-100, 100, (32, 9), dtype=torch.int64)\nresults['W9_rand'] = check(k)\nk = torch.randint(-100, 100, (16, 3), dtype=torch.int64)\nresults['W3_rand'] = check(k)\nk = torch.randint(-100, 100, (16, 1), dtype=torch.int64)\nresults['W1_rand'] = check(k)\n# 3: extreme values including INT64_MAX/MIN as actual keys\nk = torch.randint(-2**62, 2**62, (32, 11), dtype=torch.int64)\nk[0, :] = torch.tensor([2**63-1]*5 + [0]*3 + [-2**63]*3)\nk[1, :] = torch.tensor([2**63-1, -2**63, 2**63-1, -2**63, 5, 5])\nresults['W11_extremes'] = check(k)\n# 4: all-equal row\nk = torch.full((8, 10), 42, dtype=torch.int64)\nresults['W10_all_equal'] = check(k)\n# 5: many random sizes\nbad = []\nfor W in [2,3,4,5,6,7,8,12,17,32,33]:\n    for t in range(10):\n        k = torch.randint(-3, 3, (16, W), dtype=torch.int64)\n        s_ok, g_ok, st_ok = check(k)\n        if not (s_ok and g_ok and st_ok):\n            bad.append((W, t, s_ok, g_ok, st_ok))\nresults['sweep_bad'] = bad\n\nprint(json.dumps({k: (list(v) if isinstance(v, tuple) else v) for k, v in results.items()}))"
+      },
+      "created_at": "2026-09-30T08:46:24Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "124fc62c93c4daa80bf488b370df98917347b441a91f917fcfcfc4eeebda47c9"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "ab4e28756b467c5220f58cce6031e93bdfe3459d64abfb410a8bb6d5fb758ef1"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys.",
+        "cwd": "/root/cases/case_32",
+        "duration_s": 10.030273,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "124fc62c93c4daa80bf488b370df98917347b441a91f917fcfcfc4eeebda47c9"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "ab4e28756b467c5220f58cce6031e93bdfe3459d64abfb410a8bb6d5fb758ef1"
+              }
+            ],
+            "duration_s": 10.030273,
+            "exit_code": 1,
+            "expected_signal": null,
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_32/solo/probes/t7_probe.py\", line 34, in <module>\n    k[1, :] = torch.tensor([2**63-1, -2**63, 2**63-1, -2**63, 5, 5])\n    ~^^^^^^\nRuntimeError: The expanded size of the tensor (11) must match the existing size (6) at non-singleton dimension 0.  Target sizes: [11].  Tensor sizes: [6]\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 1,
+        "expected_signal": null,
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_32/solo/probes/t7_probe.py\", line 34, in <module>\n    k[1, :] = torch.tensor([2**63-1, -2**63, 2**63-1, -2**63, 5, 5])\n    ~^^^^^^\nRuntimeError: The expanded size of the tensor (11) must match the existing size (6) at non-singleton dimension 0.  Target sizes: [11].  Tensor sizes: [6]\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_32')\nfrom kernel import triton_argsort\n\ndef check(keys):\n    N, W = keys.shape\n    s, p = triton_argsort(keys.cuda())\n    s = s.cpu(); p = p.cpu()\n    kc = keys.cpu()\n    sorted_ok = bool(torch.all(s[:, :-1] <= s[:, 1:]))\n    gather_ok = bool(torch.all(s == torch.gather(kc, 1, p)))\n    ref = torch.argsort(kc, dim=1, stable=True)\n    stable_ok = bool(torch.all(p == ref))\n    return sorted_ok, gather_ok, stable_ok\n\nresults = {}\ntorch.manual_seed(0)\n\nresults['W16_dup'] = check(torch.randint(0, 5, (64, 16), dtype=torch.int64))\nresults['W13_dup'] = check(torch.randint(0, 7, (64, 13), dtype=torch.int64))\nresults['W9_rand'] = check(torch.randint(-100, 100, (32, 9), dtype=torch.int64))\nresults['W3_rand'] = check(torch.randint(-100, 100, (16, 3), dtype=torch.int64))\nresults['W1_rand'] = check(torch.randint(-100, 100, (16, 1), dtype=torch.int64))\nk = torch.randint(-2**62, 2**62, (32, 11), dtype=torch.int64)\nk[0, :] = torch.tensor([2**63-1]*5 + [0]*3 + [-2**63]*3, dtype=torch.int64)\nk[1, :] = torch.tensor([2**63-1, -2**63, 2**63-1, -2**63, 5, 5, 0, 0, 5, -2**63, 2**63-1], dtype=torch.int64)\nresults['W11_extremes'] = check(k)\nresults['W10_all_equal'] = check(torch.full((8, 10), 42, dtype=torch.int64))\nbad = []\nfor W in [2,3,4,5,6,7,8,12,17,32,33]:\n    for t in range(10):\n        kk = torch.randint(-3, 3, (16, W), dtype=torch.int64)\n        s_ok, g_ok, st_ok = check(kk)\n        if not (s_ok and g_ok and st_ok):\n            bad.append((W, t, s_ok, g_ok, st_ok))\nresults['sweep_bad'] = bad\n\nprint(json.dumps({k2: (list(v) if isinstance(v, tuple) else v) for k2, v in results.items()}))"
+      },
+      "created_at": "2026-09-30T08:46:44Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "2de547b7b6bb52991c18608c1f8d69b2775d262a587965ca7ae9b0d25f6729da"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "30913ccddf404516703ca0126e4284cee6cedf7fd30f0aca9dca57af69cfe973"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "d2c7a11e50b9efe6638ad46cd0a58eb849fc2af7f9242dbb474bb8e6ffba0646"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys.",
+        "cwd": "/root/cases/case_32",
+        "duration_s": 9.496593,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "2de547b7b6bb52991c18608c1f8d69b2775d262a587965ca7ae9b0d25f6729da"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "30913ccddf404516703ca0126e4284cee6cedf7fd30f0aca9dca57af69cfe973"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "d2c7a11e50b9efe6638ad46cd0a58eb849fc2af7f9242dbb474bb8e6ffba0646"
+              }
+            ],
+            "duration_s": 9.496593,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "W10_all_equal": [
+                true,
+                true,
+                false
+              ],
+              "W11_extremes": [
+                false,
+                true,
+                false
+              ],
+              "W13_dup": [
+                false,
+                true,
+                false
+              ],
+              "W16_dup": [
+                true,
+                true,
+                false
+              ],
+              "W1_rand": [
+                true,
+                true,
+                true
+              ],
+              "W3_rand": [
+                false,
+                true,
+                false
+              ],
+              "W9_rand": [
+                false,
+                true,
+                false
+              ],
+              "sweep_bad": [
+                [
+                  2,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  9,
+                  false,
+                  true,
+                  false
+                ]
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"W16_dup\": [true, true, false], \"W13_dup\": [false, true, false], \"W9_rand\": [false, true, false], \"W3_rand\": [false, true, false], \"W1_rand\": [true, true, true], \"W11_extremes\": [false, true, false], \"W10_all_equal\": [true, true, false], \"sweep_bad\": [[2, 0, true, true, false], [2, 1, true, true, false], [2, 2, true, true, false], [2, 3, true, true, false], [2, 4, true, true, false], [2, 5, true, true, false], [2, 6, true, true, false], [2, 7, true, true, false], [2, 8, true, true, false], [2, 9, true, true, false], [3, 0, false, true, false], [3, 1, false, true, false], [3, 2, false, true, false], [3, 3, false, true, false], [3, 4, false, true, false], [3, 5, false, true, false], [3, 6, false, true, false], [3, 7, false, true, false], [3, 8, false, true, false], [3, 9, false, true, false], [4, 0, true, true, false], [4, 1, true, true, false], [4, 2, true, true, false], [4, 3, true, true, false], [4, 4, true, true, false], [4, 5, true, true, false], [4, 6, true, true, false], [4, 7, true, true, false], [4, 8, true, true, false], [4, 9, true, true, false], [5, 0, false, true, false], [5, 1, false, true, false], [5, 2, false, true, false], [5, 3, false, true, false], [5, 4, false, true, false], [5, 5, false, true, false], [5, 6, false, true, false], [5, 7, false, true, false], [5, 8, false, true, false], [5, 9, false, true, false], [6, 0, false, true, false], [6, 1, false, true, false], [6, 2, false, true, false], [6, 3, false, true, false], [6, 4, false, true, false], [6, 5, false, true, false], [6, 6, false, true, false], [6, 7, false, true, false], [6, 8, false, true, false], [6, 9, false, true, false], [7, 0, false, true, false], [7, 1, false, true, false], [7, 2, false, true, false], [7, 3, false, true, false], [7, 4, false, true, false], [7, 5, false, true, false], [7, 6, false, true, false], [7, 7, false, true, false], [7, 8, false, true, false], [7, 9, false, true, false], [8, 0, true, true, false], [8, 1, true, true, false], [8, 2, true, true, false], [8, 3, true, true, false], [8, 4, true, true, false], [8, 5, true, true, false], [8, 6, true, true, false], [8, 7, true, true, false], [8, 8, true, true, false], [8, 9, true, true, false], [12, 0, false, true, false], [12, 1, false, true, false], [12, 2, false, true, false], [12, 3, false, true, false], [12, 4, false, true, false], [12, 5, false, true, false], [12, 6, false, true, false], [12, 7, false, true, false], [12, 8, false, true, false], [12, 9, false, true, false], [17, 0, false, true, false], [17, 1, false, true, false], [17, 2, false, true, false], [17, 3, false, true, false], [17, 4, false, true, false], [17, 5, false, true, false], [17, 6, false, true, false], [17, 7, false, true, false], [17, 8, false, true, false], [17, 9, false, true, false], [32, 0, true, true, false], [32, 1, true, true, false], [32, 2, true, true, false], [32, 3, true, true, false], [32, 4, true, true, false], [32, 5, true, true, false], [32, 6, true, true, false], [32, 7, true, true, false], [32, 8, true, true, false], [32, 9, true, true, false], [33, 0, false, true, false], [33, 1, false, true, false], [33, 2, false, true, false], [33, 3, false, true, false], [33, 4, false, true, false], [33, 5, false, true, false], [33, 6, false, true, false], [33, 7, false, true, false], [33, 8, false, true, false], [33, 9, false, true, false]]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "W10_all_equal": [
+            true,
+            true,
+            false
+          ],
+          "W11_extremes": [
+            false,
+            true,
+            false
+          ],
+          "W13_dup": [
+            false,
+            true,
+            false
+          ],
+          "W16_dup": [
+            true,
+            true,
+            false
+          ],
+          "W1_rand": [
+            true,
+            true,
+            true
+          ],
+          "W3_rand": [
+            false,
+            true,
+            false
+          ],
+          "W9_rand": [
+            false,
+            true,
+            false
+          ],
+          "sweep_bad": [
+            [
+              2,
+              0,
+              true,
+              true,
+              false
+            ],
+            [
+              2,
+              1,
+              true,
+              true,
+              false
+            ],
+            [
+              2,
+              2,
+              true,
+              true,
+              false
+            ],
+            [
+              2,
+              3,
+              true,
+              true,
+              false
+            ],
+            [
+              2,
+              4,
+              true,
+              true,
+              false
+            ],
+            [
+              2,
+              5,
+              true,
+              true,
+              false
+            ],
+            [
+              2,
+              6,
+              true,
+              true,
+              false
+            ],
+            [
+              2,
+              7,
+              true,
+              true,
+              false
+            ],
+            [
+              2,
+              8,
+              true,
+              true,
+              false
+            ],
+            [
+              2,
+              9,
+              true,
+              true,
+              false
+            ],
+            [
+              3,
+              0,
+              false,
+              true,
+              false
+            ],
+            [
+              3,
+              1,
+              false,
+              true,
+              false
+            ],
+            [
+              3,
+              2,
+              false,
+              true,
+              false
+            ],
+            [
+              3,
+              3,
+              false,
+              true,
+              false
+            ],
+            [
+              3,
+              4,
+              false,
+              true,
+              false
+            ],
+            [
+              3,
+              5,
+              false,
+              true,
+              false
+            ],
+            [
+              3,
+              6,
+              false,
+              true,
+              false
+            ],
+            [
+              3,
+              7,
+              false,
+              true,
+              false
+            ],
+            [
+              3,
+              8,
+              false,
+              true,
+              false
+            ],
+            [
+              3,
+              9,
+              false,
+              true,
+              false
+            ],
+            [
+              4,
+              0,
+              true,
+              true,
+              false
+            ],
+            [
+              4,
+              1,
+              true,
+              true,
+              false
+            ],
+            [
+              4,
+              2,
+              true,
+              true,
+              false
+            ],
+            [
+              4,
+              3,
+              true,
+              true,
+              false
+            ],
+            [
+              4,
+              4,
+              true,
+              true,
+              false
+            ],
+            [
+              4,
+              5,
+              true,
+              true,
+              false
+            ],
+            [
+              4,
+              6,
+              true,
+              true,
+              false
+            ],
+            [
+              4,
+              7,
+              true,
+              true,
+              false
+            ],
+            [
+              4,
+              8,
+              true,
+              true,
+              false
+            ],
+            [
+              4,
+              9,
+              true,
+              true,
+              false
+            ],
+            [
+              5,
+              0,
+              false,
+              true,
+              false
+            ],
+            [
+              5,
+              1,
+              false,
+              true,
+              false
+            ],
+            [
+              5,
+              2,
+              false,
+              true,
+              false
+            ],
+            [
+              5,
+              3,
+              false,
+              true,
+              false
+            ],
+            [
+              5,
+              4,
+              false,
+              true,
+              false
+            ],
+            [
+              5,
+              5,
+              false,
+              true,
+              false
+            ],
+            [
+              5,
+              6,
+              false,
+              true,
+              false
+            ],
+            [
+              5,
+              7,
+              false,
+              true,
+              false
+            ],
+            [
+              5,
+              8,
+              false,
+              true,
+              false
+            ],
+            [
+              5,
+              9,
+              false,
+              true,
+              false
+            ],
+            [
+              6,
+              0,
+              false,
+              true,
+              false
+            ],
+            [
+              6,
+              1,
+              false,
+              true,
+              false
+            ],
+            [
+              6,
+              2,
+              false,
+              true,
+              false
+            ],
+            [
+              6,
+              3,
+              false,
+              true,
+              false
+            ],
+            [
+              6,
+              4,
+              false,
+              true,
+              false
+            ],
+            [
+              6,
+              5,
+              false,
+              true,
+              false
+            ],
+            [
+              6,
+              6,
+              false,
+              true,
+              false
+            ],
+            [
+              6,
+              7,
+              false,
+              true,
+              false
+            ],
+            [
+              6,
+              8,
+              false,
+              true,
+              false
+            ],
+            [
+              6,
+              9,
+              false,
+              true,
+              false
+            ],
+            [
+              7,
+              0,
+              false,
+              true,
+              false
+            ],
+            [
+              7,
+              1,
+              false,
+              true,
+              false
+            ],
+            [
+              7,
+              2,
+              false,
+              true,
+              false
+            ],
+            [
+              7,
+              3,
+              false,
+              true,
+              false
+            ],
+            [
+              7,
+              4,
+              false,
+              true,
+              false
+            ],
+            [
+              7,
+              5,
+              false,
+              true,
+              false
+            ],
+            [
+              7,
+              6,
+              false,
+              true,
+              false
+            ],
+            [
+              7,
+              7,
+              false,
+              true,
+              false
+            ],
+            [
+              7,
+              8,
+              false,
+              true,
+              false
+            ],
+            [
+              7,
+              9,
+              false,
+              true,
+              false
+            ],
+            [
+              8,
+              0,
+              true,
+              true,
+              false
+            ],
+            [
+              8,
+              1,
+              true,
+              true,
+              false
+            ],
+            [
+              8,
+              2,
+              true,
+              true,
+              false
+            ],
+            [
+              8,
+              3,
+              true,
+              true,
+              false
+            ],
+            [
+              8,
+              4,
+              true,
+              true,
+              false
+            ],
+            [
+              8,
+              5,
+              true,
+              true,
+              false
+            ],
+            [
+              8,
+              6,
+              true,
+              true,
+              false
+            ],
+            [
+              8,
+              7,
+              true,
+              true,
+              false
+            ],
+            [
+              8,
+              8,
+              true,
+              true,
+              false
+            ],
+            [
+              8,
+              9,
+              true,
+              true,
+              false
+            ],
+            [
+              12,
+              0,
+              false,
+              true,
+              false
+            ],
+            [
+              12,
+              1,
+              false,
+              true,
+              false
+            ],
+            [
+              12,
+              2,
+              false,
+              true,
+              false
+            ],
+            [
+              12,
+              3,
+              false,
+              true,
+              false
+            ],
+            [
+              12,
+              4,
+              false,
+              true,
+              false
+            ],
+            [
+              12,
+              5,
+              false,
+              true,
+              false
+            ],
+            [
+              12,
+              6,
+              false,
+              true,
+              false
+            ],
+            [
+              12,
+              7,
+              false,
+              true,
+              false
+            ],
+            [
+              12,
+              8,
+              false,
+              true,
+              false
+            ],
+            [
+              12,
+              9,
+              false,
+              true,
+              false
+            ],
+            [
+              17,
+              0,
+              false,
+              true,
+              false
+            ],
+            [
+              17,
+              1,
+              false,
+              true,
+              false
+            ],
+            [
+              17,
+              2,
+              false,
+              true,
+              false
+            ],
+            [
+              17,
+              3,
+              false,
+              true,
+              false
+            ],
+            [
+              17,
+              4,
+              false,
+              true,
+              false
+            ],
+            [
+              17,
+              5,
+              false,
+              true,
+              false
+            ],
+            [
+              17,
+              6,
+              false,
+              true,
+              false
+            ],
+            [
+              17,
+              7,
+              false,
+              true,
+              false
+            ],
+            [
+              17,
+              8,
+              false,
+              true,
+              false
+            ],
+            [
+              17,
+              9,
+              false,
+              true,
+              false
+            ],
+            [
+              32,
+              0,
+              true,
+              true,
+              false
+            ],
+            [
+              32,
+              1,
+              true,
+              true,
+              false
+            ],
+            [
+              32,
+              2,
+              true,
+              true,
+              false
+            ],
+            [
+              32,
+              3,
+              true,
+              true,
+              false
+            ],
+            [
+              32,
+              4,
+              true,
+              true,
+              false
+            ],
+            [
+              32,
+              5,
+              true,
+              true,
+              false
+            ],
+            [
+              32,
+              6,
+              true,
+              true,
+              false
+            ],
+            [
+              32,
+              7,
+              true,
+              true,
+              false
+            ],
+            [
+              32,
+              8,
+              true,
+              true,
+              false
+            ],
+            [
+              32,
+              9,
+              true,
+              true,
+              false
+            ],
+            [
+              33,
+              0,
+              false,
+              true,
+              false
+            ],
+            [
+              33,
+              1,
+              false,
+              true,
+              false
+            ],
+            [
+              33,
+              2,
+              false,
+              true,
+              false
+            ],
+            [
+              33,
+              3,
+              false,
+              true,
+              false
+            ],
+            [
+              33,
+              4,
+              false,
+              true,
+              false
+            ],
+            [
+              33,
+              5,
+              false,
+              true,
+              false
+            ],
+            [
+              33,
+              6,
+              false,
+              true,
+              false
+            ],
+            [
+              33,
+              7,
+              false,
+              true,
+              false
+            ],
+            [
+              33,
+              8,
+              false,
+              true,
+              false
+            ],
+            [
+              33,
+              9,
+              false,
+              true,
+              false
+            ]
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"W16_dup\": [true, true, false], \"W13_dup\": [false, true, false], \"W9_rand\": [false, true, false], \"W3_rand\": [false, true, false], \"W1_rand\": [true, true, true], \"W11_extremes\": [false, true, false], \"W10_all_equal\": [true, true, false], \"sweep_bad\": [[2, 0, true, true, false], [2, 1, true, true, false], [2, 2, true, true, false], [2, 3, true, true, false], [2, 4, true, true, false], [2, 5, true, true, false], [2, 6, true, true, false], [2, 7, true, true, false], [2, 8, true, true, false], [2, 9, true, true, false], [3, 0, false, true, false], [3, 1, false, true, false], [3, 2, false, true, false], [3, 3, false, true, false], [3, 4, false, true, false], [3, 5, false, true, false], [3, 6, false, true, false], [3, 7, false, true, false], [3, 8, false, true, false], [3, 9, false, true, false], [4, 0, true, true, false], [4, 1, true, true, false], [4, 2, true, true, false], [4, 3, true, true, false], [4, 4, true, true, false], [4, 5, true, true, false], [4, 6, true, true, false], [4, 7, true, true, false], [4, 8, true, true, false], [4, 9, true, true, false], [5, 0, false, true, false], [5, 1, false, true, false], [5, 2, false, true, false], [5, 3, false, true, false], [5, 4, false, true, false], [5, 5, false, true, false], [5, 6, false, true, false], [5, 7, false, true, false], [5, 8, false, true, false], [5, 9, false, true, false], [6, 0, false, true, false], [6, 1, false, true, false], [6, 2, false, true, false], [6, 3, false, true, false], [6, 4, false, true, false], [6, 5, false, true, false], [6, 6, false, true, false], [6, 7, false, true, false], [6, 8, false, true, false], [6, 9, false, true, false], [7, 0, false, true, false], [7, 1, false, true, false], [7, 2, false, true, false], [7, 3, false, true, false], [7, 4, false, true, false], [7, 5, false, true, false], [7, 6, false, true, false], [7, 7, false, true, false], [7, 8, false, true, false], [7, 9, false, true, false], [8, 0, true, true, false], [8, 1, true, true, false], [8, 2, true, true, false], [8, 3, true, true, false], [8, 4, true, true, false], [8, 5, true, true, false], [8, 6, true, true, false], [8, 7, true, true, false], [8, 8, true, true, false], [8, 9, true, true, false], [12, 0, false, true, false], [12, 1, false, true, false], [12, 2, false, true, false], [12, 3, false, true, false], [12, 4, false, true, false], [12, 5, false, true, false], [12, 6, false, true, false], [12, 7, false, true, false], [12, 8, false, true, false], [12, 9, false, true, false], [17, 0, false, true, false], [17, 1, false, true, false], [17, 2, false, true, false], [17, 3, false, true, false], [17, 4, false, true, false], [17, 5, false, true, false], [17, 6, false, true, false], [17, 7, false, true, false], [17, 8, false, true, false], [17, 9, false, true, false], [32, 0, true, true, false], [32, 1, true, true, false], [32, 2, true, true, false], [32, 3, true, true, false], [32, 4, true, true, false], [32, 5, true, true, false], [32, 6, true, true, false], [32, 7, true, true, false], [32, 8, true, true, false], [32, 9, true, true, false], [33, 0, false, true, false], [33, 1, false, true, false], [33, 2, false, true, false], [33, 3, false, true, false], [33, 4, false, true, false], [33, 5, false, true, false], [33, 6, false, true, false], [33, 7, false, true, false], [33, 8, false, true, false], [33, 9, false, true, false]]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "gather_ok": "true everywhere (perm is a valid permutation of row)",
+          "sorted_ok": "false for all non-power-of-2 W (3,5,6,7,9,12,13,17,33); true for power-of-2 W (1,2,4,8,16,32)",
+          "stable_ok": "false for every W with duplicates except W=1; e.g. W16_dup [true,true,false], W4 duplicates false, W10 all-equal row false, W11 with INT64_MAX/INT64_MIN keys false"
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "Kernel fails the contract on admissible inputs: for non-power-of-2 W (3,5,6,7,9,12,13,17,33) rows are not even non-decreasing (sorted_ok=false) though perm is a valid permutation (gather_ok=true); for power-of-2 W with duplicate keys (including an all-equal row of 10s, and rows containing INT64_MAX/INT64_MIN) the permutation is not the stable order (stable_ok=false vs torch stable argsort), violating the lower-original-index-first tie rule.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:46:55Z",
+      "id": "t9",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:46:02Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:46:55Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "2de547b7b6bb52991c18608c1f8d69b2775d262a587965ca7ae9b0d25f6729da"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "30913ccddf404516703ca0126e4284cee6cedf7fd30f0aca9dca57af69cfe973"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "d2c7a11e50b9efe6638ad46cd0a58eb849fc2af7f9242dbb474bb8e6ffba0646"
+                  }
+                ],
+                "duration_s": 9.496593,
+                "exit_code": 0,
+                "expected_signal": null,
+                "gather_ok": "true everywhere (perm is a valid permutation of row)",
+                "json_parse_error": null,
+                "json_result": {
+                  "W10_all_equal": [
+                    true,
+                    true,
+                    false
+                  ],
+                  "W11_extremes": [
+                    false,
+                    true,
+                    false
+                  ],
+                  "W13_dup": [
+                    false,
+                    true,
+                    false
+                  ],
+                  "W16_dup": [
+                    true,
+                    true,
+                    false
+                  ],
+                  "W1_rand": [
+                    true,
+                    true,
+                    true
+                  ],
+                  "W3_rand": [
+                    false,
+                    true,
+                    false
+                  ],
+                  "W9_rand": [
+                    false,
+                    true,
+                    false
+                  ],
+                  "sweep_bad": [
+                    [
+                      2,
+                      0,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      2,
+                      1,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      2,
+                      2,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      2,
+                      3,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      2,
+                      4,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      2,
+                      5,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      2,
+                      6,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      2,
+                      7,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      2,
+                      8,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      2,
+                      9,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      3,
+                      0,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      3,
+                      1,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      3,
+                      2,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      3,
+                      3,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      3,
+                      4,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      3,
+                      5,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      3,
+                      6,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      3,
+                      7,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      3,
+                      8,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      3,
+                      9,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      4,
+                      0,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      4,
+                      1,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      4,
+                      2,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      4,
+                      3,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      4,
+                      4,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      4,
+                      5,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      4,
+                      6,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      4,
+                      7,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      4,
+                      8,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      4,
+                      9,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      5,
+                      0,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      5,
+                      1,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      5,
+                      2,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      5,
+                      3,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      5,
+                      4,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      5,
+                      5,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      5,
+                      6,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      5,
+                      7,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      5,
+                      8,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      5,
+                      9,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      6,
+                      0,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      6,
+                      1,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      6,
+                      2,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      6,
+                      3,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      6,
+                      4,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      6,
+                      5,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      6,
+                      6,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      6,
+                      7,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      6,
+                      8,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      6,
+                      9,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      7,
+                      0,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      7,
+                      1,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      7,
+                      2,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      7,
+                      3,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      7,
+                      4,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      7,
+                      5,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      7,
+                      6,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      7,
+                      7,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      7,
+                      8,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      7,
+                      9,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      8,
+                      0,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      8,
+                      1,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      8,
+                      2,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      8,
+                      3,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      8,
+                      4,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      8,
+                      5,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      8,
+                      6,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      8,
+                      7,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      8,
+                      8,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      8,
+                      9,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      12,
+                      0,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      12,
+                      1,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      12,
+                      2,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      12,
+                      3,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      12,
+                      4,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      12,
+                      5,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      12,
+                      6,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      12,
+                      7,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      12,
+                      8,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      12,
+                      9,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      17,
+                      0,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      17,
+                      1,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      17,
+                      2,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      17,
+                      3,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      17,
+                      4,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      17,
+                      5,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      17,
+                      6,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      17,
+                      7,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      17,
+                      8,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      17,
+                      9,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      32,
+                      0,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      32,
+                      1,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      32,
+                      2,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      32,
+                      3,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      32,
+                      4,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      32,
+                      5,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      32,
+                      6,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      32,
+                      7,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      32,
+                      8,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      32,
+                      9,
+                      true,
+                      true,
+                      false
+                    ],
+                    [
+                      33,
+                      0,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      33,
+                      1,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      33,
+                      2,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      33,
+                      3,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      33,
+                      4,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      33,
+                      5,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      33,
+                      6,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      33,
+                      7,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      33,
+                      8,
+                      false,
+                      true,
+                      false
+                    ],
+                    [
+                      33,
+                      9,
+                      false,
+                      true,
+                      false
+                    ]
+                  ]
+                },
+                "sorted_ok": "false for all non-power-of-2 W (3,5,6,7,9,12,13,17,33); true for power-of-2 W (1,2,4,8,16,32)",
+                "stable_ok": "false for every W with duplicates except W=1; e.g. W16_dup [true,true,false], W4 duplicates false, W10 all-equal row false, W11 with INT64_MAX/INT64_MIN keys false",
+                "stderr": "",
+                "stdout": "{\"W16_dup\": [true, true, false], \"W13_dup\": [false, true, false], \"W9_rand\": [false, true, false], \"W3_rand\": [false, true, false], \"W1_rand\": [true, true, true], \"W11_extremes\": [false, true, false], \"W10_all_equal\": [true, true, false], \"sweep_bad\": [[2, 0, true, true, false], [2, 1, true, true, false], [2, 2, true, true, false], [2, 3, true, true, false], [2, 4, true, true, false], [2, 5, true, true, false], [2, 6, true, true, false], [2, 7, true, true, false], [2, 8, true, true, false], [2, 9, true, true, false], [3, 0, false, true, false], [3, 1, false, true, false], [3, 2, false, true, false], [3, 3, false, true, false], [3, 4, false, true, false], [3, 5, false, true, false], [3, 6, false, true, false], [3, 7, false, true, false], [3, 8, false, true, false], [3, 9, false, true, false], [4, 0, true, true, false], [4, 1, true, true, false], [4, 2, true, true, false], [4, 3, true, true, false], [4, 4, true, true, false], [4, 5, true, true, false], [4, 6, true, true, false], [4, 7, true, true, false], [4, 8, true, true, false], [4, 9, true, true, false], [5, 0, false, true, false], [5, 1, false, true, false], [5, 2, false, true, false], [5, 3, false, true, false], [5, 4, false, true, false], [5, 5, false, true, false], [5, 6, false, true, false], [5, 7, false, true, false], [5, 8, false, true, false], [5, 9, false, true, false], [6, 0, false, true, false], [6, 1, false, true, false], [6, 2, false, true, false], [6, 3, false, true, false], [6, 4, false, true, false], [6, 5, false, true, false], [6, 6, false, true, false], [6, 7, false, true, false], [6, 8, false, true, false], [6, 9, false, true, false], [7, 0, false, true, false], [7, 1, false, true, false], [7, 2, false, true, false], [7, 3, false, true, false], [7, 4, false, true, false], [7, 5, false, true, false], [7, 6, false, true, false], [7, 7, false, true, false], [7, 8, false, true, false], [7, 9, false, true, false], [8, 0, true, true, false], [8, 1, true, true, false], [8, 2, true, true, false], [8, 3, true, true, false], [8, 4, true, true, false], [8, 5, true, true, false], [8, 6, true, true, false], [8, 7, true, true, false], [8, 8, true, true, false], [8, 9, true, true, false], [12, 0, false, true, false], [12, 1, false, true, false], [12, 2, false, true, false], [12, 3, false, true, false], [12, 4, false, true, false], [12, 5, false, true, false], [12, 6, false, true, false], [12, 7, false, true, false], [12, 8, false, true, false], [12, 9, false, true, false], [17, 0, false, true, false], [17, 1, false, true, false], [17, 2, false, true, false], [17, 3, false, true, false], [17, 4, false, true, false], [17, 5, false, true, false], [17, 6, false, true, false], [17, 7, false, true, false], [17, 8, false, true, false], [17, 9, false, true, false], [32, 0, true, true, false], [32, 1, true, true, false], [32, 2, true, true, false], [32, 3, true, true, false], [32, 4, true, true, false], [32, 5, true, true, false], [32, 6, true, true, false], [32, 7, true, true, false], [32, 8, true, true, false], [32, 9, true, true, false], [33, 0, false, true, false], [33, 1, false, true, false], [33, 2, false, true, false], [33, 3, false, true, false], [33, 4, false, true, false], [33, 5, false, true, false], [33, 6, false, true, false], [33, 7, false, true, false], [33, 8, false, true, false], [33, 9, false, true, false]]}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Kernel fails the contract on admissible inputs: for non-power-of-2 W (3,5,6,7,9,12,13,17,33) rows are not even non-decreasing (sorted_ok=false) though perm is a valid permutation (gather_ok=true); for power-of-2 W with duplicate keys (including an all-equal row of 10s, and rows containing INT64_MAX/INT64_MIN) the permutation is not the stable order (stable_ok=false vs torch stable argsort), violating the lower-original-index-first tie rule.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier sync, masked padding using INT64_MAX (which is also a legal key value), and per-compare tie-breaking on carried original index; any of these could produce wrong sorted order or unstable permutations for admissible inputs.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicate keys within a row are expected."
+            }
+          ],
+          "scope_rationale": "The contract requires per-row ascending stable argsort of arbitrary int64 keys with duplicates, so any admissible input producing non-sorted rows or a permutation that does not order tied keys by lower original index first directly violates the contract.",
+          "statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:46:55Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:46:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "2de547b7b6bb52991c18608c1f8d69b2775d262a587965ca7ae9b0d25f6729da"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "30913ccddf404516703ca0126e4284cee6cedf7fd30f0aca9dca57af69cfe973"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "d2c7a11e50b9efe6638ad46cd0a58eb849fc2af7f9242dbb474bb8e6ffba0646"
+              }
+            ],
+            "duration_s": 9.496593,
+            "exit_code": 0,
+            "expected_signal": null,
+            "gather_ok": "true everywhere (perm is a valid permutation of row)",
+            "json_parse_error": null,
+            "json_result": {
+              "W10_all_equal": [
+                true,
+                true,
+                false
+              ],
+              "W11_extremes": [
+                false,
+                true,
+                false
+              ],
+              "W13_dup": [
+                false,
+                true,
+                false
+              ],
+              "W16_dup": [
+                true,
+                true,
+                false
+              ],
+              "W1_rand": [
+                true,
+                true,
+                true
+              ],
+              "W3_rand": [
+                false,
+                true,
+                false
+              ],
+              "W9_rand": [
+                false,
+                true,
+                false
+              ],
+              "sweep_bad": [
+                [
+                  2,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  2,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  3,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  4,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  5,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  6,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  7,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  8,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  12,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  17,
+                  9,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  0,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  1,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  2,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  3,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  4,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  5,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  6,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  7,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  8,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  32,
+                  9,
+                  true,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  0,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  1,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  2,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  3,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  4,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  5,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  6,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  7,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  8,
+                  false,
+                  true,
+                  false
+                ],
+                [
+                  33,
+                  9,
+                  false,
+                  true,
+                  false
+                ]
+              ]
+            },
+            "sorted_ok": "false for all non-power-of-2 W (3,5,6,7,9,12,13,17,33); true for power-of-2 W (1,2,4,8,16,32)",
+            "stable_ok": "false for every W with duplicates except W=1; e.g. W16_dup [true,true,false], W4 duplicates false, W10 all-equal row false, W11 with INT64_MAX/INT64_MIN keys false",
+            "stderr": "",
+            "stdout": "{\"W16_dup\": [true, true, false], \"W13_dup\": [false, true, false], \"W9_rand\": [false, true, false], \"W3_rand\": [false, true, false], \"W1_rand\": [true, true, true], \"W11_extremes\": [false, true, false], \"W10_all_equal\": [true, true, false], \"sweep_bad\": [[2, 0, true, true, false], [2, 1, true, true, false], [2, 2, true, true, false], [2, 3, true, true, false], [2, 4, true, true, false], [2, 5, true, true, false], [2, 6, true, true, false], [2, 7, true, true, false], [2, 8, true, true, false], [2, 9, true, true, false], [3, 0, false, true, false], [3, 1, false, true, false], [3, 2, false, true, false], [3, 3, false, true, false], [3, 4, false, true, false], [3, 5, false, true, false], [3, 6, false, true, false], [3, 7, false, true, false], [3, 8, false, true, false], [3, 9, false, true, false], [4, 0, true, true, false], [4, 1, true, true, false], [4, 2, true, true, false], [4, 3, true, true, false], [4, 4, true, true, false], [4, 5, true, true, false], [4, 6, true, true, false], [4, 7, true, true, false], [4, 8, true, true, false], [4, 9, true, true, false], [5, 0, false, true, false], [5, 1, false, true, false], [5, 2, false, true, false], [5, 3, false, true, false], [5, 4, false, true, false], [5, 5, false, true, false], [5, 6, false, true, false], [5, 7, false, true, false], [5, 8, false, true, false], [5, 9, false, true, false], [6, 0, false, true, false], [6, 1, false, true, false], [6, 2, false, true, false], [6, 3, false, true, false], [6, 4, false, true, false], [6, 5, false, true, false], [6, 6, false, true, false], [6, 7, false, true, false], [6, 8, false, true, false], [6, 9, false, true, false], [7, 0, false, true, false], [7, 1, false, true, false], [7, 2, false, true, false], [7, 3, false, true, false], [7, 4, false, true, false], [7, 5, false, true, false], [7, 6, false, true, false], [7, 7, false, true, false], [7, 8, false, true, false], [7, 9, false, true, false], [8, 0, true, true, false], [8, 1, true, true, false], [8, 2, true, true, false], [8, 3, true, true, false], [8, 4, true, true, false], [8, 5, true, true, false], [8, 6, true, true, false], [8, 7, true, true, false], [8, 8, true, true, false], [8, 9, true, true, false], [12, 0, false, true, false], [12, 1, false, true, false], [12, 2, false, true, false], [12, 3, false, true, false], [12, 4, false, true, false], [12, 5, false, true, false], [12, 6, false, true, false], [12, 7, false, true, false], [12, 8, false, true, false], [12, 9, false, true, false], [17, 0, false, true, false], [17, 1, false, true, false], [17, 2, false, true, false], [17, 3, false, true, false], [17, 4, false, true, false], [17, 5, false, true, false], [17, 6, false, true, false], [17, 7, false, true, false], [17, 8, false, true, false], [17, 9, false, true, false], [32, 0, true, true, false], [32, 1, true, true, false], [32, 2, true, true, false], [32, 3, true, true, false], [32, 4, true, true, false], [32, 5, true, true, false], [32, 6, true, true, false], [32, 7, true, true, false], [32, 8, true, true, false], [32, 9, true, true, false], [33, 0, false, true, false], [33, 1, false, true, false], [33, 2, false, true, false], [33, 3, false, true, false], [33, 4, false, true, false], [33, 5, false, true, false], [33, 6, false, true, false], [33, 7, false, true, false], [33, 8, false, true, false], [33, 9, false, true, false]]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel fails the contract on admissible inputs: for non-power-of-2 W (3,5,6,7,9,12,13,17,33) rows are not even non-decreasing (sorted_ok=false) though perm is a valid permutation (gather_ok=true); for power-of-2 W with duplicate keys (including an all-equal row of 10s, and rows containing INT64_MAX/INT64_MIN) the permutation is not the stable order (stable_ok=false vs torch stable argsort), violating the lower-original-index-first tie rule.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Contract (problem.txt) requires per-row ascending STABLE argsort of arbitrary int64 keys with duplicates expected. Probe t8 (run on real GPU, exit 0) showed: (1) for every non-power-of-2 W tested (3,5,6,7,9,12,13,17,33) sorted_keys rows are not even non-decreasing (sorted_ok=false) while the perm is a valid permutation (gather_ok=true) \u2014 e.g. W9_rand [false,true,false], W13_dup [false,true,false]; (2) even for power-of-2 W the required stable tie rule fails whenever duplicates exist (stable_ok=false vs torch stable argsort), including W16_dup [true,true,false], an all-equal W=10 row [true,true,false], and a W=11 row containing INT64_MAX/INT64_MIN [false,true,false]; a 110-run sweep over W in {2..33} with duplicate keys found 0/10 passes for every W except W=1. These inputs are squarely in the declared domain (arbitrary int64 keys, duplicates expected, any [N,W]). The kernel violates both the non-decreasing requirement and the lower-original-index-first stability tie rule, so it must be rejected.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:47:03Z",
+      "id": "t10",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-30T08:47:03Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Contract (problem.txt) requires per-row ascending STABLE argsort of arbitrary int64 keys with duplicates expected. Probe t8 (run on real GPU, exit 0) showed: (1) for every non-power-of-2 W tested (3,5,6,7,9,12,13,17,33) sorted_keys rows are not even non-decreasing (sorted_ok=false) while the perm is a valid permutation (gather_ok=true) \u2014 e.g. W9_rand [false,true,false], W13_dup [false,true,false]; (2) even for power-of-2 W the required stable tie rule fails whenever duplicates exist (stable_ok=false vs torch stable argsort), including W16_dup [true,true,false], an all-equal W=10 row [true,true,false], and a W=11 row containing INT64_MAX/INT64_MIN [false,true,false]; a 110-run sweep over W in {2..33} with duplicate keys found 0/10 passes for every W except W=1. These inputs are squarely in the declared domain (arbitrary int64 keys, duplicates expected, any [N,W]). The kernel violates both the non-decreasing requirement and the lower-original-index-first stability tie rule, so it must be rejected.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-30T08:47:03Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Contract (problem.txt) requires per-row ascending STABLE argsort of arbitrary int64 keys with duplicates expected. Probe t8 (run on real GPU, exit 0) showed: (1) for every non-power-of-2 W tested (3,5,6,7,9,12,13,17,33) sorted_keys rows are not even non-decreasing (sorted_ok=false) while the perm is a valid permutation (gather_ok=true) \u2014 e.g. W9_rand [false,true,false], W13_dup [false,true,false]; (2) even for power-of-2 W the required stable tie rule fails whenever duplicates exist (stable_ok=false vs torch stable argsort), including W16_dup [true,true,false], an all-equal W=10 row [true,true,false], and a W=11 row containing INT64_MAX/INT64_MIN [false,true,false]; a 110-run sweep over W in {2..33} with duplicate keys found 0/10 passes for every W except W=1. These inputs are squarely in the declared domain (arbitrary int64 keys, duplicates expected, any [N,W]). The kernel violates both the non-decreasing requirement and the lower-original-index-first stability tie rule, so it must be rejected.",
+    "verdict": "reject"
+  }
+}

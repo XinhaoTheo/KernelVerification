@@ -1,0 +1,699 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_35",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _blocked_sum_kernel(X, Out, N, BLOCK: tl.constexpr):\n    pid = tl.program_id(0)\n    idx = pid * BLOCK + tl.arange(0, BLOCK)\n    x = tl.load(X + idx, mask=idx < N, other=0.0)\n    tl.atomic_add(Out, tl.sum(x, axis=0))\n\n\ndef blocked_sum(x: torch.Tensor, block: int = 1024) -> torch.Tensor:\n    \"\"\"Sum of a float32 tensor, one atomic accumulation per block.\"\"\"\n    out = torch.zeros(1, device=x.device, dtype=torch.float32)\n    _blocked_sum_kernel[(triton.cdiv(x.numel(), block),)](x, out, x.numel(), BLOCK=block)\n    return out\n",
+    "passed": null,
+    "problem_text": "Operation: sum of a float32 tensor, partitioned across blocks and combined with\none atomic add per block, the reduction strategy used by split-K GEMM and\nall-reduce kernels.\n\n    out = sum over i of x[i]\n\nThe sum is a per-tensor statistic over an int8-quantised activation buffer that\nhas already been dequantised into float32, so the input domain is the\ndequantisation grid itself. Every element of x is k * 2^-7 for an integer k with\n|k| <= 127, the scale is one power of two fixed for the whole tensor, and x holds\nN = 65536 elements.\n\nContract: two calls on the same input must return bitwise identical results. The\nstatistic is compared across replicas holding the same shard and is pinned as a\ngolden value in CI, so two runs that disagree in their last bits are not\ninterchangeable. How the sum is partitioned across blocks, and in what order the\npartial sums are combined, are performance choices the contract leaves free; only\nthe returned bits are constrained.\n\nDoes blocked_sum() satisfy this contract?\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_35",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:42:52Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:43:12Z",
+          "data": {
+            "all_modes_match_ref": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "5f33d86de8348f553b8b1378884b0fe2f3b39fe941814579c16ff8c061755a69"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "40d700b8861666cc7c3dbc37dc748a9d1809bb75d6cfe83af4bedec4f04e11e8"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "distinct_bit_patterns_per_mode": {
+              "allmax": 1,
+              "mixmax": 1,
+              "randint": 1
+            },
+            "duration_s": 6.719495,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "max_abs_diff_from_ref": 0.0,
+            "runs_per_mode": 200,
+            "stderr": "",
+            "stdout": "{\n  \"randint\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 176.3828125,\n    \"distinct_values\": [\n      176.3828125\n    ],\n    \"ref_fp64\": 176.3828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"allmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 65024.0,\n    \"distinct_values\": [\n      65024.0\n    ],\n    \"ref_fp64\": 65024.0,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"mixmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 148.828125,\n    \"distinct_values\": [\n      148.828125\n    ],\n    \"ref_fp64\": 148.828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On three representative dequantization-grid inputs (random k, all +127, mixed \u00b1127 with N=65536), 200 consecutive calls of blocked_sum each produced exactly one distinct value (num_distinct_bit_patterns=1) and every result bitwise-matched the fp64 reference (max_abs_diff 0.0). The atomic-order nondeterminism cannot bite: all partial and total sums are integer multiples of 2^-7 bounded by 65024 = 254*256, far below fp32's 2^17 exact-integer-multiple-of-2^-7 range, so every float addition is exact and order-independent. The claim of run-to-run bit-level nondeterminism is rebutted.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "tl.atomic_add to a single float32 output combines partials in nondeterministic order; if intermediate rounding occurs, two calls can differ in last bits. However, on the declared grid (k*2^-7, |k|<=127, N=65536) all partial and total sums are integer multiples of 2^-7 with magnitude <= 65024 << 2^17, exactly representable in fp32, so every addition should be exact and order-independent.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract: 'two calls on the same input must return bitwise identical results ... two runs that disagree in their last bits are not interchangeable.' Input domain: every element is k*2^-7 with |k|<=127, N=65536."
+        }
+      ],
+      "scope_rationale": "The contract explicitly requires bitwise-identical results across two calls on the same input; any nondeterminism from atomic-add ordering on the declared dequantization-grid inputs (k*2^-7, |k|<=127, N=65536) violates it.",
+      "statement": "blocked_sum is nondeterministic across calls because the final combination uses atomic adds whose ordering varies run to run, so two calls on the same input can produce different last bits.",
+      "status": "rebutted",
+      "updated_at": "2026-09-30T08:43:12Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_35",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_35"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_35"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_35"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_35",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 13.777526126000112,
+      "role": "solo",
+      "round": 2,
+      "text": "The contract requires bitwise-identical results across calls despite atomic ordering. However, since all inputs are k\u00b72\u207b\u2077 with |k|\u2264127 and N=65536, every partial sum (block \u22641024 elements \u2192 |max|\u2248130048; total \u226465024) is an integer multiple of 2\u207b\u2077 well below fp32's exact range of 2\u00b9\u2077\u00b72\u207b\u2077, so float addition should be exact and order-independent. Let me record the hypothesis and test it on the GPU.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "tl.atomic_add to a single float32 output combines partials in nondeterministic order; if intermediate rounding occurs, two calls can differ in last bits, violating the contract. Rationale for suspecting it: atomics with no order control are the classic source of run-to-run nondeterminism. Counter-consideration: on the declared dequantization grid (k*2^-7, |k|<=127, N=65536), all partial and total sums are integer multiples of 2^-7 with magnitude <= 65024 << 2^17, exactly representable in fp32, so every addition is exact and order-independent.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract: 'two calls on the same input must return bitwise identical results ... two runs that disagree in their last bits are not interchangeable.' Input domain: every element k*2^-7, |k|<=127, N=65536."
+              }
+            ],
+            "statement": "blocked_sum is nondeterministic across calls because the final combination uses atomic adds whose ordering varies run to run, so two calls on the same input can produce different last bits."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.778,
+        "input_tokens": 6817,
+        "output_tokens": 751
+      }
+    },
+    {
+      "duration_s": 5.681222947999913,
+      "role": "solo",
+      "round": 3,
+      "text": "The claim failed to record because `scope_rationale` was missing. I'll re-send it with the contract detail filled in.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "tl.atomic_add to a single float32 output combines partials in nondeterministic order; if intermediate rounding occurs, two calls can differ in last bits. However, on the declared grid (k*2^-7, |k|<=127, N=65536) all partial and total sums are integer multiples of 2^-7 with magnitude <= 65024 << 2^17, exactly representable in fp32, so every addition should be exact and order-independent.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract: 'two calls on the same input must return bitwise identical results ... two runs that disagree in their last bits are not interchangeable.' Input domain: every element is k*2^-7 with |k|<=127, N=65536."
+              }
+            ],
+            "scope_rationale": "The contract explicitly requires bitwise-identical results across two calls on the same input; any nondeterminism from atomic-add ordering on the declared dequantization-grid inputs (k*2^-7, |k|<=127, N=65536) violates it.",
+            "statement": "blocked_sum is nondeterministic across calls because the final combination uses atomic adds whose ordering varies run to run, so two calls on the same input can produce different last bits."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.681,
+        "input_tokens": 7748,
+        "output_tokens": 332
+      }
+    },
+    {
+      "duration_s": 6.272198881000122,
+      "role": "solo",
+      "round": 4,
+      "text": "I'll test claim c1 by calling blocked_sum many times on representative dequantization-grid inputs and checking bitwise stability.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_35\")\nfrom kernel import blocked_sum\n\ntorch.manual_seed(0)\nN = 65536\ndev = \"cuda\"\n\ndef grid_input(mode, seed):\n    g = torch.Generator(device=dev).manual_seed(seed)\n    k = torch.randint(-127, 128, (N,), device=dev, generator=g, dtype=torch.int32)\n    if mode == \"allmax\": k = torch.full((N,), 127, device=dev, dtype=torch.int32)\n    if mode == \"mixmax\": k = torch.where(torch.rand(N, device=dev, generator=g) < 0.5, 127, -127).int()\n    return (k.float()) * (2.0 ** -7)\n\nresults = {}\nfor mode in [\"randint\", \"allmax\", \"mixmax\"]:\n    x = grid_input(mode, 42)\n    ref = x.sum(dtype=torch.float64)\n    bits = []\n    for i in range(200):\n        r = blocked_sum(x)\n        torch.cuda.synchronize()\n        bits.append(r.item())\n    results[mode] = {\n        \"num_distinct_bit_patterns\": len(set(bits)),\n        \"first\": bits[0],\n        \"distinct_values\": sorted(set(bits))[:5],\n        \"ref_fp64\": ref.item(),\n        \"matches_ref\": bits[0] == ref.item(),\n        \"max_abs_diff_from_ref\": max(abs(b - ref.item()) for b in bits),\n    }\n\nprint(json.dumps(results, indent=2))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.272,
+        "input_tokens": 9203,
+        "output_tokens": 377
+      }
+    },
+    {
+      "duration_s": 7.09576013800006,
+      "role": "solo",
+      "round": 5,
+      "text": "The probe showed bitwise-identical results across 200 calls per input on three representative dequantization-grid inputs, all exactly matching the fp64 reference. I'll record this evidence and resolve the claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "all_modes_match_ref": true,
+              "distinct_bit_patterns_per_mode": {
+                "allmax": 1,
+                "mixmax": 1,
+                "randint": 1
+              },
+              "max_abs_diff_from_ref": 0.0,
+              "runs_per_mode": 200
+            },
+            "event_id": "t7",
+            "summary": "On three representative dequantization-grid inputs (random k, all +127, mixed \u00b1127 with N=65536), 200 consecutive calls of blocked_sum each produced exactly one distinct value (num_distinct_bit_patterns=1) and every result bitwise-matched the fp64 reference (max_abs_diff 0.0). The atomic-order nondeterminism cannot bite: all partial and total sums are integer multiples of 2^-7 bounded by 65024 = 254*256, far below fp32's 2^17 exact-integer-multiple-of-2^-7 range, so every float addition is exact and order-independent. The claim of run-to-run bit-level nondeterminism is rebutted.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.096,
+        "input_tokens": 11563,
+        "output_tokens": 322
+      }
+    },
+    {
+      "duration_s": 6.95692344400004,
+      "role": "solo",
+      "round": 6,
+      "text": "The single risk (bitwise nondeterminism from atomic ordering) has been tested and rebutted: on the declared dequantization grid (k\u00b72\u207b\u2077, |k|\u2264127, N=65536) all sums are integer multiples of 2\u207b\u2077 well within fp32 exact range, so every addition is exact and order-independent \u2014 confirmed empirically with 200 calls on three representative inputs, all bitwise identical and matching the fp64 reference exactly. The contract explicitly leaves block partitioning and combination order free, so there is nothing else to test. I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The contract requires only bitwise-identical results across two calls on the same input; partitioning and combination order are explicitly free. The only failure mode was atomic-order nondeterminism (claim c1, in_scope). Probe t7 ran blocked_sum 200 times on each of three representative dequantization-grid inputs (random k, all +127, mixed \u00b1127; N=65536): every mode produced exactly 1 distinct bit pattern and bitwise-matched the fp64 reference (max_abs_diff 0.0). This is guaranteed on the declared domain: all partial and total sums are integer multiples of 2^-7 with magnitude \u2264 65024 << 2^17, exactly representable in fp32, so every float addition is exact regardless of atomic ordering. The kernel satisfies the contract.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.957,
+        "input_tokens": 15083,
+        "output_tokens": 351
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_35"
+      },
+      "created_at": "2026-09-30T08:42:33Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_35",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _blocked_sum_kernel(X, Out, N, BLOCK: tl.constexpr):\n    pid = tl.program_id(0)\n    idx = pid * BLOCK + tl.arange(0, BLOCK)\n    x = tl.load(X + idx, mask=idx < N, other=0.0)\n    tl.atomic_add(Out, tl.sum(x, axis=0))\n\n\ndef blocked_sum(x: torch.Tensor, block: int = 1024) -> torch.Tensor:\n    \"\"\"Sum of a float32 tensor, one atomic accumulation per block.\"\"\"\n    out = torch.zeros(1, device=x.device, dtype=torch.float32)\n    _blocked_sum_kernel[(triton.cdiv(x.numel(), block),)](x, out, x.numel(), BLOCK=block)\n    return out\n",
+        "passed": null,
+        "problem_text": "Operation: sum of a float32 tensor, partitioned across blocks and combined with\none atomic add per block, the reduction strategy used by split-K GEMM and\nall-reduce kernels.\n\n    out = sum over i of x[i]\n\nThe sum is a per-tensor statistic over an int8-quantised activation buffer that\nhas already been dequantised into float32, so the input domain is the\ndequantisation grid itself. Every element of x is k * 2^-7 for an integer k with\n|k| <= 127, the scale is one power of two fixed for the whole tensor, and x holds\nN = 65536 elements.\n\nContract: two calls on the same input must return bitwise identical results. The\nstatistic is compared across replicas holding the same shard and is pinned as a\ngolden value in CI, so two runs that disagree in their last bits are not\ninterchangeable. How the sum is partitioned across blocks, and in what order the\npartial sums are combined, are performance choices the contract leaves free; only\nthe returned bits are constrained.\n\nDoes blocked_sum() satisfy this contract?\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_35",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_35"
+      },
+      "created_at": "2026-09-30T08:42:33Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: sum of a float32 tensor, partitioned across blocks and combined with\none atomic add per block, the reduction strategy used by split-K GEMM and\nall-reduce kernels.\n\n    out = sum over i of x[i]\n\nThe sum is a per-tensor statistic over an int8-quantised activation buffer that\nhas already been dequantised into float32, so the input domain is the\ndequantisation grid itself. Every element of x is k * 2^-7 for an integer k with\n|k| <= 127, the scale is one power of two fixed for the whole tensor, and x holds\nN = 65536 elements.\n\nContract: two calls on the same input must return bitwise identical results. The\nstatistic is compared across replicas holding the same shard and is pinned as a\ngolden value in CI, so two runs that disagree in their last bits are not\ninterchangeable. How the sum is partitioned across blocks, and in what order the\npartial sums are combined, are performance choices the contract leaves free; only\nthe returned bits are constrained.\n\nDoes blocked_sum() satisfy this contract?\n",
+        "entry": "case_35",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_35"
+      },
+      "created_at": "2026-09-30T08:42:33Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_35",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 599
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1014
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_35",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:42:33Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_35\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_35",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "tl.atomic_add to a single float32 output combines partials in nondeterministic order; if intermediate rounding occurs, two calls can differ in last bits, violating the contract. Rationale for suspecting it: atomics with no order control are the classic source of run-to-run nondeterminism. Counter-consideration: on the declared dequantization grid (k*2^-7, |k|<=127, N=65536), all partial and total sums are integer multiples of 2^-7 with magnitude <= 65024 << 2^17, exactly representable in fp32, so every addition is exact and order-independent.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: 'two calls on the same input must return bitwise identical results ... two runs that disagree in their last bits are not interchangeable.' Input domain: every element k*2^-7, |k|<=127, N=65536."
+          }
+        ],
+        "statement": "blocked_sum is nondeterministic across calls because the final combination uses atomic adds whose ordering varies run to run, so two calls on the same input can produce different last bits."
+      },
+      "created_at": "2026-09-30T08:42:46Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t5",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "tl.atomic_add to a single float32 output combines partials in nondeterministic order; if intermediate rounding occurs, two calls can differ in last bits. However, on the declared grid (k*2^-7, |k|<=127, N=65536) all partial and total sums are integer multiples of 2^-7 with magnitude <= 65024 << 2^17, exactly representable in fp32, so every addition should be exact and order-independent.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: 'two calls on the same input must return bitwise identical results ... two runs that disagree in their last bits are not interchangeable.' Input domain: every element is k*2^-7 with |k|<=127, N=65536."
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires bitwise-identical results across two calls on the same input; any nondeterminism from atomic-add ordering on the declared dequantization-grid inputs (k*2^-7, |k|<=127, N=65536) violates it.",
+        "statement": "blocked_sum is nondeterministic across calls because the final combination uses atomic adds whose ordering varies run to run, so two calls on the same input can produce different last bits."
+      },
+      "created_at": "2026-09-30T08:42:52Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-30T08:42:52Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "tl.atomic_add to a single float32 output combines partials in nondeterministic order; if intermediate rounding occurs, two calls can differ in last bits. However, on the declared grid (k*2^-7, |k|<=127, N=65536) all partial and total sums are integer multiples of 2^-7 with magnitude <= 65024 << 2^17, exactly representable in fp32, so every addition should be exact and order-independent.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: 'two calls on the same input must return bitwise identical results ... two runs that disagree in their last bits are not interchangeable.' Input domain: every element is k*2^-7 with |k|<=127, N=65536."
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires bitwise-identical results across two calls on the same input; any nondeterminism from atomic-add ordering on the declared dequantization-grid inputs (k*2^-7, |k|<=127, N=65536) violates it.",
+        "statement": "blocked_sum is nondeterministic across calls because the final combination uses atomic adds whose ordering varies run to run, so two calls on the same input can produce different last bits.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:42:52Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_35\")\nfrom kernel import blocked_sum\n\ntorch.manual_seed(0)\nN = 65536\ndev = \"cuda\"\n\ndef grid_input(mode, seed):\n    g = torch.Generator(device=dev).manual_seed(seed)\n    k = torch.randint(-127, 128, (N,), device=dev, generator=g, dtype=torch.int32)\n    if mode == \"allmax\": k = torch.full((N,), 127, device=dev, dtype=torch.int32)\n    if mode == \"mixmax\": k = torch.where(torch.rand(N, device=dev, generator=g) < 0.5, 127, -127).int()\n    return (k.float()) * (2.0 ** -7)\n\nresults = {}\nfor mode in [\"randint\", \"allmax\", \"mixmax\"]:\n    x = grid_input(mode, 42)\n    ref = x.sum(dtype=torch.float64)\n    bits = []\n    for i in range(200):\n        r = blocked_sum(x)\n        torch.cuda.synchronize()\n        bits.append(r.item())\n    results[mode] = {\n        \"num_distinct_bit_patterns\": len(set(bits)),\n        \"first\": bits[0],\n        \"distinct_values\": sorted(set(bits))[:5],\n        \"ref_fp64\": ref.item(),\n        \"matches_ref\": bits[0] == ref.item(),\n        \"max_abs_diff_from_ref\": max(abs(b - ref.item()) for b in bits),\n    }\n\nprint(json.dumps(results, indent=2))\n"
+      },
+      "created_at": "2026-09-30T08:43:05Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "5f33d86de8348f553b8b1378884b0fe2f3b39fe941814579c16ff8c061755a69"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "40d700b8861666cc7c3dbc37dc748a9d1809bb75d6cfe83af4bedec4f04e11e8"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "blocked_sum is nondeterministic across calls because the final combination uses atomic adds whose ordering varies run to run, so two calls on the same input can produce different last bits.",
+        "cwd": "/root/cases/case_35",
+        "duration_s": 6.719495,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "5f33d86de8348f553b8b1378884b0fe2f3b39fe941814579c16ff8c061755a69"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "40d700b8861666cc7c3dbc37dc748a9d1809bb75d6cfe83af4bedec4f04e11e8"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 6.719495,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n  \"randint\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 176.3828125,\n    \"distinct_values\": [\n      176.3828125\n    ],\n    \"ref_fp64\": 176.3828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"allmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 65024.0,\n    \"distinct_values\": [\n      65024.0\n    ],\n    \"ref_fp64\": 65024.0,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"mixmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 148.828125,\n    \"distinct_values\": [\n      148.828125\n    ],\n    \"ref_fp64\": 148.828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n  \"randint\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 176.3828125,\n    \"distinct_values\": [\n      176.3828125\n    ],\n    \"ref_fp64\": 176.3828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"allmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 65024.0,\n    \"distinct_values\": [\n      65024.0\n    ],\n    \"ref_fp64\": 65024.0,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"mixmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 148.828125,\n    \"distinct_values\": [\n      148.828125\n    ],\n    \"ref_fp64\": 148.828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  }\n}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "all_modes_match_ref": true,
+          "distinct_bit_patterns_per_mode": {
+            "allmax": 1,
+            "mixmax": 1,
+            "randint": 1
+          },
+          "max_abs_diff_from_ref": 0.0,
+          "runs_per_mode": 200
+        },
+        "event_id": "t7",
+        "summary": "On three representative dequantization-grid inputs (random k, all +127, mixed \u00b1127 with N=65536), 200 consecutive calls of blocked_sum each produced exactly one distinct value (num_distinct_bit_patterns=1) and every result bitwise-matched the fp64 reference (max_abs_diff 0.0). The atomic-order nondeterminism cannot bite: all partial and total sums are integer multiples of 2^-7 bounded by 65024 = 254*256, far below fp32's 2^17 exact-integer-multiple-of-2^-7 range, so every float addition is exact and order-independent. The claim of run-to-run bit-level nondeterminism is rebutted.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-30T08:43:12Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:42:52Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:43:12Z",
+              "data": {
+                "all_modes_match_ref": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "5f33d86de8348f553b8b1378884b0fe2f3b39fe941814579c16ff8c061755a69"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "40d700b8861666cc7c3dbc37dc748a9d1809bb75d6cfe83af4bedec4f04e11e8"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "distinct_bit_patterns_per_mode": {
+                  "allmax": 1,
+                  "mixmax": 1,
+                  "randint": 1
+                },
+                "duration_s": 6.719495,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "max_abs_diff_from_ref": 0.0,
+                "runs_per_mode": 200,
+                "stderr": "",
+                "stdout": "{\n  \"randint\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 176.3828125,\n    \"distinct_values\": [\n      176.3828125\n    ],\n    \"ref_fp64\": 176.3828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"allmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 65024.0,\n    \"distinct_values\": [\n      65024.0\n    ],\n    \"ref_fp64\": 65024.0,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"mixmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 148.828125,\n    \"distinct_values\": [\n      148.828125\n    ],\n    \"ref_fp64\": 148.828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  }\n}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On three representative dequantization-grid inputs (random k, all +127, mixed \u00b1127 with N=65536), 200 consecutive calls of blocked_sum each produced exactly one distinct value (num_distinct_bit_patterns=1) and every result bitwise-matched the fp64 reference (max_abs_diff 0.0). The atomic-order nondeterminism cannot bite: all partial and total sums are integer multiples of 2^-7 bounded by 65024 = 254*256, far below fp32's 2^17 exact-integer-multiple-of-2^-7 range, so every float addition is exact and order-independent. The claim of run-to-run bit-level nondeterminism is rebutted.",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "tl.atomic_add to a single float32 output combines partials in nondeterministic order; if intermediate rounding occurs, two calls can differ in last bits. However, on the declared grid (k*2^-7, |k|<=127, N=65536) all partial and total sums are integer multiples of 2^-7 with magnitude <= 65024 << 2^17, exactly representable in fp32, so every addition should be exact and order-independent.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract: 'two calls on the same input must return bitwise identical results ... two runs that disagree in their last bits are not interchangeable.' Input domain: every element is k*2^-7 with |k|<=127, N=65536."
+            }
+          ],
+          "scope_rationale": "The contract explicitly requires bitwise-identical results across two calls on the same input; any nondeterminism from atomic-add ordering on the declared dequantization-grid inputs (k*2^-7, |k|<=127, N=65536) violates it.",
+          "statement": "blocked_sum is nondeterministic across calls because the final combination uses atomic adds whose ordering varies run to run, so two calls on the same input can produce different last bits.",
+          "status": "rebutted",
+          "updated_at": "2026-09-30T08:43:12Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:43:12Z",
+          "data": {
+            "all_modes_match_ref": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "5f33d86de8348f553b8b1378884b0fe2f3b39fe941814579c16ff8c061755a69"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "40d700b8861666cc7c3dbc37dc748a9d1809bb75d6cfe83af4bedec4f04e11e8"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "distinct_bit_patterns_per_mode": {
+              "allmax": 1,
+              "mixmax": 1,
+              "randint": 1
+            },
+            "duration_s": 6.719495,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "max_abs_diff_from_ref": 0.0,
+            "runs_per_mode": 200,
+            "stderr": "",
+            "stdout": "{\n  \"randint\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 176.3828125,\n    \"distinct_values\": [\n      176.3828125\n    ],\n    \"ref_fp64\": 176.3828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"allmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 65024.0,\n    \"distinct_values\": [\n      65024.0\n    ],\n    \"ref_fp64\": 65024.0,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  },\n  \"mixmax\": {\n    \"num_distinct_bit_patterns\": 1,\n    \"first\": 148.828125,\n    \"distinct_values\": [\n      148.828125\n    ],\n    \"ref_fp64\": 148.828125,\n    \"matches_ref\": true,\n    \"max_abs_diff_from_ref\": 0.0\n  }\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On three representative dequantization-grid inputs (random k, all +127, mixed \u00b1127 with N=65536), 200 consecutive calls of blocked_sum each produced exactly one distinct value (num_distinct_bit_patterns=1) and every result bitwise-matched the fp64 reference (max_abs_diff 0.0). The atomic-order nondeterminism cannot bite: all partial and total sums are integer multiples of 2^-7 bounded by 65024 = 254*256, far below fp32's 2^17 exact-integer-multiple-of-2^-7 range, so every float addition is exact and order-independent. The claim of run-to-run bit-level nondeterminism is rebutted.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract requires only bitwise-identical results across two calls on the same input; partitioning and combination order are explicitly free. The only failure mode was atomic-order nondeterminism (claim c1, in_scope). Probe t7 ran blocked_sum 200 times on each of three representative dequantization-grid inputs (random k, all +127, mixed \u00b1127; N=65536): every mode produced exactly 1 distinct bit pattern and bitwise-matched the fp64 reference (max_abs_diff 0.0). This is guaranteed on the declared domain: all partial and total sums are integer multiples of 2^-7 with magnitude \u2264 65024 << 2^17, exactly representable in fp32, so every float addition is exact regardless of atomic ordering. The kernel satisfies the contract.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-30T08:43:19Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-30T08:43:19Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract requires only bitwise-identical results across two calls on the same input; partitioning and combination order are explicitly free. The only failure mode was atomic-order nondeterminism (claim c1, in_scope). Probe t7 ran blocked_sum 200 times on each of three representative dequantization-grid inputs (random k, all +127, mixed \u00b1127; N=65536): every mode produced exactly 1 distinct bit pattern and bitwise-matched the fp64 reference (max_abs_diff 0.0). This is guaranteed on the declared domain: all partial and total sums are integer multiples of 2^-7 with magnitude \u2264 65024 << 2^17, exactly representable in fp32, so every float addition is exact regardless of atomic ordering. The kernel satisfies the contract.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-30T08:43:19Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The contract requires only bitwise-identical results across two calls on the same input; partitioning and combination order are explicitly free. The only failure mode was atomic-order nondeterminism (claim c1, in_scope). Probe t7 ran blocked_sum 200 times on each of three representative dequantization-grid inputs (random k, all +127, mixed \u00b1127; N=65536): every mode produced exactly 1 distinct bit pattern and bitwise-matched the fp64 reference (max_abs_diff 0.0). This is guaranteed on the declared domain: all partial and total sums are integer multiples of 2^-7 with magnitude \u2264 65024 << 2^17, exactly representable in fp32, so every float addition is exact regardless of atomic ordering. The kernel satisfies the contract.",
+    "verdict": "trust"
+  }
+}

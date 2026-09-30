@@ -1,0 +1,122 @@
+[
+  {
+    "created_at": "2026-09-30T08:58:04Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:59:10Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "149499e08cb251b324ab613a278cef1ffdf3669ab062fc96b5c479ddc0130116"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "492a363e5d597a26a21ecfa91b463a3783f4401909c03d30355e78565521ceca"
+            }
+          ],
+          "duration_s": 5.57073,
+          "exit_code": 1,
+          "expected_signal": "E <= 0.003 (claim c1 rebutted) or E > 0.003 (confirmed)",
+          "failure": "NameError: name 'torch' is not defined - probe bug, no measurement taken",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/numerical_pilot/case_87/debate/probes/t12_probe.py\", line 13, in <module>\n    ref = torch.empty_like(bf)\n          ^^^^^\nNameError: name 'torch' is not defined\n",
+          "stdout": "",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe failed with NameError: torch not imported (probe code bug, not a kernel result). No E measurement obtained.",
+        "supports": "inconclusive",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "Line 13 rounds the carry to fp16 (~2^-11 relative) at every one of 768 steps with decay 0.999, so per-element absolute rounding error can reach ~0.005 near steady state (~10), and errors accumulate in the L2 norm across 24576 outputs; E could exceed 0.003 since the denominator max(||ref||_2, ~76.8) may be smaller than the accumulated fp16 error norm.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Reference is float64 recurrence on same float32 inputs; pass iff all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003, on exactly the make_inputs() workload."
+      }
+    ],
+    "scope_rationale": "The contract requires E <= 0.003 on exactly the make_inputs() workload (t=768, d=32, decay=0.999, bias=0.01) with a float64 reference; the per-step fp16 carry quantization at kernel.py line 13 directly determines whether that budget is met on this single in-scope workload.",
+    "statement": "On the fixed workload (seed 453, t=768, d=32, decay=0.999, bias=0.01), the per-step fp16 rounding of the carry (kernel.py line 13) accumulates error such that E exceeds the 0.003 budget.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-30T08:59:10Z"
+  },
+  {
+    "created_at": "2026-09-30T08:58:04Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:59:10Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t13_probe.py",
+              "sha256": "dd86830c829cbfff831821c2dcfca275b5106f9faab752aa030a470710a61879"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t13_stdout.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t13_stderr.txt",
+              "sha256": "b0436dae1170eaf8d76873f4d96c57714dba5fab7deed7ad12dcd1876687035a"
+            }
+          ],
+          "duration_s": 5.68678,
+          "exit_code": 1,
+          "expected_signal": "launch succeeds with enable_fp_fusion kwarg and fusion on/off makes negligible or zero difference",
+          "failure": "NameError: name 'torch' is not defined - probe bug, no measurement taken",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/numerical_pilot/case_87/debate/probes/t13_probe.py\", line 18, in <module>\n    out2 = torch.empty_like(b)\n           ^^^^^\nNameError: name 'torch' is not defined\n",
+          "stdout": "",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe failed with NameError: torch not imported (probe code bug, not a kernel result). No launch behavior measured.",
+        "supports": "inconclusive",
+        "tool_event_id": "t13"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "run() passes enable_fp_fusion=False as a launch kwarg (line 19) rather than a triton.Config option; if Triton 3.4.0 rejects it or silently ignores it, execution could fail or the a*h+b computation could be FMA-contracted, shifting accumulated rounding relative to the intended unfused evaluation.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Environment fixed to Triton 3.4.0 on T4; compliance requires the kernel to run on the single workload and produce outputs with E <= 0.003."
+      }
+    ],
+    "scope_rationale": "The contract fixes the environment to Triton 3.4.0 on T4 and requires the kernel to execute on the single make_inputs() workload producing finite outputs with E <= 0.003; a launch-kwarg incompatibility on this exact environment would break compliance.",
+    "statement": "The kernel's launch path may fail or produce a different result than intended on the specified environment because enable_fp_fusion is passed as a kernel launch kwarg, which may not be accepted by Triton 3.4.0 or may leave the a*h+b computation fused into an FMA, slightly shifting accumulated rounding relative to the unfused evaluation.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-30T08:59:10Z"
+  }
+]

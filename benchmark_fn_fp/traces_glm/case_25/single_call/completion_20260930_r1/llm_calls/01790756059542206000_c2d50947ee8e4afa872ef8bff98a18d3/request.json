@@ -1,0 +1,18 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are verifying whether a GPU (Triton) kernel implementation is correct.\n\nYou will be given:\n1. A problem statement describing the operation's contract and its reference behavior.\n2. The kernel implementation under test.\n\nDecide one of:\n- \"reject\": the implementation has a real defect / violates the stated contract.\n- \"trust\": the implementation is correct, or is an equally valid alternative implementation.\n- \"needs_more_evidence\": you genuinely cannot tell.\n\nAnswer with the JSON object required by the output schema.\nOutput schema:\n{\"type\": \"object\", \"required\": [\"verdict\", \"confidence\", \"reason\"], \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": [\"trust\", \"reject\", \"needs_more_evidence\"], \"description\": \"'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell.\"}, \"confidence\": {\"type\": \"number\", \"description\": \"0.0 to 1.0.\"}, \"reason\": {\"type\": \"string\", \"description\": \"One or two sentences.\"}}, \"additionalProperties\": false}"
+    },
+    {
+      "role": "user",
+      "content": "## Problem statement (contract + reference behavior)\n\nOperation: one symmetric INT8 quantize-dequantize round trip, the storage step\nused by low-precision optimizer state and KV-cache compression.\n\n    scale = max(|x|) / 127        per block\n    q     = round(x / scale)      to the nearest representable level\n    y     = q * scale\n\nThe rounding must be to nearest, so the round trip is unbiased: repeated\napplication must not push the tensor systematically toward zero or away from it.\nThis matters because the operation is applied once per optimizer step, so any\nper-step bias compounds over a training run.\n\nDoes requantize() satisfy this contract?\n\n\n## Kernel implementation under test (kernel.py)\n\n```python\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _requant_step_kernel(X, OUT, N, BLOCK: tl.constexpr):\n    pid = tl.program_id(0)\n    offs = pid * BLOCK + tl.arange(0, BLOCK)\n    mask = offs < N\n    x = tl.load(X + offs, mask=mask, other=0.0)\n    absmax = tl.max(tl.abs(x), axis=0)\n    scale = tl.where(absmax == 0.0, 1.0, absmax / 127.0)\n    q = tl.floor(x / scale).to(tl.int8)\n    tl.store(OUT + offs, q.to(tl.float32) * scale, mask=mask)\n\n\ndef requantize(x: torch.Tensor) -> torch.Tensor:\n    \"\"\"One symmetric INT8 quantize-dequantize round trip over a 1-D tensor.\"\"\"\n    n = x.numel()\n    out = torch.empty_like(x)\n    BLOCK = 1024\n    _requant_step_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)\n    return out\n\n```\n\nIs this implementation correct?"
+    }
+  ],
+  "response_format": {
+    "type": "json_object"
+  },
+  "reasoning_effort": "low"
+}

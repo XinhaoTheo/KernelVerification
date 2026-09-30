@@ -1,0 +1,754 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_83",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):\n    d = tl.arange(0, D)\n    h = tl.full((D,), 0.0, tl.float32)\n    for t in range(T):\n        a = tl.load(A + t * D + d)\n        b = tl.load(B + t * D + d)\n        h = a * h + b\n        h = h.to(tl.float16).to(tl.float32)\n        tl.store(O + t * D + d, h)\n\ndef run(a, b):\n    t, d = a.shape\n    out = torch.empty_like(b)\n    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'recurrence', 'seed': 452, 't': 640, 'd': 32, 'decay': 1.0, 'noise': 0.001, 'bias': 0.01}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+    "passed": null,
+    "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\nh[0] = a[0] * 0 + b[0]; h[t] = a[t] * h[t-1] + b[t]. Return ALL states.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.003.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+    "rounds": null,
+    "session_dir": "/root/pilot_cases/case_83",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-30T08:49:47Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:50:08Z",
+          "data": {
+            "E": 0.004019616219081861,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "535fed02ab5630e92452d1fa3446286714eb27d4fdf9946541ff779551d3c6f0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "f0b40827cec2de8b29a7fc6b5e358d786277821d65414f8e53d6101ef6cd0e20"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "a8c7ead8ccfa355b200d4c307942f519e108dd514285df3828f37c9548ee34a1"
+              }
+            ],
+            "budget": 0.003,
+            "duration_s": 5.930464,
+            "exit_code": 0,
+            "expected_signal": null,
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.004019616219081861,
+              "budget": 0.003,
+              "dtype": "torch.float32",
+              "finite": true,
+              "max_abs_err": 0.07155016483739018,
+              "max_rel_err": 0.011308904528730832,
+              "metric": "relative_l2_error_E",
+              "ref_norm": 529.4260244408146,
+              "shape": [
+                640,
+                32
+              ],
+              "verdict_per_contract": false
+            },
+            "max_abs_err": 0.07155016483739018,
+            "max_rel_err": 0.011308904528730832,
+            "ref_norm": 529.4260244408146,
+            "shape": [
+              640,
+              32
+            ],
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative_l2_error_E\", \"E\": 0.004019616219081861, \"budget\": 0.003, \"finite\": true, \"ref_norm\": 529.4260244408146, \"max_abs_err\": 0.07155016483739018, \"max_rel_err\": 0.011308904528730832, \"shape\": [640, 32], \"dtype\": \"torch.float32\", \"verdict_per_contract\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact make_inputs() workload (t=640, d=32, decay=1.0), the kernel output vs float64 reference gives E = 0.00402, exceeding the 0.003 budget (outputs finite, max_abs_err 0.0716, max_rel_err 0.0113). The per-step fp16 rounding of the recurrent state is the accumulated-error source.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel rounds the recurrent state to fp16 at every one of 640 steps. With a=1.0 exactly, the reference h[t] grows linearly (~t*0.01 up to ~6.4), and fp16's ~5e-4 relative quantization error is injected each step, so accumulated error may exceed the contract's E <= 0.003.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Reference is the float64 recurrence on the same float32 inputs from make_inputs(); the kernel satisfies iff all outputs are finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(n)) <= 0.003."
+        }
+      ],
+      "scope_rationale": "Contract requires E <= 0.003 with the float64 recurrence as reference on the exact make_inputs() workload.",
+      "statement": "On the single specified workload (t=640, d=32, decay=1.0), the kernel's repeated fp16 rounding of the recurrent state causes relative error E > 0.003 against the float64 reference.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:50:08Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_83",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_83"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_83"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_83"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_83",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 7.265646958,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll test whether the kernel's per-step fp16 rounding on this 640-step decay-1.0 recurrence keeps the relative error E within the 0.003 budget.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel rounds the recurrent state to fp16 at every one of 640 steps. With a=1.0 exactly, the reference h[t] grows linearly (~t*0.01 up to ~6.4), and fp16's ~5e-4 relative quantization error is injected each step, so accumulated error may exceed the contract's E <= 0.003.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference is the float64 recurrence on the same float32 inputs from make_inputs(); the kernel satisfies iff all outputs are finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(n)) <= 0.003."
+              }
+            ],
+            "scope_rationale": "Contract requires E <= 0.003 with the float64 recurrence as reference on the exact make_inputs() workload.",
+            "statement": "On the single specified workload (t=640, d=32, decay=1.0), the kernel's repeated fp16 rounding of the recurrent state causes relative error E > 0.003 against the float64 reference."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.266,
+        "input_tokens": 8223,
+        "output_tokens": 401
+      }
+    },
+    {
+      "duration_s": 7.427203142,
+      "role": "solo",
+      "round": 3,
+      "text": "Running the decisive probe on the exact make_inputs workload.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport sys, json, importlib.util\nsys.path.insert(0, '/root/pilot_cases/case_83')\nspec = importlib.util.spec_from_file_location('k', '/root/pilot_cases/case_83/kernel.py')\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\na, b = k.make_inputs()\nout = k.run(a, b)\nimport numpy as np, torch\naf = a.cpu().numpy().astype(np.float64)\nbf = b.cpu().numpy().astype(np.float64)\nref = np.empty_like(af)\nh = np.zeros(af.shape[1])\nfor t in range(af.shape[0]):\n    h = af[t]*h + bf[t]\n    ref[t] = h\no = out.cpu().numpy().astype(np.float64)\ndiff = o - ref\nn = diff.size\nE = np.linalg.norm(diff.ravel()) / max(np.linalg.norm(ref.ravel()), 0.001*np.sqrt(n))\nprint(json.dumps({\n  'metric': 'relative_l2_error_E',\n  'E': float(E),\n  'budget': 0.003,\n  'finite': bool(np.isfinite(o).all()),\n  'ref_norm': float(np.linalg.norm(ref.ravel())),\n  'max_abs_err': float(np.abs(diff).max()),\n  'max_rel_err': float((np.abs(diff)/np.maximum(np.abs(ref),1e-12)).max()),\n  'shape': list(o.shape), 'dtype': str(out.dtype),\n  'verdict_per_contract': bool(np.isfinite(o).all() and E <= 0.003)\n}))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.427,
+        "input_tokens": 9570,
+        "output_tokens": 386
+      }
+    },
+    {
+      "duration_s": 7.753777623000001,
+      "role": "solo",
+      "round": 4,
+      "text": "The decisive probe ran: E = 0.00402 > 0.003 budget, confirming the fp16-accumulation hypothesis. I'll finalize the evidence, confirm the claim, and record the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "E": 0.004019616219081861,
+              "budget": 0.003,
+              "finite": true,
+              "max_abs_err": 0.07155016483739018,
+              "max_rel_err": 0.011308904528730832,
+              "ref_norm": 529.4260244408146,
+              "shape": [
+                640,
+                32
+              ]
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "On the exact make_inputs() workload (t=640, d=32, decay=1.0), the kernel output vs float64 reference gives E = 0.00402, exceeding the 0.003 budget (outputs finite, max_abs_err 0.0716, max_rel_err 0.0113). The per-step fp16 rounding of the recurrent state is the accumulated-error source.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.754,
+        "input_tokens": 12081,
+        "output_tokens": 302
+      }
+    },
+    {
+      "duration_s": 5.621204789,
+      "role": "solo",
+      "round": 5,
+      "text": "The single decisive claim is confirmed with in-scope evidence from the exact contract workload: E = 0.00402 exceeds the 0.003 budget. I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Ran the exact make_inputs() workload (t=640, d=32, decay=1.0) through the kernel and compared against the float64 recurrence reference on the same float32 inputs (probe event t6). All outputs are finite, but E = 0.00402 > 0.003 budget (max abs err 0.0716, max rel err 0.0113, ref L2 norm 529.4). The kernel rounds the recurrent state to fp16 at every step (kernel.py line 13), and over 640 steps with decay=1.0 this accumulated quantization error violates the contract's E <= 0.003 requirement. Reduced precision is only permitted if the budget is met, which it is not on this single fully specified workload.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.621,
+        "input_tokens": 15879,
+        "output_tokens": 264
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_83"
+      },
+      "created_at": "2026-09-30T08:49:38Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_83",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):\n    d = tl.arange(0, D)\n    h = tl.full((D,), 0.0, tl.float32)\n    for t in range(T):\n        a = tl.load(A + t * D + d)\n        b = tl.load(B + t * D + d)\n        h = a * h + b\n        h = h.to(tl.float16).to(tl.float32)\n        tl.store(O + t * D + d, h)\n\ndef run(a, b):\n    t, d = a.shape\n    out = torch.empty_like(b)\n    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'recurrence', 'seed': 452, 't': 640, 'd': 32, 'decay': 1.0, 'noise': 0.001, 'bias': 0.01}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+        "passed": null,
+        "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\nh[0] = a[0] * 0 + b[0]; h[t] = a[t] * h[t-1] + b[t]. Return ALL states.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.003.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "rounds": null,
+        "session_dir": "/root/pilot_cases/case_83",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_83"
+      },
+      "created_at": "2026-09-30T08:49:38Z",
+      "id": "t2",
+      "output": {
+        "content": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\nh[0] = a[0] * 0 + b[0]; h[t] = a[t] * h[t-1] + b[t]. Return ALL states.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.003.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
+        "entry": "case_83",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_83"
+      },
+      "created_at": "2026-09-30T08:49:38Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_83",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2417
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1065
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_83",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-30T08:49:38Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_83\",\n  \"status\": \"unverified\",\n  \"passed\": null\n}\n",
+        "entry": "case_83",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel rounds the recurrent state to fp16 at every one of 640 steps. With a=1.0 exactly, the reference h[t] grows linearly (~t*0.01 up to ~6.4), and fp16's ~5e-4 relative quantization error is injected each step, so accumulated error may exceed the contract's E <= 0.003.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is the float64 recurrence on the same float32 inputs from make_inputs(); the kernel satisfies iff all outputs are finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(n)) <= 0.003."
+          }
+        ],
+        "scope_rationale": "Contract requires E <= 0.003 with the float64 recurrence as reference on the exact make_inputs() workload.",
+        "statement": "On the single specified workload (t=640, d=32, decay=1.0), the kernel's repeated fp16 rounding of the recurrent state causes relative error E > 0.003 against the float64 reference."
+      },
+      "created_at": "2026-09-30T08:49:47Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-30T08:49:47Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel rounds the recurrent state to fp16 at every one of 640 steps. With a=1.0 exactly, the reference h[t] grows linearly (~t*0.01 up to ~6.4), and fp16's ~5e-4 relative quantization error is injected each step, so accumulated error may exceed the contract's E <= 0.003.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is the float64 recurrence on the same float32 inputs from make_inputs(); the kernel satisfies iff all outputs are finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(n)) <= 0.003."
+          }
+        ],
+        "scope_rationale": "Contract requires E <= 0.003 with the float64 recurrence as reference on the exact make_inputs() workload.",
+        "statement": "On the single specified workload (t=640, d=32, decay=1.0), the kernel's repeated fp16 rounding of the recurrent state causes relative error E > 0.003 against the float64 reference.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:49:47Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport sys, json, importlib.util\nsys.path.insert(0, '/root/pilot_cases/case_83')\nspec = importlib.util.spec_from_file_location('k', '/root/pilot_cases/case_83/kernel.py')\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\na, b = k.make_inputs()\nout = k.run(a, b)\nimport numpy as np, torch\naf = a.cpu().numpy().astype(np.float64)\nbf = b.cpu().numpy().astype(np.float64)\nref = np.empty_like(af)\nh = np.zeros(af.shape[1])\nfor t in range(af.shape[0]):\n    h = af[t]*h + bf[t]\n    ref[t] = h\no = out.cpu().numpy().astype(np.float64)\ndiff = o - ref\nn = diff.size\nE = np.linalg.norm(diff.ravel()) / max(np.linalg.norm(ref.ravel()), 0.001*np.sqrt(n))\nprint(json.dumps({\n  'metric': 'relative_l2_error_E',\n  'E': float(E),\n  'budget': 0.003,\n  'finite': bool(np.isfinite(o).all()),\n  'ref_norm': float(np.linalg.norm(ref.ravel())),\n  'max_abs_err': float(np.abs(diff).max()),\n  'max_rel_err': float((np.abs(diff)/np.maximum(np.abs(ref),1e-12)).max()),\n  'shape': list(o.shape), 'dtype': str(out.dtype),\n  'verdict_per_contract': bool(np.isfinite(o).all() and E <= 0.003)\n}))\n"
+      },
+      "created_at": "2026-09-30T08:50:00Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "535fed02ab5630e92452d1fa3446286714eb27d4fdf9946541ff779551d3c6f0"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "f0b40827cec2de8b29a7fc6b5e358d786277821d65414f8e53d6101ef6cd0e20"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "a8c7ead8ccfa355b200d4c307942f519e108dd514285df3828f37c9548ee34a1"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On the single specified workload (t=640, d=32, decay=1.0), the kernel's repeated fp16 rounding of the recurrent state causes relative error E > 0.003 against the float64 reference.",
+        "cwd": "/root/pilot_cases/case_83",
+        "duration_s": 5.930464,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "535fed02ab5630e92452d1fa3446286714eb27d4fdf9946541ff779551d3c6f0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "f0b40827cec2de8b29a7fc6b5e358d786277821d65414f8e53d6101ef6cd0e20"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "a8c7ead8ccfa355b200d4c307942f519e108dd514285df3828f37c9548ee34a1"
+              }
+            ],
+            "duration_s": 5.930464,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.004019616219081861,
+              "budget": 0.003,
+              "dtype": "torch.float32",
+              "finite": true,
+              "max_abs_err": 0.07155016483739018,
+              "max_rel_err": 0.011308904528730832,
+              "metric": "relative_l2_error_E",
+              "ref_norm": 529.4260244408146,
+              "shape": [
+                640,
+                32
+              ],
+              "verdict_per_contract": false
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative_l2_error_E\", \"E\": 0.004019616219081861, \"budget\": 0.003, \"finite\": true, \"ref_norm\": 529.4260244408146, \"max_abs_err\": 0.07155016483739018, \"max_rel_err\": 0.011308904528730832, \"shape\": [640, 32], \"dtype\": \"torch.float32\", \"verdict_per_contract\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "E": 0.004019616219081861,
+          "budget": 0.003,
+          "dtype": "torch.float32",
+          "finite": true,
+          "max_abs_err": 0.07155016483739018,
+          "max_rel_err": 0.011308904528730832,
+          "metric": "relative_l2_error_E",
+          "ref_norm": 529.4260244408146,
+          "shape": [
+            640,
+            32
+          ],
+          "verdict_per_contract": false
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"relative_l2_error_E\", \"E\": 0.004019616219081861, \"budget\": 0.003, \"finite\": true, \"ref_norm\": 529.4260244408146, \"max_abs_err\": 0.07155016483739018, \"max_rel_err\": 0.011308904528730832, \"shape\": [640, 32], \"dtype\": \"torch.float32\", \"verdict_per_contract\": false}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "E": 0.004019616219081861,
+          "budget": 0.003,
+          "finite": true,
+          "max_abs_err": 0.07155016483739018,
+          "max_rel_err": 0.011308904528730832,
+          "ref_norm": 529.4260244408146,
+          "shape": [
+            640,
+            32
+          ]
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "On the exact make_inputs() workload (t=640, d=32, decay=1.0), the kernel output vs float64 reference gives E = 0.00402, exceeding the 0.003 budget (outputs finite, max_abs_err 0.0716, max_rel_err 0.0113). The per-step fp16 rounding of the recurrent state is the accumulated-error source.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:50:08Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:49:47Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:50:08Z",
+              "data": {
+                "E": 0.004019616219081861,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "535fed02ab5630e92452d1fa3446286714eb27d4fdf9946541ff779551d3c6f0"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "f0b40827cec2de8b29a7fc6b5e358d786277821d65414f8e53d6101ef6cd0e20"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "a8c7ead8ccfa355b200d4c307942f519e108dd514285df3828f37c9548ee34a1"
+                  }
+                ],
+                "budget": 0.003,
+                "duration_s": 5.930464,
+                "exit_code": 0,
+                "expected_signal": null,
+                "finite": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "E": 0.004019616219081861,
+                  "budget": 0.003,
+                  "dtype": "torch.float32",
+                  "finite": true,
+                  "max_abs_err": 0.07155016483739018,
+                  "max_rel_err": 0.011308904528730832,
+                  "metric": "relative_l2_error_E",
+                  "ref_norm": 529.4260244408146,
+                  "shape": [
+                    640,
+                    32
+                  ],
+                  "verdict_per_contract": false
+                },
+                "max_abs_err": 0.07155016483739018,
+                "max_rel_err": 0.011308904528730832,
+                "ref_norm": 529.4260244408146,
+                "shape": [
+                  640,
+                  32
+                ],
+                "stderr": "",
+                "stdout": "{\"metric\": \"relative_l2_error_E\", \"E\": 0.004019616219081861, \"budget\": 0.003, \"finite\": true, \"ref_norm\": 529.4260244408146, \"max_abs_err\": 0.07155016483739018, \"max_rel_err\": 0.011308904528730832, \"shape\": [640, 32], \"dtype\": \"torch.float32\", \"verdict_per_contract\": false}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the exact make_inputs() workload (t=640, d=32, decay=1.0), the kernel output vs float64 reference gives E = 0.00402, exceeding the 0.003 budget (outputs finite, max_abs_err 0.0716, max_rel_err 0.0113). The per-step fp16 rounding of the recurrent state is the accumulated-error source.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel rounds the recurrent state to fp16 at every one of 640 steps. With a=1.0 exactly, the reference h[t] grows linearly (~t*0.01 up to ~6.4), and fp16's ~5e-4 relative quantization error is injected each step, so accumulated error may exceed the contract's E <= 0.003.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Reference is the float64 recurrence on the same float32 inputs from make_inputs(); the kernel satisfies iff all outputs are finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(n)) <= 0.003."
+            }
+          ],
+          "scope_rationale": "Contract requires E <= 0.003 with the float64 recurrence as reference on the exact make_inputs() workload.",
+          "statement": "On the single specified workload (t=640, d=32, decay=1.0), the kernel's repeated fp16 rounding of the recurrent state causes relative error E > 0.003 against the float64 reference.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:50:08Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:50:08Z",
+          "data": {
+            "E": 0.004019616219081861,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "535fed02ab5630e92452d1fa3446286714eb27d4fdf9946541ff779551d3c6f0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "f0b40827cec2de8b29a7fc6b5e358d786277821d65414f8e53d6101ef6cd0e20"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "a8c7ead8ccfa355b200d4c307942f519e108dd514285df3828f37c9548ee34a1"
+              }
+            ],
+            "budget": 0.003,
+            "duration_s": 5.930464,
+            "exit_code": 0,
+            "expected_signal": null,
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.004019616219081861,
+              "budget": 0.003,
+              "dtype": "torch.float32",
+              "finite": true,
+              "max_abs_err": 0.07155016483739018,
+              "max_rel_err": 0.011308904528730832,
+              "metric": "relative_l2_error_E",
+              "ref_norm": 529.4260244408146,
+              "shape": [
+                640,
+                32
+              ],
+              "verdict_per_contract": false
+            },
+            "max_abs_err": 0.07155016483739018,
+            "max_rel_err": 0.011308904528730832,
+            "ref_norm": 529.4260244408146,
+            "shape": [
+              640,
+              32
+            ],
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative_l2_error_E\", \"E\": 0.004019616219081861, \"budget\": 0.003, \"finite\": true, \"ref_norm\": 529.4260244408146, \"max_abs_err\": 0.07155016483739018, \"max_rel_err\": 0.011308904528730832, \"shape\": [640, 32], \"dtype\": \"torch.float32\", \"verdict_per_contract\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact make_inputs() workload (t=640, d=32, decay=1.0), the kernel output vs float64 reference gives E = 0.00402, exceeding the 0.003 budget (outputs finite, max_abs_err 0.0716, max_rel_err 0.0113). The per-step fp16 rounding of the recurrent state is the accumulated-error source.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Ran the exact make_inputs() workload (t=640, d=32, decay=1.0) through the kernel and compared against the float64 recurrence reference on the same float32 inputs (probe event t6). All outputs are finite, but E = 0.00402 > 0.003 budget (max abs err 0.0716, max rel err 0.0113, ref L2 norm 529.4). The kernel rounds the recurrent state to fp16 at every step (kernel.py line 13), and over 640 steps with decay=1.0 this accumulated quantization error violates the contract's E <= 0.003 requirement. Reduced precision is only permitted if the budget is met, which it is not on this single fully specified workload.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-30T08:50:13Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-30T08:50:13Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Ran the exact make_inputs() workload (t=640, d=32, decay=1.0) through the kernel and compared against the float64 recurrence reference on the same float32 inputs (probe event t6). All outputs are finite, but E = 0.00402 > 0.003 budget (max abs err 0.0716, max rel err 0.0113, ref L2 norm 529.4). The kernel rounds the recurrent state to fp16 at every step (kernel.py line 13), and over 640 steps with decay=1.0 this accumulated quantization error violates the contract's E <= 0.003 requirement. Reduced precision is only permitted if the budget is met, which it is not on this single fully specified workload.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-30T08:50:13Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Ran the exact make_inputs() workload (t=640, d=32, decay=1.0) through the kernel and compared against the float64 recurrence reference on the same float32 inputs (probe event t6). All outputs are finite, but E = 0.00402 > 0.003 budget (max abs err 0.0716, max rel err 0.0113, ref L2 norm 529.4). The kernel rounds the recurrent state to fp16 at every step (kernel.py line 13), and over 640 steps with decay=1.0 this accumulated quantization error violates the contract's E <= 0.003 requirement. Reduced precision is only permitted if the budget is met, which it is not on this single fully specified workload.",
+    "verdict": "reject"
+  }
+}

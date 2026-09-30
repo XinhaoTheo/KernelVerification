@@ -1,0 +1,179 @@
+[
+  {
+    "created_at": "2026-09-30T08:31:54Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:32:52Z",
+        "data": {
+          "C3_exc_type": "CompilationError",
+          "C3_raised": true,
+          "C48_exc_type": "CompilationError",
+          "C48_raised": true,
+          "C4_raised": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "ed888df883f0cb01c30aba8148d3f7893674d49e641ef8ba66ffda172e433c7d"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "b963aef52caed34ba4b68bcb5f8ce3db6803e165158dcee6edff8b51f2138e83"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t12_json_result.json",
+              "sha256": "7d7c7917215ebbed56104c61572352a9ee61f88a2fa88c87224396b85f896721"
+            }
+          ],
+          "device": "cuda",
+          "duration_s": 9.087934,
+          "error_line": "tl.arange(0, C) at kernel.py line 9",
+          "exit_code": 0,
+          "expected_signal": "C=3 or C=48 raises (Triton power-of-two arange error) while power-of-two C works",
+          "json_parse_error": null,
+          "json_result": {
+            "device": "cuda",
+            "results": {
+              "C3": {
+                "exc_type": "CompilationError",
+                "msg": "at 3:11:\ndef _scale_channels_kernel(X, Scale, Out, C: tl.constexpr):\n    pix = tl.program_id(0)\n    offs = tl.arange(0, C)\n           ^",
+                "raised": true
+              },
+              "C4": {
+                "max_abs_err_vs_nchw_ref": 9.539318084716797,
+                "raised": false
+              },
+              "C48": {
+                "exc_type": "CompilationError",
+                "msg": "at 3:11:\ndef _scale_channels_kernel(X, Scale, Out, C: tl.constexpr):\n    pix = tl.program_id(0)\n    offs = tl.arange(0, C)\n           ^",
+                "raised": true
+              }
+            }
+          },
+          "stderr": "",
+          "stdout": "{\"device\": \"cuda\", \"results\": {\"C3\": {\"raised\": true, \"exc_type\": \"CompilationError\", \"msg\": \"at 3:11:\\ndef _scale_channels_kernel(X, Scale, Out, C: tl.constexpr):\\n    pix = tl.program_id(0)\\n    offs = tl.arange(0, C)\\n           ^\"}, \"C48\": {\"raised\": true, \"exc_type\": \"CompilationError\", \"msg\": \"at 3:11:\\ndef _scale_channels_kernel(X, Scale, Out, C: tl.constexpr):\\n    pix = tl.program_id(0)\\n    offs = tl.arange(0, C)\\n           ^\"}, \"C4\": {\"raised\": false, \"max_abs_err_vs_nchw_ref\": 9.539318084716797}}}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On CUDA, C=3 and C=48 both raise a Triton CompilationError pointing at tl.arange(0, C) in _scale_channels_kernel (kernel.py line 9), while power-of-two C=4 runs (its large error vs the NCHW reference is the separate c2 layout issue, not a compile failure). This confirms c1: non-power-of-two channel counts fail to compile instead of producing output.",
+        "supports": "confirmed",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The wrapper passes channels as a Triton constexpr block size directly into tl.arange(0, C); Triton block sizes must be powers of two, so C=3 or C=48 should fail to compile rather than produce correct output. The contract states no constraint on C.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract asks whether scale_channels() produces the specified per-channel scaling out[n,c,h,w] = x[n,c,h,w]*scale[c] for the operation generally; the contract imposes no constraint on the channel count C, so any C the contract admits (e.g., 3 or 48) must still produce correct scaling."
+      }
+    ],
+    "scope_rationale": "The contract requires correct per-channel scaling for the operation as stated in problem.txt (out[n,c,h,w] = x[n,c,h,w] * scale[c]) and places no constraint on C; a call with a contract-admitted non-power-of-two C must still produce the specified scaling.",
+    "statement": "For a non-power-of-two channel count (e.g., C=3 or C=48), scale_channels fails (tl.arange(0, C) requires a power-of-two block size in Triton) instead of computing out = x * scale, violating the contract's requirement of correct scaling for arbitrary C.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:32:52Z"
+  },
+  {
+    "created_at": "2026-09-30T08:31:54Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:32:52Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t13_probe.py",
+              "sha256": "26179e344c168d99d0f22326ec643bd82dc0fe58fa7807bba9d4f525e7631a71"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t13_stdout.txt",
+              "sha256": "83bd1b7c2cd04c33817751e48dd0ab9d1c71eccd249908bf239b5bf4a6dee914"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t13_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t13_json_result.json",
+              "sha256": "7e184fc953e5defe28b98751f309870e837a1eb28e4b46f9038eef646bcf13e3"
+            }
+          ],
+          "duration_s": 7.043535,
+          "exit_code": 0,
+          "expected_signal": "NCHW-contiguous input yields out != x*scale[c] and matches scale[linear % C] pattern",
+          "json_parse_error": null,
+          "json_result": {
+            "layout": "NCHW contiguous",
+            "matches_scale_of_linear_mod_C": true,
+            "max_abs_err": 5.287692070007324,
+            "num_mismatch": 48,
+            "numel": 72,
+            "shape": [
+              2,
+              4,
+              3,
+              3
+            ]
+          },
+          "matches_scale_of_linear_mod_C": true,
+          "max_abs_err": 5.2877,
+          "num_mismatch": 48,
+          "numel": 72,
+          "shape": [
+            2,
+            4,
+            3,
+            3
+          ],
+          "stderr": "",
+          "stdout": "{\"layout\": \"NCHW contiguous\", \"shape\": [2, 4, 3, 3], \"max_abs_err\": 5.287692070007324, \"num_mismatch\": 48, \"numel\": 72, \"matches_scale_of_linear_mod_C\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "For a default NCHW-contiguous x of shape (2,4,3,3) with scale=[1,2,3,4], 48 of 72 elements mismatch the correct reference x*scale.view(1,C,1,1) (max abs err 5.29), and the output exactly equals x.reshape(-1)*scale[linear_index % C] (matches_scale_of_linear_mod_C=true). This confirms c2: on PyTorch-default NCHW inputs the kernel scales each element by the wrong per-channel factor.",
+        "supports": "confirmed",
+        "tool_event_id": "t13"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The wrapper passes raw data pointers of x and torch.empty_like(x), which preserve NCHW strides. Addressing pix*C+offs then spans elements across the n, h, w axes, so under the PyTorch-default NCHW layout each element is paired with scale[linear_index % C] rather than scale[c]. Nothing in the wrapper checks or converts the layout, so a caller passing a default-contiguous tensor gets silently wrong results.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract explicitly lists 'NCHW : the channel axis has the larger stride (PyTorch default)' as a common production layout and asks 'Does scale_channels() satisfy this contract?'; the kernel neither documents nor enforces its NHWC convention to the caller, so the PyTorch-default NCHW input is a contract-admitted case that yields wrong scaling."
+      }
+    ],
+    "scope_rationale": "problem.txt names NCHW as the PyTorch-default production layout and asks whether scale_channels() satisfies the contract for this operation; the wrapper silently returns wrong values for a default-contiguous NCHW input without enforcing or converting to its documented channels-last convention, so the contract's out = x * scale[c] is violated on this contract-admitted input.",
+    "statement": "When called on a PyTorch-default NCHW-contiguous 4-D tensor x of shape (N, C, H, W) without any channels-last conversion, scale_channels(x, scale, C) returns out[n,c,h,w] = x[n,c,h,w] * scale[(n*C*H*W + c*H*W + h*W + w) % C] instead of x[n,c,h,w] * scale[c], i.e., each element is scaled by a wrong per-channel factor (elementwise comparison against x * scale.view(1,C,1,1) fails for generic non-uniform scale).",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:32:52Z"
+  }
+]

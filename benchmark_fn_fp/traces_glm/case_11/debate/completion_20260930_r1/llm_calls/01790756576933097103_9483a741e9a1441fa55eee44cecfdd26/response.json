@@ -1,0 +1,81 @@
+{
+  "id": "chatcmpl-78820f0c052b4a2685b284319e5b3550",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three runtime probes for the three open claims: interleaved pairing correctness (c1), odd headdim garbage output (c2), and non-power-of-two headdim on the interleaved path (c3). Each compares against an independent PyTorch reference with per-lane metrics.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b826a889409d7a1b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_11/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ntorch.manual_seed(0)\\nS, H, D = 8, 3, 64\\ndev = \\\"cuda\\\"\\nx = torch.randn(S, H, D, device=dev, dtype=torch.float32)\\ncos = torch.randn(S, D // 2, device=dev)\\nsin = torch.randn(S, D // 2, device=dev)\\n\\nout = k.apply_rotary(x, cos, sin, True)\\n# independent reference: pair dim 2i with 2i+1\\nx0 = x[..., 0::2]; x1 = x[..., 1::2]\\nref = torch.empty_like(x)\\nref[..., 0::2] = x0 * cos[:, None, :] - x1 * sin[:, None, :]\\nref[..., 1::2] = x0 * sin[:, None, :] + x1 * cos[:, None, :]\\n\\ndiff = (out - ref).abs()\\nmax_err = diff.max().item()\\n# per-lane worst error\\nlane0 = diff[..., 0::2].max().item(); lane1 = diff[..., 1::2].max().item()\\n# also check cross-mode: does interleaved output match non-interleaved-style pairing?\\nxn0 = x[..., :D//2]; xn1 = x[..., D//2:]\\nrefn = torch.empty_like(x)\\nrefn[..., :D//2] = xn0*cos[:,None,:] - xn1*sin[:,None,:]\\nrefn[..., D//2:] = xn0*sin[:,None,:] + xn1*cos[:,None,:]\\ncross_err = (out - refn).abs().max().item()\\nprint(json.dumps({\\\"claim\\\":\\\"c1\\\",\\\"D\\\":D,\\\"max_abs_err_vs_interleaved_ref\\\":max_err,\\n  \\\"max_err_even_lanes\\\":lane0,\\\"max_err_odd_lanes\\\":lane1,\\n  \\\"max_abs_err_vs_noninterleaved_ref\\\":cross_err,\\n  \\\"matches_interleaved_ref\\\": max_err < 1e-5}))\\n\", \"expected_signal\": \"interleaved output matches per-pair reference (max_abs_err ~ 0)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-92d922da591be93a",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_11/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ntorch.manual_seed(1)\\nS, H, D = 4, 2, 65  # odd headdim\\ndev = \\\"cuda\\\"\\nx = torch.randn(S, H, D, device=dev, dtype=torch.float32)\\ncos = torch.randn(S, D // 2, device=dev)\\nsin = torch.randn(S, D // 2, device=dev)\\nout = k.apply_rotary(x, cos, sin, True)\\nref = torch.empty_like(x)\\nx0 = x[..., 0::2][:, :, :D//2]; x1 = x[..., 1::2][:, :, :D//2]\\nc = cos[:, None, :]; s = sin[:, None, :]\\nref[..., 0::2][:, :, :D//2] = x0*c - x1*s\\nref[..., 1::2][:, :, :D//2] = x0*s + x1*c\\n# reference for last dim: unspecified by contract; check what kernel produced\\nlast_dim_vals = out[..., -1]\\nx_last = x[..., -1]\\nprint(json.dumps({\\\"claim\\\":\\\"c2\\\",\\\"D\\\":D,\\\"last_dim_allclose_to_input\\\":bool(torch.allclose(last_dim_vals, x_last)),\\n  \\\"last_dim_equals_zero\\\":bool((last_dim_vals==0).all()),\\n  \\\"last_dim_max_abs_vs_input\\\":(last_dim_vals-x_last).abs().max().item(),\\n  \\\"note\\\":\\\"last dim never written; out=torch.empty_like so value depends on allocator; mismatch vs input is not per se a contract violation since pairing contract presumes even headdim\\\"}))\\n\", \"expected_signal\": \"last dim of output differs from input (unwritten garbage)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-841db27aa151160e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_11/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ntorch.manual_seed(2)\\nS, H, D = 6, 2, 96  # not power of two -> BLOCK_K=128\\ndev = \\\"cuda\\\"\\nx = torch.randn(S, H, D, device=dev, dtype=torch.float32)\\ncos = torch.randn(S, D // 2, device=dev)\\nsin = torch.randn(S, D // 2, device=dev)\\nout = k.apply_rotary(x, cos, sin, True)\\nx0 = x[..., 0::2]; x1 = x[..., 1::2]\\nref = torch.empty_like(x)\\nref[..., 0::2] = x0*cos[:,None,:] - x1*sin[:,None,:]\\nref[..., 1::2] = x0*sin[:,None,:] + x1*cos[:,None,:]\\ndiff = (out - ref).abs()\\nprint(json.dumps({\\\"claim\\\":\\\"c3\\\",\\\"D\\\":D,\\\"BLOCK_K\\\":128,\\n  \\\"max_abs_err_interleaved\\\":diff.max().item(),\\n  \\\"max_err_even_lanes\\\":diff[...,0::2].max().item(),\\n  \\\"max_err_odd_lanes\\\":diff[...,1::2].max().item(),\\n  \\\"allclose_1e-5\\\":bool(torch.allclose(out, ref, atol=1e-5))}))\\n\", \"expected_signal\": \"interleaved path with non-power-of-two headdim matches per-pair reference\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756577,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1356,
+    "prompt_tokens": 19514,
+    "total_tokens": 20870,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 10,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

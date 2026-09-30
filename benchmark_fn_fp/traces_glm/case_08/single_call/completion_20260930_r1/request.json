@@ -1,0 +1,18 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are verifying whether a GPU (Triton) kernel implementation is correct.\n\nYou will be given:\n1. A problem statement describing the operation's contract and its reference behavior.\n2. The kernel implementation under test.\n\nDecide one of:\n- \"reject\": the implementation has a real defect / violates the stated contract.\n- \"trust\": the implementation is correct, or is an equally valid alternative implementation.\n- \"needs_more_evidence\": you genuinely cannot tell.\n\nAnswer with the JSON object required by the output schema.\nOutput schema:\n{\"type\": \"object\", \"required\": [\"verdict\", \"confidence\", \"reason\"], \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": [\"trust\", \"reject\", \"needs_more_evidence\"], \"description\": \"'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell.\"}, \"confidence\": {\"type\": \"number\", \"description\": \"0.0 to 1.0.\"}, \"reason\": {\"type\": \"string\", \"description\": \"One or two sentences.\"}}, \"additionalProperties\": false}"
+    },
+    {
+      "role": "user",
+      "content": "## Problem statement (contract + reference behavior)\n\nOperation: stochastic rounding of a tensor onto a coarse grid, using Triton's\ncounter-based Philox RNG (tl.rand), as used by low-precision training kernels\nwhen casting high-precision accumulators down to a storage format.\n\n`stochastic_round_to_grid(x, seed)` must round each element to one of the two\nneighbouring multiples of STEP, choosing the upper one with probability equal\nto the element's fractional distance to it:\n\n    lower = floor(x / STEP) * STEP\n    P(out = lower + STEP) = (x - lower) / STEP,   otherwise out = lower\n\nso that E[out] == x. The randomness is drawn from the supplied seed.\n\nInput domain: `x` is a 1-D tensor whose length is a power of two and fits in a\nsingle block.\n\n\n## Kernel implementation under test (kernel.py)\n\n```python\nimport torch\nimport triton\nimport triton.language as tl\n\nSTEP = 0.05\n\n\n@triton.jit\ndef stochastic_round_kernel(x_ptr, out_ptr, seed, N: tl.constexpr, STEP: tl.constexpr):\n    offs = tl.arange(0, N)\n    x = tl.load(x_ptr + offs)\n    lower = tl.floor(x / STEP) * STEP\n    upper = lower + STEP\n    p_up = (x - lower) / STEP\n    r = tl.rand(seed, offs)  # real Triton Philox RNG\n    out = tl.where(r < p_up, upper, lower)\n    tl.store(out_ptr + offs, out)\n\n\ndef stochastic_round_to_grid(x: torch.Tensor, seed: int) -> torch.Tensor:\n    N = x.shape[0]\n    out = torch.empty_like(x)\n    stochastic_round_kernel[(1,)](x, out, seed, N=N, STEP=STEP)\n    return out\n\n```\n\nIs this implementation correct?"
+    }
+  ],
+  "response_format": {
+    "type": "json_object"
+  },
+  "reasoning_effort": "low"
+}

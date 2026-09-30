@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-9fe756e2e9e8410b8b6892a3fe44e6e5",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Launching two independent probes: c1 (absmax > 4.0 clipping) and c2 (absmax < 4.0 resolution loss), comparing kernel output vs the contract's per-row reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-ad942c345a307946",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_14/kernel.py\\\")\\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\\n\\ndef ref(x):\\n    absmax = x.abs().amax(dim=-1, keepdim=True).clamp_min(1e-10)\\n    scale = absmax / 127\\n    q = torch.clamp(torch.round(x / scale), -127, 127)\\n    return q * scale\\n\\ntorch.manual_seed(0)\\n# rows with absmax > 4.0\\nx = torch.randn(8, 128, device=\\\"cuda\\\") * 3.0\\nx[0, 0] = 10.0\\nout = m.quant_dequant_int8(x)\\nr = ref(x)\\nerr = (out - r).abs()\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"max_abs_err_kernel_vs_contract_reference\\\",\\n  \\\"kernel_max_out\\\": float(out.abs().max()),\\n  \\\"kernel_row0_saturates_at_4\\\": float(out[0].abs().max()),\\n  \\\"ref_row0_saturates_at\\\": float(r[0].abs().max()),\\n  \\\"max_abs_err\\\": float(err.max()),\\n  \\\"input_row_absmax\\\": [float(a) for a in x.abs().amax(dim=-1)],\\n}))\", \"expected_signal\": \"kernel output saturates at ±4.0 and deviates from per-row reference for rows with absmax > 4.0\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-8ce7a52079cb6fab",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_14/kernel.py\\\")\\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\\n\\ndef ref(x):\\n    absmax = x.abs().amax(dim=-1, keepdim=True).clamp_min(1e-10)\\n    scale = absmax / 127\\n    q = torch.clamp(torch.round(x / scale), -127, 127)\\n    return q * scale\\n\\ntorch.manual_seed(1)\\n# low-magnitude rows, absmax ~0.05\\nx = torch.randn(8, 128, device=\\\"cuda\\\") * 0.02\\nout = m.quant_dequant_int8(x)\\nr = ref(x)\\nerr = (out - r).abs()\\nrow_absmax = x.abs().amax(dim=-1)\\ncontract_bound = (row_absmax / 127 / 2)  # <= scale/2 rounding bound\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"max_abs_err_kernel_vs_contract_reference\\\",\\n  \\\"input_row_absmax\\\": [float(a) for a in row_absmax],\\n  \\\"max_abs_err\\\": float(err.max()),\\n  \\\"contract_scale_half_bound\\\": float(contract_bound.max()),\\n  \\\"err_exceeds_contract_bound\\\": bool((err.amax(dim=-1) > contract_bound).all()),\\n  \\\"ratio_err_to_bound\\\": float((err.amax(dim=-1) / contract_bound).min()),\\n}))\", \"expected_signal\": \"dequant error far above the contract's ≤ scale/2 bound for low-magnitude rows\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch two probes for c1 and c2 (independent).",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790756696,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 747,
+    "prompt_tokens": 17820,
+    "total_tokens": 18567,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 13,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 13
+    }
+  }
+}

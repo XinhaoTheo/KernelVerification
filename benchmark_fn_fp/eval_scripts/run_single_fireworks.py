@@ -12,7 +12,7 @@ REPO = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from baseline2_single_llm import SYSTEM_PROMPT, USER_TEMPLATE, VERDICT_SCHEMA
-from models import profile_for
+from models import profile_for, profile_for_trace, pricing_snapshot
 from datasets import DATASETS, cases_dir as dataset_cases_dir, checked_case_hashes
 from traces import (reserve_trace, write_trace, new_trial_id, single_call_readable_files,
                     trace_path, update_trace_metadata)
@@ -25,7 +25,8 @@ def run_one(name, *, dataset, trial, max_tokens, timeout_s=1800, reasoning_effor
     if reasoning_effort not in {"default", "low", "medium", "high"}:
         raise ValueError("Unsupported reasoning effort")
     from openai import OpenAI
-    profile = profile_for(MODEL)
+    rates = pricing_snapshot(MODEL)
+    profile = profile_for_trace(MODEL, {"pricing_snapshot": rates})
     cases_dir = dataset_cases_dir(REPO, dataset)
     hashes = checked_case_hashes(REPO, dataset, name)
     code = (cases_dir/name/"kernel.py").read_text()
@@ -68,7 +69,8 @@ def run_one(name, *, dataset, trial, max_tokens, timeout_s=1800, reasoning_effor
             "stop_reason":choice["finish_reason"],"max_tokens":max_tokens,"elapsed_s":time.monotonic()-started,
             **hashes,"prompt_variant":"original","estimated_usd":
             (usage.prompt_tokens*profile.price_in+usage.completion_tokens*profile.price_out)/1e6,
-            "pricing":"project profile estimate; not invoice; excludes GPU and unreported HTTP usage"}
+            "pricing_snapshot":rates,
+            "pricing":"dated list-price estimate; not invoice; excludes GPU and unreported HTTP usage"}
         files={"raw_response.json":json.dumps(raw_response,indent=2),"response_text.json":raw,
                "usage.json":json.dumps(meta,indent=2),"runner_error.txt":""}
         files.update(single_call_readable_files(system=system,user=prompt,response=raw,

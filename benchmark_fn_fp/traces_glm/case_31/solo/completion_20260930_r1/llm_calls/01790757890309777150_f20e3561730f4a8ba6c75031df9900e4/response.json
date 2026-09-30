@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-796a512130284560895d3c899bcea2db",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The first probe failed only because block size 4 violates Triton's min dot dimension (≥16), not for any contract reason. I'll rerun with block size 32 and per-sequence lengths whose total is divisible (e.g. 40+24=64) so the buggy EVEN_SEQ_KBLOCK flag is triggered.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9c100143c9ec9afc",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_31/kernel.py\\\")\\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\\n\\ntorch.manual_seed(0)\\ndev='cuda'\\nBS=32  # >= 16, power of 2\\n\\ndef ref(q,k,v,cuq,cuk,mask,qbs,kbs,scale):\\n    # dense per-sequence reference, non-causal\\n    out=torch.zeros_like(q)\\n    for b in range(len(cuq)-1):\\n        qs,qe=int(cuq[b]),int(cuq[b+1]); ks,ke=int(cuk[b]),int(cuk[b+1])\\n        qb=q[qs:qe]; kb=k[ks:ke]; vb=v[ks:ke]\\n        s=(qb@kb.transpose(-1,-2))*scale\\n        p=torch.softmax(s,dim=-1)\\n        out[qs:qe]=p@vb\\n    return out\\n\\nresults={}\\ncases=[([40,24],[40,24]), ([50,14],[50,14]), ([33,31],[33,31])]\\nfor lens_q, lens_k in cases:\\n    cuq=torch.tensor([0]+list(torch.tensor(lens_q).cumsum(0)),device=dev,dtype=torch.int32)\\n    cuk=torch.tensor([0]+list(torch.tensor(lens_k).cumsum(0)),device=dev,dtype=torch.int32)\\n    tq,tk=int(cuq[-1]),int(cuk[-1])\\n    hd=64; nhq,nhk=2,2\\n    q=torch.randn(tq,nhq,hd,device=dev); k=torch.randn(tk,nhk,hd,device=dev); v=torch.randn(tk,nhk,hd,device=dev)\\n    tqb=sum((l+BS-1)//BS for l in lens_q); tkb=sum((l+BS-1)//BS for l in lens_k)\\n    mask=torch.ones(nhq,tqb,tkb,dtype=torch.bool,device=dev)\\n    scale=hd**-0.5\\n    got=m.block_sparse_attention(q,k,v,cuq,cuk,mask,BS,BS,causal=False,softmax_scale=scale)\\n    exp=ref(q,k,v,cuq,cuk,mask,BS,BS,scale)\\n    d=(got-exp).abs()\\n    # per-row max error\\n    rowerr=d.max(dim=-1).values.max(dim=-1).values  # [tq]\\n    results[f\\\"lens={lens_q}\\\"]={\\n      \\\"max_abs_err\\\": d.max().item(),\\n      \\\"total_div_by_32\\\": (tk%BS==0),\\n      \\\"per_seq_div\\\": [ (l%BS==0) for l in lens_k ],\\n      \\\"err_rows_seq0_end\\\": rowerr[:lens_q[0]].max().item(),\\n      \\\"err_rows_seq1\\\": rowerr[lens_q[0]:].max().item(),\\n    }\\nprint(json.dumps(results))\\n\", \"timeout_s\": 240}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "The probe failed because block size 4 < 16 min dot size. Use block size 32 with key lengths e.g. 40+24=64 divisible by 32 but partial per batch. Write a new probe.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790757891,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 785,
+    "prompt_tokens": 18988,
+    "total_tokens": 19773,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 46,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4608,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 46
+    }
+  }
+}

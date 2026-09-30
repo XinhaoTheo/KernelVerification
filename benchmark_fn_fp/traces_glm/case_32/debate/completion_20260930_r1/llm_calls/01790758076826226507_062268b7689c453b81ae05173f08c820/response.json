@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-422c77a211144e8788e1573283f83da8",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll probe c1 by running the kernel repeatedly on tied-key and stress rows, checking determinism, sortedness, permutation validity, and agreement with a stable reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b1d18ec0c41b1ae8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_32/kernel.py\\\")\\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\\n\\ndev = 'cuda'\\nresults = {}\\ncases = []\\n# duplicate-heavy rows, various W including non-power-of-two\\nfor W in [2,3,4,5,7,8]:\\n    torch.manual_seed(0)\\n    keys = torch.randint(0, 3, (256, W), device=dev, dtype=torch.int64)\\n    cases.append((f\\\"dup_W{W}\\\", keys))\\n# all-equal rows\\ncases.append((\\\"all_eq\\\", torch.full((64, 4), 7, device=dev, dtype=torch.int64)))\\n# INT64_MAX rows\\ncases.append((\\\"maxkey\\\", torch.full((64, 3), 0x7FFFFFFFFFFFFFFF, device=dev, dtype=torch.int64)))\\n# random int64 full range\\ntorch.manual_seed(1)\\ncases.append((\\\"rand\\\", torch.randint(-(2**63), 2**63-1, (512, 6), device=dev, dtype=torch.int64)))\\n\\nfor name, keys in cases:\\n    ref_perm = torch.argsort(keys.cpu(), dim=1, stable=True).to(dev)\\n    ref_sorted = torch.gather(keys, 1, ref_perm)\\n    outs = []\\n    for r in range(10):\\n        s, p = m.triton_argsort(keys.clone())\\n        torch.cuda.synchronize()\\n        outs.append((s.clone(), p.clone()))\\n    sorted_ok = all(torch.equal(s, ref_sorted) for s,_ in outs)\\n    perm_ok = all(torch.equal(p, ref_perm) for _,p in outs)\\n    determinism = all(torch.equal(outs[0][0], s) and torch.equal(outs[0][1], p) for s,p in outs[1:])\\n    perm_valid = all(bool(torch.equal(torch.sort(p[i]).values, torch.arange(p.shape[1], device=dev, dtype=torch.int64))) for n in range(1) for p in [outs[0][1]] for i in [0]) if True else False\\n    # perm validity all rows\\n    pv = True\\n    for p in [outs[0][1]]:\\n        for i in range(p.shape[0]):\\n            if not torch.equal(torch.sort(p[i]).values, torch.arange(p.shape[1], device=dev, dtype=torch.int64)):\\n                pv = False; break\\n    # gather consistency\\n    gather_ok = all(torch.equal(torch.gather(keys,1,p), s) for s,p in outs)\\n    results[name] = {\\\"matches_stable_reference\\\": bool(sorted_ok and perm_ok),\\n                     \\\"sorted_keys_match_ref\\\": bool(sorted_ok),\\n                     \\\"perm_match_stable_ref\\\": bool(perm_ok),\\n                     \\\"deterministic_10_runs\\\": bool(determinism),\\n                     \\\"perm_is_permutation\\\": bool(pv),\\n                     \\\"gather_consistent\\\": bool(gather_ok),\\n                     \\\"sample_kernel_perm_row0\\\": outs[0][1][0].cpu().tolist(),\\n                     \\\"ref_perm_row0\\\": ref_perm[0].cpu().tolist()}\\n\\nprint(json.dumps(results))\\n\", \"expected_signal\": \"nondeterministic or mis-ordered output across repeated runs would confirm stale partner reads\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Only c1 is open. I'll run a probe for c1: repeated runs checking determinism and correctness vs stable reference, across duplicate-heavy rows, non-power-of-two W, INT64_MAX, permutation validity.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790758077,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 801,
+    "prompt_tokens": 18380,
+    "total_tokens": 19181,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 44,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 44
+    }
+  }
+}

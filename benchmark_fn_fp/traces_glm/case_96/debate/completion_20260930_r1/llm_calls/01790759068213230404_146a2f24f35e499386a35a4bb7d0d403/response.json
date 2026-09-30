@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-bf2ab704f5a44bf2a13e570b25f13da9",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run runtime probes for both open claims on the exact make_inputs() workload: c1 (full kernel E vs float64 reference, plus an FP16-quantized-p simulation to isolate the FP16 step) and c2 (same pipeline without the FP16 quantization, isolating FP32 score/reduction error). These are independent, so I'm launching both together.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-97a35d4d59b1ee9d",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport sys, json\\nsys.path.insert(0, \\\"/root/pilot_cases/case_96\\\")\\nimport torch, numpy as np\\nimport kernel as K\\n\\nq, k, v = K.make_inputs(\\\"cuda\\\")\\nout = K.run(q, k, v)\\ntorch.cuda.synchronize()\\n\\n# float64 reference on the same float32 inputs\\nqd = q.double().cpu().numpy(); kd = k.double().cpu().numpy(); vd = v.double().cpu().numpy()\\nz = kd @ qd / np.sqrt(qd.shape[0])\\np = np.exp(z - z.max()); p /= p.sum()\\nref = p @ vd\\nout_np = out.float().cpu().numpy()\\n\\nnorm_ref = np.linalg.norm(ref)\\ndenom = max(norm_ref, 0.001*np.sqrt(ref.size))\\nE = np.linalg.norm(out_np - ref) / denom\\nfinite = bool(np.all(np.isfinite(out_np)))\\n\\n# simulate: float32 softmax pipeline with FP16 rounding of p (no triton), isolate the fp16 step\\nz32 = k.float().cpu().numpy().astype(np.float64)  # not this; do pure fp32:\\nz32 = (k.float().cpu().numpy().astype(np.float64) @ q.float().cpu().numpy().astype(np.float64))\\n# strict fp32 simulation in numpy is hard; use torch float32 on cpu\\nwith torch.no_grad():\\n    kt = k.float().cpu(); qt = q.float().cpu(); vt = v.float().cpu()\\n    s = (kt @ qt) / np.sqrt(qt.shape[0], dtype=np.float32)\\n    p32 = torch.softmax(s.float(), dim=0)\\n    p16 = p32.to(torch.float16).to(torch.float32)\\n    sim_fp16 = (p16[:, None] * vt).sum(0).numpy()\\n    sim_fp32 = (p32[:, None] * vt).sum(0).numpy()\\nE_sim_fp16 = np.linalg.norm(sim_fp16 - ref) / denom\\nE_sim_fp32 = np.linalg.norm(sim_fp32 - ref) / denom\\n\\nprint(json.dumps({\\n    \\\"E_kernel\\\": float(E), \\\"tolerance\\\": 0.001, \\\"finite\\\": finite,\\n    \\\"norm_ref\\\": float(norm_ref), \\\"denom\\\": float(denom),\\n    \\\"E_sim_fp32_softmax_fp16_p\\\": float(E_sim_fp16),\\n    \\\"E_sim_fp32_softmax_fp32_p\\\": float(E_sim_fp32),\\n    \\\"max_abs_err_kernel\\\": float(np.abs(out_np - ref).max()),\\n}))\\n\", \"expected_signal\": \"E_kernel > 0.001 confirms c1 (budget violation driven by FP16 rounding of p); E_kernel <= 0.001 rebuts\", \"timeout_s\": 180}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-9c77d9913aed770b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport sys, json\\nsys.path.insert(0, \\\"/root/pilot_cases/case_96\\\")\\nimport torch, numpy as np\\nimport kernel as K\\n\\nq, k, v = K.make_inputs(\\\"cuda\\\")\\n\\n# float64 reference\\nqd = q.double().cpu().numpy(); kd = k.double().cpu().numpy(); vd = v.double().cpu().numpy()\\nz = kd @ qd / np.sqrt(qd.shape[0])\\np = np.exp(z - z.max()); p /= p.sum()\\nref = p @ vd\\nnorm_ref = np.linalg.norm(ref)\\ndenom = max(norm_ref, 0.001*np.sqrt(ref.size))\\n\\n# FP32-only pipeline (no FP16 rounding of p): isolates FP32 score/reduction error\\nwith torch.no_grad():\\n    kt = k.float().cpu(); qt = q.float().cpu(); vt = v.float().cpu()\\n    s = (kt @ qt) / np.sqrt(qt.shape[0], dtype=np.float32)\\n    p32 = torch.softmax(s.float(), dim=0)\\n    sim_fp32 = (p32[:, None] * vt).sum(0).numpy()\\nE_sim_fp32 = np.linalg.norm(sim_fp32 - ref) / denom\\n\\n# also GPU fp32 pipeline via torch\\nwith torch.no_grad():\\n    sG = (k.float() @ q.float()) / np.float32(np.sqrt(q.shape[0]))\\n    pG = torch.softmax(sG, dim=0)\\n    outG = (pG[:, None] * v.float()).sum(0)\\n    outG = outG.float().cpu().numpy()\\nE_gpu_fp32 = np.linalg.norm(outG - ref) / denom\\n\\nprint(json.dumps({\\n    \\\"E_fp32_only_cpu_pipeline\\\": float(E_sim_fp32),\\n    \\\"E_fp32_only_gpu_pipeline\\\": float(E_gpu_fp32),\\n    \\\"tolerance\\\": 0.001,\\n    \\\"norm_ref\\\": float(norm_ref),\\n}))\\n\", \"expected_signal\": \"E for an FP32-only pipeline (no FP16 p rounding) > 0.001 confirms c2; <= 0.001 rebuts\", \"timeout_s\": 180}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790759068,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1146,
+    "prompt_tokens": 20087,
+    "total_tokens": 21233,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

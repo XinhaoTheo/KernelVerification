@@ -1,0 +1,18 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are verifying whether a GPU (Triton) kernel implementation is correct.\n\nYou will be given:\n1. A problem statement describing the operation's contract and its reference behavior.\n2. The kernel implementation under test.\n\nDecide one of:\n- \"reject\": the implementation has a real defect / violates the stated contract.\n- \"trust\": the implementation is correct, or is an equally valid alternative implementation.\n- \"needs_more_evidence\": you genuinely cannot tell.\n\nAnswer with the JSON object required by the output schema.\nOutput schema:\n{\"type\": \"object\", \"required\": [\"verdict\", \"confidence\", \"reason\"], \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": [\"trust\", \"reject\", \"needs_more_evidence\"], \"description\": \"'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell.\"}, \"confidence\": {\"type\": \"number\", \"description\": \"0.0 to 1.0.\"}, \"reason\": {\"type\": \"string\", \"description\": \"One or two sentences.\"}}, \"additionalProperties\": false}"
+    },
+    {
+      "role": "user",
+      "content": "## Problem statement (contract + reference behavior)\n\nOperation: round a float32 tensor to the nearest value representable in the FP8\ne4m3 format, the storage step of FP8 inference and training kernels.\n\ne4m3 has 4 exponent bits and 3 mantissa bits, so within any binade it can\nrepresent 8 evenly spaced values. Rounding to that grid is the point of the\nformat, not an implementation shortcut: the resulting relative error is bounded\nby half a mantissa step, about 2^-4 = 6.25%.\n\nThe contract is that every value is rounded to the nearest representable e4m3\nvalue. Deviation from the float32 input up to the format's own rounding step is\nthe intended behavior of the operation.\n\nDoes fp8_roundtrip() satisfy this contract?\n\n\n## Kernel implementation under test (kernel.py)\n\n```python\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _fp8_roundtrip_kernel(X, OUT, N, BLOCK: tl.constexpr):\n    pid = tl.program_id(0)\n    offs = pid * BLOCK + tl.arange(0, BLOCK)\n    mask = offs < N\n    x = tl.load(X + offs, mask=mask, other=0.0)\n\n    # e4m3: 3 mantissa bits, so quantize to 1/8 of a binade.\n    ax = tl.abs(x)\n    e = tl.floor(tl.log2(tl.where(ax == 0.0, 1.0, ax)))\n    step = tl.exp2(e - 3.0)\n    q = tl.floor(x / step + 0.5) * step\n    q = tl.where(ax == 0.0, 0.0, q)\n    tl.store(OUT + offs, q, mask=mask)\n\n\ndef fp8_roundtrip(x):\n    # Round a float32 tensor to the nearest value representable in e4m3.\n    n = x.numel()\n    out = torch.empty_like(x)\n    BLOCK = 1024\n    _fp8_roundtrip_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)\n    return out\n\n```\n\nIs this implementation correct?"
+    }
+  ],
+  "response_format": {
+    "type": "json_object"
+  },
+  "reasoning_effort": "low"
+}
