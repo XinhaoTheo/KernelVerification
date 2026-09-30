@@ -29,8 +29,8 @@ as corrections. Unverifiable reported labels cannot activate the gate.
     if len(trials) != 2 or len(set(trials)) != 2 or not cases or len(set(cases)) != len(cases):
         raise ValueError("Need two distinct trials and a nonempty unique case list")
     designated = [row for row in rows if row.get("case") in cases
-                  and row.get("trial") in trials and row.get("arm") in ARMS]
-    slots = {(row["trial"], row["case"], row["arm"]): row for row in designated}
+                  and base_report.experiment_trial(row) in trials and row.get("arm") in ARMS]
+    slots = {(base_report.experiment_trial(row), row["case"], row["arm"]): row for row in designated}
     if len(slots) != len(designated):
         raise ValueError("Duplicate designated slot")
     comparisons, rounds = [], []
@@ -99,7 +99,8 @@ def render(result):
     lines = ["# Precision-reference transfer: case_76–case_81", "", f"Generated: {result['generated_at']}", "",
         "Follow the [prospective protocol](PRECISION_TRANSFER_PROTOCOL.md). This is a conditional fresh-seed confirmation within a mechanism selected on development cases.", "",
         "All arms share GLM low and a 32768 cumulative output-token ceiling. Input tokens, actual spend and GPU time are not matched. Every attempted slot remains visible; extra trials cannot replace designated slots.", "",
-        "| Trial | Arm | Attempts | Correct labels | Outcomes | Recorded API estimate |",
+        "Trace trial names are local rN identifiers; experiment batches below use preserved original_trial metadata.", "",
+        "| Experiment batch | Arm | Attempts | Correct labels | Outcomes | Recorded API estimate |",
         "|---|---|---:|---:|---|---:|"]
     for group in result["groups"]:
         denominator = len(CASES) if group["trial"] in TRIALS else group["attempts"]

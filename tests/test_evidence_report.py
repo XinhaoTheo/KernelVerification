@@ -121,6 +121,15 @@ def gate(rows):
     return report.pilot_gate(rows)[1]
 
 
+def test_numeric_trial_names_preserve_original_evidence_batches():
+    rows = pilot_rows()
+    renamed = [{**row, "original_trial": row["trial"], "trial": f"r{index + 1}"}
+               for index, row in enumerate(rows)]
+    assert report.pilot_gate(renamed) == report.pilot_gate(rows)
+    renamed[0]["original_trial"] = "completion_20260930_r1"
+    assert not gate(renamed)["all_two_round_slots_terminal"]
+
+
 def test_same_case_must_replicate_in_designated_rounds():
     rows = pilot_rows()
     assert gate(rows)["expansion_numerical_gate"]

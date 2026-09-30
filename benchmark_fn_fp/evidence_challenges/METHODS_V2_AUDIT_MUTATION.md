@@ -1,5 +1,7 @@
 # case_70/case_71 methods-v2 trace audit
 
+存储命名更新（2026-09-30）：本文批次标签及 r1/r2 轮次简称保留原实验含义，原标签记在 `trace_meta.json.original_trial`。统一目录使用每个 case/arm 下的 `rN`；见[命名与迁移说明](../TRACES.md)。
+
 2026-09-24。范围：`ea_methods_v2_r1` 的 case_70/case_71 × solo/debate，共四次带工具运行。只审查已经保存的源文件、冻结真值、原始 API 请求/响应和执行证据；没有追加 GPU 或模型调用。
 
 **四次最终判断均正确，主实验均遵守“全部更新完成后观察保留对象”的合同。Solo 已经独立识别并正确测试返回值别名问题，本组没有观察到 debate 的额外判断优势。**
@@ -15,16 +17,16 @@
 
 ## 决定性证据和观察时间
 
-- **case_70 solo**：[t7 probe](../traces_glm/case_70/solo/ea_methods_v2_r1/probes/t7_probe.py)、[实际输出](../traces_glm/case_70/solo/ea_methods_v2_r1/probes/t7_stdout.txt)、[最终判断](../traces_glm/case_70/solo/ea_methods_v2_r1/verdict.json)。从未更新的实际 FP32 输入保存 FP64 数值，独立递推时为每个目标历史值做 `.copy()`；原样调用 `kernel.run_sequence`，等函数完成才 `torch.stack(hist)`。候选返回值没有在更新之间被克隆。历史误差、最终状态、梯度原始字节、形状和有限性均通过。最终结论明确指出别名本身不构成失败，实际误差小于容差。
-- **case_70 debate**：[t14 历史 probe](../traces_glm/case_70/debate/ea_methods_v2_r1/probes/t14_probe.py)、[结果](../traces_glm/case_70/debate/ea_methods_v2_r1/probes/t14_stdout.txt)采用相同的正确观察顺序：先保存独立输入，再运行完整候选序列，最后才转换和堆叠候选历史。参考每步独立 `.clone()`，不存在共同别名。[t15 最终状态](../traces_glm/case_70/debate/ea_methods_v2_r1/probes/t15_stdout.txt)和 [t16 梯度字节](../traces_glm/case_70/debate/ea_methods_v2_r1/probes/t16_stdout.txt)各用新鲜输入验证另外两项合同。三个 probe 都有实际 GPU 执行，分别覆盖历史、最终状态和禁止修改的梯度。
-- **case_71 solo**：[t8 probe](../traces_glm/case_71/solo/ea_methods_v2_r1/probes/t8_probe.py)、[结果](../traces_glm/case_71/solo/ea_methods_v2_r1/probes/t8_stdout.txt)、[最终判断](../traces_glm/case_71/solo/ea_methods_v2_r1/verdict.json)。更新前保留参数和动量，调用原始 `run_sequence` 后才堆叠原返回对象；`.float()` 位于整个序列结束之后，不会修复候选历史。独立 FP64 参考对每个目标值克隆，测得 89.8980% 历史误差，超过 2.5% 阈值。最终状态相对误差约 `5.05e-8` / `4.51e-8`，梯度与重新生成的规范输入相等，输出形状和有限性正常。
-- **case_71 debate**：[t12 历史 probe](../traces_glm/case_71/debate/ea_methods_v2_r1/probes/t12_probe.py)、[结果](../traces_glm/case_71/debate/ea_methods_v2_r1/probes/t12_stdout.txt)先建立独立 FP64 逐步目标，再运行候选，明确同步后堆叠保留对象。历史误差与冻结真值一致。[t13 状态与梯度 probe](../traces_glm/case_71/debate/ea_methods_v2_r1/probes/t13_probe.py)、[结果](../traces_glm/case_71/debate/ea_methods_v2_r1/probes/t13_stdout.txt)在另一份新鲜状态上验证最终参数/动量、float32 dtype、有限性、形状和梯度字节不变。[最终判断](../traces_glm/case_71/debate/ea_methods_v2_r1/verdict.json)正确指出初始 probe 的参考也别名化，因此初始零误差不能推翻独立失败证据。
+- **case_70 solo**：[t7 probe](../traces_glm/case_70/solo/r1/probes/t7_probe.py)、[实际输出](../traces_glm/case_70/solo/r1/probes/t7_stdout.txt)、[最终判断](../traces_glm/case_70/solo/r1/verdict.json)。从未更新的实际 FP32 输入保存 FP64 数值，独立递推时为每个目标历史值做 `.copy()`；原样调用 `kernel.run_sequence`，等函数完成才 `torch.stack(hist)`。候选返回值没有在更新之间被克隆。历史误差、最终状态、梯度原始字节、形状和有限性均通过。最终结论明确指出别名本身不构成失败，实际误差小于容差。
+- **case_70 debate**：[t14 历史 probe](../traces_glm/case_70/debate/r1/probes/t14_probe.py)、[结果](../traces_glm/case_70/debate/r1/probes/t14_stdout.txt)采用相同的正确观察顺序：先保存独立输入，再运行完整候选序列，最后才转换和堆叠候选历史。参考每步独立 `.clone()`，不存在共同别名。[t15 最终状态](../traces_glm/case_70/debate/r1/probes/t15_stdout.txt)和 [t16 梯度字节](../traces_glm/case_70/debate/r1/probes/t16_stdout.txt)各用新鲜输入验证另外两项合同。三个 probe 都有实际 GPU 执行，分别覆盖历史、最终状态和禁止修改的梯度。
+- **case_71 solo**：[t8 probe](../traces_glm/case_71/solo/r1/probes/t8_probe.py)、[结果](../traces_glm/case_71/solo/r1/probes/t8_stdout.txt)、[最终判断](../traces_glm/case_71/solo/r1/verdict.json)。更新前保留参数和动量，调用原始 `run_sequence` 后才堆叠原返回对象；`.float()` 位于整个序列结束之后，不会修复候选历史。独立 FP64 参考对每个目标值克隆，测得 89.8980% 历史误差，超过 2.5% 阈值。最终状态相对误差约 `5.05e-8` / `4.51e-8`，梯度与重新生成的规范输入相等，输出形状和有限性正常。
+- **case_71 debate**：[t12 历史 probe](../traces_glm/case_71/debate/r1/probes/t12_probe.py)、[结果](../traces_glm/case_71/debate/r1/probes/t12_stdout.txt)先建立独立 FP64 逐步目标，再运行候选，明确同步后堆叠保留对象。历史误差与冻结真值一致。[t13 状态与梯度 probe](../traces_glm/case_71/debate/r1/probes/t13_probe.py)、[结果](../traces_glm/case_71/debate/r1/probes/t13_stdout.txt)在另一份新鲜状态上验证最终参数/动量、float32 dtype、有限性、形状和梯度字节不变。[最终判断](../traces_glm/case_71/debate/r1/verdict.json)正确指出初始 probe 的参考也别名化，因此初始零误差不能推翻独立失败证据。
 
 四份主历史测量与[冻结 GPU 真值](private_data/validation_gpu.json)一致，仅末位浮点舍入有约 `1e-16` 差异。所有实验使用合同的固定种子、六步更新和正确的 `max(norm(target), 0.1)` 分母；没有增加范围外输入，也没有修改候选实现。所有候选对象均在完整六步事务后才被观察，独立参考却保留各步数值：这里区分了两种必须不同的存储语义。
 
 ## 失败和证据限制
 
-case_71 solo 的首次 [t7 probe](../traces_glm/case_71/solo/ea_methods_v2_r1/probes/t7_probe.py)已经执行 GPU 序列，但在诊断 `torch.equal(H[t], w.cpu())` 时混用了 CUDA 与 CPU 张量，[运行失败](../traces_glm/case_71/solo/ea_methods_v2_r1/probes/t7_stderr.txt)。此失败未被当作合同反例；后续 t8 从新鲜输入修复设备比较，得到有效结果。原失败代码和 stderr 均保留。
+case_71 solo 的首次 [t7 probe](../traces_glm/case_71/solo/r1/probes/t7_probe.py)已经执行 GPU 序列，但在诊断 `torch.equal(H[t], w.cpu())` 时混用了 CUDA 与 CPU 张量，[运行失败](../traces_glm/case_71/solo/r1/probes/t7_stderr.txt)。此失败未被当作合同反例；后续 t8 从新鲜输入修复设备比较，得到有效结果。原失败代码和 stderr 均保留。
 
 四次运行还各遇到遗漏 `scope_rationale` 的可恢复 claim 参数错误；后续均修复。Debate 的 Skeptic 在最终 verdict 前复核了完成的证据，没有要求把容差合同改成“禁止别名”。
 

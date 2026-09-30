@@ -4,7 +4,7 @@ from pathlib import Path
 from summarize_traces import build_report, BENCHMARK
 from case_registry import case_sort_key, load_registry
 from index_cases import DATASET_LABELS
-from traces import iter_trace_records
+from traces import iter_trace_records, trace_selection_key, trial_sort_key
 
 ARMS = ("single_call", "solo", "debate")
 FINAL_VERDICTS = {"trust", "reject", "needs_more_evidence"}
@@ -35,8 +35,8 @@ def build_coverage(rows, details, metadata_by_path):
     for case, detail in sorted(details.items(), key=lambda item: case_sort_key(item[0])):
         arms = {}
         for arm in ARMS:
-            attempts = sorted(grouped[(case, arm)], key=lambda row: (
-                metadata_by_path.get(row["path"], {}).get("created_at") or "", row["path"]))
+            attempts = sorted(grouped[(case, arm)], key=lambda row: trace_selection_key(
+                row, metadata_by_path.get(row["path"], {})))
             selected = next((row for row in attempts
                              if completed(row, metadata_by_path.get(row["path"], {}))), None)
             status = ("completed" if selected else "missing" if not attempts else
@@ -85,7 +85,7 @@ def _coverage_lines(coverage, metadata_by_path, benchmark):
                      f"{count['failed_or_unfinished']} | {count['running']} | {remaining} |")
     selected = [slot["selected"] for case in cases for slot in case["arms"].values() if slot["selected"]]
     uncaptured = sum(not _raw_capture_complete(row, benchmark) for row in selected)
-    lines += ["", "完成记录按最早的 created_at 选取；缺少日期的旧记录优先，并以路径稳定排序。"
+    lines += ["", "完成记录按最早的 created_at 选取；缺少日期的旧记录优先，并以迁移前路径稳定排序。"
         "不按正确性或置信度筛选；下方历史索引仍保留全部尝试。",
         "本页是覆盖清单，不是统一协议的准确率对照：历史记录包含 OpenRouter 的 `z-ai/glm-5.3-flash` "
         "与 Fireworks 的 `accounts/fireworks/models/glm-5p3`，模型、推理配置、预算和运行器版本可能不同。",
@@ -124,10 +124,12 @@ def main():
         'Historical tool traces do not have raw API payloads; new runs include `llm_calls/`.', '',
         'See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and source kernels. '
         'Historical trace payloads keep their original IDs; the current directory and registry determine the case.', '']
+    lines += ['每个 case/arm 下按历史时间顺序编号为 `r1`、`r2`……；不同案例的同名 rN 不代表同一实验批次。'
+              '原始批次保存在 `trace_meta.json` 的 `original_trial`，统计继续按批次、模型和预算配置分组。', '']
     lines += _coverage_lines(coverage, metadata_by_path, BENCHMARK)
     lines += ['', '## 全部历史 trials', '']
     current_dataset = None
-    for r in sorted(rows,key=lambda x:(case_sort_key(x['case']),x['arm'],x['trial'])):
+    for r in sorted(rows,key=lambda x:(case_sort_key(x['case']),x['arm'],trial_sort_key(x['trial']))):
         if r['dataset'] != current_dataset:
             current_dataset = r['dataset']
             lines += ['', '### ' + DATASET_LABELS.get(current_dataset, current_dataset), '',

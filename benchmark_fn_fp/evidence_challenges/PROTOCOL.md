@@ -1,5 +1,7 @@
 # Evidence-audit pilot: prospective protocol
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 Recorded 2026-09-24 before any model evaluation of these cases. This is a small
 development experiment, followed by conditional expansion, not a claim that
 debate is superior. Existing case_36–case_61 cases and their protocols remain unchanged.
@@ -62,7 +64,7 @@ silently replaced by a retry. There is no separate high-token control this time.
 
 ## Recording and scoring
 
-Canonical path: ../traces_glm/<case>/<arm>/<trial>/. Save raw requests before
+Canonical path: ../traces_glm/<case>/<arm>/rN/. Save raw requests before
 submission, all returned responses/reasoning/usage, failure diagnostics, tool
 events, probe code and outputs, contract/source hashes and cumulative budget.
 Separate correct verdicts, explicit mistakes, abstentions, token exhaustion,

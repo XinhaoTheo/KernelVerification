@@ -120,7 +120,7 @@ case_79 那样依赖错误参考却碰巧答对的情况。
 reference、input generator 与所有必要 helper；私有文件包含来源 commit／许可、
 历史或合成标记、两个版本的 diff、候选搜索、独立真值及 GPU 验证。
 
-traces_glm/<case>/<arm>/<trial>/ 保留完整 request、response、usage、工具代码、
+traces_glm/<case>/<arm>/rN/ 保留完整 request、response、usage、工具代码、
 stdout/stderr、错误、覆盖配置、证据与最终判定。费用未知时明确记录未知。
 
 汇总表列出：case、来源、机制、历史/合成、真值、三组正确/误判/弃答、可复现

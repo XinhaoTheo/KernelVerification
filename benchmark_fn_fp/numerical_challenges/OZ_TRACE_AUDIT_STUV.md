@@ -1,8 +1,10 @@
 # case_54–case_57 tool-trace audit
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 Scope: `case_54` through `case_57`, both `solo` and `debate`, trials
 `oz_low32_r1` and (when available) `oz_low32_r2` under
-`benchmark_fn_fp/traces_glm/<case>/<arm>/<trial>/`.
+`benchmark_fn_fp/traces_glm/<case>/<arm>/rN/`.
 
 Review updated 2026-09-24 UTC after all eight r1 tool runs were collected. The
 initial snapshot had only reservation metadata; it has been superseded for

@@ -9,7 +9,7 @@ import sys
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "eval_scripts"))
 from summarize_traces import build_report
-from traces import iter_trace_records
+from traces import iter_trace_records, experiment_trial, trial_sort_key
 
 CASES = tuple(f"case_{i + 61:02d}" for i in range(1, 5))
 ARMS = ("single_call", "solo", "debate")
@@ -112,7 +112,7 @@ def audit_row(row, metadata, path, frozen):
 
 def pilot_gate(rows, *, cases=CASES, trials=TRIALS):
     """Only the predeclared case/trial slots can activate the two-stage gate."""
-    slots = {(r["trial"], r["case"], r["arm"]): r for r in rows}
+    slots = {(experiment_trial(r), r["case"], r["arm"]): r for r in rows}
     if len(slots) != len(rows):
         raise ValueError("Duplicate designated slot")
     comparisons = []
@@ -160,15 +160,17 @@ def derive(*, cases=CASES, trials=TRIALS):
             path = ROOT.parent / row["path"]
             m = meta[str(path.resolve())]
             rows.append(audit_row(row, m, path, frozen))
-    rows.sort(key=lambda r: (r["trial"], r["case"], r["arm"]))
+    rows.sort(key=lambda r: (r["case"], r["arm"], trial_sort_key(r["trial"])))
     comparisons, gate = pilot_gate(rows, cases=cases, trials=trials)
     groups = []
-    for trial in sorted({r["trial"] for r in rows}):
-        for arm in ARMS:
-            selected = [r for r in rows if r["trial"] == trial and r["arm"] == arm]
-            groups.append({"trial": trial, "arm": arm, "attempts": len(selected),
-                "outcomes": dict(Counter(r["outcome"] for r in selected)),
-                "api_estimate_usd": round(sum(r.get("usd") or 0 for r in selected), 6)})
+    audited_by_path = {row["path"]: row for row in rows}
+    for group in common["arms"].values():
+        selected = [audited_by_path[row["path"]] for row in group["per_case"].values()]
+        groups.append({"trial": group["original_trial"], "original_trial": group["original_trial"],
+            "arm": group["arm"], "provider": group["provider"], "model": group["model"],
+            "protocol": group["protocol"], "attempts": len(selected),
+            "outcomes": dict(Counter(r["outcome"] for r in selected)),
+            "api_estimate_usd": round(sum(r.get("usd") or 0 for r in selected), 6)})
     return {"generated_at": datetime.now(timezone.utc).isoformat(), "cases": frozen,
             "rows": rows, "groups": groups, "comparisons": comparisons, "gate": gate,
             "api_estimate_usd": round(sum(r.get("usd") or 0 for r in rows), 6),
@@ -185,7 +187,8 @@ def main(*, export_json=False):
     lines = ["# Evidence-audit pilot results", "", f"Generated: {result['generated_at']}", "",
         "Same GLM low setting and 32768 total output-token ceiling; total input tokens, dollars and GPU time are not matched.",
         "Pilot and conditional expansion follow [PROTOCOL.md](PROTOCOL.md). All recorded attempts remain visible.", "",
-        "| Trial | Arm | Attempts | Outcomes | Recorded API estimate |", "|---|---|---:|---|---:|"]
+        "Trace trial names are local rN identifiers; experiment batches below use preserved original_trial metadata.", "",
+        "| Experiment batch | Arm | Attempts | Outcomes | Recorded API estimate |", "|---|---|---:|---|---:|"]
     for row in result["groups"]:
         lines.append(f"| {row['trial']} | {row['arm']} | {row['attempts']} | {json.dumps(row['outcomes'])} | ${row['api_estimate_usd']:.6f} |")
     lines += ["", "Gate (requires evidence audit in addition to numerical results):", "```json",

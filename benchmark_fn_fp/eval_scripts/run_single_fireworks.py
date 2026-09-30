@@ -14,14 +14,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from baseline2_single_llm import SYSTEM_PROMPT, USER_TEMPLATE, VERDICT_SCHEMA
 from models import profile_for, profile_for_trace, pricing_snapshot
 from datasets import DATASETS, cases_dir as dataset_cases_dir, checked_case_hashes
-from traces import (reserve_trace, write_trace, new_trial_id, single_call_readable_files,
-                    trace_path, update_trace_metadata)
+from traces import (reserve_trace, write_trace, next_trial_id, single_call_readable_files,
+                    trace_path, update_trace_metadata, experiment_trial_id)
 from verifier.agentic.llm_trace import LLMCallTrace
 
 MODEL = "accounts/fireworks/models/glm-5p3"
 
 
-def run_one(name, *, dataset, trial, max_tokens, timeout_s=1800, reasoning_effort="low"):
+def run_one(name, *, dataset, trial, max_tokens, timeout_s=1800, reasoning_effort="low", original_trial=None):
     if reasoning_effort not in {"default", "low", "medium", "high"}:
         raise ValueError("Unsupported reasoning effort")
     from openai import OpenAI
@@ -41,7 +41,7 @@ def run_one(name, *, dataset, trial, max_tokens, timeout_s=1800, reasoning_effor
     dest=reserve_trace(name,"single_call",traces_dir=profile.traces_dir,trial=trial,metadata={
         "model":MODEL,"provider":"fireworks","dataset":dataset,"max_tokens":max_tokens,
         "reasoning_effort":reasoning_effort,"timeout_s":timeout_s,
-        "raw_api_capture":True,**hashes})
+        "raw_api_capture":True,"original_trial":original_trial or experiment_trial_id(trial),**hashes})
     write_trace(name,"single_call",traces_dir=profile.traces_dir,trial=trial,files={
         "request.json":json.dumps(request,indent=2),"system_prompt.txt":system,"user_prompt.txt":prompt})
     client=OpenAI(api_key=os.environ["FIREWORKS_API_KEY"],base_url="https://api.fireworks.ai/inference/v1",
@@ -109,7 +109,8 @@ def main(argv=None):
     if not names and args.all:names=sorted(p.name for p in cases_dir.iterdir() if (p/'kernel.py').exists())
     if not names:parser.error('pass --cases or --all')
     if len(names)!=len(set(names)):parser.error('duplicate cases')
-    trial=args.trial or new_trial_id()
+    trial=args.trial or next_trial_id(names, ['single_call'], traces_dir=profile_for(MODEL).traces_dir)
+    original_trial=experiment_trial_id(args.trial)
     for name in names:
         checked_case_hashes(REPO,args.dataset,name)
         dest=trace_path(name,'single_call',traces_dir=profile_for(MODEL).traces_dir,trial=trial)
@@ -117,7 +118,8 @@ def main(argv=None):
     failures=[]
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
         futures={pool.submit(run_one,n,dataset=args.dataset,trial=trial,max_tokens=args.max_tokens,
-                             timeout_s=args.timeout,reasoning_effort=args.reasoning_effort):n for n in names}
+                             timeout_s=args.timeout,reasoning_effort=args.reasoning_effort,
+                             original_trial=original_trial):n for n in names}
         for future in as_completed(futures):
             try:future.result()
             except Exception as exc:

@@ -25,6 +25,15 @@ def gate(rows):
     return report.transfer_gate(rows)[1]
 
 
+def test_numeric_trial_names_keep_precision_transfer_batch_selection():
+    rows = cohort()
+    renamed = [{**row, "original_trial": row["trial"], "trial": f"r{index + 1}"}
+               for index, row in enumerate(rows)]
+    assert report.transfer_gate(renamed) == report.transfer_gate(rows)
+    renamed[0]["original_trial"] = "ea_precision_transfer_retry"
+    assert not gate(renamed)["all_two_round_slots_terminal"]
+
+
 @pytest.mark.parametrize("state", ["missing", "running"])
 def test_r1_waits_for_every_arm_of_all_six_cases(state):
     rows = cohort()

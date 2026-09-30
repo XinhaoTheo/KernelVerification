@@ -82,11 +82,14 @@ The Modal runner automatically selects the NumPy 2.2.6 image for this dataset
 It checks `answer_key.json` hashes before submitting a paid run. For example:
 
 ```sh
-modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset numerical_pilot --arm both --all --provider fireworks --only-missing --total-output-tokens 32768 --trial my_pilot_completion
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset numerical_pilot --arm both --all --provider fireworks --only-missing --total-output-tokens 32768
 ```
 
 For GLM source-only calls, use `eval_scripts/run_single_fireworks.py` with
-`--dataset numerical_pilot --cases <missing-case-list> --trial <new-trial>`.
+`--dataset numerical_pilot --cases <missing-case-list>`.
+Omitting `--trial` reserves the next unused `rN`; an explicit unused number such
+as `--trial r2` is also accepted. Numbers are local to each case/arm, so matching
+numbers alone do not establish matching experimental settings.
 That runner has no `--only-missing` option; select missing cases from the
 [GLM coverage table](../traces_glm/INDEX.md) first. The old Opus results are
 retained separately and do not count as GLM coverage. New traces carry dated

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from uuid import uuid4
@@ -281,7 +282,7 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
     # module-level import of a sibling in this directory crashes every container
     # at startup -- which it did, and the run hung for hours retrying.
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-    from traces import write_trace, trace_path, reserve_trace, new_trial_id
+    from traces import write_trace, trace_path, reserve_trace, new_trial_id, next_trial_id, experiment_trial_id
     from models import DEFAULT_MODEL_FOR_PROVIDER, profile_for
     from datasets import cases_dir as dataset_cases_dir, checked_case_hashes
     # The debate reaches a verdict in 7 turns; the solo agent needs more rounds
@@ -289,7 +290,6 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
     selected_arms = list(ARMS) if arm == "both" else [arm]
     if skip_existing and not trial:
         raise ValueError("--skip-existing requires --trial to identify the batch")
-    trial = trial or new_trial_id()
     cases_dir = dataset_cases_dir(REPO_ROOT, dataset)
     if not model:
         model = DEFAULT_MODEL_FOR_PROVIDER.get(provider, "")
@@ -318,6 +318,25 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
                        if d.is_dir() and (d / "meta.json").exists())
     if len(names) != len(set(names)):
         raise ValueError("Duplicate case names")
+    original_trial = experiment_trial_id(trial)
+    trial = trial or (next_trial_id(names, selected_arms, traces_dir=profile.traces_dir)
+                      if profile.traces_dir == "traces_glm" else new_trial_id())
+    if skip_existing and re.fullmatch(r"r[1-9][0-9]*", trial):
+        # rN is local to each case/arm, so matching directory names can belong
+        # to different experiments. A continuation must keep one existing batch
+        # identity, rather than silently splitting it or combining unrelated runs.
+        batches = set()
+        for name in names:
+            for selected_arm in selected_arms:
+                existing = trace_path(name, selected_arm, traces_dir=profile.traces_dir, trial=trial)
+                if existing.exists():
+                    metadata = json.loads((existing / "trace_meta.json").read_text())
+                    batch = metadata.get("original_trial") or metadata.get("trial") or trial
+                    batches.add(batch)
+        if len(batches) > 1:
+            raise ValueError(f"Cannot resume {trial}: selected traces belong to multiple experiment batches")
+        if batches:
+            original_trial = batches.pop()
     # Validate the entire batch before reserving traces or submitting any work.
     source_hashes = {name: checked_case_hashes(REPO_ROOT, dataset, name) for name in names}
     filled = (existing_valid_slots(REPO_ROOT / "benchmark_fn_fp", profile.traces_dir, dataset)
@@ -344,6 +363,7 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
             "reasoning_effort":"low" if provider in {"fireworks", "openrouter"} else "default",
             "timeout_s":profile.timeout_s,
             "max_rounds":rounds,"raw_api_capture":provider == "fireworks",
+            "original_trial":original_trial,
             "total_output_token_budget":total_output_tokens or None,
             **source_hashes[n]})
     print(f"running {len(jobs)} tool trials: {provider}/{model}, dataset={dataset}, trial={trial}, max_tokens={max_tokens}",flush=True)

@@ -1,5 +1,7 @@
 # case_72–case_75 independent oracle review
 
+存储命名更新（2026-09-30）：本文批次标签及 r1/r2 轮次简称保留原实验含义，原标签记在 `trace_meta.json.original_trial`。统一目录使用每个 case/arm 下的 `rN`；见[命名与迁移说明](../TRACES.md)。
+
 2026-09-24。本审查独立于构造者，只读取现有 family、公开源码、合同和完整 CPU 搜索记录，并另外实现精确有理数计算作交叉核验。没有修改案例、追加 GPU 调用或调用模型。本文件记录 **CPU 真值与数学证明审查**，以及主流程随后保存的 GPU 冻结记录的只读核验。
 
 ## 审查结果
@@ -70,6 +72,6 @@ case_74 的真实误差小于阈值约三个数量级，case_75 为 100% 相对�
 
 公开 meta 为 `passed: null`、`status: unverified`，工具上下文相应为未知标签；保存的提示没有得到私有真值。Agent 执行镜像通过同一 runner 只挂载公开 `eval_cases`，没有挂载私有 family、answer key 或 GPU 真值文件。初始 probe 的实际输出和 `passed: false` 是同样提供给三组的待审查证据，并明确注明不是 oracle verdict。未发现本例有答案泄露、输入材料不对等或 harness 更换候选源码的迹象。此结论限定于已检查的文件、请求和镜像配置，不把文件名检索视为对任意外部知识来源的绝对证明。
 
-Solo 的 [t7 原始 probe](../traces_glm/case_74/solo/ea_methods_v3_r1/probes/t7_probe.py)把 `np.float64.sum(axis=1)` 的结果标为 exact，得到错误的零目标，进而误拒；实际 kernel 输出与冻结合格输出相同。Debate 的[最终判断](../traces_glm/case_74/debate/ea_methods_v3_r1/verdict.json)使用实际执行的 `math.fsum` 参考得到正确 trust。其保存的 history 显示：Skeptic 一度接受零参考，Describer 后续明确指出该 FP64 参考有吸收误差，Experimenter 因而执行了精确求和实验。这提供了本次交叉复核纠正错误参考的具体过程证据。
+Solo 的 [t7 原始 probe](../traces_glm/case_74/solo/r1/probes/t7_probe.py)把 `np.float64.sum(axis=1)` 的结果标为 exact，得到错误的零目标，进而误拒；实际 kernel 输出与冻结合格输出相同。Debate 的[最终判断](../traces_glm/case_74/debate/r1/verdict.json)使用实际执行的 `math.fsum` 参考得到正确 trust。其保存的 history 显示：Skeptic 一度接受零参考，Describer 后续明确指出该 FP64 参考有吸收误差，Experimenter 因而执行了精确求和实验。这提供了本次交叉复核纠正错误参考的具体过程证据。
 
 这仍是在一个冻结工作负载上的一次成对差异。两组拥有相同 32,768 累计输出上限，但实际成本不相等：solo 使用 1,552 输出 tokens、API 估算 $0.018670；debate 使用 10,031 输出 tokens、API 估算 $0.089860。角色提示、调用数、输入 tokens 和实际计算量不同。因此可比较的是当前两条工作流，不能仅凭本例将改善完全归因于 agent 数量。若第二轮同例重复，只能加强该开发案例上的可重复性；推广到新案例仍需要新的冻结、平衡工作负载及保留全部结果的验证。

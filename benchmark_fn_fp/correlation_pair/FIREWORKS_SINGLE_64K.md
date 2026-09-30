@@ -1,5 +1,7 @@
 # 无工具单次调用补测：64K
 
+存储命名更新（2026-09-30）：本文批次标签及 r1/r2 轮次简称保留原实验含义，原标签记在 `trace_meta.json.original_trial`。统一目录使用每个 case/arm 下的 `rN`；见[命名与迁移说明](../TRACES.md)。
+
 用户要求再次测试无工具调用。预先固定：case_36/case_37 各一次，trial=r2_64k，模型仍为 Fireworks accounts/fireworks/models/glm-5p3，FIREWORKS_API_KEY；仅将 max_tokens 从 32768 增至 65536。源码、输入、阈值、system/user prompt 和 JSON-object 格式不变。两个案例并行请求，各自是独立单次调用，无工具、无答案反馈、无语义重试。所有响应及 finish_reason 保留。
 
 这是看到 r1 后追加的预算补测，同时也有模型随机采样差异；不并入原始六格比较。原 REPORT_FIREWORKS.md 和 scoreboard_fireworks.json 保持原样。按现有项目价格配置，两次用满输出预算的 API 估算约 $0.145，实际按返回 usage 记录。

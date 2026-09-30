@@ -11,7 +11,7 @@ $1.413265，相差约 3.57 倍，尚未匹配总资源。见 [OZ_REPORT.md](OZ_R
 
 多数合同直接给出唯一输入、参考公式、参考精度与判定阈值。例如
 [Z 合同](eval_cases/case_61/problem.txt)和
-[case_61 solo 主 probe](../traces_glm/case_61/solo/oz_low32_r2/probes/t7_probe.py)：
+[case_61 solo 主 probe](../traces_glm/case_61/solo/r2/probes/t7_probe.py)：
 一次正确的独立参考计算和 GPU 对比已足够判定。继续提高算术难度，不一定提高
 验证过程的难度。两组已有的正确主证据之外，debate 也出现了辅助诊断归因过强、
 测量对象与字段名不一致等问题，见 [case_58–case_61 证据审查](OZ_TRACE_AUDIT_WXYZ.md)。

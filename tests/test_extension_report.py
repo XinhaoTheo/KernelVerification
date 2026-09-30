@@ -36,6 +36,18 @@ def _passed(rows, labels):
     return report.replication_gate(rows, labels)["cases"]["case_44"]["passed"]
 
 
+def test_numeric_trial_names_preserve_designated_extension_slots():
+    rows, labels = _eligible_case()
+    expected = report.replication_gate(rows, labels)
+    renamed = [{**row, "original_trial": row["trial"], "trial": f"r{index + 2}"}
+               for index, row in enumerate(rows)]
+    assert report.replication_gate(renamed, labels) == expected
+    # An unrelated batch called r1 cannot stand in for an original planned slot.
+    renamed[0]["original_trial"] = "completion_20260930_r1"
+    renamed[0]["trial"] = "r1"
+    assert not _passed(renamed, labels)
+
+
 @pytest.mark.parametrize("outcome", ["token_limit", "abstention", "no_verdict"])
 def test_two_errors_with_unanswered_third_slot_cannot_qualify(outcome):
     rows, labels = _eligible_case()

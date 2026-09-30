@@ -329,3 +329,31 @@ def test_only_missing_reuses_any_valid_judgment_across_trials_in_target_tree(run
                              ("case_c", "debate"), ("case_c", "solo")]
     assert not (benchmark / "traces_glm/case_a/solo/fill").exists()
     assert not (benchmark / "traces_glm/case_b/solo/fill").exists()
+
+
+@pytest.mark.parametrize("existing_batches", [[], ["original_batch", "original_batch"], ["batch_a", "batch_b"]])
+def test_numeric_skip_existing_preserves_one_batch_or_refuses_ambiguous_resume(runner, monkeypatch, existing_batches):
+    module, storage, benchmark = runner
+    for (case, arm), batch in zip((("case_a", "solo"), ("case_b", "debate")), existing_batches):
+        dest = storage.reserve_trace(case, arm, traces_dir="traces_glm", trial="r9",
+            metadata={"original_trial": batch, "status": "completed"})
+        (dest / "verdict.json").write_text('{"verdict":"trust"}')
+    before = {p.relative_to(benchmark): p.read_bytes() for p in benchmark.rglob("*") if p.is_file()}
+    calls = []
+    monkeypatch.setattr(module, "run_one", SimpleNamespace(
+        remote=lambda *job: calls.append(job[:2]) or make_result(*job[:2])))
+    if len(set(existing_batches)) > 1:
+        with pytest.raises(ValueError, match="multiple experiment batches"):
+            module.main(arm="both", all=True, provider="fireworks", trial="r9", skip_existing=True)
+        assert calls == []
+        assert {p.relative_to(benchmark): p.read_bytes() for p in benchmark.rglob("*") if p.is_file()} == before
+        return
+    module.main(arm="both", all=True, provider="fireworks", trial="r9", skip_existing=True)
+    assert len(calls) == 6 - len(existing_batches)
+    saved = [read(p) for p in (benchmark / "traces_glm").glob("case_*/*/r9/trace_meta.json")]
+    batches = {meta["original_trial"] for meta in saved}
+    assert len(saved) == 6 and len(batches) == 1
+    if existing_batches:
+        assert batches == {"original_batch"}
+    else:
+        assert next(iter(batches)).startswith("run_")

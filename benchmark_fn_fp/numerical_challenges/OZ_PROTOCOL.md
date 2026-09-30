@@ -1,5 +1,7 @@
 # case_50–case_61 construction and evaluation protocol
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 Recorded before any case_50–case_61 model evaluation. Twelve additional fixed-workload
 cases form six balanced pairs, with one numerically compliant and one
 noncompliant case per pair. They extend case_36–case_49 without editing prior cases,
@@ -51,7 +53,7 @@ qualifying slot needs a complete trace and terminal, explicit verdict. This is
 replication on selected synthetic workloads, not held-out generalization.
 Default-control counterevidence and transport failures remain visible.
 
-Use the unified ../traces_glm/<case>/<arm>/<trial>/ layout. Save requests before
+Use the unified ../traces_glm/<case>/<arm>/rN/ layout. Save requests before
 calls, all returned provider responses/reasoning/usage, errors and finish reasons,
 readable transcripts, and all tool probes and results. Report source-only, solo,
 and debate separately, and audit actual runtime evidence before attributing a

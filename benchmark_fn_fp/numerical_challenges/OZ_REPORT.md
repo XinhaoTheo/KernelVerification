@@ -1,6 +1,6 @@
 # Numerical extension case_50–case_61
 
-Generated: 2026-09-24T01:20:42.142729+00:00
+Generated: 2026-09-30T17:50:43.168188+00:00
 
 This report is derived only from canonical case_50–case_61 traces. CPU-only labels are provisional; GPU verification is required for the replication gate. Missing slots are pending, not successful attempts.
 
@@ -23,7 +23,9 @@ This report is derived only from canonical case_50–case_61 traces. CPU-only la
 
 Correct, explicit wrong, and no-result counts are separate. No result includes abstention, token exhaustion, or missing verdict; pending and not-started slots are shown separately. Default means the reasoning_effort field was omitted from the captured API request.
 
-| Trial | Arm | Provider / model | Reasoning / token cap / rounds | Attempts | Correct | Explicit wrong | No result | Pending | Not started | API estimate | Raw coverage |
+Trace trial names are local rN identifiers; experiment batches below use preserved original_trial metadata.
+
+| Experiment batch | Arm | Provider / model | Reasoning / token cap / rounds | Attempts | Correct | Explicit wrong | No result | Pending | Not started | API estimate | Raw coverage |
 |---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|
 | oz_default64_r1 | single_call | fireworks / accounts/fireworks/models/glm-5p3 | default / 65536 / — | 12 | 4 | 2 | 6 | 0 | 0 | $0.167357 | {"complete": 6, "partial": 6} |
 | oz_low32_r1 | debate | fireworks / accounts/fireworks/models/glm-5p3 | low / 32768 / 4 | 12 | 12 | 0 | 0 | 0 | 0 | $0.691501 | {"complete": 12} |
@@ -67,99 +69,99 @@ Matched tool comparisons: 24; valid both-correct pairs: 24; debate corrects an e
 
 | Case | Trial | Arm | Status | Verdict | Outcome | API estimate | Raw coverage | Trace / protocol issues |
 |---|---|---|---|---|---|---:|---|---|
-| case_50 | oz_default64_r1 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_50/single_call/oz_default64_r1/trace_meta.json)  |
-| case_51 | oz_default64_r1 | single_call | completed | reject | correct | $0.030176 | complete | [trace](../traces_glm/case_51/single_call/oz_default64_r1/transcript.md)  |
-| case_52 | oz_default64_r1 | single_call | completed | reject | wrong_verdict | $0.008849 | complete | [trace](../traces_glm/case_52/single_call/oz_default64_r1/transcript.md)  |
-| case_53 | oz_default64_r1 | single_call | completed | reject | correct | $0.009904 | complete | [trace](../traces_glm/case_53/single_call/oz_default64_r1/transcript.md)  |
-| case_54 | oz_default64_r1 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_54/single_call/oz_default64_r1/trace_meta.json)  |
-| case_55 | oz_default64_r1 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_55/single_call/oz_default64_r1/trace_meta.json)  |
-| case_56 | oz_default64_r1 | single_call | completed | trust | correct | $0.042444 | complete | [trace](../traces_glm/case_56/single_call/oz_default64_r1/transcript.md)  |
-| case_57 | oz_default64_r1 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_57/single_call/oz_default64_r1/trace_meta.json)  |
-| case_58 | oz_default64_r1 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_58/single_call/oz_default64_r1/trace_meta.json)  |
-| case_59 | oz_default64_r1 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_59/single_call/oz_default64_r1/trace_meta.json)  |
-| case_60 | oz_default64_r1 | single_call | completed | trust | correct | $0.029318 | complete | [trace](../traces_glm/case_60/single_call/oz_default64_r1/transcript.md)  |
-| case_61 | oz_default64_r1 | single_call | completed | trust | wrong_verdict | $0.046666 | complete | [trace](../traces_glm/case_61/single_call/oz_default64_r1/transcript.md)  |
-| case_50 | oz_low32_r1 | debate | completed | trust | correct | $0.057753 | complete | [trace](../traces_glm/case_50/debate/oz_low32_r1/transcript.md)  |
-| case_51 | oz_low32_r1 | debate | completed | reject | correct | $0.060088 | complete | [trace](../traces_glm/case_51/debate/oz_low32_r1/transcript.md)  |
-| case_52 | oz_low32_r1 | debate | completed | trust | correct | $0.067835 | complete | [trace](../traces_glm/case_52/debate/oz_low32_r1/transcript.md)  |
-| case_53 | oz_low32_r1 | debate | completed | reject | correct | $0.056074 | complete | [trace](../traces_glm/case_53/debate/oz_low32_r1/transcript.md)  |
-| case_54 | oz_low32_r1 | debate | completed | trust | correct | $0.036779 | complete | [trace](../traces_glm/case_54/debate/oz_low32_r1/transcript.md)  |
-| case_55 | oz_low32_r1 | debate | completed | reject | correct | $0.079228 | complete | [trace](../traces_glm/case_55/debate/oz_low32_r1/transcript.md)  |
-| case_56 | oz_low32_r1 | debate | completed | trust | correct | $0.046540 | complete | [trace](../traces_glm/case_56/debate/oz_low32_r1/transcript.md)  |
-| case_57 | oz_low32_r1 | debate | completed | reject | correct | $0.032250 | complete | [trace](../traces_glm/case_57/debate/oz_low32_r1/transcript.md)  |
-| case_58 | oz_low32_r1 | debate | completed | trust | correct | $0.068535 | complete | [trace](../traces_glm/case_58/debate/oz_low32_r1/transcript.md)  |
-| case_59 | oz_low32_r1 | debate | completed | reject | correct | $0.060670 | complete | [trace](../traces_glm/case_59/debate/oz_low32_r1/transcript.md)  |
-| case_60 | oz_low32_r1 | debate | completed | trust | correct | $0.066816 | complete | [trace](../traces_glm/case_60/debate/oz_low32_r1/transcript.md)  |
-| case_61 | oz_low32_r1 | debate | completed | reject | correct | $0.058933 | complete | [trace](../traces_glm/case_61/debate/oz_low32_r1/transcript.md)  |
-| case_50 | oz_low32_r1 | single_call | completed | reject | wrong_verdict | $0.003510 | complete | [trace](../traces_glm/case_50/single_call/oz_low32_r1/transcript.md)  |
-| case_51 | oz_low32_r1 | single_call | completed | reject | correct | $0.000817 | complete | [trace](../traces_glm/case_51/single_call/oz_low32_r1/transcript.md)  |
-| case_52 | oz_low32_r1 | single_call | completed | reject | wrong_verdict | $0.001518 | complete | [trace](../traces_glm/case_52/single_call/oz_low32_r1/transcript.md)  |
-| case_53 | oz_low32_r1 | single_call | completed | reject | correct | $0.001471 | complete | [trace](../traces_glm/case_53/single_call/oz_low32_r1/transcript.md)  |
-| case_54 | oz_low32_r1 | single_call | completed | reject | wrong_verdict | $0.002591 | complete | [trace](../traces_glm/case_54/single_call/oz_low32_r1/transcript.md)  |
-| case_55 | oz_low32_r1 | single_call | completed | trust | wrong_verdict | $0.007621 | complete | [trace](../traces_glm/case_55/single_call/oz_low32_r1/transcript.md)  |
-| case_56 | oz_low32_r1 | single_call | completed | reject | wrong_verdict | $0.001007 | complete | [trace](../traces_glm/case_56/single_call/oz_low32_r1/transcript.md)  |
-| case_57 | oz_low32_r1 | single_call | completed | needs_more_evidence | abstention | $0.002487 | complete | [trace](../traces_glm/case_57/single_call/oz_low32_r1/transcript.md)  |
-| case_58 | oz_low32_r1 | single_call | completed | trust | correct | $0.000431 | complete | [trace](../traces_glm/case_58/single_call/oz_low32_r1/transcript.md)  |
-| case_59 | oz_low32_r1 | single_call | completed | trust | wrong_verdict | $0.001377 | complete | [trace](../traces_glm/case_59/single_call/oz_low32_r1/transcript.md)  |
-| case_60 | oz_low32_r1 | single_call | completed | reject | wrong_verdict | $0.003406 | complete | [trace](../traces_glm/case_60/single_call/oz_low32_r1/transcript.md)  |
-| case_61 | oz_low32_r1 | single_call | completed | trust | wrong_verdict | $0.001340 | complete | [trace](../traces_glm/case_61/single_call/oz_low32_r1/transcript.md)  |
-| case_50 | oz_low32_r1 | solo | completed | trust | correct | $0.016082 | complete | [trace](../traces_glm/case_50/solo/oz_low32_r1/transcript.md)  |
-| case_51 | oz_low32_r1 | solo | completed | reject | correct | $0.014905 | complete | [trace](../traces_glm/case_51/solo/oz_low32_r1/transcript.md)  |
-| case_52 | oz_low32_r1 | solo | completed | trust | correct | $0.016828 | complete | [trace](../traces_glm/case_52/solo/oz_low32_r1/transcript.md)  |
-| case_53 | oz_low32_r1 | solo | completed | reject | correct | $0.022590 | complete | [trace](../traces_glm/case_53/solo/oz_low32_r1/transcript.md)  |
-| case_54 | oz_low32_r1 | solo | completed | trust | correct | $0.017070 | complete | [trace](../traces_glm/case_54/solo/oz_low32_r1/transcript.md)  |
-| case_55 | oz_low32_r1 | solo | completed | reject | correct | $0.020792 | complete | [trace](../traces_glm/case_55/solo/oz_low32_r1/transcript.md)  |
-| case_56 | oz_low32_r1 | solo | completed | trust | correct | $0.016159 | complete | [trace](../traces_glm/case_56/solo/oz_low32_r1/transcript.md)  |
-| case_57 | oz_low32_r1 | solo | completed | reject | correct | $0.012442 | complete | [trace](../traces_glm/case_57/solo/oz_low32_r1/transcript.md)  |
-| case_58 | oz_low32_r1 | solo | completed | trust | correct | $0.015561 | complete | [trace](../traces_glm/case_58/solo/oz_low32_r1/transcript.md)  |
-| case_59 | oz_low32_r1 | solo | completed | reject | correct | $0.015591 | complete | [trace](../traces_glm/case_59/solo/oz_low32_r1/transcript.md)  |
-| case_60 | oz_low32_r1 | solo | completed | trust | correct | $0.015597 | complete | [trace](../traces_glm/case_60/solo/oz_low32_r1/transcript.md)  |
-| case_61 | oz_low32_r1 | solo | completed | reject | correct | $0.022673 | complete | [trace](../traces_glm/case_61/solo/oz_low32_r1/transcript.md)  |
-| case_50 | oz_low32_r2 | debate | completed | trust | correct | $0.062025 | complete | [trace](../traces_glm/case_50/debate/oz_low32_r2/transcript.md)  |
-| case_51 | oz_low32_r2 | debate | completed | reject | correct | $0.069894 | complete | [trace](../traces_glm/case_51/debate/oz_low32_r2/transcript.md)  |
-| case_52 | oz_low32_r2 | debate | completed | trust | correct | $0.051041 | complete | [trace](../traces_glm/case_52/debate/oz_low32_r2/transcript.md)  |
-| case_53 | oz_low32_r2 | debate | completed | reject | correct | $0.054168 | complete | [trace](../traces_glm/case_53/debate/oz_low32_r2/transcript.md)  |
-| case_54 | oz_low32_r2 | debate | completed | trust | correct | $0.075678 | complete | [trace](../traces_glm/case_54/debate/oz_low32_r2/transcript.md)  |
-| case_55 | oz_low32_r2 | debate | completed | reject | correct | $0.074027 | complete | [trace](../traces_glm/case_55/debate/oz_low32_r2/transcript.md)  |
-| case_56 | oz_low32_r2 | debate | completed | trust | correct | $0.047179 | complete | [trace](../traces_glm/case_56/debate/oz_low32_r2/transcript.md)  |
-| case_57 | oz_low32_r2 | debate | completed | reject | correct | $0.048097 | complete | [trace](../traces_glm/case_57/debate/oz_low32_r2/transcript.md)  |
-| case_58 | oz_low32_r2 | debate | completed | trust | correct | $0.064695 | complete | [trace](../traces_glm/case_58/debate/oz_low32_r2/transcript.md)  |
-| case_59 | oz_low32_r2 | debate | completed | reject | correct | $0.063870 | complete | [trace](../traces_glm/case_59/debate/oz_low32_r2/transcript.md)  |
-| case_60 | oz_low32_r2 | debate | completed | trust | correct | $0.072841 | complete | [trace](../traces_glm/case_60/debate/oz_low32_r2/transcript.md)  |
-| case_61 | oz_low32_r2 | debate | completed | reject | correct | $0.038249 | complete | [trace](../traces_glm/case_61/debate/oz_low32_r2/transcript.md)  |
-| case_50 | oz_low32_r2 | single_call | completed | reject | wrong_verdict | $0.003352 | complete | [trace](../traces_glm/case_50/single_call/oz_low32_r2/transcript.md)  |
-| case_51 | oz_low32_r2 | single_call | completed | trust | wrong_verdict | $0.000384 | complete | [trace](../traces_glm/case_51/single_call/oz_low32_r2/transcript.md)  |
-| case_52 | oz_low32_r2 | single_call | completed | reject | wrong_verdict | $0.001096 | complete | [trace](../traces_glm/case_52/single_call/oz_low32_r2/transcript.md)  |
-| case_53 | oz_low32_r2 | single_call | completed | reject | correct | $0.001243 | complete | [trace](../traces_glm/case_53/single_call/oz_low32_r2/transcript.md)  |
-| case_54 | oz_low32_r2 | single_call | completed | trust | correct | $0.000616 | complete | [trace](../traces_glm/case_54/single_call/oz_low32_r2/transcript.md)  |
-| case_55 | oz_low32_r2 | single_call | completed | trust | wrong_verdict | $0.007056 | complete | [trace](../traces_glm/case_55/single_call/oz_low32_r2/transcript.md)  |
-| case_56 | oz_low32_r2 | single_call | completed | trust | correct | $0.002022 | complete | [trace](../traces_glm/case_56/single_call/oz_low32_r2/transcript.md)  |
-| case_57 | oz_low32_r2 | single_call | completed | needs_more_evidence | abstention | $0.003260 | complete | [trace](../traces_glm/case_57/single_call/oz_low32_r2/transcript.md)  |
-| case_58 | oz_low32_r2 | single_call | completed | trust | correct | $0.000870 | complete | [trace](../traces_glm/case_58/single_call/oz_low32_r2/transcript.md)  |
-| case_59 | oz_low32_r2 | single_call | completed | trust | wrong_verdict | $0.001344 | complete | [trace](../traces_glm/case_59/single_call/oz_low32_r2/transcript.md)  |
-| case_60 | oz_low32_r2 | single_call | completed | trust | correct | $0.000564 | complete | [trace](../traces_glm/case_60/single_call/oz_low32_r2/transcript.md)  |
-| case_61 | oz_low32_r2 | single_call | completed | reject | correct | $0.001993 | complete | [trace](../traces_glm/case_61/single_call/oz_low32_r2/transcript.md)  |
-| case_50 | oz_low32_r2 | solo | completed | trust | correct | $0.015709 | complete | [trace](../traces_glm/case_50/solo/oz_low32_r2/transcript.md)  |
-| case_51 | oz_low32_r2 | solo | completed | reject | correct | $0.012707 | complete | [trace](../traces_glm/case_51/solo/oz_low32_r2/transcript.md)  |
-| case_52 | oz_low32_r2 | solo | completed | trust | correct | $0.014520 | complete | [trace](../traces_glm/case_52/solo/oz_low32_r2/transcript.md)  |
-| case_53 | oz_low32_r2 | solo | completed | reject | correct | $0.016685 | complete | [trace](../traces_glm/case_53/solo/oz_low32_r2/transcript.md)  |
-| case_54 | oz_low32_r2 | solo | completed | trust | correct | $0.014114 | complete | [trace](../traces_glm/case_54/solo/oz_low32_r2/transcript.md)  |
-| case_55 | oz_low32_r2 | solo | completed | reject | correct | $0.016258 | complete | [trace](../traces_glm/case_55/solo/oz_low32_r2/transcript.md)  |
-| case_56 | oz_low32_r2 | solo | completed | trust | correct | $0.020247 | complete | [trace](../traces_glm/case_56/solo/oz_low32_r2/transcript.md)  |
-| case_57 | oz_low32_r2 | solo | completed | reject | correct | $0.015817 | complete | [trace](../traces_glm/case_57/solo/oz_low32_r2/transcript.md)  |
-| case_58 | oz_low32_r2 | solo | completed | trust | correct | $0.015572 | complete | [trace](../traces_glm/case_58/solo/oz_low32_r2/transcript.md)  |
-| case_59 | oz_low32_r2 | solo | completed | reject | correct | $0.015441 | complete | [trace](../traces_glm/case_59/solo/oz_low32_r2/transcript.md)  |
-| case_60 | oz_low32_r2 | solo | completed | trust | correct | $0.016247 | complete | [trace](../traces_glm/case_60/solo/oz_low32_r2/transcript.md)  |
-| case_61 | oz_low32_r2 | solo | completed | reject | correct | $0.016281 | complete | [trace](../traces_glm/case_61/solo/oz_low32_r2/transcript.md)  |
-| case_50 | oz_low32_r3 | single_call | completed | reject | wrong_verdict | $0.001849 | complete | [trace](../traces_glm/case_50/single_call/oz_low32_r3/transcript.md)  |
-| case_51 | oz_low32_r3 | single_call | completed | trust | wrong_verdict | $0.003499 | complete | [trace](../traces_glm/case_51/single_call/oz_low32_r3/transcript.md)  |
-| case_52 | oz_low32_r3 | single_call | completed | reject | wrong_verdict | $0.000953 | complete | [trace](../traces_glm/case_52/single_call/oz_low32_r3/transcript.md)  |
-| case_53 | oz_low32_r3 | single_call | completed | reject | correct | $0.000862 | complete | [trace](../traces_glm/case_53/single_call/oz_low32_r3/transcript.md)  |
-| case_54 | oz_low32_r3 | single_call | completed | trust | correct | $0.003016 | complete | [trace](../traces_glm/case_54/single_call/oz_low32_r3/transcript.md)  |
-| case_55 | oz_low32_r3 | single_call | completed | trust | wrong_verdict | $0.004390 | complete | [trace](../traces_glm/case_55/single_call/oz_low32_r3/transcript.md)  |
-| case_56 | oz_low32_r3 | single_call | completed | needs_more_evidence | abstention | $0.002739 | complete | [trace](../traces_glm/case_56/single_call/oz_low32_r3/transcript.md)  |
-| case_57 | oz_low32_r3 | single_call | completed | needs_more_evidence | abstention | $0.005023 | complete | [trace](../traces_glm/case_57/single_call/oz_low32_r3/transcript.md)  |
-| case_58 | oz_low32_r3 | single_call | completed | trust | correct | $0.000732 | complete | [trace](../traces_glm/case_58/single_call/oz_low32_r3/transcript.md)  |
-| case_59 | oz_low32_r3 | single_call | completed | trust | wrong_verdict | $0.000743 | complete | [trace](../traces_glm/case_59/single_call/oz_low32_r3/transcript.md)  |
-| case_60 | oz_low32_r3 | single_call | completed | trust | correct | $0.000745 | complete | [trace](../traces_glm/case_60/single_call/oz_low32_r3/transcript.md)  |
-| case_61 | oz_low32_r3 | single_call | completed | trust | wrong_verdict | $0.001648 | complete | [trace](../traces_glm/case_61/single_call/oz_low32_r3/transcript.md)  |
+| case_50 | r1 | debate | completed | trust | correct | $0.057753 | complete | [trace](../traces_glm/case_50/debate/r1/transcript.md)  |
+| case_50 | r2 | debate | completed | trust | correct | $0.062025 | complete | [trace](../traces_glm/case_50/debate/r2/transcript.md)  |
+| case_50 | r1 | single_call | completed | reject | wrong_verdict | $0.003510 | complete | [trace](../traces_glm/case_50/single_call/r1/transcript.md)  |
+| case_50 | r2 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_50/single_call/r2/trace_meta.json)  |
+| case_50 | r3 | single_call | completed | reject | wrong_verdict | $0.003352 | complete | [trace](../traces_glm/case_50/single_call/r3/transcript.md)  |
+| case_50 | r4 | single_call | completed | reject | wrong_verdict | $0.001849 | complete | [trace](../traces_glm/case_50/single_call/r4/transcript.md)  |
+| case_50 | r1 | solo | completed | trust | correct | $0.016082 | complete | [trace](../traces_glm/case_50/solo/r1/transcript.md)  |
+| case_50 | r2 | solo | completed | trust | correct | $0.015709 | complete | [trace](../traces_glm/case_50/solo/r2/transcript.md)  |
+| case_51 | r1 | debate | completed | reject | correct | $0.060088 | complete | [trace](../traces_glm/case_51/debate/r1/transcript.md)  |
+| case_51 | r2 | debate | completed | reject | correct | $0.069894 | complete | [trace](../traces_glm/case_51/debate/r2/transcript.md)  |
+| case_51 | r1 | single_call | completed | reject | correct | $0.000817 | complete | [trace](../traces_glm/case_51/single_call/r1/transcript.md)  |
+| case_51 | r2 | single_call | completed | reject | correct | $0.030176 | complete | [trace](../traces_glm/case_51/single_call/r2/transcript.md)  |
+| case_51 | r3 | single_call | completed | trust | wrong_verdict | $0.000384 | complete | [trace](../traces_glm/case_51/single_call/r3/transcript.md)  |
+| case_51 | r4 | single_call | completed | trust | wrong_verdict | $0.003499 | complete | [trace](../traces_glm/case_51/single_call/r4/transcript.md)  |
+| case_51 | r1 | solo | completed | reject | correct | $0.014905 | complete | [trace](../traces_glm/case_51/solo/r1/transcript.md)  |
+| case_51 | r2 | solo | completed | reject | correct | $0.012707 | complete | [trace](../traces_glm/case_51/solo/r2/transcript.md)  |
+| case_52 | r1 | debate | completed | trust | correct | $0.067835 | complete | [trace](../traces_glm/case_52/debate/r1/transcript.md)  |
+| case_52 | r2 | debate | completed | trust | correct | $0.051041 | complete | [trace](../traces_glm/case_52/debate/r2/transcript.md)  |
+| case_52 | r1 | single_call | completed | reject | wrong_verdict | $0.001518 | complete | [trace](../traces_glm/case_52/single_call/r1/transcript.md)  |
+| case_52 | r2 | single_call | completed | reject | wrong_verdict | $0.008849 | complete | [trace](../traces_glm/case_52/single_call/r2/transcript.md)  |
+| case_52 | r3 | single_call | completed | reject | wrong_verdict | $0.001096 | complete | [trace](../traces_glm/case_52/single_call/r3/transcript.md)  |
+| case_52 | r4 | single_call | completed | reject | wrong_verdict | $0.000953 | complete | [trace](../traces_glm/case_52/single_call/r4/transcript.md)  |
+| case_52 | r1 | solo | completed | trust | correct | $0.016828 | complete | [trace](../traces_glm/case_52/solo/r1/transcript.md)  |
+| case_52 | r2 | solo | completed | trust | correct | $0.014520 | complete | [trace](../traces_glm/case_52/solo/r2/transcript.md)  |
+| case_53 | r1 | debate | completed | reject | correct | $0.056074 | complete | [trace](../traces_glm/case_53/debate/r1/transcript.md)  |
+| case_53 | r2 | debate | completed | reject | correct | $0.054168 | complete | [trace](../traces_glm/case_53/debate/r2/transcript.md)  |
+| case_53 | r1 | single_call | completed | reject | correct | $0.001471 | complete | [trace](../traces_glm/case_53/single_call/r1/transcript.md)  |
+| case_53 | r2 | single_call | completed | reject | correct | $0.009904 | complete | [trace](../traces_glm/case_53/single_call/r2/transcript.md)  |
+| case_53 | r3 | single_call | completed | reject | correct | $0.001243 | complete | [trace](../traces_glm/case_53/single_call/r3/transcript.md)  |
+| case_53 | r4 | single_call | completed | reject | correct | $0.000862 | complete | [trace](../traces_glm/case_53/single_call/r4/transcript.md)  |
+| case_53 | r1 | solo | completed | reject | correct | $0.022590 | complete | [trace](../traces_glm/case_53/solo/r1/transcript.md)  |
+| case_53 | r2 | solo | completed | reject | correct | $0.016685 | complete | [trace](../traces_glm/case_53/solo/r2/transcript.md)  |
+| case_54 | r1 | debate | completed | trust | correct | $0.036779 | complete | [trace](../traces_glm/case_54/debate/r1/transcript.md)  |
+| case_54 | r2 | debate | completed | trust | correct | $0.075678 | complete | [trace](../traces_glm/case_54/debate/r2/transcript.md)  |
+| case_54 | r1 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_54/single_call/r1/trace_meta.json)  |
+| case_54 | r2 | single_call | completed | reject | wrong_verdict | $0.002591 | complete | [trace](../traces_glm/case_54/single_call/r2/transcript.md)  |
+| case_54 | r3 | single_call | completed | trust | correct | $0.000616 | complete | [trace](../traces_glm/case_54/single_call/r3/transcript.md)  |
+| case_54 | r4 | single_call | completed | trust | correct | $0.003016 | complete | [trace](../traces_glm/case_54/single_call/r4/transcript.md)  |
+| case_54 | r1 | solo | completed | trust | correct | $0.017070 | complete | [trace](../traces_glm/case_54/solo/r1/transcript.md)  |
+| case_54 | r2 | solo | completed | trust | correct | $0.014114 | complete | [trace](../traces_glm/case_54/solo/r2/transcript.md)  |
+| case_55 | r1 | debate | completed | reject | correct | $0.079228 | complete | [trace](../traces_glm/case_55/debate/r1/transcript.md)  |
+| case_55 | r2 | debate | completed | reject | correct | $0.074027 | complete | [trace](../traces_glm/case_55/debate/r2/transcript.md)  |
+| case_55 | r1 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_55/single_call/r1/trace_meta.json)  |
+| case_55 | r2 | single_call | completed | trust | wrong_verdict | $0.007621 | complete | [trace](../traces_glm/case_55/single_call/r2/transcript.md)  |
+| case_55 | r3 | single_call | completed | trust | wrong_verdict | $0.007056 | complete | [trace](../traces_glm/case_55/single_call/r3/transcript.md)  |
+| case_55 | r4 | single_call | completed | trust | wrong_verdict | $0.004390 | complete | [trace](../traces_glm/case_55/single_call/r4/transcript.md)  |
+| case_55 | r1 | solo | completed | reject | correct | $0.020792 | complete | [trace](../traces_glm/case_55/solo/r1/transcript.md)  |
+| case_55 | r2 | solo | completed | reject | correct | $0.016258 | complete | [trace](../traces_glm/case_55/solo/r2/transcript.md)  |
+| case_56 | r1 | debate | completed | trust | correct | $0.046540 | complete | [trace](../traces_glm/case_56/debate/r1/transcript.md)  |
+| case_56 | r2 | debate | completed | trust | correct | $0.047179 | complete | [trace](../traces_glm/case_56/debate/r2/transcript.md)  |
+| case_56 | r1 | single_call | completed | reject | wrong_verdict | $0.001007 | complete | [trace](../traces_glm/case_56/single_call/r1/transcript.md)  |
+| case_56 | r2 | single_call | completed | trust | correct | $0.042444 | complete | [trace](../traces_glm/case_56/single_call/r2/transcript.md)  |
+| case_56 | r3 | single_call | completed | trust | correct | $0.002022 | complete | [trace](../traces_glm/case_56/single_call/r3/transcript.md)  |
+| case_56 | r4 | single_call | completed | needs_more_evidence | abstention | $0.002739 | complete | [trace](../traces_glm/case_56/single_call/r4/transcript.md)  |
+| case_56 | r1 | solo | completed | trust | correct | $0.016159 | complete | [trace](../traces_glm/case_56/solo/r1/transcript.md)  |
+| case_56 | r2 | solo | completed | trust | correct | $0.020247 | complete | [trace](../traces_glm/case_56/solo/r2/transcript.md)  |
+| case_57 | r1 | debate | completed | reject | correct | $0.032250 | complete | [trace](../traces_glm/case_57/debate/r1/transcript.md)  |
+| case_57 | r2 | debate | completed | reject | correct | $0.048097 | complete | [trace](../traces_glm/case_57/debate/r2/transcript.md)  |
+| case_57 | r1 | single_call | completed | needs_more_evidence | abstention | $0.002487 | complete | [trace](../traces_glm/case_57/single_call/r1/transcript.md)  |
+| case_57 | r2 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_57/single_call/r2/trace_meta.json)  |
+| case_57 | r3 | single_call | completed | needs_more_evidence | abstention | $0.003260 | complete | [trace](../traces_glm/case_57/single_call/r3/transcript.md)  |
+| case_57 | r4 | single_call | completed | needs_more_evidence | abstention | $0.005023 | complete | [trace](../traces_glm/case_57/single_call/r4/transcript.md)  |
+| case_57 | r1 | solo | completed | reject | correct | $0.012442 | complete | [trace](../traces_glm/case_57/solo/r1/transcript.md)  |
+| case_57 | r2 | solo | completed | reject | correct | $0.015817 | complete | [trace](../traces_glm/case_57/solo/r2/transcript.md)  |
+| case_58 | r1 | debate | completed | trust | correct | $0.068535 | complete | [trace](../traces_glm/case_58/debate/r1/transcript.md)  |
+| case_58 | r2 | debate | completed | trust | correct | $0.064695 | complete | [trace](../traces_glm/case_58/debate/r2/transcript.md)  |
+| case_58 | r1 | single_call | completed | trust | correct | $0.000431 | complete | [trace](../traces_glm/case_58/single_call/r1/transcript.md)  |
+| case_58 | r2 | single_call | completed | trust | correct | $0.000870 | complete | [trace](../traces_glm/case_58/single_call/r2/transcript.md)  |
+| case_58 | r3 | single_call | completed | trust | correct | $0.000732 | complete | [trace](../traces_glm/case_58/single_call/r3/transcript.md)  |
+| case_58 | r4 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_58/single_call/r4/trace_meta.json)  |
+| case_58 | r1 | solo | completed | trust | correct | $0.015561 | complete | [trace](../traces_glm/case_58/solo/r1/transcript.md)  |
+| case_58 | r2 | solo | completed | trust | correct | $0.015572 | complete | [trace](../traces_glm/case_58/solo/r2/transcript.md)  |
+| case_59 | r1 | debate | completed | reject | correct | $0.060670 | complete | [trace](../traces_glm/case_59/debate/r1/transcript.md)  |
+| case_59 | r2 | debate | completed | reject | correct | $0.063870 | complete | [trace](../traces_glm/case_59/debate/r2/transcript.md)  |
+| case_59 | r1 | single_call | completed | trust | wrong_verdict | $0.001377 | complete | [trace](../traces_glm/case_59/single_call/r1/transcript.md)  |
+| case_59 | r2 | single_call | completed | trust | wrong_verdict | $0.001344 | complete | [trace](../traces_glm/case_59/single_call/r2/transcript.md)  |
+| case_59 | r3 | single_call | completed | trust | wrong_verdict | $0.000743 | complete | [trace](../traces_glm/case_59/single_call/r3/transcript.md)  |
+| case_59 | r4 | single_call | error | — | no_verdict | unknown | partial | [trace](../traces_glm/case_59/single_call/r4/trace_meta.json)  |
+| case_59 | r1 | solo | completed | reject | correct | $0.015591 | complete | [trace](../traces_glm/case_59/solo/r1/transcript.md)  |
+| case_59 | r2 | solo | completed | reject | correct | $0.015441 | complete | [trace](../traces_glm/case_59/solo/r2/transcript.md)  |
+| case_60 | r1 | debate | completed | trust | correct | $0.066816 | complete | [trace](../traces_glm/case_60/debate/r1/transcript.md)  |
+| case_60 | r2 | debate | completed | trust | correct | $0.072841 | complete | [trace](../traces_glm/case_60/debate/r2/transcript.md)  |
+| case_60 | r1 | single_call | completed | reject | wrong_verdict | $0.003406 | complete | [trace](../traces_glm/case_60/single_call/r1/transcript.md)  |
+| case_60 | r2 | single_call | completed | trust | correct | $0.000564 | complete | [trace](../traces_glm/case_60/single_call/r2/transcript.md)  |
+| case_60 | r3 | single_call | completed | trust | correct | $0.000745 | complete | [trace](../traces_glm/case_60/single_call/r3/transcript.md)  |
+| case_60 | r4 | single_call | completed | trust | correct | $0.029318 | complete | [trace](../traces_glm/case_60/single_call/r4/transcript.md)  |
+| case_60 | r1 | solo | completed | trust | correct | $0.015597 | complete | [trace](../traces_glm/case_60/solo/r1/transcript.md)  |
+| case_60 | r2 | solo | completed | trust | correct | $0.016247 | complete | [trace](../traces_glm/case_60/solo/r2/transcript.md)  |
+| case_61 | r1 | debate | completed | reject | correct | $0.058933 | complete | [trace](../traces_glm/case_61/debate/r1/transcript.md)  |
+| case_61 | r2 | debate | completed | reject | correct | $0.038249 | complete | [trace](../traces_glm/case_61/debate/r2/transcript.md)  |
+| case_61 | r1 | single_call | completed | trust | wrong_verdict | $0.001340 | complete | [trace](../traces_glm/case_61/single_call/r1/transcript.md)  |
+| case_61 | r2 | single_call | completed | reject | correct | $0.001993 | complete | [trace](../traces_glm/case_61/single_call/r2/transcript.md)  |
+| case_61 | r3 | single_call | completed | trust | wrong_verdict | $0.001648 | complete | [trace](../traces_glm/case_61/single_call/r3/transcript.md)  |
+| case_61 | r4 | single_call | completed | trust | wrong_verdict | $0.046666 | complete | [trace](../traces_glm/case_61/single_call/r4/transcript.md)  |
+| case_61 | r1 | solo | completed | reject | correct | $0.022673 | complete | [trace](../traces_glm/case_61/solo/r1/transcript.md)  |
+| case_61 | r2 | solo | completed | reject | correct | $0.016281 | complete | [trace](../traces_glm/case_61/solo/r2/transcript.md)  |

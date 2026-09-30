@@ -58,7 +58,8 @@ def main():
                      f"[kernel]({public}/kernel.py) · [合同]({public}/problem.txt) | {traces} |")
     lines += ["", "## 如何读 traces", "",
         "`traces_glm/<case>/<arm>/<trial>/` 中，`single_call` 是无工具单次调用，`solo` 是单 agent 加工具，"
-        "`debate` 是多角色加工具。`legacy` 表示旧实验没有轮次名时的归档目录；`r1` 等表示实验轮次。",
+        "`debate` 是多角色加工具。各组批次目录统一为 `r1`、`r2` 等运行序号；原批次名保留在 "
+        "`trace_meta.json` 的 `original_trial` 中。同名 `r1` 不代表模型、预算或实验配置相同。",
         "[GLM 逐次运行索引](traces_glm/INDEX.md) 保留不同配置、复测与失败尝试；题库编号相同不代表三组都已跑齐。",
         "目录已统一编号；历史请求、回复、probe 代码和 trace metadata 保留执行当时的原始字节，"
         "其中旧编号不是另一道题。读取程序根据当前目录与本注册表核对身份，不修改历史证据。",

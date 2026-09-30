@@ -233,13 +233,18 @@ GLM runs share one directory, arranged by case, arm and trial:
 
 ```
 benchmark_fn_fp/traces_opus5/case_33/debate/              historical Opus run
-benchmark_fn_fp/traces_glm/case_33/debate/legacy/
+benchmark_fn_fp/traces_glm/case_33/debate/r1/
 benchmark_fn_fp/traces_glm/case_36/debate/r1/
 ```
 
 Both GLM model profiles in `eval_scripts/models.py` write to `traces_glm/`. Metadata
 retains the API model ID and provider for provenance and cost calculation.
 New runs reserve a fresh trial directory and cannot overwrite earlier results.
+Trial folders are `r1`, `r2`, and so on within each case/arm, including incomplete
+attempts. Original labels and paths remain in `trace_meta.json` as
+`original_trial` and `original_trace_path`; `selection_sort_key` preserves
+historical selection order. The same `rN` across arms does not establish matching
+model settings or budgets.
 
 [`TRACES.md`](TRACES.md) documents the artifacts and migration.
 [`traces_glm/INDEX.md`](traces_glm/INDEX.md) links to the GLM runs.
@@ -278,16 +283,17 @@ and `candidate_measurements.json` retain the private construction measurements.
 # One case. Run this after changing anything, before running the full set.
 modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --arm debate --cases case_33
 
-# Full set, with a named trial shared by the two arms
-modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --arm both --all --trial comparison_01
+# Full GLM set; automatically reserve the next unused rN across both arms
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --arm both --all --provider fireworks
 
 # Resume after an interruption, skipping cases that already have a trace.
-# Only valid when the agents themselves have not changed.
-modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --arm both --all --trial comparison_01 --skip-existing
+# Only valid when the agents themselves have not changed. Replace r2 with the
+# actual trial number printed by the original batch.
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --arm both --all --provider fireworks --trial r2 --skip-existing
 
-# Fireworks case_36/case_37 comparison; use a new trial name for each repeat
-python benchmark_fn_fp/eval_scripts/run_single_fireworks.py --dataset correlation_pair --cases case_36,case_37 --trial pair_01 --max-tokens 65536
-modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset correlation_pair --arm both --cases case_36,case_37 --provider fireworks --trial pair_01 --max-tokens 65536
+# Fireworks case_36/case_37 comparison; each command reserves a new unused rN
+python benchmark_fn_fp/eval_scripts/run_single_fireworks.py --dataset correlation_pair --cases case_36,case_37 --max-tokens 65536
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset correlation_pair --arm both --cases case_36,case_37 --provider fireworks --max-tokens 65536
 
 # Audit first, score second.
 python benchmark_fn_fp/eval_scripts/audit_traces.py

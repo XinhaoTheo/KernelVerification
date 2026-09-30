@@ -1,5 +1,7 @@
 # Other-methods pilot v3: scope certificates and reference precision
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 2026-09-24. Prospective before any case_72–case_75 model evaluation. v2 completed
 with both tool arms correct on all six workloads. The user asked for further
 methods, so this is a new adaptive development cohort, not a held-out test of

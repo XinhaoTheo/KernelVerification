@@ -19,7 +19,8 @@ def main(*, version="v2", cases=CASES, trials=TRIALS, export_json=False):
         output.write_text(json.dumps(result, indent=2) + "\n")
     lines = [f"# Other-methods pilot {version}: {cases[0]}–{cases[-1]}", "", f"Generated: {result['generated_at']}", "",
              f"See [prospective protocol](METHODS_{version.upper()}_PROTOCOL.md). All three arms share a 32768 total output-token allowance; input tokens, dollars and GPU time differ.", "",
-             "| Trial | Arm | Attempts | Outcomes | Recorded API estimate |",
+             "Trace trial names are local rN identifiers; experiment batches below use preserved original_trial metadata.", "",
+             "| Experiment batch | Arm | Attempts | Outcomes | Recorded API estimate |",
              "|---|---|---:|---|---:|"]
     for row in result["groups"]:
         lines.append(f"| {row['trial']} | {row['arm']} | {row['attempts']} | {json.dumps(row['outcomes'])} | ${row['api_estimate_usd']:.6f} |")

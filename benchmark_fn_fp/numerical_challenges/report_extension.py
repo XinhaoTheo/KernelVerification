@@ -15,7 +15,7 @@ import sys
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "eval_scripts"))
 from summarize_traces import build_report
-from traces import iter_trace_records
+from traces import iter_trace_records, experiment_trial, trial_sort_key
 
 CASES = tuple(f"case_{i:02d}" for i in range(44, 50))
 ARMS = ("single_call", "solo", "debate")
@@ -118,7 +118,7 @@ def _request_config(path, metadata):
 
 
 def _protocol_issues(row, frozen, planned=PLANNED):
-    expected = planned.get(row["trial"])
+    expected = planned.get(experiment_trial(row))
     issues = []
     if not expected:
         issues.append("outside prespecified extension trials")
@@ -160,8 +160,8 @@ def _valid(row):
 def replication_gate(rows, labels, *, cases=CASES, low_trials=LOW_TRIALS, required_families=2):
     slots = defaultdict(list)
     for row in rows:
-        if row["trial"] in low_trials:
-            slots[(row["case"], row["arm"], row["trial"])].append(row)
+        if experiment_trial(row) in low_trials:
+            slots[(row["case"], row["arm"], experiment_trial(row))].append(row)
     details = {}
     for case in cases:
         windows = {arm: [slots[(case, arm, trial)] for trial in
@@ -232,20 +232,22 @@ def derive(root=ROOT, *, cases=CASES, low_trials=LOW_TRIALS, planned=PLANNED,
             row["provider_errors"] = [{"call": failure.parent.name, "details": _read(failure)}
                                       for failure in sorted((path / "llm_calls").glob("*/error.json"))]
             rows.append(row)
-    rows.sort(key=lambda row: (row["trial"], row["arm"], row["case"], row["attempt_id"]))
+    rows.sort(key=lambda row: (row["case"], row["arm"], trial_sort_key(row["trial"]), row["attempt_id"]))
     grouped = defaultdict(list)
     for row in rows:
-        key = (row["trial"], row["provider"], row["model"], row["reasoning_effort"], row["max_tokens"], row["arm"], row["max_rounds"])
+        key = (experiment_trial(row), row["provider"], row["model"], row["reasoning_effort"], row["max_tokens"], row["arm"], row["max_rounds"],
+               (row.get("protocol") or {}).get("total_output_token_budget"))
         grouped[key].append(row)
     for trial, config in planned.items():
         for arm in config["arms"]:
             rounds = 10 if arm == "solo" else 4 if arm == "debate" else None
-            grouped.setdefault((trial, "fireworks", MODEL, config["reasoning_effort"], config["max_tokens"], arm, rounds), [])
+            grouped.setdefault((trial, "fireworks", MODEL, config["reasoning_effort"], config["max_tokens"], arm, rounds, None), [])
     groups = []
     for key, attempts in sorted(grouped.items(), key=lambda item: tuple(map(str, item[0]))):
-        trial, provider, model, reasoning, tokens, arm, rounds = key
+        trial, provider, model, reasoning, tokens, arm, rounds, total_output_budget = key
         counts = _counts(attempts)
-        groups.append({"trial": trial, "provider": provider, "model": model, "reasoning_effort": reasoning,
+        groups.append({"trial": trial, "original_trial": trial, "provider": provider, "model": model, "reasoning_effort": reasoning,
+                       "total_output_token_budget": total_output_budget,
                        "max_tokens": tokens, "max_rounds": rounds, "arm": arm, "attempts": len(attempts), "outcomes": counts,
                        "missing_cases": [case for case in cases if case not in {row["case"] for row in attempts}],
                        "no_result": sum(counts[name] for name in ("abstention", "token_limit", "no_verdict")),
@@ -254,7 +256,10 @@ def derive(root=ROOT, *, cases=CASES, low_trials=LOW_TRIALS, planned=PLANNED,
     pairs = defaultdict(dict)
     for row in rows:
         if row["arm"] in {"solo", "debate"}:
-            key = (row["case"], row["trial"], row["provider"], row["model"], row["reasoning_effort"], row["max_tokens"])
+            key = (row["case"], experiment_trial(row), row["provider"], row["model"], row["reasoning_effort"], row["max_tokens"],
+                   (row.get("protocol") or {}).get("total_output_token_budget"))
+            if row["arm"] in pairs[key]:
+                raise ValueError(f"Duplicate experiment arm: {key}/{row['arm']}")
             pairs[key][row["arm"]] = row
     comparisons = []
     for key, pair in sorted(pairs.items(), key=lambda item: tuple(map(str, item[0]))):
@@ -294,7 +299,8 @@ def render(report):
         lines.append("| " + " | ".join(_cell(value) for value in (case, row["family"], row["truth"], row["truth_status"], row["cpu_error"], row["gpu_max_error"], row["budget"])) + " |")
     lines.extend(["", "## Per-trial results", "",
                   "Correct, explicit wrong, and no-result counts are separate. No result includes abstention, token exhaustion, or missing verdict; pending and not-started slots are shown separately. Default means the reasoning_effort field was omitted from the captured API request.", "",
-                  "| Trial | Arm | Provider / model | Reasoning / token cap / rounds | Attempts | Correct | Explicit wrong | No result | Pending | Not started | API estimate | Raw coverage |",
+                  "Trace trial names are local rN identifiers; experiment batches below use preserved original_trial metadata.", "",
+                  "| Experiment batch | Arm | Provider / model | Reasoning / token cap / rounds | Attempts | Correct | Explicit wrong | No result | Pending | Not started | API estimate | Raw coverage |",
                   "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|"])
     for group in report["groups"]:
         counts = group["outcomes"]

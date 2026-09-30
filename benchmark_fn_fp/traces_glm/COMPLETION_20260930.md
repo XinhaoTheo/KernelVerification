@@ -9,7 +9,7 @@
 | 其他题库 | 0 | 0 | 0 | 0 |
 | 合计 | 58 | 48 | 56 | 162 |
 
-本轮 trial 为 `completion_20260930_r1`，模型 `accounts/fireworks/models/glm-5p3`，reasoning_effort=low。三组使用同一公开 kernel 和合同；无工具一次调用最多 32768 输出 tokens，工具组所有角色合计最多 32768 输出 tokens，solo 最多 10 轮、debate 最多 4 轮。GPU 为 Modal T4，最多四个工具任务并发。SDK 不自动重试。
+本轮原始实验标签为 `completion_20260930_r1`，模型 `accounts/fireworks/models/glm-5p3`，reasoning_effort=low。三组使用同一公开 kernel 和合同；无工具一次调用最多 32768 输出 tokens，工具组所有角色合计最多 32768 输出 tokens，solo 最多 10 轮、debate 最多 4 轮。GPU 为 Modal T4，最多四个工具任务并发。SDK 不自动重试。
 
 已有正确、错误和主动弃答都算覆盖，不为提高成绩重跑。只有基础设施失败或没有最终结果的任务可以追加一次独立 `completion_20260930_r2`；第一次原始记录完整保留。补全依赖所有历史 trial 的覆盖，不只检查本轮目录。全部历史 OpenRouter/Fireworks 结果保留，精确模型与预算差异继续披露；这次补齐不代表历史数据成为统一配置的新实验。
 
@@ -33,6 +33,8 @@
 新增 162 个位置共执行 163 次 trial：162 次形成有效最终判断，另 1 次为 case_11 solo 的 r1，在回合上限内未产出 verdict；按预先规则追加的 r2 完成。两次记录均保留。有效判断包含 147 个正确、10 个错误、5 个主动弃答；没有为错误或弃答重跑。GLM 历史总计由 305 增至 468 次 trial。
 
 本轮 806 次实际 API 调用全部保存了 request、response 和调用元数据，包括 case_11 未给出 verdict 的首次尝试。逐条检查了模型、reasoning effort、源码及合同 hash、累计输出预算、单价快照和工具调用 usage 的完整性；没有发现缺项。开跑前的 7,153 个历史 trace 文件逐个 SHA-256 比较，全部保持原样。
+
+上述 7,153 个文件不变是补实验结束时的审计快照。随后统一目录命名为每个 case/arm 下的 `r1`、`r2`……，仅调整目录及 `trace_meta.json` 的身份、追溯字段；原始请求、响应、transcript 和 probe 内容不变。旧实验标签保存在 `original_trial`，旧路径保存在 `original_trace_path`，原 metadata 字节及完整映射保存在[命名迁移记录](migration_20260930_trial_names.json)。本文链接已更新，成绩与费用未改；目录序号本身不代表相同模型或预算。
 
 保留的旧结果中，16 个已完成位置没有可确认的完整原始 API payload；按用户“已有不重跑”的要求保留并在 INDEX 披露，不用新的 trace 冒充旧运行的记录。
 
@@ -64,9 +66,9 @@ Pilot 中，solo 相比无工具多判对 6 题（+25 个百分点）；debate �
 | Case / arm | 抽查结果 |
 |---|---|
 | case_19 / solo、debate | 16 次实际 API 请求均含完整 353 行源码及合同，raw request/response 齐全，输出预算未超限；两组均有真实 GPU 反例支持 reject。部分非决定性推理与工具参数错误保留在 trace。 |
-| case_31 / solo | 5 次实际请求均含完整 323 行源码及合同；输出 3,935 tokens。reject 与真值一致，静态定位成立，但 [t7 自写参考](case_31/solo/completion_20260930_r1/probes/t7_probe.py) 把 `[L,H,D]` 张量算成跨 head 的 `[L,H,H]` attention，所报数值误差不能作为有效反例。最终声称已由正确参考确认过强。 |
-| case_31 / debate | 12 次实际请求全文完整；输出 10,717 tokens。[t16 参考](case_31/debate/completion_20260930_r1/probes/t16_probe.py) 正确按 query 及同序列 keys 计算，batch 0 误差 0.545661，支持尾块 masking 缺陷；reject 与证据一致。 |
+| case_31 / solo | 5 次实际请求均含完整 323 行源码及合同；输出 3,935 tokens。reject 与真值一致，静态定位成立，但 [t7 自写参考](case_31/solo/r1/probes/t7_probe.py) 把 `[L,H,D]` 张量算成跨 head 的 `[L,H,H]` attention，所报数值误差不能作为有效反例。最终声称已由正确参考确认过强。 |
+| case_31 / debate | 12 次实际请求全文完整；输出 10,717 tokens。[t16 参考](case_31/debate/r1/probes/t16_probe.py) 正确按 query 及同序列 keys 计算，batch 0 误差 0.545661，支持尾块 masking 缺陷；reject 与证据一致。 |
 | case_82 / solo | 4 次实际请求完整；输出 1,154 tokens。GPU 实测 E=0.001576224834839737 与冻结答案三次实测一致，reject 正确。独立 image 配置固定 NumPy 2.2.6，产物未另存 runtime 版本快照。probe 输出是 Python dict，自动 JSON 解析失败，但原始 stdout 完整可核验。 |
-| case_82 / debate | 10 次实际请求完整；输出 5,963 tokens。[t12 GPU 参考](case_82/debate/completion_20260930_r1/probes/t12_probe.py) 正确，E=0.0015762248348375875，与冻结值仅差 2.15e-15，reject 正确。对误差分母由 floor 主导的假说经实验反驳后未采用；整体 max_abs_err 的 fp16 归因未经消融，不作为决定性证据。 |
+| case_82 / debate | 10 次实际请求完整；输出 5,963 tokens。[t12 GPU 参考](case_82/debate/r1/probes/t12_probe.py) 正确，E=0.0015762248348375875，与冻结值仅差 2.15e-15，reject 正确。对误差分母由 floor 主导的假说经实验反驳后未采用；整体 max_abs_err 的 fp16 归因未经消融，不作为决定性证据。 |
 
 case_31 说明“判对”与“验证证据可靠”不是同一个指标；这是一项具体观察，不能单凭此例推断 debate 整体优于 solo。

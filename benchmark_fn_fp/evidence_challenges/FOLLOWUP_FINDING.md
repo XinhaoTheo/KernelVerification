@@ -1,5 +1,7 @@
 # Follow-up experiment scheduling: finding from case_75
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 Observed in frozen `ea_methods_v3_r1` and `ea_methods_v3_r2`; no runtime or prompt
 change was made during either cohort. This is an implementation proposal, not a
 tested fix and not a replacement score for the two abstentions.

@@ -1,5 +1,7 @@
 # Tool-trace audit: case_50–case_53
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 Updated: 2026-09-24 UTC, `oz_low32_r1` and `oz_low32_r2` collections. This is a read-only
 review of saved probe code, stdout/stderr, tool events, claim evidence, source
 hashes, and final verdicts. No GPU probe or API was re-executed. Both rounds are

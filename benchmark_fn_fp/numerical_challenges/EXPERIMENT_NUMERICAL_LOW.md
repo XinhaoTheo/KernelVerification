@@ -1,9 +1,11 @@
 # GLM numerical-challenge experiment
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 This is the completed two-repeat experiment on the six frozen numerical cases.
 The same Fireworks GLM model (`accounts/fireworks/models/glm-5p3`) was used for
-all three arms. `reasoning_effort=low`, `max_tokens=8192`, and the canonical
-trial names were `numerical_low_r1` and `numerical_low_r2`. Every completed
+all three arms. `reasoning_effort=low`, `max_tokens=8192`, and the original
+experimental labels were `numerical_low_r1` and `numerical_low_r2`. Every completed
 attempt has a raw API trace; tool attempts also have the full GPU probe and
 agent trace.
 
@@ -38,5 +40,5 @@ repeat accuracy table. The initial 65K/32K failures were caused by long hidden
 reasoning; adding the recorded low-effort setting made the complete runs finish.
 
 Canonical traces are under
-`benchmark_fn_fp/traces_glm/<case>/<arm>/<trial>/`, and the generated global
+`benchmark_fn_fp/traces_glm/<case>/<arm>/rN/`, and the generated global
 scoreboard is `benchmark_fn_fp/eval_scripts/scoreboard.json`.

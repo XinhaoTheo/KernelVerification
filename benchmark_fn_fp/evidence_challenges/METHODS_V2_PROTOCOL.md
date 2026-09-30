@@ -1,5 +1,7 @@
 # Other-methods pilot v2
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 2026-09-24, recorded before the first case_66–case_71 model call. The user requested
 additional small experiments after case_62–case_65 failed to separate solo and debate.
 This is a new development cohort; the original protocol and negative results
@@ -64,7 +66,7 @@ to drop trials or lower solo's budget. Other construction or workflow ideas can
 be tested as a separately versioned pilot; do not relabel them as this cohort.
 No unrecorded retries and no replacement of a failed designated slot.
 
-Traces: ../traces_glm/<case>/<arm>/<trial>/. Report this cohort separately in
+Traces: ../traces_glm/<case>/<arm>/rN/. Report this cohort separately in
 METHODS_V2_REPORT.md and private_data/reports/methods_v2_scoreboard.json, preserving case_62–case_65 REPORT.md
 and private_data/reports/scoreboard.json. Costs are profile estimates excluding Modal GPU and any
 unreported failed-call usage. Accuracy and the quality of its evidence are

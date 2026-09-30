@@ -15,7 +15,7 @@ case_64 的错误不能归因于秘密输入：PCG64 seed、生成器、操作�
 没有实际求出置换并检查组合，因此把普遍可疑的源码当成了当前固定数据必然失败。
 case_62 的 confidence 0.95 同样不能解释为经校准的概率；本实验没有重标定 confidence。
 
-原始结果：[case_62](../traces_glm/case_62/single_call/ea_pilot_r1/transcript.md)、
-[case_63](../traces_glm/case_63/single_call/ea_pilot_r1/transcript.md)、
-[case_64](../traces_glm/case_64/single_call/ea_pilot_r1/transcript.md)、
-[case_65](../traces_glm/case_65/single_call/ea_pilot_r1/transcript.md)。
+原始结果：[case_62](../traces_glm/case_62/single_call/r1/transcript.md)、
+[case_63](../traces_glm/case_63/single_call/r1/transcript.md)、
+[case_64](../traces_glm/case_64/single_call/r1/transcript.md)、
+[case_65](../traces_glm/case_65/single_call/r1/transcript.md)。

@@ -1,5 +1,7 @@
 # case_44–case_49 extension trace audit
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 Trials: `extension_low32_r1` and `extension_low32_r2`. Reviews: 2026-09-24 UTC.
 The main sections audit r1; the final section independently audits r2.
 
@@ -19,18 +21,18 @@ documented below; its actual denominator still equals the contract denominator.
 
 | Case | Arm | Decisive probe | Measured relative L2 | Contract threshold | Verdict |
 |---|---|---|---:|---:|---|
-| case_44 | solo | [t7](../traces_glm/case_44/solo/extension_low32_r1/probes/t7_probe.py) | 0.00024261613799325 | 0.02 | trust |
-| case_45 | solo | [t7](../traces_glm/case_45/solo/extension_low32_r1/probes/t7_probe.py) | 0.14481964583989307 | 0.02 | reject |
-| case_46 | solo | [t6](../traces_glm/case_46/solo/extension_low32_r1/probes/t6_probe.py) | 0.023636854556236472 | 0.08 | trust |
-| case_47 | solo | [t7](../traces_glm/case_47/solo/extension_low32_r1/probes/t7_probe.py) | 0.12440399903958174 | 0.08 | reject |
-| case_48 | solo | [t6](../traces_glm/case_48/solo/extension_low32_r1/probes/t6_probe.py) | 0.00003372867387109279 | 0.0002 | trust |
-| case_49 | solo | [t7](../traces_glm/case_49/solo/extension_low32_r1/probes/t7_probe.py) | 0.0004729252164019362 | 0.0002 | reject |
-| case_44 | debate | [t12](../traces_glm/case_44/debate/extension_low32_r1/probes/t12_probe.py), [t13](../traces_glm/case_44/debate/extension_low32_r1/probes/t13_probe.py) | 0.00024261613799325 | 0.02 | trust |
-| case_45 | debate | [t12](../traces_glm/case_45/debate/extension_low32_r1/probes/t12_probe.py) | 0.14481964583989307 | 0.02 | reject |
-| case_46 | debate | [t12](../traces_glm/case_46/debate/extension_low32_r1/probes/t12_probe.py) | 0.023636854556236472 | 0.08 | trust |
-| case_47 | debate | [t13](../traces_glm/case_47/debate/extension_low32_r1/probes/t13_probe.py) | 0.12440399903958174 | 0.08 | reject |
-| case_48 | debate | [t12](../traces_glm/case_48/debate/extension_low32_r1/probes/t12_probe.py) | 0.00003372867387109279 | 0.0002 | trust |
-| case_49 | debate | [t8](../traces_glm/case_49/debate/extension_low32_r1/probes/t8_probe.py) | 0.0004729252165482065 | 0.0002 | reject |
+| case_44 | solo | [t7](../traces_glm/case_44/solo/r1/probes/t7_probe.py) | 0.00024261613799325 | 0.02 | trust |
+| case_45 | solo | [t7](../traces_glm/case_45/solo/r1/probes/t7_probe.py) | 0.14481964583989307 | 0.02 | reject |
+| case_46 | solo | [t6](../traces_glm/case_46/solo/r1/probes/t6_probe.py) | 0.023636854556236472 | 0.08 | trust |
+| case_47 | solo | [t7](../traces_glm/case_47/solo/r1/probes/t7_probe.py) | 0.12440399903958174 | 0.08 | reject |
+| case_48 | solo | [t6](../traces_glm/case_48/solo/r1/probes/t6_probe.py) | 0.00003372867387109279 | 0.0002 | trust |
+| case_49 | solo | [t7](../traces_glm/case_49/solo/r1/probes/t7_probe.py) | 0.0004729252164019362 | 0.0002 | reject |
+| case_44 | debate | [t12](../traces_glm/case_44/debate/r1/probes/t12_probe.py), [t13](../traces_glm/case_44/debate/r1/probes/t13_probe.py) | 0.00024261613799325 | 0.02 | trust |
+| case_45 | debate | [t12](../traces_glm/case_45/debate/r1/probes/t12_probe.py) | 0.14481964583989307 | 0.02 | reject |
+| case_46 | debate | [t12](../traces_glm/case_46/debate/r1/probes/t12_probe.py) | 0.023636854556236472 | 0.08 | trust |
+| case_47 | debate | [t13](../traces_glm/case_47/debate/r1/probes/t13_probe.py) | 0.12440399903958174 | 0.08 | reject |
+| case_48 | debate | [t12](../traces_glm/case_48/debate/r1/probes/t12_probe.py) | 0.00003372867387109279 | 0.0002 | trust |
+| case_49 | debate | [t8](../traces_glm/case_49/debate/r1/probes/t8_probe.py) | 0.0004729252165482065 | 0.0002 | reject |
 
 case_44/case_45 probes use the centered population variance reference with epsilon 1e-5.
 case_46/case_47 use `np.linalg.solve` on the actual supplied FP32 matrix and RHS cast to
@@ -57,7 +59,7 @@ covers every r2 repetition after its run archive became available.
 
 ## case_44 debate: incorrect auxiliary denominator diagnostic, valid core verdict
 
-In [case_44 debate t12](../traces_glm/case_44/debate/extension_low32_r1/probes/t12_probe.py),
+In [case_44 debate t12](../traces_glm/case_44/debate/r1/probes/t12_probe.py),
 `eff_den` is computed as `norm(output) / norm(x - mean64)`. This estimates the
 reciprocal of the effective denominator. Estimating the denominator requires
 the reverse ratio, with the small FP32-versus-FP64 mean difference also taken
@@ -77,7 +79,7 @@ GPU probe, t13, reproduces the same full-output error while measuring the
 mean contribution separately. Thus the trust verdict remains supported.
 
 The agent also explicitly recognized the problem in its saved
-[claim evidence](../traces_glm/case_44/debate/extension_low32_r1/claims.json):
+[claim evidence](../traces_glm/case_44/debate/r1/claims.json):
 the claim c1 evidence summary calls `eff_den_from_output` and `den_rel_err`
 “a probe-side formula artifact” and states that the direct relative-L2
 comparison is decisive. The original probe was not corrected or rerun for
@@ -86,7 +88,7 @@ measurement failure or an ignored contract violation.
 
 ## case_47 debate: incorrect inactive floor and limited rounding diagnostic
 
-[case_47 debate t13](../traces_glm/case_47/debate/extension_low32_r1/probes/t13_probe.py)
+[case_47 debate t13](../traces_glm/case_47/debate/r1/probes/t13_probe.py)
 uses `max(norm(x), 0.04)` instead of the required
 `max(norm(x), 0.001*sqrt(16))`, whose floor is 0.004. This is a metric-expression
 error. For the only in-scope input, `norm(x) = 18.216566495477316`, so both
@@ -147,18 +149,18 @@ reconstructed FP32 bytes exactly match the oracle output hashes.
 
 | Case | Arm | Core GPU probe | Relative L2 | Verdict |
 |---|---|---|---:|---|
-| case_44 | solo | [t7](../traces_glm/case_44/solo/extension_low32_r2/probes/t7_probe.py) | 0.00024261613799325 | trust |
-| case_44 | debate | [t9](../traces_glm/case_44/debate/extension_low32_r2/probes/t9_probe.py) | 0.00024261613799325 | trust |
-| case_45 | solo | [t7](../traces_glm/case_45/solo/extension_low32_r2/probes/t7_probe.py) | 0.14481964583989307 | reject |
-| case_45 | debate | [t8](../traces_glm/case_45/debate/extension_low32_r2/probes/t8_probe.py) | 0.14481964583989307 | reject |
-| case_46 | solo | [t7](../traces_glm/case_46/solo/extension_low32_r2/probes/t7_probe.py), stdout evidence | 0.023636854556236472 | trust |
-| case_46 | debate | [t12](../traces_glm/case_46/debate/extension_low32_r2/probes/t12_probe.py) | 0.023636854556236472 | trust |
-| case_47 | solo | [t7](../traces_glm/case_47/solo/extension_low32_r2/probes/t7_probe.py) | 0.12440399903958174 | reject |
-| case_47 | debate | [t12](../traces_glm/case_47/debate/extension_low32_r2/probes/t12_probe.py) | 0.12440399903958174 | reject |
-| case_48 | solo | [t7](../traces_glm/case_48/solo/extension_low32_r2/probes/t7_probe.py) | 0.00003372867393290552 | trust |
-| case_48 | debate | [t12](../traces_glm/case_48/debate/extension_low32_r2/probes/t12_probe.py) | 0.000033728673707072835 | trust |
-| case_49 | solo | [t7](../traces_glm/case_49/solo/extension_low32_r2/probes/t7_probe.py) | 0.0004729252164019362 | reject |
-| case_49 | debate | [t12](../traces_glm/case_49/debate/extension_low32_r2/probes/t12_probe.py) | 0.0004729252165880834 | reject |
+| case_44 | solo | [t7](../traces_glm/case_44/solo/r2/probes/t7_probe.py) | 0.00024261613799325 | trust |
+| case_44 | debate | [t9](../traces_glm/case_44/debate/r2/probes/t9_probe.py) | 0.00024261613799325 | trust |
+| case_45 | solo | [t7](../traces_glm/case_45/solo/r2/probes/t7_probe.py) | 0.14481964583989307 | reject |
+| case_45 | debate | [t8](../traces_glm/case_45/debate/r2/probes/t8_probe.py) | 0.14481964583989307 | reject |
+| case_46 | solo | [t7](../traces_glm/case_46/solo/r2/probes/t7_probe.py), stdout evidence | 0.023636854556236472 | trust |
+| case_46 | debate | [t12](../traces_glm/case_46/debate/r2/probes/t12_probe.py) | 0.023636854556236472 | trust |
+| case_47 | solo | [t7](../traces_glm/case_47/solo/r2/probes/t7_probe.py) | 0.12440399903958174 | reject |
+| case_47 | debate | [t12](../traces_glm/case_47/debate/r2/probes/t12_probe.py) | 0.12440399903958174 | reject |
+| case_48 | solo | [t7](../traces_glm/case_48/solo/r2/probes/t7_probe.py) | 0.00003372867393290552 | trust |
+| case_48 | debate | [t12](../traces_glm/case_48/debate/r2/probes/t12_probe.py) | 0.000033728673707072835 | trust |
+| case_49 | solo | [t7](../traces_glm/case_49/solo/r2/probes/t7_probe.py) | 0.0004729252164019362 | reject |
+| case_49 | debate | [t12](../traces_glm/case_49/debate/r2/probes/t12_probe.py) | 0.0004729252165880834 | reject |
 
 The correct verdicts are supported by measured results, but this does **not**
 mean every probe process exited successfully:

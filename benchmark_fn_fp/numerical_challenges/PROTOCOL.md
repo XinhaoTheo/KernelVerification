@@ -57,7 +57,7 @@ wrong verdict. Extra explanation alone is not a correct-label improvement.
 
 ## Records
 
-Every paid run reserves `../traces_glm/<case>/<arm>/<trial>/` before calling the
+Every paid run reserves `../traces_glm/<case>/<arm>/rN/` before calling the
 model. Preserve full API requests/responses, provider reasoning, finish reasons,
 reported usage, readable transcript and final answer. Tool runs also preserve
 state, claims, tool events and every probe's source/stdout/stderr/result. Failed

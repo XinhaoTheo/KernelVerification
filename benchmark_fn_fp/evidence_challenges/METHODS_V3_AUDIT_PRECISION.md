@@ -1,5 +1,7 @@
 # case_74/case_75 precision-reference audit, both fixed pilot rounds
 
+存储命名更新（2026-09-30）：本文批次标签及 r1/r2 轮次简称保留原实验含义，原标签记在 `trace_meta.json.original_trial`。统一目录使用每个 case/arm 下的 `rN`；见[命名与迁移说明](../TRACES.md)。
+
 2026-09-24。范围为 `ea_methods_v3_r1`、`ea_methods_v3_r2` 的 case_74/case_75 × 三个 arm，共 12 次运行。本审查没有新增付费调用或改变已冻结案例。
 
 **case_74 在两轮均出现明确的 solo 错误、debate 正确，而且证据有效；但 case_75 两轮均为 solo 正确、debate 弃答，因此这对案例的总体正确率仍然持平。** 不应把明确误判的减少解释为已经提高了完整 cohort 的正确率。
@@ -28,21 +30,21 @@
 
 ## case_74：两次明确纠错均有证据
 
-**Solo 两轮都把普通 NumPy FP64 reduction 当成精确参考。** [r1 t7](../traces_glm/case_74/solo/ea_methods_v3_r1/probes/t7_probe.py)及[r2 t7](../traces_glm/case_74/solo/ea_methods_v3_r2/probes/t7_probe.py)用 `vals64.sum(axis=1)` 得到零，并把它命名为 exact target。实际 kernel 输出正确，但错误参考产生约 `1.36e13` 的伪误差。[r1 verdict](../traces_glm/case_74/solo/ea_methods_v3_r1/verdict.json)和[r2 verdict](../traces_glm/case_74/solo/ea_methods_v3_r2/verdict.json)均为置信度 0.99 的 reject。r1 还错误声称正的小量会跨行抵消。这是实质性的参考算法和合同推理错误，非工具失败或缺失证据。
+**Solo 两轮都把普通 NumPy FP64 reduction 当成精确参考。** [r1 t7](../traces_glm/case_74/solo/r1/probes/t7_probe.py)及[r2 t7](../traces_glm/case_74/solo/r2/probes/t7_probe.py)用 `vals64.sum(axis=1)` 得到零，并把它命名为 exact target。实际 kernel 输出正确，但错误参考产生约 `1.36e13` 的伪误差。[r1 verdict](../traces_glm/case_74/solo/r1/verdict.json)和[r2 verdict](../traces_glm/case_74/solo/r2/verdict.json)均为置信度 0.99 的 reject。r1 还错误声称正的小量会跨行抵消。这是实质性的参考算法和合同推理错误，非工具失败或缺失证据。
 
-**Debate r1 有可见的跨角色纠正链。** [完整 transcript](../traces_glm/case_74/debate/ea_methods_v3_r1/transcript.md)中，Skeptic 先重复“FP64 零就是 exact”的错误指控；Describer 随后明确指出初始参考的舍入问题，将目标恢复为八个正小量的总和。Skeptic 改为检查固定排列是否使补偿项丢失小量，Experimenter 再执行 [t12](../traces_glm/case_74/debate/ea_methods_v3_r1/probes/t12_probe.py)：实际 GPU 输出对 `math.fsum` 目标的[误差为 1.9235792803862544e-8](../traces_glm/case_74/debate/ea_methods_v3_r1/probes/t12_stdout.txt)，同时检查 dtype、shape、finite 和输入不变性。t13/t14 是 CPU 模拟和输入排列检查，确认两个 `±2^30` 位于所有小量之前；它们不是额外 GPU 执行。Judge 最终正确 trust。
+**Debate r1 有可见的跨角色纠正链。** [完整 transcript](../traces_glm/case_74/debate/r1/transcript.md)中，Skeptic 先重复“FP64 零就是 exact”的错误指控；Describer 随后明确指出初始参考的舍入问题，将目标恢复为八个正小量的总和。Skeptic 改为检查固定排列是否使补偿项丢失小量，Experimenter 再执行 [t12](../traces_glm/case_74/debate/r1/probes/t12_probe.py)：实际 GPU 输出对 `math.fsum` 目标的[误差为 1.9235792803862544e-8](../traces_glm/case_74/debate/r1/probes/t12_stdout.txt)，同时检查 dtype、shape、finite 和输入不变性。t13/t14 是 CPU 模拟和输入排列检查，确认两个 `±2^30` 位于所有小量之前；它们不是额外 GPU 执行。Judge 最终正确 trust。
 
-**Debate r2 独立纠正了参考，但没有重新执行 GPU。** Describer 在结构分析中识别 FP64 参考不可靠，Experimenter 的 [t16](../traces_glm/case_74/debate/ea_methods_v3_r2/probes/t16_probe.py)和[t17](../traces_glm/case_74/debate/ea_methods_v3_r2/probes/t17_probe.py)重建固定输入，使用 `Fraction(float(v))` 精确求和，并比较 FP32 模拟和公共初始 probe 已记录的真实 T4 输出。[t17 输出](../traces_glm/case_74/debate/ea_methods_v3_r2/probes/t17_stdout.txt)的有理数目标和误差与私有独立 oracle 一致。因此 trust 有效，但应称为对共享 GPU 观测做独立参考复核，而非该 arm 再次运行 GPU。早先 t13/t14 因 `Fraction(np.float32(...))` 类型错误失败，修复和失败文件均保留。
+**Debate r2 独立纠正了参考，但没有重新执行 GPU。** Describer 在结构分析中识别 FP64 参考不可靠，Experimenter 的 [t16](../traces_glm/case_74/debate/r2/probes/t16_probe.py)和[t17](../traces_glm/case_74/debate/r2/probes/t17_probe.py)重建固定输入，使用 `Fraction(float(v))` 精确求和，并比较 FP32 模拟和公共初始 probe 已记录的真实 T4 输出。[t17 输出](../traces_glm/case_74/debate/r2/probes/t17_stdout.txt)的有理数目标和误差与私有独立 oracle 一致。因此 trust 有效，但应称为对共享 GPU 观测做独立参考复核，而非该 arm 再次运行 GPU。早先 t13/t14 因 `Fraction(np.float32(...))` 类型错误失败，修复和失败文件均保留。
 
 该固定排列中两项相邻且位于小量之前。模型某些概括只检查“两项之间没有小量”；这不是适用于所有排列的充分条件，因为第一项之前的小量也可能丢失。这里实际输出、固定顺序与精确目标的直接比较使最终结论成立。
 
 ## case_75：两轮弃答和流程限制
 
-Solo 的 [r1 t9](../traces_glm/case_75/solo/ea_methods_v3_r1/probes/t9_probe.py)、[r2 t8](../traces_glm/case_75/solo/ea_methods_v3_r2/probes/t8_probe.py)均实际运行 kernel，以 `math.fsum` 得到正确非零目标和 E=1.0。r2 的前一个 probe 因缺少 NumPy import 失败，随后修复。两次最终 reject 有充分证据。
+Solo 的 [r1 t9](../traces_glm/case_75/solo/r1/probes/t9_probe.py)、[r2 t8](../traces_glm/case_75/solo/r2/probes/t8_probe.py)均实际运行 kernel，以 `math.fsum` 得到正确非零目标和 E=1.0。r2 的前一个 probe 因缺少 NumPy import 失败，随后修复。两次最终 reject 有充分证据。
 
-**Debate r1** 的 [t12](../traces_glm/case_75/debate/ea_methods_v3_r1/probes/t12_probe.py)使用普通 NumPy FP64 reduction，得到错误的零目标；t13 对参考的审查也重复同一问题。Experimenter 在[transcript](../traces_glm/case_75/debate/ea_methods_v3_r1/transcript.md)中发现错误，声称会立即改用 fsum 重跑，但没有提交该修复实验。Judge 依靠实际零输出和正目标的数学论证尝试 reject，因 claims 仍为 inconclusive 被 ledger 拒绝，最终记录 needs_more_evidence。不能把口头计划当作已经执行的 probe。
+**Debate r1** 的 [t12](../traces_glm/case_75/debate/r1/probes/t12_probe.py)使用普通 NumPy FP64 reduction，得到错误的零目标；t13 对参考的审查也重复同一问题。Experimenter 在[transcript](../traces_glm/case_75/debate/r1/transcript.md)中发现错误，声称会立即改用 fsum 重跑，但没有提交该修复实验。Judge 依靠实际零输出和正目标的数学论证尝试 reject，因 claims 仍为 inconclusive 被 ledger 拒绝，最终记录 needs_more_evidence。不能把口头计划当作已经执行的 probe。
 
-**Debate r2** 确实完成了修复：[t13](../traces_glm/case_75/debate/ea_methods_v3_r2/probes/t13_probe.py)执行复制的 Triton kernel，使用精确 Fraction、math.fsum 和仅累加小量三种计算互相核对，得到[正确非零目标、GPU 零输出与 E=1.0](../traces_glm/case_75/debate/ea_methods_v3_r2/probes/t13_stdout.txt)。审查已对复制的 `_compensated_rows` 和 `run` 与冻结源码逐 AST 比较，完全相同；输入生成逻辑也一致。但成功 t13 未通过 `finalize_probe_evidence` 正确进入 c1 的状态，后续 reject 仍被 ledger 阻止。最终 [verdict](../traces_glm/case_75/debate/ea_methods_v3_r2/verdict.json)明确弃答，缺口主要是证据登记流程，而非没有数值证据。
+**Debate r2** 确实完成了修复：[t13](../traces_glm/case_75/debate/r2/probes/t13_probe.py)执行复制的 Triton kernel，使用精确 Fraction、math.fsum 和仅累加小量三种计算互相核对，得到[正确非零目标、GPU 零输出与 E=1.0](../traces_glm/case_75/debate/r2/probes/t13_stdout.txt)。审查已对复制的 `_compensated_rows` 和 `run` 与冻结源码逐 AST 比较，完全相同；输入生成逻辑也一致。但成功 t13 未通过 `finalize_probe_evidence` 正确进入 c1 的状态，后续 reject 仍被 ledger 阻止。最终 [verdict](../traces_glm/case_75/debate/r2/verdict.json)明确弃答，缺口主要是证据登记流程，而非没有数值证据。
 
 两轮均未触及累计输出 token 上限。应保留这项编排限制，它在最终正确率中抵消了 case_74 的收益；不能事后修正 ledger 或按拟提交标签重评分。
 

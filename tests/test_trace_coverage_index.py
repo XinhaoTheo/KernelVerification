@@ -58,6 +58,18 @@ def test_legacy_absent_metadata_and_abstention_are_completed(index):
     assert coverage["cases"][0]["arms"]["solo"]["selected"] == legacy
 
 
+def test_numeric_rename_preserves_original_coverage_tiebreak(index):
+    earlier = row(trial="r10", outcome="wrong_verdict")
+    later = row(trial="r2")
+    metadata = {
+        earlier["path"]: {"selection_sort_key": ["", "traces_glm/case_01/solo/aaa"]},
+        later["path"]: {"selection_sort_key": ["", "traces_glm/case_01/solo/zzz"]},
+    }
+    coverage = index.build_coverage([later, earlier], {"case_01": {"dataset": "benchmark_fn_fp"}}, metadata)
+    assert coverage["cases"][0]["arms"]["solo"]["selected"] == earlier
+    assert sorted(["r10", "r2", "r1"], key=index.trial_sort_key) == ["r1", "r2", "r10"]
+
+
 @pytest.mark.parametrize("overrides, metadata", [
     ({"outcome": "token_limit"}, {}),
     ({"outcome": "no_verdict"}, {}),

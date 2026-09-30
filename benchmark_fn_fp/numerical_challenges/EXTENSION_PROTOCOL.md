@@ -1,5 +1,7 @@
 # case_44–case_49 extension protocol
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 Recorded 2026-09-23 before any case_44–case_49 model evaluation. This extension does not
 change the original case_38–case_43 protocol or its replication gate.
 
@@ -35,7 +37,7 @@ not qualify for the gate. Later retries cannot replace these slots. Default
 reasoning control results must be disclosed even if they remove the observed
 gap; one control attempt is not evidence of a stable error rate.
 
-All attempts reserve canonical traces under ../traces_glm/<case>/<arm>/<trial>
+All attempts reserve canonical traces under ../traces_glm/<case>/<arm>/rN
 before calls. Requests, full provider responses and reasoning, usage, errors,
 finish reasons, transcripts, tool events, probe sources and results are kept.
 No case is revised after model evaluation. Report all six cases and all trials,

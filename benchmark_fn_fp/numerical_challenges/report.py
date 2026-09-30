@@ -15,7 +15,7 @@ import sys
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "eval_scripts"))
 from summarize_traces import build_report
-from traces import iter_trace_records
+from traces import iter_trace_records, experiment_trial, trace_selection_key
 
 DATASET = "numerical_challenges"
 MODEL = "accounts/fireworks/models/glm-5p3"
@@ -74,7 +74,7 @@ def replication_gate(rows, labels):
     for case, label in sorted(labels.items()):
         arms = by_case[case]
         for attempts in arms.values():
-            attempts.sort(key=lambda row: (row.get("created_at") or "", row["trial"], row["path"]))
+            attempts.sort(key=trace_selection_key)
         source = arms["single_call"][:3]
         tool_windows = {arm: arms[arm][:2] for arm in ("solo", "debate")}
         source_finished = len(source) == 3 and all(_finished(row) for row in source)
@@ -189,7 +189,7 @@ def derive(root=ROOT):
                 "transcript.md" if (path / "transcript.md").exists() else "trace_meta.json")
             rows.append(row)
     rows.sort(key=lambda row: (row["case"], ARMS.index(row["arm"]) if row["arm"] in ARMS else 99,
-                               row.get("created_at") or "", row["trial"], row["path"]))
+                               trace_selection_key(row)))
     ordinal = Counter()
     for row in rows:
         key = (row["case"], row["arm"], row["model"], row["provider"])
@@ -209,11 +209,16 @@ def derive(root=ROOT):
             "outcomes": _counts(attempts), "status_counts": dict(Counter(row["status"] for row in attempts)),
             "probes": sum(row.get("probes", 0) for row in attempts), **_costs(attempts),
         }
-    # Only compare matching trial IDs under the same exact provider and model.
+    # Local rN names are independent per arm; pair the original experiment batch.
     paired = defaultdict(dict)
     for row in rows:
         if row["arm"] in {"solo", "debate"}:
-            paired[(row["case"], row["trial"], row["provider"], row["model"])][row["arm"]] = row
+            protocol = row.get("protocol") or {}
+            key = (row["case"], experiment_trial(row), row["provider"], row["model"],
+                   json.dumps({k: v for k, v in protocol.items() if k != "max_rounds"}, sort_keys=True))
+            if row["arm"] in paired[key]:
+                raise ValueError(f"Duplicate experiment arm: {key}/{row['arm']}")
+            paired[key][row["arm"]] = row
     comparisons = []
     for key, pair in sorted(paired.items()):
         if set(pair) != {"solo", "debate"}:

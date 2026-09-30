@@ -17,15 +17,56 @@ def _reader():
 
 
 def _single(root, *, provider, model, trial, dataset="benchmark_fn_fp",
-            verdict="trust", stop="stop"):
-    dest = root / provider / dataset / "case_a" / "single_call" / trial
+            verdict="trust", stop="stop", case="case_a"):
+    dest = root / provider / dataset / case / "single_call" / trial
     dest.mkdir(parents=True)
     (dest / "usage.json").write_text(json.dumps({
         "usage": {"input_tokens": 1000, "output_tokens": 2000},
         "stop_reason": stop, "response": {"verdict": verdict, "confidence": 0.8},
     }))
-    return {"path": dest, "case": "case_a", "arm": "single_call", "trial": trial,
+    return {"path": dest, "case": case, "arm": "single_call", "trial": trial,
             "dataset": dataset, "model": model, "provider": provider, "metadata": {}}
+
+
+def test_local_trial_numbers_do_not_merge_batches_or_budgets(tmp_path):
+    reader = _reader()
+    records = []
+    configs = [
+        ("case_01", "r1", "batch_a", 32768, 32768),
+        ("case_02", "r1", "batch_b", 32768, 32768),
+        ("case_04", "r2", "batch_a", 32768, 32768),
+        ("case_05", "r1", "batch_a", 65536, 32768),
+        ("case_06", "r1", "batch_a", 32768, 65536),
+    ]
+    for case, trial, batch, cap, total in configs:
+        record = _single(tmp_path, provider="fireworks", model="accounts/fireworks/models/glm-5p3",
+                         case=case, trial=trial)
+        record["metadata"] = {"original_trial": batch, "max_tokens": cap,
+                              "total_output_token_budget": total}
+        records.append(record)
+    report = reader.build_report(records=records, benchmark_dir=tmp_path, labels={})
+    groups = list(report["arms"].values())
+    assert len(groups) == 4
+    paired = next(group for group in groups if group["attempts"] == 2)
+    assert paired["original_trial"] == "batch_a"
+    assert {row["trial"] for row in paired["per_case"].values()} == {"r1", "r2"}
+    assert set(paired["per_case"]) == {"case_01", "case_04"}
+
+
+def test_reader_retains_batch_and_chronology_after_numeric_rename(tmp_path):
+    from benchmark_fn_fp.eval_scripts.traces import iter_trace_records, trace_selection_key
+    leaf = tmp_path / "traces_glm/case_01/solo/r2"
+    leaf.mkdir(parents=True)
+    original = "traces_glm/case_01/solo/completion_20260930_r1"
+    (leaf / "trace_meta.json").write_text(json.dumps({
+        "case": "case_01", "arm": "solo", "trial": "r2", "original_trial": "completion_20260930_r1",
+        "model": "accounts/fireworks/models/glm-5p3", "provider": "fireworks",
+        "original_trace_path": original, "selection_sort_key": ["", original],
+        "created_at": "2026-09-30T00:00:00Z"}))
+    row, = iter_trace_records(tmp_path)
+    assert row["trial"] == "r2"
+    assert row["original_trial"] == "completion_20260930_r1"
+    assert trace_selection_key(row) == ("", original)
 
 
 def test_report_separates_provider_trial_dataset_and_uses_exact_model_price(tmp_path):

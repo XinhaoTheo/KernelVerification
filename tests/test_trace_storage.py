@@ -38,6 +38,30 @@ def snapshot(root):
     return {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
 
+def test_next_numeric_trial_uses_all_selected_slots_without_overwriting(benchmark):
+    traces.reserve_trace("case_01", "solo", traces_dir="traces_glm", trial="r2")
+    traces.reserve_trace("case_02", "debate", traces_dir="traces_glm", trial="r10")
+    assert traces.next_trial_id(["case_01", "case_02"], ["solo", "debate"], traces_dir="traces_glm") == "r11"
+    assert traces.next_trial_id(["case_03"], ["solo"], traces_dir="traces_glm") == "r1"
+    first = traces.write_trace("case_03", "solo", traces_dir="traces_glm", files={"run.json": "first"})
+    second = traces.write_trace("case_03", "solo", traces_dir="traces_glm", files={"run.json": "second"})
+    assert (first.name, second.name) == ("r1", "r2")
+    assert (first / "run.json").read_text() == "first"
+    first_meta = json.loads((first / "trace_meta.json").read_text())
+    second_meta = json.loads((second / "trace_meta.json").read_text())
+    assert first_meta["original_trial"] != second_meta["original_trial"]
+
+
+def test_default_trial_collision_cannot_merge_concurrent_payloads(benchmark, monkeypatch):
+    first = traces.write_trace("case_01", "solo", traces_dir="traces_glm", files={"run.json": "first"})
+    before = snapshot(first)
+    # Simulate another writer reserving r1 after this writer selected its ID.
+    monkeypatch.setattr(traces, "next_trial_id", lambda *args, **kwargs: "r1")
+    with pytest.raises(FileExistsError):
+        traces.write_trace("case_01", "solo", traces_dir="traces_glm", files={"other.json": "second"})
+    assert snapshot(first) == before
+
+
 def test_archive_roundtrip_preserves_binary_probes_and_raw_calls(benchmark, tmp_path):
     source = tmp_path / "source_run"
     payloads = {

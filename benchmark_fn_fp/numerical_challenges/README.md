@@ -83,7 +83,11 @@ separately whether tools help and whether debate improves on solo.
 
 Model results are generated in [`REPORT.md`](REPORT.md), with the case_44–case_49 extension
 reported separately in [`EXTENSION_REPORT.md`](EXTENSION_REPORT.md). All canonical traces
-are in `../traces_glm/<case>/<arm>/<trial>/`, alongside older GLM experiments.
+are in `../traces_glm/<case>/<arm>/rN/`, alongside older GLM experiments.
+The number identifies an attempt within that case/arm, not a model or budget.
+Historical experimental labels and paths remain in `trace_meta.json` as
+`original_trial` and `original_trace_path`; `selection_sort_key` preserves their
+previous ordering. Protocols below retain their original batch labels.
 Each record includes dataset provenance, full raw API calls and token usage;
 tool runs also retain probe code, outputs and agent state. Never overwrite a
 trial or change a case after its first model evaluation.

@@ -24,6 +24,7 @@ BENCHMARK = REPO / "benchmark_fn_fp"
 OUT = REPO / "benchmark_fn_fp" / "eval_scripts" / "scoreboard.json"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from traces import experiment_trial  # noqa: E402
 from models import PROFILES, profile_for, profile_for_trace  # noqa: E402
 from case_registry import case_sort_key, validation_path  # noqa: E402
 
@@ -223,7 +224,14 @@ def build_report(*, records=None, labels: dict[str, dict[str, str]] | None = Non
                    "turns": 0, "claims": 0, "probes": 0}
         # Model identity is metadata, never a guess based on a common GLM family.
         row.update({key: record.get(key) for key in
-                    ("case", "original_case", "arm", "trial", "dataset", "provider", "model")})
+                    ("case", "original_case", "arm", "trial", "dataset", "provider", "model",
+                     "original_trace_path", "selection_sort_key")})
+        row["original_trial"] = experiment_trial(record)
+        metadata = record.get("metadata") or {}
+        protocol = {key: metadata.get(key) for key in (
+            "max_tokens", "total_output_token_budget", "reasoning_effort", "max_rounds",
+            "timeout_s", "runner_version", "prompt_variant")}
+        row["protocol"] = protocol
         row["path"] = str(run_dir.relative_to(root)) if run_dir.is_relative_to(root) else str(run_dir)
         truth = labels.get(record["dataset"], {}).get(record["case"])
         row["truth"] = truth
@@ -233,9 +241,14 @@ def build_report(*, records=None, labels: dict[str, dict[str, str]] | None = Non
         if error_path.exists() and error_path.read_text().strip():
             row["runner_error"] = error_path.read_text().strip()
         key = "/".join(str(record.get(part) or "unknown") for part in
-                       ("dataset", "provider", "model", "arm", "trial"))
+                       ("dataset", "provider", "model", "arm")) + "/" + row["original_trial"]
+        key += "/" + json.dumps(protocol, sort_keys=True, separators=(",", ":"))
         group = groups.setdefault(key, {
-            **{part: record.get(part) for part in ("dataset", "provider", "model", "arm", "trial")},
+            **{part: record.get(part) for part in ("dataset", "provider", "model", "arm")},
+            # Group-level trial is the historical batch for backwards-compatible
+            # protocol consumers; per_case[*].trial is the local display name.
+            "trial": row["original_trial"], "original_trial": row["original_trial"],
+            "protocol": protocol,
             "per_case": {},
         })
         if record["case"] in group["per_case"]:

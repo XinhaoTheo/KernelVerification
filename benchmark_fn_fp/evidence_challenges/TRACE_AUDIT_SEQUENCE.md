@@ -1,5 +1,7 @@
 # case_64 / case_65 pilot trace audit
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 Audit date: 2026-09-24. Trial: `ea_pilot_r1`. Scope: the four completed
 `solo` / `debate` runs for the sequence-audit pair. This audit only reads
 saved artifacts and performs local hash/JSON checks; it does not rerun GPU or
@@ -27,15 +29,15 @@ error `1e-5`; output shape, dtype and finiteness are also required.
 
 ## case_64: solo
 
-[Probe t7](../traces_glm/case_64/solo/ea_pilot_r1/probes/t7_probe.py)
+[Probe t7](../traces_glm/case_64/solo/r1/probes/t7_probe.py)
 enumerates `range(5)` and `itertools.product((0,1,2), repeat=L)`, asserts 121
 words, calls the actual `kernel.run_sequence` with CUDA inputs, and evaluates
 an independent forward FP64 logical reference. The reference starts from
 `C.copy()` for every word; `run_sequence` itself clones the initial cache.
 The probe checks `(8,32)`, float32, finite outputs and the contractual metric.
-[Its output](../traces_glm/case_64/solo/ea_pilot_r1/probes/t7_stdout.txt)
+[Its output](../traces_glm/case_64/solo/r1/probes/t7_stdout.txt)
 reports all 121 words, 0 failures, and maximum error 0.0. The
-[trust verdict](../traces_glm/case_64/solo/ea_pilot_r1/verdict.json) is supported.
+[trust verdict](../traces_glm/case_64/solo/r1/verdict.json) is supported.
 
 The initial reasoning incorrectly suggested that any nonidentity order might
 fail. The same solo agent rebutted this hypothesis after its probe. Its final
@@ -54,14 +56,14 @@ involution is an involution. The Experimenter did not treat these hypotheses
 as established verdicts.
 
 Initial probes
-[t12](../traces_glm/case_64/debate/ea_pilot_r1/probes/t12_probe.py) and
-[t13](../traces_glm/case_64/debate/ea_pilot_r1/probes/t13_probe.py) incorrectly
+[t12](../traces_glm/case_64/debate/r1/probes/t12_probe.py) and
+[t13](../traces_glm/case_64/debate/r1/probes/t13_probe.py) incorrectly
 used `C[0]` after unpacking the initial cache and crashed with broadcasting
 errors. Their stderr and source are preserved. The Experimenter identified
 this error and reran corrected probes; it did not claim either failed probe
 was evidence for the kernel label.
 
-Corrected [t14](../traces_glm/case_64/debate/ea_pilot_r1/probes/t14_probe.py)
+Corrected [t14](../traces_glm/case_64/debate/r1/probes/t14_probe.py)
 evaluates `(0,1,2)` against the proper FP64 logical reference and obtains
 error 0. It prints the two actual seeded permutations and an involutive
 composition. Its diagnostic calls `P[1][P[0]]` the order after `(0,1)`;
@@ -69,9 +71,9 @@ the implementation's forward order is `P[0][P[1]]`. For this particular
 commuting pair they are identical, so this naming/direction error does not
 affect the measured reference result or the diagnosis here.
 
-Corrected [t15](../traces_glm/case_64/debate/ea_pilot_r1/probes/t15_probe.py)
+Corrected [t15](../traces_glm/case_64/debate/r1/probes/t15_probe.py)
 does run all 121 legal words on the GPU and uses the correct FP64 reference.
-[Its output](../traces_glm/case_64/debate/ea_pilot_r1/probes/t15_stdout.txt)
+[Its output](../traces_glm/case_64/debate/r1/probes/t15_stdout.txt)
 reports no above-tolerance errors. However, two reporting limitations matter:
 
 - It accumulates only entries with `err > 1e-5` and computes
@@ -85,7 +87,7 @@ reports no above-tolerance errors. However, two reporting limitations matter:
   and solo trace separately verify all conditions. Those facts must not be
   misattributed to t15's checks.
 
-The [trust verdict](../traces_glm/case_64/debate/ea_pilot_r1/verdict.json)
+The [trust verdict](../traces_glm/case_64/debate/r1/verdict.json)
 is correct. Its claim that t15 directly measured maximum error exactly zero
 is stronger than that probe's reporting establishes. The final Skeptic review
 did not flag either of these probe limitations. Thus this is not evidence of
@@ -93,15 +95,15 @@ a uniquely effective multi-role evidence audit.
 
 ## case_65: solo
 
-[Probe t6](../traces_glm/case_65/solo/ea_pilot_r1/probes/t6_probe.py)
+[Probe t6](../traces_glm/case_65/solo/r1/probes/t6_probe.py)
 independently sweeps all 121 words with the correct FP64 logical reference,
 fresh initial state, GPU kernel execution, and shape/dtype/finite/metric checks.
-[Its output](../traces_glm/case_65/solo/ea_pilot_r1/probes/t6_stdout.txt)
+[Its output](../traces_glm/case_65/solo/r1/probes/t6_stdout.txt)
 matches the frozen oracle: 12 failing words and maximum absolute error 7.625.
 
 Concrete legal counterexamples are `(0,1,2)` and `(1,0,2)`, each with error
 3.8125, and `(0,1,2,2)` with error 7.625. Any of these already establishes
-rejection. The [reject verdict](../traces_glm/case_65/solo/ea_pilot_r1/verdict.json)
+rejection. The [reject verdict](../traces_glm/case_65/solo/r1/verdict.json)
 correctly treats the initial five smoke successes as incomplete coverage.
 The phrase “non-identity reorder composition” should not be read as a
 sufficient failure condition: non-involutive order is the relevant direction
@@ -109,19 +111,19 @@ mismatch, and several nonidentity involutions are harmless here.
 
 ## case_65: debate
 
-[Targeted t12](../traces_glm/case_65/debate/ea_pilot_r1/probes/t12_probe.py)
+[Targeted t12](../traces_glm/case_65/debate/r1/probes/t12_probe.py)
 checks eight legal words using the independent FP64 logical reference.
-[Its output](../traces_glm/case_65/debate/ea_pilot_r1/probes/t12_stdout.txt)
+[Its output](../traces_glm/case_65/debate/r1/probes/t12_stdout.txt)
 shows the seeded composition is not an involution, the two 3.8125-error words,
 the repeated-append 7.625-error word, and five passing controls. This is valid
 counterexample evidence. Targeted t12 does not check every output condition,
 but a numeric error above tolerance alone suffices to reject.
 
-[Exhaustive t13](../traces_glm/case_65/debate/ea_pilot_r1/probes/t13_probe.py)
+[Exhaustive t13](../traces_glm/case_65/debate/r1/probes/t13_probe.py)
 additionally checks the full domain and all output conditions.
-[Its output](../traces_glm/case_65/debate/ea_pilot_r1/probes/t13_stdout.txt)
+[Its output](../traces_glm/case_65/debate/r1/probes/t13_stdout.txt)
 matches solo and the private oracle: 121 words, 12 failures, maximum error
-7.625. The [reject verdict](../traces_glm/case_65/debate/ea_pilot_r1/verdict.json)
+7.625. The [reject verdict](../traces_glm/case_65/debate/r1/verdict.json)
 is supported by both probes.
 
 The Skeptic improved the Describer's initial indexing explanation by stating

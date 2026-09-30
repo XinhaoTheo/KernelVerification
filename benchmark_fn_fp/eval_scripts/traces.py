@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import io
 import json
+import re
 from pathlib import Path, PurePosixPath
 import tarfile
 from typing import Any
@@ -20,6 +21,28 @@ TRACES_GLOB = "traces_*"
 
 def new_trial_id() -> str:
     return datetime.now(timezone.utc).strftime("run_%Y%m%dT%H%M%S_%fZ")
+
+
+def next_trial_id(case_ids: list[str], arms: list[str], *, traces_dir: str) -> str:
+    """Choose the next numeric batch label; reserve_trace remains the collision guard."""
+    highest = 0
+    for case_id in case_ids:
+        for arm in arms:
+            parent = trace_path(case_id, arm, traces_dir=traces_dir, trial="r1").parent
+            if not parent.is_dir():
+                continue
+            for child in parent.iterdir():
+                match = re.fullmatch(r"r([1-9][0-9]*)", child.name)
+                if child.is_dir() and match:
+                    highest = max(highest, int(match.group(1)))
+    return f"r{highest + 1}"
+
+
+def experiment_trial_id(requested_trial: str | None = None) -> str:
+    """Keep a batch identity in metadata independent of its numeric directory."""
+    if requested_trial and not re.fullmatch(r"r[1-9][0-9]*", requested_trial):
+        return requested_trial
+    return new_trial_id()
 
 
 def _relative(value: str) -> Path:
@@ -60,6 +83,8 @@ def reserve_trace(case_id: str, arm: str, *, traces_dir: str, trial: str,
     except ImportError:
         from models import pricing_snapshot
     metadata = dict(metadata or {})
+    if traces_dir == "traces_glm":
+        metadata.setdefault("original_trial", experiment_trial_id(trial))
     if metadata.get("model") and "pricing_snapshot" not in metadata:
         metadata["pricing_snapshot"] = pricing_snapshot(metadata["model"])
     dest = trace_path(case_id, arm, traces_dir=traces_dir, trial=trial)
@@ -89,7 +114,9 @@ def write_trace(case_id: str, arm: str, *, traces_dir: str, tar: bytes | None = 
     Identical files are idempotent; differing files raise instead of overwriting.
     Archive paths and all collisions are checked before any payload is written.
     """
-    trial = trial or new_trial_id()
+    auto_allocated = not trial
+    trial = trial or (next_trial_id([case_id], [arm], traces_dir=traces_dir)
+                      if traces_dir == "traces_glm" else new_trial_id())
     dest = trace_path(case_id, arm, traces_dir=traces_dir, trial=trial)
     payload: dict[Path, bytes] = {}
     if tar:
@@ -131,12 +158,17 @@ def write_trace(case_id: str, arm: str, *, traces_dir: str, tar: bytes | None = 
                 raise FileExistsError(f"Trace parent is not a directory: {parent}")
         if path.exists() and path.read_bytes() != value:
             raise FileExistsError(f"Refusing to overwrite trace: {path}")
-    dest.mkdir(parents=True, exist_ok=True)
+    # A concurrently allocated numeric trial must fail before any payload write.
+    # Only an explicit trial may append to a directory reserved by the caller.
+    dest.mkdir(parents=True, exist_ok=not auto_allocated)
     for name, value in payload.items():
         path = dest / name
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             path.write_bytes(value)
+    metadata = dict(metadata or {})
+    if traces_dir == "traces_glm" and not (dest / "trace_meta.json").exists():
+        metadata.setdefault("original_trial", experiment_trial_id(trial))
     update_trace_metadata(dest, **{"schema_version": 2, "case": case_id, "arm": arm,
         "trial": trial, **(metadata or {})})
     return dest
@@ -165,6 +197,29 @@ def single_call_readable_files(*, system: str, user: str, response: str,
             "## Final response (verbatim)", response or "(no final text)",
             "## Verdict", json.dumps(verdict, indent=2, ensure_ascii=False),
             "## Usage and stop reason", json.dumps(usage or {}, indent=2, ensure_ascii=False)]) + "\n"}
+
+
+def experiment_trial(record: dict) -> str:
+    """Return the experiment batch, independent of its local rN directory name."""
+    metadata = record.get("metadata") or {}
+    return (record.get("original_trial") or metadata.get("original_trial")
+            or record.get("trial") or metadata.get("trial") or "legacy")
+
+
+def trace_selection_key(record: dict, metadata: dict | None = None) -> tuple[str, str]:
+    """Preserve chronological selection, including the pre-migration tie break."""
+    metadata = metadata if metadata is not None else record.get("metadata") or {}
+    saved = record.get("selection_sort_key") or metadata.get("selection_sort_key")
+    if isinstance(saved, (list, tuple)) and len(saved) == 2:
+        return str(saved[0] or ""), str(saved[1])
+    return (str(metadata.get("created_at") or record.get("created_at") or ""),
+            str(record.get("original_trace_path") or metadata.get("original_trace_path")
+                or record["path"]))
+
+
+def trial_sort_key(trial: str) -> tuple[int, int | str]:
+    """Sort canonical r1, r2, ... numerically; retain legacy readability."""
+    return (0, int(trial[1:])) if trial.startswith("r") and trial[1:].isdigit() else (1, trial)
 
 
 def iter_trace_records(benchmark_dir: Path | None = None):
@@ -212,9 +267,14 @@ def iter_trace_records(benchmark_dir: Path | None = None):
                 model = matches[0].model if len(matches) == 1 else None
             profile = PROFILES.get(model)
             case, original_case, dataset = resolve_trace_case(parts[arm_index-1], meta, registry)
+            leaf_trial = parts[arm_index+1] if len(parts)>arm_index+1 else "legacy"
+            trial = leaf_trial if leaf_trial.startswith("r") and leaf_trial[1:].isdigit() else meta.get("trial", leaf_trial)
             yield {"path": directory, "metadata": meta,
                 "case": case, "original_case": original_case,
                 "arm": meta.get("arm", parts[arm_index]),
-                "trial": meta.get("trial", parts[arm_index+1] if len(parts)>arm_index+1 else "legacy"),
+                "trial": trial,
+                "original_trial": meta.get("original_trial") or meta.get("trial") or leaf_trial,
+                "original_trace_path": meta.get("original_trace_path"),
+                "selection_sort_key": meta.get("selection_sort_key"),
                 "dataset": dataset, "model": model,
                 "provider": meta.get("provider", profile.provider if profile else None)}

@@ -15,6 +15,11 @@ with `python benchmark_fn_fp/correlation_pair/report.py --fireworks`. Token-limi
 exhaustion is recorded separately from a wrong verdict. Opus records are retained.
 Completed six-trial findings: [FIREWORKS_FINDINGS.md](FIREWORKS_FINDINGS.md).
 
+Canonical GLM copies now live at `../traces_glm/<case>/<arm>/rN/`.
+The source archives under `traces_fireworks/` retain their historical names.
+Labels such as `r2_64k` survive as `original_trial` in canonical trace metadata;
+current `rN` numbers count attempts within a case/arm and do not encode a budget.
+
 This is a new pair of finite-workload numerical-compliance cases, separate from
 the existing benchmark and the earlier 24-case pilot. It tests whether a verifier
 can determine the final error when the two branch errors have identical marginal

@@ -1,5 +1,7 @@
 # Conditional fresh-seed confirmation of the precision-reference mechanism
 
+Storage update (2026-09-30): Batch labels and repeat shorthand below retain their original experimental meaning; original labels are saved in `trace_meta.json.original_trial`. Canonical links use per-case/arm `rN` folders; see [trace naming and migration](../TRACES.md).
+
 2026-09-24. Recorded before constructing or evaluating transfer cases.
 This stage is conditional on the v3 predeclared repeated-case gate and an
 independent evidence audit. It does not change or replace any case_72–case_75 result.
