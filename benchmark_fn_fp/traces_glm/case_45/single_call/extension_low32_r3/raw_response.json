@@ -1,0 +1,44 @@
+{
+  "id": "chatcmpl-ebd723d7ee8c4bca87cae9024689347d",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"reject\", \"confidence\": 0.7, \"reason\": \"The kernel computes variance via E[x^2] - mean^2 in float32 with sequential accumulation; with x \u2248 64 (x^2 \u2248 4096, sum of squares \u2248 524288), float32 rounding plus catastrophic cancellation yields variance error on the order of the true variance (~0.0156), so the denominator (\u22480.125) can be off by far more than the 2% tolerance relative to the float64 reference.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Float32 sequential sum of 128 values around 64, values \u00b10.125. Sum ~8192 \u00b1 1.6. Float32 has ~7 digits; adding 0.125-scale terms to 8192: eps at 8192 is ~2^-10 \u2248 0.001 (actually 8192=2^13, eps ~ 2^13*1.2e-7 \u2248 1e-3). Errors accumulate ~sqrt(128)*1e-3 \u2248 0.01 in mean sum \u2192 mean error ~1e-4. Mean \u2248 64, deviations 0.125. Variance \u2248 0.0156; epsilon 1e-5. mean error 1e-4 \u2192 (x-mean) error 1e-4 relative to 0.125 \u2192 ~0.1% relative. Denominator: variance computed via squares/N - mean\u00b2 \u2014 catastrophic cancellation? squares \u2248 128*4096 \u2248 524k, mean\u00b2 \u2248 4096. Float32 sum of squares up to 5e5, eps \u2248 5e5*1.2e-7 \u2248 0.06; accumulate ~sqrt(128)*0.06 \u2248 0.7 error. squares/N \u2248 4096+var, error ~0.005. mean\u00b2 error: mean error 1e-4 \u2192 2*64*1e-4=0.013. So variance \u2248 0.0156 could have error ~0.02 \u2014 comparable to variance itself! Variance could even be clamped to 0. Denominator sqrt(0.0156+1e-5)\u22480.125. If variance error makes denominator 0.10 vs 0.125, output off by 25% \u2192 relative L2 error ~0.25 > 0.02. This is a real risk. Actual error depends on actual values; hard to determine precisely without running. Sequential accumulation in fp32 of squares ~4096 each: each addition error up to ulp(500000)=0.03125... wait ulp at 524288 (2^19) is 2^19-23=2^-4=0.0625. Sum of squares: each x\u00b2\u22484096+16*dev+dev\u00b2. Sum \u2248 524288 + small. Error per add up to 0.0625/2, accumulated ~ maybe a few units worst case, typical sqrt(128)*0.03 \u2248 0.35. Variance error \u2248 0.35/128 \u2248 0.003 plus mean\u00b2 error. Total variance error ~0.005-0.01 vs variance 0.0156. Denominator error ~ up to 4-8%. Relative error could exceed 2%... it's borderline. Also mean error: sum \u22488192, ulp 0.00098; accumulated ~0.01 in sum \u2192 mean error 8e-5 \u2192 mean\u00b2 error 0.01 \u2192 variance error 0.01. Combined could be \u00b10.015 variance error on 0.0156 \u2192 denominator anywhere 0.08-0.17. Very likely fails.\n\nBut could be lucky with specific data. Expected relative L2 error ~ (variance error)/(2*variance) ~ 0.01/0.03 \u2248 30%? That seems too pessimistic; errors random walk. Sum of squares error: each term x_i\u00b2 \u2248 4096\u00b116. Partial sums grow to 524288. Rounding errors random \u00b1ulp/2 with ulp ~0.03-0.06, RMS total \u2248 sqrt(128)*0.03/sqrt(3)? ~0.2. So squares error ~0.2 \u2192 var error 0.0016. mean error ~1e-4*sqrt? sum error RMS ~ sqrt(128)*0.0005/sqrt(3)\u22480.003 \u2192 mean error 2.4e-5 \u2192 mean\u00b2 error 2*64*2.4e-5\u22480.003. Variance total error ~0.004 vs 0.0156 \u2192 26% variance error \u2192 13% denominator error \u2192 output relative error ~13% >> 2%. So reject.\n\nAlso enable_fp_fusion=False doesn't help. Also tl.full((), ...) scalar loop\u2014fine. I'll reject with moderate confidence.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790208781,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1104,
+    "prompt_tokens": 834,
+    "total_tokens": 1938,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 982,
+      "rejected_prediction_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cached_tokens": 833
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 982
+    }
+  }
+}

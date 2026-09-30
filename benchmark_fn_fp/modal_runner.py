@@ -1,7 +1,7 @@
-"""Run benchmark_fn_fp/<case>/test.py on a real Modal GPU (Triton needs CUDA).
+"""Run benchmark_fn_fp/triton/<case>/test.py on a real Modal GPU.
 
 Usage:
-    modal run benchmark_fn_fp/modal_runner.py --cases fn1_foo,fp2_bar
+    modal run benchmark_fn_fp/modal_runner.py --cases case_01,case_04
     modal run benchmark_fn_fp/modal_runner.py --all
 
 Each case directory must contain kernel.py and test.py (test.py must define
@@ -17,7 +17,7 @@ import sys
 import modal
 
 APP_NAME = "kv-fn-fp-benchmark"
-CASES_DIR = pathlib.Path(__file__).parent
+CASES_DIR = pathlib.Path(__file__).parent / "triton"
 
 app = modal.App(APP_NAME)
 

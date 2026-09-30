@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-44b4b0d0024342e19b4a7e35901b1df3",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll batch probes for c1 and c2: both run the kernel on the seeded workload and compare against the float64 reference, with c2 specifically checking for negative pre-clamp distances (reproduced via float32 accumulation in numpy) and clamped-row weights.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-983ce9ee6be4ff58",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json, numpy as np, torch, sys\\nsys.path.insert(0, \\\"/root/numerical_cases/case_z\\\")\\nimport kernel\\n\\nq, a, v = kernel.make_inputs_numpy()\\nqt, at, vt = kernel.make_inputs()\\nout = kernel.run(qt, at, vt).detach().cpu().numpy()\\n\\n# float64 reference from stored float32 values\\nd64 = ((a.astype(np.float64) - q.astype(np.float64)[None, :])**2).sum(axis=1)\\nw64 = np.exp(-16.0*d64)\\nref = (w64*v.astype(np.float64)).sum()/w64.sum()\\n\\nerr = abs(float(out[0]) - float(ref))/max(abs(float(ref)), 0.05)\\nprint(json.dumps({\\n  \\\"kernel_output\\\": float(out[0]), \\\"reference\\\": float(ref),\\n  \\\"relative_error\\\": err, \\\"tolerance\\\": 0.05, \\\"passes\\\": err <= 0.05,\\n  \\\"finiteness\\\": bool(np.isfinite(out).all()), \\\"shape\\\": list(out.shape),\\n  \\\"true_distances_min_max\\\": [float(d64.min()), float(d64.max())]\\n}))\", \"expected_signal\": \"relative error on the fixed seeded workload exceeds 0.05 or stays within tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-9a9aa5883d664ee2",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import json, numpy as np, torch, sys\\nsys.path.insert(0, \\\"/root/numerical_cases/case_z\\\")\\nimport kernel\\n\\nq, a, v = kernel.make_inputs_numpy()\\nqt, at, vt = kernel.make_inputs()\\nout = kernel.run(qt, at, vt).detach().cpu().numpy()\\n\\n# emulate kernel's float32 expanded identity with per-step rounding (numpy float32 ops round per op)\\nrowwise = []\\nfor i in range(16):\\n    anchor_norm = np.float32(0.0); query_norm = np.float32(0.0); dot = np.float32(0.0)\\n    for k in range(32):\\n        ak = np.float32(a[i,k]); qk = np.float32(q[k])\\n        anchor_norm = np.float32(anchor_norm + np.float32(ak*ak))\\n        query_norm = np.float32(query_norm + np.float32(qk*qk))\\n        dot = np.float32(dot + np.float32(ak*qk))\\n    norm_sum = np.float32(anchor_norm + query_norm)\\n    twice = np.float32(np.float32(2.0)*dot)\\n    pre = np.float32(norm_sum - twice)\\n    rowwise.append(float(pre))\\npre = np.array(rowwise)\\nneg = pre < 0\\nw_kernel = np.exp(-16.0*np.maximum(pre,0.0)).astype(np.float64)\\n\\nd64 = ((a.astype(np.float64) - q.astype(np.float64)[None,:])**2).sum(axis=1)\\nw64 = np.exp(-16.0*d64)\\nref = (w64*v.astype(np.float64)).sum()/w64.sum()\\n\\nprint(json.dumps({\\n  \\\"pre_clamp_distances\\\": [round(x,6) for x in rowwise],\\n  \\\"num_negative_rows\\\": int(neg.sum()),\\n  \\\"min_pre_clamp\\\": float(pre.min()),\\n  \\\"emulated_clamp_output\\\": float((w_kernel*v.astype(np.float64)).sum()/w_kernel.sum()),\\n  \\\"reference\\\": float(ref),\\n  \\\"kernel_output\\\": float(out[0]),\\n  \\\"relative_error_kernel\\\": abs(float(out[0])-float(ref))/max(abs(ref),0.05)\\n}))\", \"expected_signal\": \"count of rows where the float32 expanded-identity distance is negative and thus clamped to weight=1\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Two independent claims; launch two probes together.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790212297,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 857,
+    "prompt_tokens": 16900,
+    "total_tokens": 17757,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 9,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3925,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 9
+    }
+  }
+}

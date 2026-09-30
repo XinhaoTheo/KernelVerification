@@ -1,0 +1,9 @@
+{
+  "confidence": 0.9,
+  "created_at": "2026-09-23T02:57:31Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The contract is a finite-workload numerical compliance check: run(*make_inputs()) must produce finite outputs with E = ||out-ref||_2/max(||ref||_2, 0.001*sqrt(64)) <= 0.1, where ref = A@x + B@x in float64, and approximate intermediates are explicitly permitted. I raised c1 hypothesizing that the kernel's per-row INT4 quantization (scale = max|row|/7, round-half-up via floor(v/s+0.5), clamp to [-7,7]) would inject enough noise to exceed 0.1, since each row's true projection is deliberately constructed to be small (~0.5 per branch) relative to the ~0.4 quantization step.\n\nProbe t6 ran the kernel on the GPU and evaluated the contract metric in float64: E = 0.033647, ||ref|| = 7.9876, ||err|| = 0.2688, all 64 outputs finite. The kernel output matched an independent NumPy per-row INT4 emulation to 2.67e-7 max abs, confirming the kernel really does implement the quantized path and that the observed error is quantization noise, not a coding bug. Probe t8 repeated the full pipeline 5x on the declared target hardware (Tesla T4): E = 0.0336471 bit-identically each run, all outputs finite. Error is ~3x below the allowed bound with no run-to-run variance.\n\nSo the only in-scope claim is rebutted by runtime evidence, and the lossy INT4 intermediate representation is precisely the deviation the contract pre-authorizes (\"Approximate intermediate values are allowed if the FINAL output meets this requirement\"; \"not a requirement to reproduce INT4 arithmetic bit-for-bit\"). Residual uncertainty: the margin depends on the fixed PCG64 seed/permutation workload, which is exactly what the contract scopes; no claim about general inputs is made or needed.",
+  "verdict": "trust"
+}

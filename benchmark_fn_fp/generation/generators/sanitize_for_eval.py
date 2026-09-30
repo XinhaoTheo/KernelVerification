@@ -5,7 +5,7 @@ problem.txt and kernel.py spell out what was changed and whether the kernel is
 correct. That is fine for a human reader and fatal for an evaluation -- any
 verifier reading them is just copying the answer.
 
-This script emits benchmark_fn_fp/eval_cases/<name>/ containing ONLY what a
+This script emits benchmark_fn_fp/triton_eval_cases/<name>/ containing ONLY what a
 verifier should legitimately see:
 
     problem.txt  - the operator contract, rewritten neutrally (below). States
@@ -32,7 +32,7 @@ import os
 import re
 
 SRC_DIR = os.environ.get("KV_SRC_DIR", "benchmark_fn_fp/triton")
-OUT_DIR = os.environ.get("KV_EVAL_DIR", "benchmark_fn_fp/eval_cases")
+OUT_DIR = os.environ.get("KV_EVAL_DIR", "benchmark_fn_fp/triton_eval_cases")
 
 
 # Neutral contract statements. Each says what the operation must satisfy and

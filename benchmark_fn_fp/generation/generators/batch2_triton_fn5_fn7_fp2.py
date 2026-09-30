@@ -469,7 +469,8 @@ if __name__ == "__main__":
 
 
 def write_case(case, dataset_dir):
-    entry_dir = os.path.join(dataset_dir, case["name"])
+    from _case_paths import source_case_path
+    entry_dir = source_case_path(dataset_dir, case["name"])
     os.makedirs(entry_dir, exist_ok=True)
     with open(os.path.join(entry_dir, "problem.txt"), "w") as f:
         f.write(case["problem_txt"].strip() + "\n")

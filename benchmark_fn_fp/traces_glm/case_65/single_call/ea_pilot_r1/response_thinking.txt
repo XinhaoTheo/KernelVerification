@@ -1,0 +1,17 @@
+Check order semantics. Logical cache L. Order maps logical row -> physical row: L[i] = physical[order[i]].
+
+Op 0: L_next = L[P0]. So L_next[i] = L[P0[i]] = physical[order[P0[i]]]. New order_next[i] = order[P0[i]]. Kernel: _reorder computes Next[row] = Order[source] where source = P[row]... next_order[i] = order[P[i]]? source = P[i], next = Order[source] = order[P[i]]. Yes correct.
+
+Delta: L += Delta, i.e., physical[order[i]] += Delta[i]. Kernel: row loads order[row] as source, adds increment[source] — increment[order[i]] added to physical[i]. Wrong! Should add increment[i] to physical[order[i]]. Instead it adds Delta[order[i]] to physical row i.
+
+Wait — check carefully. Current logical row i corresponds to physical row order[i]. Adding Delta to logical: logical[i] += Delta[i], so physical[order[i]] += Delta[i]. Kernel: for physical row `row`, source = order[row]; physical[row] += Delta[source] = Delta[order[row]].
+
+Hmm, note P permutations are involutions but order isn't. Unless order is always symmetric... order starts identity, after op with P (involution), order = order∘P? Actually order_new[i] = order[P[i]], i.e., order_new = order ∘ P. Composition of involutions isn't symmetric generally. But Delta is indexed by logical row. If order were an involution... even so, physical[row] += Delta[order[row]] vs needed physical[order[i]] += Delta[i]. Set i = order^{-1}[row]... only matches if order symmetric AND Delta indexed appropriately—needed: physical[q] += Delta[order^{-1}[q]]. Kernel gives Delta[order[q]]. If order is an involution, order^{-1}=order, so matches! Order is a composition of involutions? order = P_k ∘ ... actually order_new = order ∘ P, starting from identity: order = P1∘P2∘...∘Pk? Let's compute: order0 = id. order1[i] = id[P[i]] = P[i]. order2[i] = order1[P2[i]] = P1[P2[i]]. So order = P1∘P2∘...∘Pk (functions composed with Pk applied last? order(i) = P1(P2(...Pk(i)))). Composition of involutions need not be involution. Words up to length 4 can give non-involutive order, e.g., (0,1,0,2)? order after 0,1: P0∘P1. Then op0: order∘P0 = P0∘P1∘P0 — that's conjugation, an involution actually. Hmm. (0,1): order = P0∘P1, not involution generally. Then op 2 with that order: kernel wrong unless order symmetric. Probe tested only words where order is identity after ops (2, 0 2, 1 2, 00 2, 11 2) — order identity, so passes.
+
+So for e.g. word (0,1,2): order = P0∘P1 likely not involution, kernel fails. Verdict: reject.
+
+Actually also check whether P0∘P1 could be involution for this seed — can't verify without data, but contract says don't assume; the implementation only correct when order is involution. The kernel adds Delta[order[row]] to physical row instead of Delta[row] to physical[order[row]]. Defect: reject.
+
+Wait double-check _materialize: output[row] = physical[order[row]]. Logical[i] = physical[order[i]] — correct.
+
+So bug is in _append. Confidence high.

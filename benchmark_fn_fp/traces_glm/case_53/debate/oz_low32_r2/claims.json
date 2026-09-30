@@ -1,0 +1,104 @@
+[
+  {
+    "created_at": "2026-09-24T01:07:13Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T01:07:51Z",
+        "data": {},
+        "id": "c1.e1",
+        "kind": "tool_error",
+        "summary": "Probe t10 crashed with TypeError (CUDA tensor .numpy() without .cpu()); no measurement produced, evidence inconclusive for c1.",
+        "supports": "inconclusive",
+        "tool_event_id": "t10"
+      },
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T01:08:02Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "05b45d13dae63ea9e3e9f83da42f2032c98cbbd3f27db2d6961a89804d339dc7"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "af642cd6f690b4eb2efd24a09f2959871c3df69deb38787cb598ab2b1a25862e"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t12_json_result.json",
+              "sha256": "9753618d17efa96341a1e5536c1db3bcac216453c9d9b110f3304334b965114e"
+            }
+          ],
+          "contract_pass": false,
+          "duration_s": 4.726058,
+          "emulated_winner": 7,
+          "exit_code": 0,
+          "expected_signal": "kernel winner != reference winner and relative L2 error > 0.1",
+          "json_parse_error": null,
+          "json_result": {
+            "contract_pass": false,
+            "emulated_winner": 7,
+            "kernel_winner_inferred": 7,
+            "output_finite": true,
+            "reference_winner": 9,
+            "relative_l2_error": 1.3401840023235219,
+            "tolerance": 0.1,
+            "true_dist_gap": 0.0005067404983488677,
+            "true_dist_max": 1.0029926975422043,
+            "true_dist_min": 0.9967549356501691,
+            "true_dist_second": 0.997261676148518,
+            "winner_mismatch": true
+          },
+          "kernel_winner_inferred": 7,
+          "reference_winner": 9,
+          "relative_l2_error": 1.3401840023235219,
+          "stderr": "",
+          "stdout": "{\"reference_winner\": 9, \"kernel_winner_inferred\": 7, \"emulated_winner\": 7, \"winner_mismatch\": true, \"relative_l2_error\": 1.3401840023235219, \"tolerance\": 0.1, \"contract_pass\": false, \"true_dist_min\": 0.9967549356501691, \"true_dist_second\": 0.997261676148518, \"true_dist_gap\": 0.0005067404983488677, \"true_dist_max\": 1.0029926975422043, \"output_finite\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.1,
+          "true_dist_gap": 0.0005067404983488677,
+          "true_dist_max": 1.0029926975422043,
+          "true_dist_min": 0.9967549356501691,
+          "winner_mismatch": true
+        },
+        "id": "c1.e2",
+        "kind": "runtime_probe",
+        "summary": "On the fixed make_inputs() workload, the kernel (and a numpy emulation of its quantized route) selects winner index 7 while the float64 unquantized reference selects index 9 (true gap between best and second-best distances is only 5.07e-4, far below the ~0.0625/coordinate quantization noise). The resulting output embedding has relative L2 error 1.340 vs the reference embedding, far above the 0.1 tolerance; output is finite. Contract fails on the sole in-scope workload, confirming c1.",
+        "supports": "confirmed",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "All 16 true distances are nearly equal (radii within \u00b10.002 of 1.0), while quantization noise per coordinate is up to 0.0625, so the quantized ranking is dominated by rounding noise and the kernel's winner can differ from the reference winner; two independent N(0,1) 8-dim embeddings typically have relative L2 error O(1), far above 0.1.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract requires output within relative L2 0.1 of embeddings[reference index] on the fixed make_inputs() workload; only this workload is in scope."
+      },
+      {
+        "source": "kernel.py make_inputs_numpy",
+        "summary": "Candidates are query + unit offsets scaled by radii in 1.0\u00b10.002, so true distances are near-equal and the winner is decided by ~1e-3 differences that quantization (step 0.125) can swamp."
+      }
+    ],
+    "scope_rationale": "The contract fixes acceptance as relative L2 error <= 0.1 against embeddings[reference winner] on the sole in-scope workload generated by make_inputs(); if quantization flips the winner, the output is a different random embedding likely violating this bound.",
+    "statement": "On the fixed make_inputs() workload, the kernel's quantized-route winner differs from the float64 unquantized reference winner, and the resulting output embedding has relative L2 error > 0.1 versus the reference, violating the contract.",
+    "status": "confirmed",
+    "updated_at": "2026-09-24T01:08:02Z"
+  }
+]

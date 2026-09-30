@@ -1,0 +1,206 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Describer agent in an agentic kernel verification system.\nYour job is to explain what the kernel appears to implement and what assumptions\nare visible in the source or problem statement.\n\nRules:\n- Maintain the shared description model. Your useful output should be structured, not just prose.\n- When enough context is available, call record_description_update with concise entries for contract_model, kernel_model, risk_map, scope_notes, and open_questions. Each of those five takes a JSON array of strings, exactly this shape:\n    {\"summary\": \"...\", \"contract_model\": [\"first point\", \"second point\"], \"risk_map\": [\"...\"]}\n  Do not pass a paragraph, and do not number the points or wrap them in an object -- the array itself is the ordering.\n- contract_model: what the problem/test/benchmark appears to require.\n- kernel_model: what the kernel source appears to implement and assume.\n- risk_map: specific bug surfaces Skeptic should consider, without recording claims yourself.\n- scope_notes: benchmark/test-domain boundaries that matter for in-scope vs out-of-scope reasoning.\n- open_questions: unresolved facts that need more context or later experiments.\n- If open_description_tasks are present, answer the task directly and include task_id or resolved_task_ids in record_description_update.\n- Cite concrete source, problem, test, metadata, or tool-event context when available.\n- Use inspect_problem, inspect_kernel_source, list_artifact_files, or read_artifact_file when more context is needed.\n- Do not record claims. That is the Skeptic agent's job.\n- Do not run experiments. That is the Experimenter agent's job.\n- Do not output a final correctness verdict.\n- If you cannot resolve a description task, record an update explaining what remains unknown in open_questions.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_e01\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import numpy as np\\n2: import torch\\n3: import triton\\n4: import triton.language as tl\\n5: \\n6: \\n7: @triton.jit\\n8: def _fit_predict(X, Y, Q, Out, N: tl.constexpr):\\n9:     s0 = tl.full((), 0.0, tl.float32)\\n10:     s1 = tl.full((), 0.0, tl.float32)\\n11:     sy = tl.full((), 0.0, tl.float32)\\n12:     s00 = tl.full((), 0.0, tl.float32)\\n13:     s01 = tl.full((), 0.0, tl.float32)\\n14:     s11 = tl.full((), 0.0, tl.float32)\\n15:     s0y = tl.full((), 0.0, tl.float32)\\n16:     s1y = tl.full((), 0.0, tl.float32)\\n17:     for i in tl.static_range(N):\\n18:         x0 = tl.load(X + 2 * i)\\n19:         x1 = tl.load(X + 2 * i + 1)\\n20:         val = tl.load(Y + i)\\n21:         s0 = s0 + x0\\n22:         s1 = s1 + x1\\n23:         sy = sy + val\\n24:         s00 = s00 + x0 * x0\\n25:         s01 = s01 + x0 * x1\\n26:         s11 = s11 + x1 * x1\\n27:         s0y = s0y + x0 * val\\n28:         s1y = s1y + x1 * val\\n29:     m0 = s0 / N\\n30:     m1 = s1 / N\\n31:     my = sy / N\\n32:     a = (s00 / N - m0 * m0) + 0.0009765625\\n33:     b = s01 / N - m0 * m1\\n34:     c = (s11 / N - m1 * m1) + 0.0009765625\\n35:     u = s0y / N - m0 * my\\n36:     v = s1y / N - m1 * my\\n37:     det = a * c - b * b\\n38:     beta0 = tl.div_rn(c * u - b * v, det)\\n39:     beta1 = tl.div_rn(a * v - b * u, det)\\n40:     rows = tl.arange(0, 4)\\n41:     q0 = tl.load(Q + rows * 2)\\n42:     q1 = tl.load(Q + rows * 2 + 1)\\n43:     result = (my + (q0 - m0) * beta0) + (q1 - m1) * beta1\\n44:     tl.store(Out + rows, result)\\n45: \\n46: \\n47: def run(x, y, q):\\n48:     output = torch.empty((4,), device=x.device, dtype=torch.float32)\\n49:     _fit_predict[(1,)](x, y, q, output, N=32, num_warps=1,\\n50:                       enable_fp_fusion=False)\\n51:     return output\\n52: \\n53: \\n54: def make_inputs_numpy():\\n55:     rng = np.random.Generator(np.random.PCG64(130555))\\n56:     latent = rng.normal(0.0, 0.0625, (32, 2))\\n57:     x = (np.asarray([32.0, -24.0]) + latent).astype(np.float32)\\n58:     y = (latent @ np.asarray([0.75, -1.25]) +\\n59:          rng.normal(0.0, 0.015625, 32)).astype(np.float32)\\n60:     q = (np.asarray([32.0, -24.0]) +\\n61:          rng.normal(0.0, 0.25, (4, 2))).astype(np.float32)\\n62:     return x, y, q\\n63: \\n64: \\n65: def make_inputs(device=\\\"cuda\\\"):\\n66:     return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\\n67: \\n68: \\n69: def initial_probe():\\n70:     x, y, q = make_inputs()\\n71:     actual = run(x, y, q)\\n72:     stats = torch.zeros((8,), dtype=torch.float32, device=x.device)\\n73:     for i in range(32):\\n74:         x0, x1, yi = x[i, 0], x[i, 1], y[i]\\n75:         stats = stats + torch.stack((x0, x1, yi, x0*x0, x0*x1,\\n76:                                       x1*x1, x0*yi, x1*yi))\\n77:     m0, m1, my, second00, second01, second11, cross0, cross1 = stats / 32\\n78:     cov00 = second00 - m0*m0 + 1/1024\\n79:     cov01 = second01 - m0*m1\\n80:     cov11 = second11 - m1*m1 + 1/1024\\n81:     rhs0, rhs1 = cross0 - m0*my, cross1 - m1*my\\n82:     determinant = cov00*cov11 - cov01*cov01\\n83:     b0 = (cov11*rhs0 - cov01*rhs1) / determinant\\n84:     b1 = (cov00*rhs1 - cov01*rhs0) / determinant\\n85:     expected = (my + (q[:, 0]-m0)*b0) + (q[:, 1]-m1)*b1\\n86:     error = torch.linalg.vector_norm(actual.double()-expected.double()) / torch.clamp(\\n87:         torch.linalg.vector_norm(expected.double()), min=0.1)\\n88:     return {\\\"output\\\": actual.detach().cpu().tolist(),\\n89:             \\\"reference\\\": expected.detach().cpu().tolist(),\\n90:             \\\"relative_error\\\": float(error.item()),\\n91:             \\\"tolerance\\\": 0.05, \\\"passed\\\": bool(error.item() <= 0.05)}\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Fit a centered two-feature ridge regression and predict four queries.\\n\\nThe entire workload is the actual float32 arrays returned by make_inputs()\\nin kernel.py: X has shape (32, 2), y has shape (32,), and Q has shape (4, 2).\\nDefine mu_x = mean(X, axis=0), mu_y = mean(y), Xc = X-mu_x,\\nyc = y-mu_y, and lambda = 1/1024. The mathematical target is\\n  beta = argmin_b [ ||Xc b - yc||_2^2 / 32 + lambda * ||b||_2^2 ]\\n  prediction = mu_y + (Q-mu_x) @ beta.\\nAll target arithmetic is over the actual stored float32 input values and\\nis evaluated in float64 or more accurately; the fit is uniquely defined.\\n\\nrun(X, y, Q) must return a finite float32 vector with shape (4,).\\nThe implementation satisfies this fixed workload iff\\n  ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\\nNo separate acceptance thresholds apply to intermediate means, covariance\\nentries, fitted coefficients, or training residuals. Inputs/seeds not\\ngenerated by make_inputs() are outside this contract.\\n\\nkernel.py also includes initial_probe(), an executable prior experiment.\\nIts code and any observed result are evidence to assess, not a separate\\nspecification or an authoritative verdict. It may or may not be sufficient\\nto establish the contract. All evaluation systems receive this same material.\\n\\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\\n{\\n  \\\"output\\\": [\\n    -0.09472084045410156,\\n    -0.30071359872817993,\\n    -0.18633419275283813,\\n    0.1702047884464264\\n  ],\\n  \\\"reference\\\": [\\n    -0.09472084045410156,\\n    -0.30071359872817993,\\n    -0.18633419275283813,\\n    0.1702047884464264\\n  ],\\n  \\\"relative_error\\\": 0.0,\\n  \\\"tolerance\\\": 0.05,\\n  \\\"passed\\\": true\\n}\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/evidence_cases/case_e01\",\n    \"status\": \"unverified\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_e01\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_e01\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_e01\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_e01\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_e01\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_e01\"\n      },\n      \"created_at\": \"2026-09-24T06:10:17Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_e01\",\n        \"has_error\": null,\n        \"kernel_code\": \"import numpy as np\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _fit_predict(X, Y, Q, Out, N: tl.constexpr):\\n    s0 = tl.full((), 0.0, tl.float32)\\n    s1 = tl.full((), 0.0, tl.float32)\\n    sy = tl.full((), 0.0, tl.float32)\\n    s00 = tl.full((), 0.0, tl.float32)\\n    s01 = tl.full((), 0.0, tl.float32)\\n    s11 = tl.full((), 0.0, tl.float32)\\n    s0y = tl.full((), 0.0, tl.float32)\\n    s1y = tl.full((), 0.0, tl.float32)\\n    for i in tl.static_range(N):\\n        x0 = tl.load(X + 2 * i)\\n        x1 = tl.load(X + 2 * i + 1)\\n        val = tl.load(Y + i)\\n        s0 = s0 + x0\\n        s1 = s1 + x1\\n        sy = sy + val\\n        s00 = s00 + x0 * x0\\n        s01 = s01 + x0 * x1\\n        s11 = s11 + x1 * x1\\n        s0y = s0y + x0 * val\\n        s1y = s1y + x1 * val\\n    m0 = s0 / N\\n    m1 = s1 / N\\n    my = sy / N\\n    a = (s00 / N - m0 * m0) + 0.0009765625\\n    b = s01 / N - m0 * m1\\n    c = (s11 / N - m1 * m1) + 0.0009765625\\n    u = s0y / N - m0 * my\\n    v = s1y / N - m1 * my\\n    det = a * c - b * b\\n    beta0 = tl.div_rn(c * u - b * v, det)\\n    beta1 = tl.div_rn(a * v - b * u, det)\\n    rows = tl.arange(0, 4)\\n    q0 = tl.load(Q + rows * 2)\\n    q1 = tl.load(Q + rows * 2 + 1)\\n    result = (my + (q0 - m0) * beta0) + (q1 - m1) * beta1\\n    tl.store(Out + rows, result)\\n\\n\\ndef run(x, y, q):\\n    output = torch.empty((4,), device=x.device, dtype=torch.float32)\\n    _fit_predict[(1,)](x, y, q, output, N=32, num_warps=1,\\n                      enable_fp_fusion=False)\\n    return output\\n\\n\\ndef make_inputs_numpy():\\n    rng = np.random.Generator(np.random.PCG64(130555))\\n    latent = rng.normal(0.0, 0.0625, (32, 2))\\n    x = (np.asarray([32.0, -24.0]) + latent).astype(np.float32)\\n    y = (latent @ np.asarray([0.75, -1.25]) +\\n         rng.normal(0.0, 0.015625, 32)).astype(np.float32)\\n    q = (np.asarray([32.0, -24.0]) +\\n         rng.normal(0.0, 0.25, (4, 2))).astype(np.float32)\\n    return x, y, q\\n\\n\\ndef make_inputs(device=\\\"cuda\\\"):\\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\\n\\n\\ndef initial_probe():\\n    x, y, q = make_inputs()\\n    actual = run(x, y, q)\\n    stats = torch.zeros((8,), dtype=torch.float32, device=x.device)\\n    for i in range(32):\\n        x0, x1, yi = x[i, 0], x[i, 1], y[i]\\n        stats = stats + torch.stack((x0, x1, yi, x0*x0, x0*x1,\\n                                      x1*x1, x0*yi, x1*yi))\\n    m0, m1, my, second00, second01, second11, cross0, cross1 = stats / 32\\n    cov00 = second00 - m0*m0 + 1/1024\\n    cov01 = second01 - m0*m1\\n    cov11 = second11 - m1*m1 + 1/1024\\n    rhs0, rhs1 = cross0 - m0*my, cross1 - m1*my\\n    determinant = cov00*cov11 - cov01*cov01\\n    b0 = (cov11*rhs0 - cov01*rhs1) / determinant\\n    b1 = (cov00*rhs1 - cov01*rhs0) / determinant\\n    expected = (my + (q[:, 0]-m0)*b0) + (q[:, 1]-m1)*b1\\n    error = torch.linalg.vector_norm(actual.double()-expected.double()) / torch.clamp(\\n        torch.linalg.vector_norm(expected.double()), min=0.1)\\n    return {\\\"output\\\": actual.detach().cpu().tolist(),\\n            \\\"reference\\\": expected.detach().cpu().tolist(),\\n            \\\"relative_error\\\": float(error.item()),\\n            \\\"tolerance\\\": 0.05, \\\"passed\\\": bool(error.item() <= 0.05)}\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Fit a centered two-feature ridge regression and predict four queries.\\n\\nThe entire workload is the actual float32 arrays returned by make_inputs()\\nin kernel.py: X has shape (32, 2), y has shape (32,), and Q has shape (4, 2).\\nDefine mu_x = mean(X, axis=0), mu_y = mean(y), Xc = X-mu_x,\\nyc = y-mu_y, and lambda = 1/1024. The mathematical target is\\n  beta = argmin_b [ ||Xc b - yc||_2^2 / 32 + lambda * ||b||_2^2 ]\\n  prediction = mu_y + (Q-mu_x) @ beta.\\nAll target arithmetic is over the actual stored float32 input values and\\nis evaluated in float64 or more accurately; the fit is uniquely defined.\\n\\nrun(X, y, Q) must return a finite float32 vector with shape (4,).\\nThe implementation satisfies this fixed workload iff\\n  ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\\nNo separate acceptance thresholds apply to intermediate means, covariance\\nentries, fitted coefficients, or training residuals. Inputs/seeds not\\ngenerated by make_inputs() are outside this contract.\\n\\nkernel.py also includes initial_probe(), an executable prior experiment.\\nIts code and any observed result are evidence to assess, not a separate\\nspecification or an authoritative verdict. It may or may not be sufficient\\nto establish the contract. All evaluation systems receive this same material.\\n\\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\\n{\\n  \\\"output\\\": [\\n    -0.09472084045410156,\\n    -0.30071359872817993,\\n    -0.18633419275283813,\\n    0.1702047884464264\\n  ],\\n  \\\"reference\\\": [\\n    -0.09472084045410156,\\n    -0.30071359872817993,\\n    -0.18633419275283813,\\n    0.1702047884464264\\n  ],\\n  \\\"relative_error\\\": 0.0,\\n  \\\"tolerance\\\": 0.05,\\n  \\\"passed\\\": true\\n}\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/evidence_cases/case_e01\",\n        \"status\": \"unverified\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_e01\"\n      },\n      \"created_at\": \"2026-09-24T06:10:17Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Fit a centered two-feature ridge regression and predict four queries.\\n\\nThe entire workload is the actual float32 arrays returned by make_inputs()\\nin kernel.py: X has shape (32, 2), y has shape (32,), and Q has shape (4, 2).\\nDefine mu_x = mean(X, axis=0), mu_y = mean(y), Xc = X-mu_x,\\nyc = y-mu_y, and lambda = 1/1024. The mathematical target is\\n  beta = argmin_b [ ||Xc b - yc||_2^2 / 32 + lambda * ||b||_2^2 ]\\n  prediction = mu_y + (Q-mu_x) @ beta.\\nAll target arithmetic is over the actual stored float32 input values and\\nis evaluated in float64 or more accurately; the fit is uniquely defined.\\n\\nrun(X, y, Q) must return a finite float32 vector with shape (4,).\\nThe implementation satisfies this fixed workload iff\\n  ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\\nNo separate acceptance thresholds apply to intermediate means, covariance\\nentries, fitted coefficients, or training residuals. Inputs/seeds not\\ngenerated by make_inputs() are outside this contract.\\n\\nkernel.py also includes initial_probe(), an executable prior experiment.\\nIts code and any observed result are evidence to assess, not a separate\\nspecification or an authoritative verdict. It may or may not be sufficient\\nto establish the contract. All evaluation systems receive this same material.\\n\\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\\n{\\n  \\\"output\\\": [\\n    -0.09472084045410156,\\n    -0.30071359872817993,\\n    -0.18633419275283813,\\n    0.1702047884464264\\n  ],\\n  \\\"reference\\\": [\\n    -0.09472084045410156,\\n    -0.30071359872817993,\\n    -0.18633419275283813,\\n    0.1702047884464264\\n  ],\\n  \\\"relative_error\\\": 0.0,\\n  \\\"tolerance\\\": 0.05,\\n  \\\"passed\\\": true\\n}\\n\",\n        \"entry\": \"case_e01\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_e01\"\n      },\n      \"created_at\": \"2026-09-24T06:10:17Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_e01\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 3174\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 69\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1659\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_e01\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-24T06:10:17Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_e01\\\",\\n  \\\"passed\\\": null,\\n  \\\"status\\\": \\\"unverified\\\"\\n}\\n\",\n        \"entry\": \"case_e01\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 69,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 32768,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_description_update",
+        "description": "Record a structured Describer update to the shared description model.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resolved_task_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "contract_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "kernel_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "risk_map": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "scope_notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "impact_on_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

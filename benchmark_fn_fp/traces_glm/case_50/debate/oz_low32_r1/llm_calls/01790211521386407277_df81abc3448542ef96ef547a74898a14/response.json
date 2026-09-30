@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-6a9455e6914b4fa2ba9b377bff5bbaeb",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The single open claim c1 needs the decisive numeric probe: run the kernel on the fixed make_inputs() workload and compare to a float64 reference, with an fp32 CPU emulation as cross-check.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8ac90d6894d46db1",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json, numpy as np, torch, triton\\nimport sys\\nsys.path.insert(0, \\\"/root/numerical_cases/case_o\\\")\\nimport kernel as K\\n\\nu, b = K.make_inputs(\\\"cuda\\\")\\nout = K.run(u, b)\\ntorch.cuda.synchronize()\\nout_np = out.detach().cpu().numpy().astype(np.float64)\\n\\nu64 = u.detach().cpu().numpy().astype(np.float64)\\nb64 = b.detach().cpu().numpy().astype(np.float64)\\n\\n# fp64 reference (recentred-free, cancellation negligible in fp64)\\nalpha = (u64 * b64).sum() / (u64 * u64).sum()\\nres = b64 - alpha * u64\\nref = res / np.linalg.norm(res)\\n\\nerr = np.linalg.norm(out_np - ref) / max(np.linalg.norm(ref), 1e-12)\\n\\n# fp32 CPU emulation of kernel arithmetic\\nu32 = u.detach().cpu().numpy(); b32 = b.detach().cpu().numpy()\\nnum = np.float32(0.0); den = np.float32(0.0)\\nfor j in range(32):\\n    num = np.float32(num + np.float32(u32[j] * b32[j]))\\n    den = np.float32(den + np.float32(u32[j] * u32[j]))\\ncoef = np.float32(num / den)\\nnsq = np.float32(0.0)\\nres32 = np.empty(32, dtype=np.float32)\\nfor j in range(32):\\n    res32[j] = np.float32(b32[j] - np.float32(u32[j] * coef))\\n    nsq = np.float32(nsq + np.float32(res32[j] * res32[j]))\\nnorm = np.float32(np.sqrt(nsq))\\nemu = (res32 / norm).astype(np.float64)\\nerr_emu = np.linalg.norm(emu - ref) / max(np.linalg.norm(ref), 1e-12)\\nbitmatch = bool(np.array_equal(emu.astype(np.float32), out.detach().cpu().numpy()))\\nres_norm = float(np.linalg.norm(res))\\nfinite = bool(np.all(np.isfinite(out_np)))\\n\\nprint(json.dumps({\\n  \\\"rel_l2_gpu_vs_fp64ref\\\": float(err),\\n  \\\"rel_l2_fp32emu_vs_fp64ref\\\": float(err_emu),\\n  \\\"bitmatch_gpu_vs_emu\\\": bitmatch,\\n  \\\"alpha_fp64\\\": float(alpha), \\\"alpha_fp32_kernel\\\": float(coef),\\n  \\\"residual_norm_fp64\\\": res_norm,\\n  \\\"tolerance\\\": 0.01,\\n  \\\"passes_tolerance\\\": bool(err <= 0.01),\\n  \\\"output_finite\\\": finite,\\n  \\\"shape\\\": list(out_np.shape)\\n}))\", \"expected_signal\": \"relative L2 error of kernel output vs fp64 reference on fixed workload, decisive vs 0.01 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "One open claim c1. Run decisive probe: kernel run vs fp64 reference, plus fp32 CPU emulation.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790211521,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 685,
+    "prompt_tokens": 24558,
+    "total_tokens": 25243,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 23,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 23
+    }
+  }
+}

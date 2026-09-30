@@ -1,0 +1,171 @@
+[
+  {
+    "created_at": "2026-09-23T21:36:49Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-23T21:37:36Z",
+        "data": {
+          "E": 0.0,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "69b22ba24b48d40450d2b935fe7b51d5da4deedf241e3abeb670c36a365a6656"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "d27f8ab6653533daf0c1cc5640f0df2bdd30d6e69f87d579ff6020eed0fc0e41"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t12_json_result.json",
+              "sha256": "d82a7ebbfed71df36879f84a7ff85fe738e229f81a203461d9e5929ed1cdc48c"
+            }
+          ],
+          "duration_s": 0.218143,
+          "exit_code": 0,
+          "expected_signal": "E value for left-to-right fp32 sequential summation vs float64 reference on exact seed-730119 matrix, compared against 0.1 tolerance",
+          "json_parse_error": null,
+          "json_result": {
+            "E": 0.0,
+            "kahan_crosscheck_ok": true,
+            "max_abs_err": 0.0,
+            "max_ref_row": 35.75,
+            "max_row_rel_err": 0.0,
+            "metric": "E = ||fp32_seq - f64_ref||_2 / max(||ref||_2, 0.008), plus per-row absolute/relative errors",
+            "min_ref_row": 28.5,
+            "nonfinite_emulated": false,
+            "rows_exceeding_rel_0.1": 0,
+            "tolerance": 0.1
+          },
+          "kahan_crosscheck_ok": true,
+          "max_abs_err": 0.0,
+          "max_ref_row": 35.75,
+          "max_row_rel_err": 0.0,
+          "min_ref_row": 28.5,
+          "nonfinite_emulated": false,
+          "rows_exceeding_rel_0.1": 0,
+          "stderr": "",
+          "stdout": "{\"metric\": \"E = ||fp32_seq - f64_ref||_2 / max(||ref||_2, 0.008), plus per-row absolute/relative errors\", \"E\": 0.0, \"tolerance\": 0.1, \"max_abs_err\": 0.0, \"min_ref_row\": 28.5, \"max_ref_row\": 35.75, \"max_row_rel_err\": 0.0, \"rows_exceeding_rel_0.1\": 0, \"nonfinite_emulated\": false, \"kahan_crosscheck_ok\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.1
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On the exact seed-730119 double-permuted matrix, left-to-right fp32 sequential summation is EXACT vs the float64 (Kahan cross-checked) reference: E = 0.0, max_abs_err = 0.0, zero rows exceed relative error 0.1. The feared cancellation error does not materialize because all large terms are integer multiples of 2^20 (exactly representable, exact cancellation) and the small 0.25-granularity terms sum exactly once the accumulator returns to small scale; reference row sums are 28.5-35.75. The claimed E-budget violation is rebutted for the in-scope workload.",
+        "supports": "rebutted",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "Large +w/-w terms (magnitudes up to ~3.36e7) cancel exactly in real arithmetic, leaving true row sums of only the 64 small terms (~8-32). Sequential fp32 accumulation rounds partial sums to ULPs up to 128 at 2^25-scale intermediate stages; if the permuted column order interleaves large and small terms before +w/-w cancellation completes, accumulated absolute rounding error can dwarf the ~32 true sum, pushing E far above 0.1.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Reference sums original float32 entries in real arithmetic (float64); contract requires E = ||out-ref||_2/max(||ref||_2,0.008) <= 0.1 on the exact seed-730119 workload; fp32 arithmetic is allowed only if this metric holds."
+      },
+      {
+        "source": "kernel.py",
+        "summary": "make_inputs_numpy generates [w (1..32)*2^20, -w, small 0.25..0.75] then applies the fixed public column permutation; the kernel sums sequentially in fp32, so permuted order governs accumulation error."
+      }
+    ],
+    "scope_rationale": "The contract requires E <= 0.1 against a float64 reference on exactly the seed-730119 workload (problem.txt); the kernel uses left-to-right fp32 accumulation whose rounding error on this specific permuted input directly determines whether that stated numeric requirement is violated.",
+    "statement": "The kernel's left-to-right float32 accumulation over the specifically permuted columns (seed 730119) can carry absolute rounding error on the order of tens-to-hundreds (ULP ~128 at 2^25-scale partial sums), which may exceed the 10% relative error budget E <= 0.1 given true row sums are only ~8-32.",
+    "status": "rebutted",
+    "updated_at": "2026-09-23T21:37:36Z"
+  },
+  {
+    "created_at": "2026-09-23T21:36:49Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-23T21:37:36Z",
+        "data": {
+          "all_finite": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t13_probe.py",
+              "sha256": "525d067cc41523f6c5a2effc471b8f8fb62d9ee4e3e49a837107918d54507116"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t13_stdout.txt",
+              "sha256": "9bdb8ffb95bcec6d7ffd96564735bc44577d32e3d3dfb0c5700e9e90d74bcbb5"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t13_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t13_json_result.json",
+              "sha256": "7e0a9f60d5e0f2daed7cbd14457a8fc466c0dadba76a8edb8519c77408a4a619"
+            }
+          ],
+          "dtype": "torch.float32",
+          "duration_s": 4.421101,
+          "exit_code": 0,
+          "expected_signal": "run(*make_inputs()) returns finite (64,) float32 output bit-matching a left-to-right fp32 sequential emulation",
+          "json_parse_error": null,
+          "json_result": {
+            "all_finite": true,
+            "dtype": "torch.float32",
+            "matches_fp32_sequential_emulation": true,
+            "max_abs_dev_vs_emulation": 0.0,
+            "shape": [
+              64
+            ]
+          },
+          "matches_fp32_sequential_emulation": true,
+          "max_abs_dev_vs_emulation": 0.0,
+          "shape": [
+            64
+          ],
+          "stderr": "",
+          "stdout": "{\"shape\": [64], \"dtype\": \"torch.float32\", \"all_finite\": true, \"matches_fp32_sequential_emulation\": true, \"max_abs_dev_vs_emulation\": 0.0}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "GPU run of run(*make_inputs()) produced a (64,) float32 output, all entries finite, bit-exactly matching the faithful left-to-right fp32 sequential emulation (max_abs_dev = 0.0) \u2014 no index/stride or garbage values. Combined with t12 (emulation equals float64 reference exactly), the in-scope output is both finite and contractually accurate.",
+        "supports": "confirmed",
+        "tool_event_id": "t13"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The single-program kernel assumes a (64,128) contiguous row-major input with K=128, R=64; any indexing or specialization deviation would show as garbage or non-finite values. Finiteness is explicitly contractually required, so it needs direct runtime confirmation.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: every output must be finite and E <= 0.1; only the final result on the specified input is in scope."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly states every output must be finite on the specified workload, so verifying the output is finite and correctly indexed on run(*make_inputs()) is directly required by the stated contract.",
+    "statement": "run(*make_inputs()) on the specified CUDA workload returns a finite (64,) float32 output equal to the kernel's sequential fp32 sums without index/stride errors (no garbage or non-finite entries).",
+    "status": "confirmed",
+    "updated_at": "2026-09-23T21:37:36Z"
+  }
+]

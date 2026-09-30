@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-a36142af9eb2471e84839dffb92e3b89",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch both probes now: c1 runs the actual kernel on the specified input and computes E against a float64 reference; c2 simulates the identical ascending fp32 accumulation and counts small entries absorbed at large partial sums. They're independent, so I batch them.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bb35e86cf69f4a56",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json\\nsys.path.insert(0, \\\"/root/numerical_cases/case_g\\\")\\nimport torch, numpy as np\\nfrom kernel import run, make_inputs\\n\\nvals, = make_inputs(\\\"cuda\\\")\\nout = run(vals)\\ntorch.cuda.synchronize()\\nref = vals.double().sum(dim=1)  # float64 per-row reference\\nerr = out.double() - ref\\nE = float(err.norm() / max(float(ref.norm()), 0.008))\\nprint(json.dumps({\\n    \\\"E\\\": E, \\\"tolerance\\\": 0.1, \\\"passes\\\": E <= 0.1,\\n    \\\"all_finite\\\": bool(torch.isfinite(out).all()),\\n    \\\"ref_norm\\\": float(ref.norm()),\\n    \\\"err_norm\\\": float(err.norm()),\\n    \\\"max_abs_err\\\": float(err.abs().max()),\\n    \\\"max_abs_ref_row\\\": float(ref.abs().max()),\\n}))\", \"expected_signal\": \"E relative-L2 error vs float64 reference exceeds 0.1 or not\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-8382608fd6df44a5",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, json\\nsys.path.insert(0, \\\"/root/numerical_cases/case_g\\\")\\nimport torch, numpy as np\\nfrom kernel import make_inputs_numpy\\n\\nvals, = make_inputs_numpy()  # (64,128) float32, contiguous\\nref = vals.astype(np.float64).sum(axis=1)\\n\\ntotal_small, absorbed = 0, 0\\nmax_abs_partial = 0.0\\nouts = []\\nabsorbed_mask = np.zeros(vals.shape, dtype=bool)\\nfor i in range(64):\\n    acc = np.float32(0.0)\\n    partials = []\\n    for j in range(128):\\n        v = vals[i, j]\\n        new = np.float32(acc + v)\\n        is_small = abs(v) <= 1.0\\n        if is_small:\\n            total_small += 1\\n            if new == acc:\\n                absorbed += 1\\n                absorbed_mask[i, j] = True\\n        acc = new\\n        partials.append(float(acc))\\n    outs.append(float(acc))\\n    max_abs_partial = max(max_abs_partial, max(abs(p) for p in partials))\\n\\nouts = np.array(outs, dtype=np.float64)\\nerr = outs - ref\\nE = float(np.linalg.norm(err) / max(np.linalg.norm(ref), 0.008))\\nprint(json.dumps({\\n    \\\"total_small_entries\\\": total_small,\\n    \\\"absorbed_small_entries\\\": absorbed,\\n    \\\"absorbed_fraction\\\": absorbed / total_small,\\n    \\\"max_abs_partial_sum\\\": max_abs_partial,\\n    \\\"sim_E\\\": E,\\n    \\\"sim_max_abs_row_err\\\": float(np.abs(err).max()),\\n    \\\"sim_matches_kernel_expectation_note\\\": \\\"ascending-order fp32 sequential accumulation, same as kernel with enable_fp_fusion=False\\\",\\n}))\", \"expected_signal\": \"small 0.25-scale entries absorbed while partial sums ~1e8\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch both probes: c1 (run kernel, compute E) and c2 (simulate ascending fp32 accumulation, count absorbed small entries). Independent — batch.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790199808,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 726,
+    "prompt_tokens": 24773,
+    "total_tokens": 25499,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 32,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 32
+    }
+  }
+}

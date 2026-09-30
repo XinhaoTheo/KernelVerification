@@ -534,7 +534,8 @@ CASES = {
 
 def main() -> None:
     for name, spec in CASES.items():
-        d = OUT / name
+        from _case_paths import source_case_path
+        d = source_case_path(OUT, name)
         d.mkdir(parents=True, exist_ok=True)
         (d / "kernel.py").write_text(f'"""Triton kernel under test: {name}."""' + spec["kernel"])
         (d / "problem.txt").write_text(spec["problem"])

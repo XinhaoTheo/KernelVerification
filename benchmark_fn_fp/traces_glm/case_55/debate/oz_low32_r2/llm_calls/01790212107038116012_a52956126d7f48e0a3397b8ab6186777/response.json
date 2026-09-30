@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-56ace709992a4c7ca5c4be20511ae887",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two independent probes: c1 runs the kernel on the fixed seed workload and compares to the float64 closed-form continuous integral; c2 isolates float32 arithmetic error by comparing the kernel output against a float64 evaluation of the same 32-point midpoint rule.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9a8903970ae2081a",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import numpy as np, torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/numerical_cases/case_t/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nA, F, P = k.make_inputs()\\nout = k.run(A, F, P).cpu().numpy().astype(np.float64)\\n\\na = A.cpu().numpy().astype(np.float64)\\nf = F.cpu().numpy().astype(np.float64)\\np = P.cpu().numpy().astype(np.float64)\\nref = 1.0 + np.sum(a*(np.cos(p)-np.cos(p+f))/f, axis=1)\\n\\nrel = np.linalg.norm(out-ref)/max(np.linalg.norm(ref),1e-12)\\nprint(json.dumps({\\n \\\"kernel_output\\\": out.tolist(),\\n \\\"reference\\\": ref.tolist(),\\n \\\"relative_l2\\\": rel,\\n \\\"tolerance\\\": 0.035,\\n \\\"exceeds\\\": bool(rel > 0.035),\\n \\\"per_row_abs_err\\\": (out-ref).tolist(),\\n \\\"freqs_gt_100\\\": int((f>100).sum()), \\\"freqs_gt_150\\\": int((f>150).sum()),\\n \\\"max_amp\\\": float(np.abs(a).max()), \\\"finite\\\": bool(np.isfinite(out).all()),\\n \\\"dtype_shape_ok\\\": True\\n}))\", \"expected_signal\": \"relative L2 error of the 32-point midpoint kernel vs float64 continuous integral, compared to 0.035 threshold\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-83dd82c566e0c688",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import numpy as np, torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/numerical_cases/case_t/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nA, F, P = k.make_inputs()\\nout = k.run(A, F, P).cpu().numpy().astype(np.float64)\\n\\na = A.cpu().numpy().astype(np.float64)\\nf = F.cpu().numpy().astype(np.float64)\\np = P.cpu().numpy().astype(np.float64)\\nt = (np.arange(32)+0.5)/32.0\\nmid64 = 1.0 + (a[:,None,:]*np.sin(f[:,None,:]*t[None,:,None]+p[:,None,:])).sum(axis=2).mean(axis=1)\\n\\n# float64 closed-form reference and its relative error, to see how close to boundary\\nref = 1.0 + np.sum(a*(np.cos(p)-np.cos(p+f))/f, axis=1)\\nrel_vs_ref = np.linalg.norm(out-ref)/max(np.linalg.norm(ref),1e-12)\\nfp32_err = out - mid64\\nrel_fp32 = np.linalg.norm(fp32)/np.linalg.norm(mid64)\\nquad_err = mid64 - ref\\nprint(json.dumps({\\n \\\"kernel_minus_midpoint64\\\": fp32.tolist(),\\n \\\"max_abs_fp32_arith_err\\\": float(np.abs(fp32).max()),\\n \\\"rel_fp32_component\\\": rel_fp32,\\n \\\"midpoint_minus_reference\\\": quad_err.tolist(),\\n \\\"rel_quadrature_component\\\": float(np.linalg.norm(quad_err)/np.linalg.norm(ref)),\\n \\\"rel_total_vs_ref\\\": rel_vs_ref,\\n \\\"tolerance\\\": 0.035,\\n \\\"fp32_component_decisive\\\": bool(rel_fp32 > 0.01*(rel_vs_ref+1e-30))\\n}))\", \"expected_signal\": \"float32 arithmetic error (kernel vs float64 midpoint rule) compared to quadrature error and 0.035 boundary\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch two probes: c1 (run kernel, compare to float64 closed-form reference) and c2 (compare kernel output to float64 midpoint rule). Both independent, batch together.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790212107,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 870,
+    "prompt_tokens": 24884,
+    "total_tokens": 25754,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 37,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4916,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 37
+    }
+  }
+}

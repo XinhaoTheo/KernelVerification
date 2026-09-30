@@ -46,13 +46,13 @@ def main():
              "Error/budget below 1 means compliant. Confidence is recorded, not used in scoring.", "",
              "| Case | Family | Error/budget | Truth | Verdict | Confidence | Correct |",
              "| --- | --- | ---: | --- | --- | ---: | --- |"]
-    for name, r in sorted(rows.items()):
+    for name, r in sorted(rows.items(), key=lambda item: int(item[0].split("_")[1])):
         k = key["cases"][name]
         ratio = k["errors"][0] / key["budgets"][r["family"]]
         text.append(f"| {name} | {r['family']} | {ratio:.4f} | {r['ground_truth']} | "
                     f"{r['verdict']} | {r.get('confidence', '—')} | {r['correct']} |")
     text += ["", "## Model explanations", ""]
-    for name, r in sorted(rows.items()):
+    for name, r in sorted(rows.items(), key=lambda item: int(item[0].split("_")[1])):
         text += [f"### {name}", "", r.get("reason", r.get("error_type", "No final answer")), ""]
     text += ["## Limits", "",
              "This is an exploratory finite-workload accuracy test, not universal kernel verification. "

@@ -44,6 +44,7 @@ _SENSITIVE_ENV_VARS = {
     "OPENAI_API_KEY",
     "OPENAI_ORG_ID",
     "OPENROUTER_API_KEY",
+    "FIREWORKS_API_KEY",
     "HF_TOKEN",
     "HUGGINGFACE_TOKEN",
     "GITHUB_TOKEN",
@@ -216,6 +217,7 @@ def run_python_probe(context: ToolContext, args: dict) -> dict:
 def run_claim_probe(context: ToolContext, args: dict) -> dict:
     claim_id = str(args["claim_id"])
     claim = ClaimLedger(context.state).get_claim(claim_id)
+    _reject_reprobe_of_unconsumed_success(context, claim_id)
     result = _execute_python_probe(context, args)
     expected_signal = _optional_str(args.get("expected_signal"))
     result.update(
@@ -234,6 +236,42 @@ def run_claim_probe(context: ToolContext, args: dict) -> dict:
         }
     )
     return result
+
+
+def _reject_reprobe_of_unconsumed_success(context: ToolContext, claim_id: str) -> None:
+    """Refuse to re-run a claim whose last probe already succeeded unspent.
+
+    Probes for independent claims are launched together and finalized in the
+    next response. When one claim's probe keeps failing, the batch keeps being
+    re-issued, and a claim that already has a good result is re-probed alongside
+    it every turn -- it is still open, so the launch rule still names it. A
+    measured run did this three times for one claim while a sibling's probe code
+    failed four times running: three of its four probes were the same experiment,
+    and the two wasted turns came out of the same budget the run needed for the
+    claim that was actually stuck.
+
+    A failed probe is not blocked: rewriting broken probe code is the loop
+    working. Only an unspent success is, and the way past it is to finalize.
+    """
+    for event in reversed(context.state.tool_events):
+        if event.tool != "run_claim_probe":
+            continue
+        output = event.output or {}
+        if str(output.get("claim_id") or "") != claim_id:
+            continue
+        if output.get("exit_code") != 0 or output.get("timed_out"):
+            return  # last probe for this claim failed; a rewrite is the point
+        if _probe_event_consumed(context, event.id):
+            return  # already turned into evidence; a new experiment is fine
+        raise LedgerError(
+            f"claim {claim_id} already has a successful probe you have not "
+            f"interpreted: event {event.id}. Call finalize_probe_evidence("
+            f"event_id={event.id!r}, supports=..., summary=...) first. Re-running "
+            f"the same experiment cannot tell you anything its result does not "
+            f"already say. If you need a genuinely different experiment, finalize "
+            f"{event.id} first and then probe again."
+        )
+    return
 
 
 def finalize_probe_evidence(context: ToolContext, args: dict) -> dict:

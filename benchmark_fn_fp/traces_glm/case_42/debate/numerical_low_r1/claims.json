@@ -1,0 +1,85 @@
+[
+  {
+    "created_at": "2026-09-23T21:36:14Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-23T21:36:58Z",
+        "data": {
+          "E": 0.9001987201108703,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "19b66d64393a71687f025bfcce1df4c99aa440abaf99c706a3a86872e2589a56"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "f2ae9b2df91872e1926a9c7d7abd02fc55659e45ddbfdaa3c7a0af2b5c07b5d3"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t7_json_result.json",
+              "sha256": "54432f1545b20656d309d281081710584773a7fd9de62abcfc396836bbbbd357"
+            }
+          ],
+          "duration_s": 4.726404,
+          "exit_code": 0,
+          "expected_signal": "E > 0.1 (sequential fp32 accumulation loses small terms) or E <= 0.1 (passes)",
+          "finite": true,
+          "json_parse_error": null,
+          "json_result": {
+            "E": 0.9001987201108703,
+            "finite": true,
+            "max_abs_err": 35.75,
+            "passes_contract": false,
+            "ref_max": 35.75,
+            "ref_min": 28.5,
+            "ref_norm": 257.13274781715376,
+            "tolerance": 0.1
+          },
+          "max_abs_err": 35.75,
+          "metric": "E = ||out - float64 ref||_2 / max(||ref||_2, 0.008)",
+          "passes_contract": false,
+          "ref_max": 35.75,
+          "ref_min": 28.5,
+          "ref_norm": 257.13274781715376,
+          "stderr": "",
+          "stdout": "{\"E\": 0.9001987201108703, \"tolerance\": 0.1, \"passes_contract\": false, \"max_abs_err\": 35.75, \"ref_norm\": 257.13274781715376, \"ref_min\": 28.5, \"ref_max\": 35.75, \"finite\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.1
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Ran the kernel on the exact specified workload (run(make_inputs('cuda'))) and compared against float64 row sums. E = 0.9002, far above the contract bound 0.1; max per-row absolute error 35.75 while reference row sums are only 28.5\u201335.75. Outputs are finite but the relative-error contract is violated by ~9x, consistent with sequential fp32 accumulation discarding the 0.25-granularity small terms when the running accumulator is on the order of \u00b1(1..32)*2^20.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The permuted column order interleaves large \u00b1(1..32)*2^20 terms (fp32 ulp at those magnitudes is 2 or 4) with small 0.25-granularity terms. Once the running fp32 accumulator is on the order of tens of millions, small terms of 0.25\u20130.75 round away entirely, so the computed row sum can deviate from the true sum (~16\u201348) by tens of units, plausibly driving E far above 0.1. Whether \u00b1w pairs happen to cancel early in each row's column order decides the actual magnitude, so this is directly testable by simulating the sequential fp32 accumulation on the deterministic public input.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Reference is a real-arithmetic per-row sum of the original float32 entries; contract requires all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.008) <= 0.1 on the fully specified (64,128) PCG64(730119) workload."
+      }
+    ],
+    "scope_rationale": "The claim concerns exactly the specified workload run(*make_inputs()) and the stated numerical contract E <= 0.1 with finite outputs; problem.txt says only the final result on this specified input is in scope and the kernel may use fp32 sequential summation only if it meets this tolerance.",
+    "statement": "The Triton kernel's strictly sequential float32 left-to-right accumulation of the specified (64,128) input loses the small 0.25-granularity terms when the running accumulator is large (on the order of \u00b1(1..32)*2^20), producing per-row outputs whose relative-error metric E exceeds the contract bound of 0.1 against the float64 reference row sums.",
+    "status": "confirmed",
+    "updated_at": "2026-09-23T21:36:58Z"
+  }
+]

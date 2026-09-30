@@ -1,0 +1,469 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_e02\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import numpy as np\\n2: import torch\\n3: import triton\\n4: import triton.language as tl\\n5: \\n6: \\n7: @triton.jit\\n8: def _fit_predict(X, Y, Q, Out, N: tl.constexpr):\\n9:     s0 = tl.full((), 0.0, tl.float32)\\n10:     s1 = tl.full((), 0.0, tl.float32)\\n11:     sy = tl.full((), 0.0, tl.float32)\\n12:     s00 = tl.full((), 0.0, tl.float32)\\n13:     s01 = tl.full((), 0.0, tl.float32)\\n14:     s11 = tl.full((), 0.0, tl.float32)\\n15:     s0y = tl.full((), 0.0, tl.float32)\\n16:     s1y = tl.full((), 0.0, tl.float32)\\n17:     for i in tl.static_range(N):\\n18:         x0 = tl.load(X + 2 * i)\\n19:         x1 = tl.load(X + 2 * i + 1)\\n20:         val = tl.load(Y + i)\\n21:         s0 = s0 + x0\\n22:         s1 = s1 + x1\\n23:         sy = sy + val\\n24:         s00 = s00 + x0 * x0\\n25:         s01 = s01 + x0 * x1\\n26:         s11 = s11 + x1 * x1\\n27:         s0y = s0y + x0 * val\\n28:         s1y = s1y + x1 * val\\n29:     m0 = s0 / N\\n30:     m1 = s1 / N\\n31:     my = sy / N\\n32:     a = (s00 / N - m0 * m0) + 0.0009765625\\n33:     b = s01 / N - m0 * m1\\n34:     c = (s11 / N - m1 * m1) + 0.0009765625\\n35:     u = s0y / N - m0 * my\\n36:     v = s1y / N - m1 * my\\n37:     det = a * c - b * b\\n38:     beta0 = tl.div_rn(c * u - b * v, det)\\n39:     beta1 = tl.div_rn(a * v - b * u, det)\\n40:     rows = tl.arange(0, 4)\\n41:     q0 = tl.load(Q + rows * 2)\\n42:     q1 = tl.load(Q + rows * 2 + 1)\\n43:     result = (my + (q0 - m0) * beta0) + (q1 - m1) * beta1\\n44:     tl.store(Out + rows, result)\\n45: \\n46: \\n47: def run(x, y, q):\\n48:     output = torch.empty((4,), device=x.device, dtype=torch.float32)\\n49:     _fit_predict[(1,)](x, y, q, output, N=32, num_warps=1,\\n50:                       enable_fp_fusion=False)\\n51:     return output\\n52: \\n53: \\n54: def make_inputs_numpy():\\n55:     rng = np.random.Generator(np.random.PCG64(130653))\\n56:     latent = rng.normal(0.0, 0.0625, (32, 2))\\n57:     x = (np.asarray([32.0, -24.0]) + latent).astype(np.float32)\\n58:     y = (latent @ np.asarray([0.75, -1.25]) +\\n59:          rng.normal(0.0, 0.015625, 32)).astype(np.float32)\\n60:     q = (np.asarray([32.0, -24.0]) +\\n61:          rng.normal(0.0, 0.25, (4, 2))).astype(np.float32)\\n62:     return x, y, q\\n63: \\n64: \\n65: def make_inputs(device=\\\"cuda\\\"):\\n66:     return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\\n67: \\n68: \\n69: def initial_probe():\\n70:     x, y, q = make_inputs()\\n71:     actual = run(x, y, q)\\n72:     stats = torch.zeros((8,), dtype=torch.float32, device=x.device)\\n73:     for i in range(32):\\n74:         x0, x1, yi = x[i, 0], x[i, 1], y[i]\\n75:         stats = stats + torch.stack((x0, x1, yi, x0*x0, x0*x1,\\n76:                                       x1*x1, x0*yi, x1*yi))\\n77:     m0, m1, my, second00, second01, second11, cross0, cross1 = stats / 32\\n78:     cov00 = second00 - m0*m0 + 1/1024\\n79:     cov01 = second01 - m0*m1\\n80:     cov11 = second11 - m1*m1 + 1/1024\\n81:     rhs0, rhs1 = cross0 - m0*my, cross1 - m1*my\\n82:     determinant = cov00*cov11 - cov01*cov01\\n83:     b0 = (cov11*rhs0 - cov01*rhs1) / determinant\\n84:     b1 = (cov00*rhs1 - cov01*rhs0) / determinant\\n85:     expected = (my + (q[:, 0]-m0)*b0) + (q[:, 1]-m1)*b1\\n86:     error = torch.linalg.vector_norm(actual.double()-expected.double()) / torch.clamp(\\n87:         torch.linalg.vector_norm(expected.double()), min=0.1)\\n88:     return {\\\"output\\\": actual.detach().cpu().tolist(),\\n89:             \\\"reference\\\": expected.detach().cpu().tolist(),\\n90:             \\\"relative_error\\\": float(error.item()),\\n91:             \\\"tolerance\\\": 0.05, \\\"passed\\\": bool(error.item() <= 0.05)}\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Fit a centered two-feature ridge regression and predict four queries.\\n\\nThe entire workload is the actual float32 arrays returned by make_inputs()\\nin kernel.py: X has shape (32, 2), y has shape (32,), and Q has shape (4, 2).\\nDefine mu_x = mean(X, axis=0), mu_y = mean(y), Xc = X-mu_x,\\nyc = y-mu_y, and lambda = 1/1024. The mathematical target is\\n  beta = argmin_b [ ||Xc b - yc||_2^2 / 32 + lambda * ||b||_2^2 ]\\n  prediction = mu_y + (Q-mu_x) @ beta.\\nAll target arithmetic is over the actual stored float32 input values and\\nis evaluated in float64 or more accurately; the fit is uniquely defined.\\n\\nrun(X, y, Q) must return a finite float32 vector with shape (4,).\\nThe implementation satisfies this fixed workload iff\\n  ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\\nNo separate acceptance thresholds apply to intermediate means, covariance\\nentries, fitted coefficients, or training residuals. Inputs/seeds not\\ngenerated by make_inputs() are outside this contract.\\n\\nkernel.py also includes initial_probe(), an executable prior experiment.\\nIts code and any observed result are evidence to assess, not a separate\\nspecification or an authoritative verdict. It may or may not be sufficient\\nto establish the contract. All evaluation systems receive this same material.\\n\\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\\n{\\n  \\\"output\\\": [\\n    -0.13965053856372833,\\n    0.028182610869407654,\\n    0.13553990423679352,\\n    -0.032625481486320496\\n  ],\\n  \\\"reference\\\": [\\n    -0.13965053856372833,\\n    0.028182610869407654,\\n    0.13553990423679352,\\n    -0.032625481486320496\\n  ],\\n  \\\"relative_error\\\": 0.0,\\n  \\\"tolerance\\\": 0.05,\\n  \\\"passed\\\": true\\n}\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/evidence_cases/case_e02\",\n    \"status\": \"unverified\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-09-24T06:10:29Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"rationale\": \"The contract defines the target as float64 (or more accurate) arithmetic over the stored float32 inputs; initial_probe's reference recomputes statistics in float32 with the same accumulation order as the kernel, so its 0.0 error may hide a shared bias (e.g. catastrophic cancellation in E[x^2]-mu^2 with x~32) rather than prove contract satisfaction.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"All target arithmetic is over the actual stored float32 input values and is evaluated in float64 or more accurately; the implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\"\n        }\n      ],\n      \"scope_rationale\": \"The contract requires the output to match the prediction computed with float64-or-better accuracy on the fixed make_inputs() workload within relative error 0.05; a failure against a float64 reference on that exact workload violates this requirement.\",\n      \"statement\": \"run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-09-24T06:10:29Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_e02\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_e02\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_e02\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_e02\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_e02\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"I'll verify the kernel's output against a true float64 reference (the initial_probe's reference itself used float32 accumulation, which the contract says is insufficient). Recording the claim first, then running a decisive probe.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The contract defines the target as float64 (or more accurate) arithmetic over the stored float32 inputs; initial_probe's reference recomputes statistics in float32 with the same accumulation order as the kernel, so its 0.0 error may hide a shared bias rather than prove contract satisfaction.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"All target arithmetic is over the actual stored float32 input values and is evaluated in float64 or more accurately; the implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\"\n              }\n            ],\n            \"statement\": \"run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"The prior record_claim failed because it lacked scope_rationale. I'll re-record the claim correctly, with the scope rationale tying it to the float64-reference tolerance requirement in the contract.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The contract defines the target as float64 (or more accurate) arithmetic over the stored float32 inputs; initial_probe's reference recomputes statistics in float32 with the same accumulation order as the kernel, so its 0.0 error may hide a shared bias (e.g. catastrophic cancellation in E[x^2]-mu^2 with x~32) rather than prove contract satisfaction.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"All target arithmetic is over the actual stored float32 input values and is evaluated in float64 or more accurately; the implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires the output to match the prediction computed with float64-or-better accuracy on the fixed make_inputs() workload within relative error 0.05; a failure against a float64 reference on that exact workload violates this requirement.\",\n            \"statement\": \"run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 4,\n      \"text\": \"I'll run the decisive probe: compute the contract's float64-accurate reference on the exact make_inputs() workload and compare against the kernel output.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import json, numpy as np, torch, sys\\nsys.path.insert(0, \\\"/root/evidence_cases/case_e02\\\")\\nimport kernel\\n\\nx, y, q = kernel.make_inputs()\\nout = kernel.run(x, y, q)\\n\\n# float64 reference over the stored float32 inputs\\nX = x.double().cpu().numpy(); Y = y.double().cpu().numpy(); Q = q.double().cpu().numpy()\\nmux = X.mean(axis=0); muy = Y.mean()\\nXc = X - mux; yc = Y - muy\\nlam = 1.0/1024\\nA = Xc.T @ Xc / 32.0 + lam*np.eye(2)\\nrhs = Xc.T @ yc / 32.0\\nbeta = np.linalg.solve(A, rhs)\\npred = muy + (Q - mux) @ beta\\ndiff = out.double().cpu().numpy() - pred\\nrel = np.linalg.norm(diff) / max(np.linalg.norm(pred), 0.1)\\nprint(json.dumps({\\\"output\\\": out.cpu().tolist(), \\\"f64_reference\\\": pred.tolist(),\\n                  \\\"beta\\\": beta.tolist(), \\\"rel_error\\\": float(rel),\\n                  \\\"tolerance\\\": 0.05, \\\"passed\\\": bool(rel <= 0.05),\\n                  \\\"finite\\\": bool(np.all(np.isfinite(out.cpu().numpy())))}))\",\n            \"expected_signal\": \"relative error vs float64 reference exceeds 0.05\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_e02\"\n      },\n      \"created_at\": \"2026-09-24T06:10:17Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_e02\",\n        \"has_error\": null,\n        \"kernel_code\": \"import numpy as np\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _fit_predict(X, Y, Q, Out, N: tl.constexpr):\\n    s0 = tl.full((), 0.0, tl.float32)\\n    s1 = tl.full((), 0.0, tl.float32)\\n    sy = tl.full((), 0.0, tl.float32)\\n    s00 = tl.full((), 0.0, tl.float32)\\n    s01 = tl.full((), 0.0, tl.float32)\\n    s11 = tl.full((), 0.0, tl.float32)\\n    s0y = tl.full((), 0.0, tl.float32)\\n    s1y = tl.full((), 0.0, tl.float32)\\n    for i in tl.static_range(N):\\n        x0 = tl.load(X + 2 * i)\\n        x1 = tl.load(X + 2 * i + 1)\\n        val = tl.load(Y + i)\\n        s0 = s0 + x0\\n        s1 = s1 + x1\\n        sy = sy + val\\n        s00 = s00 + x0 * x0\\n        s01 = s01 + x0 * x1\\n        s11 = s11 + x1 * x1\\n        s0y = s0y + x0 * val\\n        s1y = s1y + x1 * val\\n    m0 = s0 / N\\n    m1 = s1 / N\\n    my = sy / N\\n    a = (s00 / N - m0 * m0) + 0.0009765625\\n    b = s01 / N - m0 * m1\\n    c = (s11 / N - m1 * m1) + 0.0009765625\\n    u = s0y / N - m0 * my\\n    v = s1y / N - m1 * my\\n    det = a * c - b * b\\n    beta0 = tl.div_rn(c * u - b * v, det)\\n    beta1 = tl.div_rn(a * v - b * u, det)\\n    rows = tl.arange(0, 4)\\n    q0 = tl.load(Q + rows * 2)\\n    q1 = tl.load(Q + rows * 2 + 1)\\n    result = (my + (q0 - m0) * beta0) + (q1 - m1) * beta1\\n    tl.store(Out + rows, result)\\n\\n\\ndef run(x, y, q):\\n    output = torch.empty((4,), device=x.device, dtype=torch.float32)\\n    _fit_predict[(1,)](x, y, q, output, N=32, num_warps=1,\\n                      enable_fp_fusion=False)\\n    return output\\n\\n\\ndef make_inputs_numpy():\\n    rng = np.random.Generator(np.random.PCG64(130653))\\n    latent = rng.normal(0.0, 0.0625, (32, 2))\\n    x = (np.asarray([32.0, -24.0]) + latent).astype(np.float32)\\n    y = (latent @ np.asarray([0.75, -1.25]) +\\n         rng.normal(0.0, 0.015625, 32)).astype(np.float32)\\n    q = (np.asarray([32.0, -24.0]) +\\n         rng.normal(0.0, 0.25, (4, 2))).astype(np.float32)\\n    return x, y, q\\n\\n\\ndef make_inputs(device=\\\"cuda\\\"):\\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\\n\\n\\ndef initial_probe():\\n    x, y, q = make_inputs()\\n    actual = run(x, y, q)\\n    stats = torch.zeros((8,), dtype=torch.float32, device=x.device)\\n    for i in range(32):\\n        x0, x1, yi = x[i, 0], x[i, 1], y[i]\\n        stats = stats + torch.stack((x0, x1, yi, x0*x0, x0*x1,\\n                                      x1*x1, x0*yi, x1*yi))\\n    m0, m1, my, second00, second01, second11, cross0, cross1 = stats / 32\\n    cov00 = second00 - m0*m0 + 1/1024\\n    cov01 = second01 - m0*m1\\n    cov11 = second11 - m1*m1 + 1/1024\\n    rhs0, rhs1 = cross0 - m0*my, cross1 - m1*my\\n    determinant = cov00*cov11 - cov01*cov01\\n    b0 = (cov11*rhs0 - cov01*rhs1) / determinant\\n    b1 = (cov00*rhs1 - cov01*rhs0) / determinant\\n    expected = (my + (q[:, 0]-m0)*b0) + (q[:, 1]-m1)*b1\\n    error = torch.linalg.vector_norm(actual.double()-expected.double()) / torch.clamp(\\n        torch.linalg.vector_norm(expected.double()), min=0.1)\\n    return {\\\"output\\\": actual.detach().cpu().tolist(),\\n            \\\"reference\\\": expected.detach().cpu().tolist(),\\n            \\\"relative_error\\\": float(error.item()),\\n            \\\"tolerance\\\": 0.05, \\\"passed\\\": bool(error.item() <= 0.05)}\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Fit a centered two-feature ridge regression and predict four queries.\\n\\nThe entire workload is the actual float32 arrays returned by make_inputs()\\nin kernel.py: X has shape (32, 2), y has shape (32,), and Q has shape (4, 2).\\nDefine mu_x = mean(X, axis=0), mu_y = mean(y), Xc = X-mu_x,\\nyc = y-mu_y, and lambda = 1/1024. The mathematical target is\\n  beta = argmin_b [ ||Xc b - yc||_2^2 / 32 + lambda * ||b||_2^2 ]\\n  prediction = mu_y + (Q-mu_x) @ beta.\\nAll target arithmetic is over the actual stored float32 input values and\\nis evaluated in float64 or more accurately; the fit is uniquely defined.\\n\\nrun(X, y, Q) must return a finite float32 vector with shape (4,).\\nThe implementation satisfies this fixed workload iff\\n  ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\\nNo separate acceptance thresholds apply to intermediate means, covariance\\nentries, fitted coefficients, or training residuals. Inputs/seeds not\\ngenerated by make_inputs() are outside this contract.\\n\\nkernel.py also includes initial_probe(), an executable prior experiment.\\nIts code and any observed result are evidence to assess, not a separate\\nspecification or an authoritative verdict. It may or may not be sufficient\\nto establish the contract. All evaluation systems receive this same material.\\n\\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\\n{\\n  \\\"output\\\": [\\n    -0.13965053856372833,\\n    0.028182610869407654,\\n    0.13553990423679352,\\n    -0.032625481486320496\\n  ],\\n  \\\"reference\\\": [\\n    -0.13965053856372833,\\n    0.028182610869407654,\\n    0.13553990423679352,\\n    -0.032625481486320496\\n  ],\\n  \\\"relative_error\\\": 0.0,\\n  \\\"tolerance\\\": 0.05,\\n  \\\"passed\\\": true\\n}\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/evidence_cases/case_e02\",\n        \"status\": \"unverified\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_e02\"\n      },\n      \"created_at\": \"2026-09-24T06:10:17Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Fit a centered two-feature ridge regression and predict four queries.\\n\\nThe entire workload is the actual float32 arrays returned by make_inputs()\\nin kernel.py: X has shape (32, 2), y has shape (32,), and Q has shape (4, 2).\\nDefine mu_x = mean(X, axis=0), mu_y = mean(y), Xc = X-mu_x,\\nyc = y-mu_y, and lambda = 1/1024. The mathematical target is\\n  beta = argmin_b [ ||Xc b - yc||_2^2 / 32 + lambda * ||b||_2^2 ]\\n  prediction = mu_y + (Q-mu_x) @ beta.\\nAll target arithmetic is over the actual stored float32 input values and\\nis evaluated in float64 or more accurately; the fit is uniquely defined.\\n\\nrun(X, y, Q) must return a finite float32 vector with shape (4,).\\nThe implementation satisfies this fixed workload iff\\n  ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\\nNo separate acceptance thresholds apply to intermediate means, covariance\\nentries, fitted coefficients, or training residuals. Inputs/seeds not\\ngenerated by make_inputs() are outside this contract.\\n\\nkernel.py also includes initial_probe(), an executable prior experiment.\\nIts code and any observed result are evidence to assess, not a separate\\nspecification or an authoritative verdict. It may or may not be sufficient\\nto establish the contract. All evaluation systems receive this same material.\\n\\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\\n{\\n  \\\"output\\\": [\\n    -0.13965053856372833,\\n    0.028182610869407654,\\n    0.13553990423679352,\\n    -0.032625481486320496\\n  ],\\n  \\\"reference\\\": [\\n    -0.13965053856372833,\\n    0.028182610869407654,\\n    0.13553990423679352,\\n    -0.032625481486320496\\n  ],\\n  \\\"relative_error\\\": 0.0,\\n  \\\"tolerance\\\": 0.05,\\n  \\\"passed\\\": true\\n}\\n\",\n        \"entry\": \"case_e02\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_e02\"\n      },\n      \"created_at\": \"2026-09-24T06:10:17Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_e02\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 3174\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 69\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1663\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_e02\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-24T06:10:17Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_e02\\\",\\n  \\\"passed\\\": null,\\n  \\\"status\\\": \\\"unverified\\\"\\n}\\n\",\n        \"entry\": \"case_e02\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 69,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The contract defines the target as float64 (or more accurate) arithmetic over the stored float32 inputs; initial_probe's reference recomputes statistics in float32 with the same accumulation order as the kernel, so its 0.0 error may hide a shared bias rather than prove contract satisfaction.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"All target arithmetic is over the actual stored float32 input values and is evaluated in float64 or more accurately; the implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\"\n          }\n        ],\n        \"statement\": \"run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.\"\n      },\n      \"created_at\": \"2026-09-24T06:10:23Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"error\": {\n          \"message\": \"in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.\",\n          \"recoverable\": true,\n          \"type\": \"LedgerError\"\n        },\n        \"error_type\": \"LedgerError\",\n        \"event_id\": \"t5\",\n        \"message\": \"in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.\",\n        \"ok\": false\n      },\n      \"status\": \"error\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The contract defines the target as float64 (or more accurate) arithmetic over the stored float32 inputs; initial_probe's reference recomputes statistics in float32 with the same accumulation order as the kernel, so its 0.0 error may hide a shared bias (e.g. catastrophic cancellation in E[x^2]-mu^2 with x~32) rather than prove contract satisfaction.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"All target arithmetic is over the actual stored float32 input values and is evaluated in float64 or more accurately; the implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires the output to match the prediction computed with float64-or-better accuracy on the fixed make_inputs() workload within relative error 0.05; a failure against a float64 reference on that exact workload violates this requirement.\",\n        \"statement\": \"run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.\"\n      },\n      \"created_at\": \"2026-09-24T06:10:29Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"created_at\": \"2026-09-24T06:10:29Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"The contract defines the target as float64 (or more accurate) arithmetic over the stored float32 inputs; initial_probe's reference recomputes statistics in float32 with the same accumulation order as the kernel, so its 0.0 error may hide a shared bias (e.g. catastrophic cancellation in E[x^2]-mu^2 with x~32) rather than prove contract satisfaction.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"All target arithmetic is over the actual stored float32 input values and is evaluated in float64 or more accurately; the implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires the output to match the prediction computed with float64-or-better accuracy on the fixed make_inputs() workload within relative error 0.05; a failure against a float64 reference on that exact workload violates this requirement.\",\n        \"statement\": \"run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-09-24T06:10:29Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import json, numpy as np, torch, sys\\nsys.path.insert(0, \\\"/root/evidence_cases/case_e02\\\")\\nimport kernel\\n\\nx, y, q = kernel.make_inputs()\\nout = kernel.run(x, y, q)\\n\\n# float64 reference over the stored float32 inputs\\nX = x.double().cpu().numpy(); Y = y.double().cpu().numpy(); Q = q.double().cpu().numpy()\\nmux = X.mean(axis=0); muy = Y.mean()\\nXc = X - mux; yc = Y - muy\\nlam = 1.0/1024\\nA = Xc.T @ Xc / 32.0 + lam*np.eye(2)\\nrhs = Xc.T @ yc / 32.0\\nbeta = np.linalg.solve(A, rhs)\\npred = muy + (Q - mux) @ beta\\ndiff = out.double().cpu().numpy() - pred\\nrel = np.linalg.norm(diff) / max(np.linalg.norm(pred), 0.1)\\nprint(json.dumps({\\\"output\\\": out.cpu().tolist(), \\\"f64_reference\\\": pred.tolist(),\\n                  \\\"beta\\\": beta.tolist(), \\\"rel_error\\\": float(rel),\\n                  \\\"tolerance\\\": 0.05, \\\"passed\\\": bool(rel <= 0.05),\\n                  \\\"finite\\\": bool(np.all(np.isfinite(out.cpu().numpy())))}))\",\n        \"expected_signal\": \"relative error vs float64 reference exceeds 0.05\"\n      },\n      \"created_at\": \"2026-09-24T06:10:41Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t7_probe.py\",\n            \"sha256\": \"62d356f76d41f2378962692ca4fb2be2faa6b3887381f763d62619abef089c2a\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t7_stdout.txt\",\n            \"sha256\": \"932cd6eec48c1686887c6df5e1c4bd9c6180cea559eecb2ec8af913a972d6a35\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t7_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n            \"kind\": \"json_result\",\n            \"path\": \"probes/t7_json_result.json\",\n            \"sha256\": \"2c99e71a9158975d1b583c82aef4113dd737a2830f6a9f30d18c18f80942bbf2\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.\",\n        \"cwd\": \"/root/evidence_cases/case_e02\",\n        \"duration_s\": 6.757074,\n        \"event_id\": \"t7\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t7_probe.py\",\n                \"sha256\": \"62d356f76d41f2378962692ca4fb2be2faa6b3887381f763d62619abef089c2a\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t7_stdout.txt\",\n                \"sha256\": \"932cd6eec48c1686887c6df5e1c4bd9c6180cea559eecb2ec8af913a972d6a35\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t7_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t7_json_result.json\",\n                \"sha256\": \"2c99e71a9158975d1b583c82aef4113dd737a2830f6a9f30d18c18f80942bbf2\"\n              }\n            ],\n            \"duration_s\": 6.757074,\n            \"exit_code\": 0,\n            \"expected_signal\": \"relative error vs float64 reference exceeds 0.05\",\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"beta\": [\n                0.7097992046560915,\n                -0.9074404433080981\n              ],\n              \"f64_reference\": [\n                -0.11580082185643768,\n                0.03600776652492417,\n                0.10418083799488609,\n                -0.04689557792391956\n              ],\n              \"finite\": true,\n              \"output\": [\n                -0.13965053856372833,\n                0.028182610869407654,\n                0.13553990423679352,\n                -0.032625481486320496\n              ],\n              \"passed\": false,\n              \"rel_error\": 0.255847958607997,\n              \"tolerance\": 0.05\n            },\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"output\\\": [-0.13965053856372833, 0.028182610869407654, 0.13553990423679352, -0.032625481486320496], \\\"f64_reference\\\": [-0.11580082185643768, 0.03600776652492417, 0.10418083799488609, -0.04689557792391956], \\\"beta\\\": [0.7097992046560915, -0.9074404433080981], \\\"rel_error\\\": 0.255847958607997, \\\"tolerance\\\": 0.05, \\\"passed\\\": false, \\\"finite\\\": true}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe produced a JSON result that needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t7\"\n        },\n        \"exit_code\": 0,\n        \"expected_signal\": \"relative error vs float64 reference exceeds 0.05\",\n        \"json_parse_error\": null,\n        \"json_result\": {\n          \"beta\": [\n            0.7097992046560915,\n            -0.9074404433080981\n          ],\n          \"f64_reference\": [\n            -0.11580082185643768,\n            0.03600776652492417,\n            0.10418083799488609,\n            -0.04689557792391956\n          ],\n          \"finite\": true,\n          \"output\": [\n            -0.13965053856372833,\n            0.028182610869407654,\n            0.13553990423679352,\n            -0.032625481486320496\n          ],\n          \"passed\": false,\n          \"rel_error\": 0.255847958607997,\n          \"tolerance\": 0.05\n        },\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"{\\\"output\\\": [-0.13965053856372833, 0.028182610869407654, 0.13553990423679352, -0.032625481486320496], \\\"f64_reference\\\": [-0.11580082185643768, 0.03600776652492417, 0.10418083799488609, -0.04689557792391956], \\\"beta\\\": [0.7097992046560915, -0.9074404433080981], \\\"rel_error\\\": 0.255847958607997, \\\"tolerance\\\": 0.05, \\\"passed\\\": false, \\\"finite\\\": true}\\n\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 31757,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Leave it unset if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Required when scope is in_scope: which contract requirement this claim would violate."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Required when scope is in_scope: at least one quote from the contract, each with its source."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

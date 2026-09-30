@@ -1,0 +1,15 @@
+Iteration: state += residual = Richardson iteration with step size 1 (no preconditioner). Converges if spectral radius of (I - A) < 1, i.e., eigenvalues of A in (0,2). Eigenvalues given: min 0.03125, max 1.75. So I - A eigenvalues: 1-λ, max |1-λ| = 1-0.03125 = 0.96875. Convergence rate 0.96875^64 ≈ e^(64·ln0.96875) = e^(-64·0.031749) = e^-2.032 ≈ 0.131. Error reduced ~×0.131 per component. Residual relative? Richardson error: x_k - x = (I-A)^k (x_0 - x). Initial error magnitude ~ ||x||. Relative error ~0.13 which exceeds 0.08? Hmm, but error components depend on eigenvector decomposition of -x. Worst case 0.131·||x||, but typical could be smaller. Also float32 accumulation errors: eigenvalue 0.03125 component converges slowly; other components converge fast. The smallest eigenvector (Hadamard first column, constant) — rhs is random normalized; its projection onto constant vector is some value. Eigenvalue 0.03125 → factor 0.96875^64 ≈ 0.131. Also eigenvalue 0.0625 → 0.9375^64 ≈ e^-4.06 ≈ 0.017. Others negligible.
+
+So error ≈ 0.131·|c1| + 0.017·|c2| relative to ||x||. ||x||² = Σ c_k²/λ_k². With λ1=0.03125, that term dominates: 32·c1². So ||x|| ≈ 5.66|c1|. Relative error ≈ 0.131·|c1| / (5.66|c1|) ≈ 0.023 < 0.08. Good—since the small eigenvalue inflates ||x||, relative error is small.
+
+But float32 accumulation: state + residual repeatedly; rounding errors ~ machine eps · ||A||· iterations... Each step adds residual ~ small; error accumulation roughly STEPS·eps·something. Also compute residual via sum of matrix*state; relative error per step ~ eps·κ? Actually rounding errors act like perturbing rhs slightly; fixed error ~ eps·||A||·||x|| · const. eps=1e-7, 64 steps: ~1e-4 relative. Fine.
+
+Also does the kernel converge to true solution? Yes. Also check rhs float32 vs reference in float64 with original float32 values — the matrix is float32, rhs float32; solver uses these exactly. Richardson converges to the exact float32-system solution, which approximates the float64 solution of float32 inputs. Fine.
+
+One concern: tl.arange(0,16) power of two, fine.STEPS=64 constexpr loop unrolled fine.
+
+Compute c1: rhs projection onto Hadamard constant column /4... The projection onto eigenvector for λ=0.03125 is the constant vector (normalized). c1 = sum(rhs)/4 (since orthogonal columns are ±1/4 each, norm 1). Random normal normalized: sum ~ N(0, 16)/4 → std ~1... anyway nonzero generally. Even if c1 tiny, c2 term: ||x|| then dominated by 1/0.0625=16·c2. 0.017·|c2|/(16|c2|)=0.001. Fine. Worst case: if all mass in large eigenvalues, error tiny. Denominator has max(||x||, 0.004). Fine.
+
+Also 0.03125 float exact, 1-λ exact in float32... convergence stable.
+
+Verdict: trust. Confidence ~0.85.

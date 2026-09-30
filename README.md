@@ -420,10 +420,28 @@ the most obvious unsafe reject.
 
 ## 5. Repository layout
 
+The verification benchmarks use one global `case_<number>` registry. Start with
+[the case index](benchmark_fn_fp/CASE_INDEX.md) for all 104 active cases and their
+experimental purpose; [the benchmark guide](benchmark_fn_fp/README.md) explains
+which files are public inputs, private answers, programs, and historical traces.
+The original FN/FP suite has 34 active cases; `case_03` remains retired.
+
 ```text
 kernel_verification/
 ├── KernelAgent/              # kernel generator dependency
 ├── KernelBench/              # benchmark/problem source dependency
+├── benchmark_fn_fp/          # verification benchmarks, programs, and traces
+│   ├── CASE_INDEX.md         # all case IDs, dataset groups, and links
+│   ├── case_map.json         # single canonical registry
+│   ├── triton/              # original cases with private answers
+│   ├── triton_eval_cases/   # answer-free copies with the same IDs
+│   ├── correlation_pair/    # case_36–case_37
+│   ├── numerical_challenges/ # case_38–case_61
+│   ├── evidence_challenges/ # case_62–case_81
+│   ├── numerical_pilot/     # case_82–case_105
+│   ├── real_kernel_challenges/ # plan only
+│   ├── eval_scripts/        # evaluation programs
+│   └── traces_glm/          # case/arm/trial records
 ├── dataset/                  # saved kernel artifacts
 │   └── <entry>/
 │       ├── problem.txt
@@ -489,13 +507,39 @@ Copy `.env.example` to `.env` and set only the keys you need:
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 
-AGENTIC_PROVIDER=openai        # anthropic | openai | chatgpt
+AGENTIC_PROVIDER=openai        # anthropic | openai | chatgpt | openrouter | fireworks
 AGENTIC_MODEL=gpt-5            # or another model supported by the provider
 AGENTIC_MAX_ROUNDS=4
 ```
 
 KernelAgent generation can use its own settings in `.env`, but the verifier does not need
 KernelAgent settings when it is only verifying existing `dataset/` entries.
+
+To use Fireworks for verification, set these values in the root `.env`:
+
+```env
+FIREWORKS_API_KEY=your-fireworks-api-key
+AGENTIC_PROVIDER=fireworks
+AGENTIC_FIREWORKS_MODEL=accounts/fireworks/models/glm-5p3
+```
+
+Leave `AGENTIC_MODEL` unset to use the provider-specific model above; `--model`
+overrides both. The Fireworks client uses the
+[official OpenAI-compatible endpoint](https://docs.fireworks.ai/tools-sdks/openai-compatibility)
+at `https://api.fireworks.ai/inference/v1` with Chat Completions and native tool
+calling. It requires its own `FIREWORKS_API_KEY` and does not use `OPENAI_API_KEY`.
+
+```bash
+uv run kv-agentic-run elem_add --provider fireworks --agent skeptic --max-debate-rounds 1
+```
+
+For the Modal benchmark runner, also pass the model explicitly:
+
+```bash
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py \
+  --provider fireworks --model accounts/fireworks/models/glm-5p3 \
+  --arm solo --cases case_01
+```
 
 ### 6.2 Build dataset entries
 

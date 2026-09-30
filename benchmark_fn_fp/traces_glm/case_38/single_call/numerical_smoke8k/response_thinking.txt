@@ -1,0 +1,211 @@
+Let me analyze this carefully.
+
+The problem statement says: The reference uses the original input logits, without quantization:
+- p[i] = exp(logits[i] - max(logits)) / sum_j exp(logits[j] - max(logits))
+- reference[k] = sum_i p[i] * values[i, k]
+
+The reference must be evaluated in float64 on the supplied float32 input values. The output must be a finite vector of shape (16,), and the relative L2 error must be <= 0.02.
+
+The kernel implementation, however, quantizes the logits before applying softmax:
+```python
+scale = tl.max(tl.abs(logits), axis=0) / 7.0
+codes = tl.minimum(tl.maximum(tl.floor(logits / scale + 0.5), -7.0), 7.0)
+rounded = codes * scale
+weights = tl.exp(rounded - tl.max(rounded, axis=0))
+probabilities = weights / tl.sum(weights, axis=0)
+```
+
+So the question is: does this quantization introduce enough error to exceed the 0.02 relative L2 error tolerance?
+
+Let me try to reproduce the computation mentally / analytically. The inputs are generated with a fixed seed:
+- rng = np.random.Generator(np.random.PCG64(918233))
+- logits = rng.normal(0.0, 1.2, 128).astype(np.float32)
+- values = (1.0 + rng.normal(0.0, 1.0, (128, 16))).astype(np.float32)
+- order is a permutation applied to values rows.
+
+I can't compute the exact logits without running numpy, but I can reason about the error magnitude.
+
+The quantization scheme: scale = max(|logits|)/7. So logits are quantized to a grid of spacing `scale` with codes in [-7, 7] (clamped). The rounding is round-to-nearest (floor(x/scale + 0.5)).
+
+max(|logits|) for 128 samples from N(0, 1.2): the standard deviation is 1.2, so max |logits| is likely around 3-4 (for 128 samples of normal, expected max ~ 2.5-3 sigma, so ~3.0-3.6). Let's say max|logits| ≈ 3.5. Then scale ≈ 0.5.
+
+So each logit is rounded to the nearest multiple of 0.5, with rounding error at most 0.25 (half of scale). Actually, error at most scale/2 ≈ 0.25 per logit.
+
+How does a perturbation of logit by ε affect the softmax probability? p_i = exp(l_i - max)/Z. A perturbation δ_i in l_i changes p_i approximately by p_i * (δ_i - sum_j p_j δ_j). The relative perturbation in p_i is bounded by 2*max|δ| ≈ 0.5 in the worst case.
+
+Hmm, that could be significant. Let's think about the effect on the output: reference[k] = sum_i p_i * v[i,k]. The perturbed output is sum_i p'_i * v[i,k]. The difference is sum_i (p'_i - p_i) * v[i,k].
+
+The perturbation in p: p'_i ≈ p_i * (1 + δ_i - <δ, p>) where <δ, p> = sum_j p_j δ_j. So p'_i - p_i ≈ p_i (δ_i - <δ,p>).
+
+Error in output[k] ≈ sum_i p_i (δ_i - <δ,p>) v[i,k] = <p ⊙ δ, v_k> - <δ,p> * <p, v_k>... wait let me redo.
+
+sum_i p_i δ_i v[i,k] - (sum_j p_j δ_j)(sum_i p_i v[i,k]).
+
+This is like a weighted covariance between δ and v[:,k] under weights p. Its magnitude is bounded by roughly max|δ| * (weighted std of v[:,k]) * something.
+
+Actually, the error is bounded by 2 * max|δ| * (weighted standard deviation of values under p) roughly. Since δ can be up to ±0.25 (scale/2), and... hmm, but the errors are random-ish.
+
+Let me think again: |sum_i (p'_i - p_i) v_i| <= ... The total variation between p and p' is at most... p' is p perturbed multiplicatively by factors exp(δ_i - <δ,p>-ish). Actually exact: p'_i = exp(l_i + δ_i) / sum_j exp(l_j + δ_j) (up to the max shift). p'_i / p_i = exp(δ_i) / sum_j p_j exp(δ_j). So p'_i = p_i exp(δ_i) / E_p[exp(δ)].
+
+Error[k] = sum_i p_i (exp(δ_i)/E[exp δ] - 1) v[i,k].
+
+With |δ_i| <= scale/2 = max|l|/14.
+
+max|l| ≈ let's estimate. For N(0, 1.2) with 128 samples, the max of |X| — expected max of 128 standard normals is about 2.6σ... Actually E[max of n standard normals] ≈ sqrt(2 ln n) = sqrt(2*ln 128) = sqrt(2*4.852) = sqrt(9.704) ≈ 3.115. So max |X| ≈ 3.1-3.3 (taking absolute value slightly increases it, but the max of |X| over 128 samples ≈ max of 256 samples-ish, but they're the same samples; roughly the max |X| ~ 3.2). Times 1.2 gives max|l| ≈ 3.8. Hmm, so scale ≈ 3.8/7 ≈ 0.55, δ max ≈ 0.27.
+
+But wait — importantly, the value with max |logits| gets quantized exactly (since it's ±7 * scale exactly... well, l/scale = ±7 exactly, floor(7+0.5)=7, so codes = ±7, rounded = ±7*scale = ±max|l| exactly, up to float rounding). Other logits get rounded to nearest multiple of scale.
+
+The effect on softmax: probabilities get multiplied by exp(δ_i - weighted mean δ). With δ up to ±0.27, exp(δ) ranges from 0.76 to 1.31. So probabilities change by up to ~30% relative. But the errors in output depend on correlation between δ and values.
+
+Expected error magnitude: Error[k] = Cov_p(δ, v_k)-ish = sum_i p_i δ_i v_ik - (sum p_i δ_i)(sum p_i v_ik). Hmm.
+
+Roughly, if δ were random uniform in [-0.27, 0.27], and v has weighted std ~1 (values are 1 + N(0,1), so std ~1; mean under p ~1), then Cov_p(δ, v) ≈ correlation * std(δ)*std(v). δ std ≈ 0.27/sqrt(3) ≈ 0.156. If uncorrelated, error ≈ 0. But quantization error is deterministic and roughly uniform-ish. However, there could be accidental correlation.
+
+Actually, hmm. Let's think about the second term too: -(E_p[δ])(E_p[v_k]). E_p[δ] is a weighted average of quantization errors, small.
+
+The dominant term: sum_i p_i δ_i v_ik. δ_i depends on logits_i (deterministic function), v_ik is random and independent of logits. So the correlation between δ and v is essentially random, of magnitude ~ std under p... Let's compute: sum_i p_i δ_i v_ik, treating v_ik as iid N(1,1) independent of δ. Conditional on δ and p, this is a weighted sum of normals with weights w_i = p_i δ_i. Its std is sqrt(sum_i (p_i δ_i)^2) * 1 (std of v). sum_i (p_i δ_i)^2 <= max|δ|^2 * sum p_i^2. sum p_i^2 for softmax over 128 entries with logits std 1.2 — the softmax distribution: logits ~ N(0, 1.2^2). exp of these... p_i = exp(l_i)/Z. The effective number of dominant terms: logits range over about ±3.8, so exp varies by factor e^7.6 ≈ 2000. The top few logits dominate. sum p_i^2 ≈ maybe 0.1-0.3? Let's estimate: p is like a Boltzmann distribution; sum p^2 = e^{sum...}. For N(0, σ=1.2) logits, the softmax is fairly spread out. The participation ratio... Let me think: with 128 entries and logits N(0,1.2), the partition function Z ≈ 128 * E[exp(l)] = 128 * exp(σ²/2) = 128 * exp(0.72) ≈ 128*2.05 ≈ 263. sum p_i^2 = sum exp(2 l_i)/Z² ≈ 128 * exp(2σ²)/Z² = 128 * exp(2.88)/263² = 128*17.8/69169 ≈ 2278/69169 ≈ 0.033. So sqrt(sum p_i²) ≈ 0.18.
+
+So std of first term ≈ 0.18 * 0.156 ≈ 0.028 (if δ were random with std 0.156; actually quantization errors are more like uniform, std ≈ scale/sqrt(12) = 0.55/3.46 ≈ 0.159). So ~0.028 per component, times sqrt(16) for L2 norm... wait, error norm over 16 components each with std 0.028 → L2 ≈ 0.028*4 = 0.112. Hmm wait, but the v are the same across k for each i, and δ_i is the same across k. So errors across k are correlated through sum_i p_i δ_i (the common part times mean of v). Let me redo.
+
+Error[k] = sum_i p_i δ̃_i (v_ik - v̄_k) where δ̃_i = δ_i - E_p[δ] and v̄_k = E_p[v]. Roughly.
+
+v_ik - v̄_k ≈ v_ik - 1 (since E_p[v] ≈ 1 + weighted average of N(0,1) noise ≈ 1). So Error[k] ≈ sum_i p_i δ̃_i (v_ik - 1) = sum_i p_i δ̃_i ε_ik, where ε_ik iid N(0,1).
+
+For fixed δ̃, the errors across k are iid with std sqrt(sum (p_i δ̃_i)²) ≈ sqrt(sum p_i²) * std(δ̃) ≈ 0.18 * 0.16 ≈ 0.029.
+
+L2 norm of error over 16 components ≈ 0.029 * sqrt(16) = 0.029*4 ≈ 0.115. Expected chi distribution: E[norm] ≈ 0.029 * sqrt(16 - 0.5) ≈ 0.029*3.94 ≈ 0.114.
+
+Reference norm: reference[k] = sum_i p_i v_ik ≈ 1 + noise, where noise std = sqrt(sum p_i²) ≈ 0.18 per component. So reference ≈ vector of ~1 ± 0.18. Norm ≈ sqrt(16 * (1 + small)) ≈ 4. Actually norm ≈ sqrt(sum (1+ε)²) ≈ sqrt(16 + 16*0.03) ≈ 4.1.
+
+Relative error ≈ 0.114/4.1 ≈ 0.028. Hmm, that's above 0.02! But this is a rough estimate with lots of uncertainty. Also, there's a subtlety: δ are deterministic quantization errors, not random, so the "random correlation" estimate might be off.
+
+Hmm wait, but I should be more careful. Let me reconsider.
+
+Actually, let me reconsider the quantization error distribution. scale = max|l|/7 ≈ 3.8/7 ≈ 0.545. Codes are clamped to [-7,7]. Since max|l|/scale = 7 exactly, no clamping actually occurs for the max element. Quantization error δ_i = round(l_i/scale)*scale - l_i ∈ [-scale/2, scale/2] = [-0.27, 0.27].
+
+But actually, is the error δ̃_i = δ_i - E_p[δ]? In the exact formula, p'_i = p_i exp(δ_i)/E_p[exp(δ)]. Error[k] = sum_i p_i v_ik (exp(δ_i)/E[exp δ] - 1).
+
+To first order: ≈ sum_i p_i v_ik (δ_i - E[δ]).
+
+So yes, my analysis holds to first order.
+
+Hmm, but let me reconsider whether the errors δ_i behave like random. Quantization errors for uniformly distributed l: roughly uniform in [-s/2, s/2], appearing random. Since logits ~ N(0, 1.2) and grid spacing 0.545, the fractional parts are roughly uniform, so δ_i look like iid uniform ±0.27. Weighted by p.
+
+So the error vector over k: Error[k] = sum_i p_i δ̃_i ε_ik where ε_ik ~ iid N(0,1) independent of everything (values noise). Actually values = 1 + N(0,1), and the row permutation doesn't matter for independence.
+
+Hmm wait, but there's also correlation between the permutation and... no, permutation is fixed and applied to values; values rows are iid, so permutation doesn't change distribution. And logits are independent of values. So the correlation between δ (function of logits) and v is random.
+
+So expected relative L2 error ≈ 0.03 by my estimate. The threshold is 0.02. Hmm, close call. My estimates have significant uncertainty. Let me try to be more precise.
+
+Let me try to actually simulate mentally... that's hard. Let me think about whether I can pin down the actual logits. The RNG is np.random.Generator(np.random.PCG64(918233)), rng.normal(0.0, 1.2, 128). I can't compute these values without running code. Hmm.
+
+But wait — maybe I should think about this differently. The task says "Decide whether this implementation satisfies that contract for this fixed workload." The implementation deliberately quantizes logits even though the reference uses unquantized logits. The question is whether the quantization error keeps the output within 2% relative L2.
+
+Key question: is this a "reject" (quantization too coarse) or "trust" (quantization fine)?
+
+Let me redo the estimate more carefully.
+
+Parameters:
+- n = 128 logits ~ N(0, σ=1.2).
+- max|l|: for 128 samples, E[max] ≈ 3.1σ? Let me compute more carefully. For n=128 standard normals, E[max] ≈ Φ^{-1}(1 - 1/n) adjusted... The expected maximum ≈ b_n = Φ^{-1}(1-1/(n+1))... Φ^{-1}(1 - 1/129) = Φ^{-1}(0.99225) ≈ 2.42. Hmm, that's the quantile approximation; the expected max of n normals is closer to Φ^{-1}(1-1/(n+1))? Actually E[max_n] ≈ Φ^{-1}(1 - 1/(n+1)) is an approximation. For n=128: 1 - 1/129 ≈ 0.99225, Φ^{-1}(0.99225) ≈ 2.42. Another approximation: E[max] ≈ sqrt(2 ln n) - (ln ln n + ln 4π)/(2 sqrt(2 ln n))... For n=128: sqrt(2 ln 128) = 3.115; ln ln 128 = ln(4.852) = 1.579; ln(4π) = 2.531; sum = 4.11; denominator 2*3.115 = 6.23; correction = 0.66; E[max] ≈ 3.115 - 0.66 = 2.45. OK so E[max of 128 N(0,1)] ≈ 2.45-2.5. But we need max of |X|, which is like max of 2n samples but correlated... roughly max |X| ≈ E[max of 256] ≈ sqrt(2 ln 256) - ... = sqrt(11.05)=3.324; ln ln 256 = ln(5.545)=1.713; +2.531 = 4.244; /(2*3.324=6.648) = 0.638; E ≈ 2.69. Hmm, but max|X| for n samples: P(max|X| < t) = (2Φ(t)-1)^n. E[max|X|] where P ≈ ... For n=128: (2Φ(t)-1)^128 = 0.5 → 2Φ(t)-1 = 0.5^{1/128} = e^{ln0.5/128} = e^{-0.005417} ≈ 0.99460 → Φ(t) = 0.99730 → t ≈ 2.78. So median max|X| ≈ 2.78, E ≈ 2.8. Times 1.2: max|l| ≈ 3.35. So scale ≈ 0.48, δ_max = 0.24.
+
+Hmm, but this is the actual fixed seed, not expectation. Could be anywhere from ~2.5 to ~4 in units of σ (i.e., max|l| between 3.0 and 4.8). Let's take ~3.4.
+
+- scale s = max|l|/7 ≈ 0.49.
+- Quantization error δ_i uniform-ish in [-s/2, s/2] = [-0.245, 0.245], std ≈ s/sqrt(12) ≈ 0.141.
+
+- Softmax weights p: logits N(0, 1.2²). Let me compute sum p_i² more carefully. p_i = e^{l_i}/Z. sum p² = (sum e^{2l_i})/Z². E[sum e^{2l_i}] = n e^{2σ²} = 128 e^{2.88} = 128*17.81 = 2280. E[Z] = n e^{σ²/2} = 128 e^{0.72} = 128*2.054 = 263. E[Z²] = Var + E². Var(Z) = n Var(e^l) = n(e^{2σ²} - e^{σ²}) = 128(17.81 - 2.054*... wait e^{σ²}=e^{1.44}=4.22). Var(e^l) = e^{2σ²} - (e^{σ²/2})²... hmm, E[e^l] = e^{σ²/2} = e^{0.72} = 2.054. E[e^{2l}] = e^{2σ²} = e^{2.88} = 17.81. Var(e^l) = 17.81 - 2.054² = 17.81 - 4.22 = 13.59. Var(Z) = 128*13.59 = 1740. E[Z²] = 1740 + 263² = 1740 + 69169 = 70909. E[sum p²] = E[sum e^{2l}/Z²] ≈ E[sum e^{2l}]/E[Z²]-ish (not exact, but roughly) = 2280/70909 ≈ 0.032. sqrt ≈ 0.18.
+
+- values v_ik = 1 + ε_ik, ε iid N(0,1).
+- reference[k] = sum_i p_i v_ik = 1 + sum_i p_i ε_ik. sum p_i ε_ik has std sqrt(sum p²) ≈ 0.18. So reference ≈ 1 ± 0.18 per component. ||reference|| ≈ sqrt(16 + 16*0.032 + cross terms) ≈ sqrt(16.5) ≈ 4.06. Plus random fluctuation. The threshold max(||ref||, 0.001*4=0.004) — so ||ref|| ≈ 4.
+
+- Error[k] ≈ sum_i p_i δ̃_i ε_ik (first order), where δ̃_i = δ_i - sum_j p_j δ_j. Hmm, actually let me redo the exact structure:
+
+p'_i = p_i e^{δ_i} / M where M = sum_j p_j e^{δ_j}.
+Error[k] = sum_i (p'_i - p_i) v_ik = sum_i p_i (e^{δ_i}/M - 1) v_ik.
+
+Let g_i = e^{δ_i}/M - 1. First order g_i ≈ δ_i - δ̄ where δ̄ = sum p_j δ_j.
+
+Error[k] ≈ sum_i p_i g_i (1 + ε_ik) = (sum_i p_i g_i) + sum_i p_i g_i ε_ik ≈ 0 + sum_i p_i g_i ε_ik (since sum p_i g_i = sum p_i e^{δ_i}/M - 1 = M/M - 1 = 0 exactly!). 
+
+So Error[k] = sum_i p_i g_i ε_ik exactly (to the extent v_ik = 1 + ε_ik and the approximation holds... wait no: Error[k] = sum_i p_i g_i v_ik = sum_i p_i g_i + sum_i p_i g_i ε_ik = 0 + sum_i p_i g_i ε_ik. Exactly! Since sum_i p_i g_i = 0.)
+
+So Error[k] = sum_i p_i g_i ε_ik, where g depends on δ (logits quantization), ε on values. These are independent. 
+
+For fixed g, p: Error[k] ~ N(0, σ_k²) with σ_k² = sum_i (p_i g_i)², iid across k (ε_ik iid across k).
+
+||Error||² = sum_k Error[k]². E[||Error||²] = 16 * sum_i (p_i g_i)².
+
+sum_i (p_i g_i)²: g_i ≈ δ_i - δ̄, |g_i| ≲ 2*max|δ| but typically |g_i| ~ std(δ) ≈ 0.14 (uniform). sum_i (p_i g_i)² ≈ sum p_i² * E[g² |p-weighted] ≈ 0.032 * (0.14² + variance of δ̄ weighted...) Let me just say ≈ 0.032 * 0.02 ≈ 0.00064. Hmm: g² typical ≈ 0.02 (std 0.14). So sum (p_i g_i)² ≈ 0.032 * 0.02 = 0.00064. sqrt = 0.0253.
+
+Wait, I need to be careful: sum_i (p_i g_i)² <= max(g²) * sum p_i². If g_i are roughly independent of p_i... δ_i is quantization error of logit l_i. Is δ correlated with p? p_i is large when l_i is large. δ_i = round(l_i/s)*s - l_i, the fractional part thing. For large l_i, δ_i is still roughly uniform. No strong correlation. So sum_i (p_i g_i)² ≈ E[g²] * sum p_i² ≈ 0.02 * 0.032 = 0.00064.
+
+E[||Error||²] = 16 * 0.00064 = 0.0102. ||Error|| ≈ 0.10.
+
+Relative error ≈ 0.10 / 4.06 ≈ 0.025.
+
+Hmm, so ~2.5% expected relative error, threshold 2%. But the variance of this estimate is substantial. The relative error squared is like a chi-squared; E[rel²] ≈ 0.00064... Let me compute std of rel error: ||Error||² ~ σ² χ²_16, E = 16σ², std = σ² sqrt(32) = 16σ² * sqrt(2/16) = E * sqrt(2/16) = E*0.354. So ||Error|| = sqrt of that: std of ||Error|| ≈ E[||Error||] * 0.354/(2*... ) roughly E*0.125. So ||Error|| ≈ 0.100 ± 0.013. Also uncertainty in g's actual realization: sum_i (p_i g_i)² itself is a random realization, could vary by ±50% maybe. And uncertainty in the actual logits (max|l|, spread) and in sum p².
+
+Also, second-order terms: e^{δ} has curvature; g_i = e^{δ_i}/M - 1 with δ up to ±0.245: e^{0.245} = 1.28, e^{-0.245} = 0.78. M = E_p[e^δ] ≈ 1 + δ̄ + δ²/2-ish ≈ 1.0098 (since E[δ²]/2 = 0.02/2 = 0.01). So g_i ≈ (e^{δ_i})/1.01 - 1. For δ_i = +0.245: g = 1.28/1.01 - 1 = 0.268. For δ_i = -0.245: g = 0.78/1.01 - 1 = -0.236. First order would give ±0.235. So second order adds ~10% on positive side. Fine.
+
+Hmm, so my central estimate is ~2.5% relative error, exceeding the 2% threshold. But with uncertainty, it could be 1.5% or 4%.
+
+Hmm, this is genuinely hard to decide without running the code. Let me think about whether there are other issues.
+
+Wait, actually, let me re-read the kernel. Is there any other defect?
+
+```python
+i = tl.arange(0, N)
+j = tl.arange(0, D)
+logits = tl.load(Logits + i).to(tl.float32)
+scale = tl.max(tl.abs(logits), axis=0) / 7.0
+codes = tl.minimum(tl.maximum(tl.floor(logits / scale + 0.5), -7.0), 7.0)
+rounded = codes * scale
+weights = tl.exp(rounded - tl.max(rounded, axis=0))
+probabilities = weights / tl.sum(weights, axis=0)
+values = tl.load(Values + i[:, None] * D + j[None, :]).to(tl.float32)
+result = tl.sum(probabilities[:, None] * values, axis=0)
+tl.store(Output + j, result)
+```
+
+This computes softmax on quantized logits (int8-like symmetric quantization with 4-bit codes [-7,7], scale max|l|/7), then the attention weighted sum. It's a valid implementation pattern (simulating quantized attention). The only contract question is numerical accuracy.
+
+Edge cases: scale could be 0 if all logits are 0 — not the case here. tl.floor(x + 0.5) rounds half up — fine. Clamping to [-7, 7]: since |l| <= max|l| = 7*scale, l/scale ∈ [-7, 7], round to nearest could give ±7 at most (since |l/scale| <= 7, round(l/scale) ∈ [-7, 7]). So clamping is a no-op except for float rounding edge cases. Fine.
+
+The max element(s): l_max/scale = 7 exactly (in exact arithmetic; float division may give 7.0000001 or 6.9999; floor(7.5) = 7; fine).
+
+So the softmax is computed on rounded logits. The question is purely: is the quantization-induced error within 2% relative L2 for this specific seed?
+
+Hmm. Since I estimated ~2.5%, which is above the threshold... but let me double-check my estimate of sum p_i² and other quantities. Actually, let me reconsider: maybe I'm overestimating.
+
+Let me reconsider max|l|. The actual seed is fixed; I can't know the actual max. Expected max|X| ≈ 2.8σ = 3.36 for l. But the estimate E[max|X|] for n=128: I computed median 2.78. E is slightly higher, ~2.85. So max|l| ≈ 3.4, s ≈ 0.486, δ range ±0.243, std(δ) = s/√12 = 0.140.
+
+But wait — quantization error isn't exactly uniform. l ~ N(0, 1.2). The fractional parts of l/s where s = 0.486: since σ/s = 2.47, the distribution of l/s spans roughly ±7 with most mass in ±5. Fractional parts of a smooth distribution are near-uniform. So δ approx uniform on [-s/2, s/2]. std ≈ 0.14. OK.
+
+E[g²]: g_i = e^{δ_i}/M - 1, δ iid-ish uniform. Var(g) ≈ Var(δ) + (E[δ²]/2)²-ish... roughly E[g²] ≈ E[δ²] ≈ 0.0198 + small. Let's say ≈ 0.021.
+
+Hmm wait, actually, E[g²] where g_i = e^{δ_i}/M - 1: E[g²] = Var_p(e^δ)/M² ≈ Var(δ)/1 * (1+...) ≈ 0.0196. OK ≈ 0.02.
+
+sum_i (p_i g_i)²: This equals sum p_i² g_i² if g uncorrelated with p... but careful: is δ_i correlated with p_i? p_i = e^{l_i}/Z. δ_i = quantization error of l_i. The quantization error as a function of l: δ(l) = round(l/s)s - l is a sawtooth function of l with period s. Over the range of l, the sawtooth phase... p_i weights larger l more. Within one period, δ is symmetric around 0 (goes from +s/2 down to -s/2 as l increases through a period... actually δ(l) = -frac_error... it's a sawtooth: at l = k s, δ = 0; between, δ goes up to s/2 then jumps to -s/2). Averaging g² over l weighted by e^l within a period: asymmetric slightly (the positive δ part gets slightly more weight since e^l increasing), but g² symmetric. So roughly E_p[g²] ≈ E[g²] ≈ 0.02.
+
+sum p_i²: I estimated ≈ 0.032 in expectation. But actually the realized value could differ. Let me sanity check with a different approach: the softmax of 128 iid N(0,1.44). The top logit ≈ 3.4 (max). Second ≈ 2.9? Typical gaps between top order statistics of normals near the max: for n=128, gaps ~ 1/(n f(x)) where f at 2.45σ... The top few values: ~3.36, ~2.9, ~2.7, ~2.5, ... p_i ∝ e^{l_i}. Z ≈ 263 (from before, E[Z] = 263). p_max = e^{3.36}/263 ≈ 28.8/263 ≈ 0.11. Hmm, e^{3.36} = 28.8. Second: e^{2.9} = 18.2 → p ≈ 0.069. Third e^{2.7}=14.9 → 0.057. Fourth e^{2.5}=12.2 → 0.046. Fifth e^{2.35}=10.5 → 0.040. Then it decays. Sum of p² ≈ 0.11² + 0.069² + 0.057² + 0.046² + 0.04² + ... = 0.0121 + 0.0048 + 0.0032 + 0.0021 + 0.0016 + ... tail: many entries with p ~ 0.01-0.03: sum of squares of tail maybe 0.008. Total ≈ 0.032. OK consistent.
+
+So sum_i (p_i g_i)² ≈ 0.032 * 0.02 = 0.00064. Per-component error std = sqrt(0.00064) = 0.0253.
+
+||Error||₂ ≈ 0.0253 * sqrt(16) = 0.101 (expected; chi_16: E[sqrt(χ²16)] = sqrt(2)Γ(8.5)/Γ(8) ≈ ... ≈ 3.94). So E||Error|| ≈ 0.0253*3.94 = 0.0997.
+
+||reference||: reference[k] = 1 + sum_i p_i ε_ik. Var per component = sum p² = 0.032, std 0.18. ||ref||² = sum (1 + η_k)² where η_k iid N(0, 0.032). E||ref||² = 16 + 16*0.032 = 16.5. ||ref|| ≈ 4.06 ± 0.03.
+
+Relative error ≈ 0.0997/4.06 = 0.0246.
+
+So ~2.5%, above the 2% threshold. Hmm. But my uncertainty: the realized sum_i (p_i g_i)² could easily be half or double my estimate (0.0003 to 0.0013), giving relative error 1.7% to 3.5%. Plus the χ² fluctuation ±12%. So it's genuinely borderline: maybe 70% probability of exceeding 2%?
+
+Hmm. Wait, maybe I should reconsider. Is the problem designed so that the quantized version passes or fails? The problem statement emphasizes: "The reference uses the original input logits, without quantization." This emphasis suggests the implementation under test does something with quantization (which it does), and the question is whether that's within tolerance. The tolerance 0.02 (2%) is fairly tight. A 4-bit symmetric quantization of logits (codes -7..7, i.e., 15 levels... well, 4-bit signed with range ±7) before softmax...
+
+Hmm, let me reconsider. Actually, let me reconsider the error analysis once more. Maybe I'm wrong about E[g²] or about the effective error.
+
+Actually hold on. Let me reconsider: is the first-order analysis right? p'_i = p_i e^{δ_i}/M. The error in output: sum_i p_i g_i v_ik with sum_i p_i g_i = 0. So error[k] = sum_i p_i g_i ε_ik where v_ik = 1 + ε_ik. Yes.
+
+Now here's a thought: the errors across k are iid conditional on g (since ε_ik iid across k for fixed i... wait, ε_ik are iid across both i and k. For fixed i (hence fixed g), Error[k] = sum_i p_i g_i ε_ik — as k varies, uses different ε's (ε_i1, ε_i2, ...). So yes iid across k, each N(0, sum (p g)²).
+
+OK so relative L2 error ≈ sqrt(16 * sum(p g)²)/4 = sqrt(sum(p g)²). Wait: ||Error||/||ref|| ≈ [sqrt(16 sum(pg)

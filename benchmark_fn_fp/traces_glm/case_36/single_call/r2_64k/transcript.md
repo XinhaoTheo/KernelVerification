@@ -1,0 +1,912 @@
+# Single-call trace
+
+## System prompt
+
+You are verifying whether a GPU (Triton) kernel implementation is correct.
+
+You will be given:
+1. A problem statement describing the operation's contract and its reference behavior.
+2. The kernel implementation under test.
+
+Decide one of:
+- "reject": the implementation has a real defect / violates the stated contract.
+- "trust": the implementation is correct, or is an equally valid alternative implementation.
+- "needs_more_evidence": you genuinely cannot tell.
+
+Answer with the JSON object required by the output schema.
+Output schema:
+{"type": "object", "required": ["verdict", "confidence", "reason"], "properties": {"verdict": {"type": "string", "enum": ["trust", "reject", "needs_more_evidence"], "description": "'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell."}, "confidence": {"type": "number", "description": "0.0 to 1.0."}, "reason": {"type": "string", "description": "One or two sentences."}}, "additionalProperties": false}
+
+## User prompt
+
+## Problem statement (contract + reference behavior)
+
+Evaluate numerical compliance of run(*make_inputs()) on exactly the workload
+specified in kernel.py. All inputs are float32 and contiguous, with x of shape
+(128,) and A, B of shape (64,128). The complete input construction, PCG64 seed
+and row permutation are provided in the source; no hidden input is involved.
+
+Reference: y = A @ x + B @ x on the original float32 inputs, evaluated in float64.
+Metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64)).
+Contract: all outputs must be finite and E <= 0.1. Approximate intermediate
+values are allowed if the FINAL output meets this requirement. Either branch
+may individually exceed 0.1 without violating the contract.
+Target implementation: the supplied Triton kernel, on an NVIDIA T4. Input
+generator uses NumPy PCG64 on CPU. This is finite-workload compliance, not a
+claim about all inputs, and not a requirement to reproduce INT4 arithmetic
+bit-for-bit. Decide trust, reject, or needs_more_evidence.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def _kernel(X, A, B, Y, K: tl.constexpr):
+    row = tl.program_id(0)
+    j = tl.arange(0, K)
+    x = tl.load(X + j)
+    a = tl.load(A + row * K + j)
+    b = tl.load(B + row * K + j)
+    sa = tl.max(tl.abs(a), 0) / 7.0
+    sb = tl.max(tl.abs(b), 0) / 7.0
+    qa = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(a / sa + 0.5)))
+    qb = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(b / sb + 0.5)))
+    ya = tl.sum((qa * sa) * x, 0)
+    yb = tl.sum((qb * sb) * x, 0)
+    tl.store(Y + row, ya + yb)
+
+def run(x, a, b):
+    out = torch.empty(a.shape[0], device=x.device, dtype=torch.float32)
+    _kernel[(a.shape[0],)](x, a, b, out, a.shape[1], enable_fp_fusion=False)
+    return out
+
+SEED = 921000
+PERMUTATION = [4, 1, 2, 53, 44, 13, 11, 56, 46, 57, 33, 8, 25, 35, 39, 20, 36, 14, 51, 52, 40, 29, 23, 26, 3, 31, 38, 16, 21, 62, 41, 24, 61, 45, 30, 59, 19, 42, 27, 28, 12, 17, 60, 47, 43, 54, 6, 34, 22, 10, 18, 50, 32, 0, 7, 15, 9, 5, 63, 55, 49, 37, 48, 58]
+
+def make_inputs(device="cuda"):
+    import numpy as np
+    rng = np.random.Generator(np.random.PCG64(SEED))
+    x = rng.standard_normal(128)
+    x /= np.linalg.norm(x)
+    # Construct two dense projections with similar signal magnitudes.
+    matrices = []
+    for _ in range(2):
+        w = rng.standard_normal((64, 128))
+        target = 0.5 + 0.02 * rng.standard_normal(64)
+        projection = np.sum(w * x[None, :], axis=1, dtype=np.float64)
+        w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]
+        matrices.append(w.astype(np.float32))
+    arrays = [x.astype(np.float32), matrices[0], matrices[1][PERMUTATION].copy()]
+    return tuple(torch.from_numpy(a.copy()).to(device) for a in arrays)
+
+```
+
+Is this implementation correct?
+
+## Provider reasoning (verbatim)
+
+Let me analyze this problem carefully.
+
+We have a Triton kernel that computes y = A @ x + B @ x, where x is shape (128,), A and B are shape (64, 128). The reference is computed in float64 on the original float32 inputs.
+
+The kernel implements a form of quantization: for each row of A (and B), it computes a scale sa = max(|a|) / 7.0, then quantizes a to integers in [-7, 7] via q = clamp(floor(a/sa + 0.5), -7, 7), and computes ya = sum((q * sa) * x).
+
+So the kernel approximates A @ x + B @ x using quantized versions of A and B. The question is whether the resulting error E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64)) is <= 0.1.
+
+Key question: how accurate is this quantization? Each row of A is quantized with a per-row scale max(|a|)/7. The quantization error per element is at most sa/2 = max(|a|)/14 (roughly, since q = round(a/sa) clamped). Actually with clamping to [-7, 7], and scale = max/7, all values fit within [-7, 7] after scaling, so clamping rarely binds. The quantization error per element is at most sa/2.
+
+So the error in ya for row i is sum_j (a_ij - qa_ij * sa) * x_j. The quantization error e_ij is bounded by sa/2 = max_j|a_ij| / 14 in absolute value, and is roughly uniform in [-sa/2, sa/2] (well, quantization to a grid... the error distribution depends on a).
+
+The relative error per row: |ya - y_ref_a| <= sum_j |e_ij| * |x_j| <= (sa/2) * sum_j |x_j| = (max_j |a_ij| / 14) * ||x||_1.
+
+Now, ||x||_1: x is a normalized standard normal vector of length 128, so ||x||_2 = 1, and ||x||_1 ≈ sqrt(2/pi) * ... Actually for a random unit vector in R^128, E[||x||_1] ≈ sqrt(128) * sqrt(2/pi) / sqrt(128) = sqrt(2/pi) ≈ 0.798... wait let me redo. For standard normal z in R^n, ||z||_1 has expectation n * sqrt(2/π), and ||z||_2 ≈ sqrt(n). After normalization, x = z/||z||_2, so ||x||_1 ≈ n*sqrt(2/π)/sqrt(n) = sqrt(n) * sqrt(2/π) = sqrt(128 * 2/π) ≈ sqrt(81.49) ≈ 9.03. Hmm, that's the expected L1 norm ≈ 9.03.
+
+Meanwhile, the row of A: a_ij are standard normal (roughly, after the adjustment which is small). max_j |a_ij| over 128 entries ≈ 3.2 or so (expected max of 128 |N(0,1)| is about 3.2). So sa ≈ 0.46.
+
+Worst-case bound per row: (max|a|/14) * ||x||_1 ≈ 3.2/14 * 9.03 ≈ 0.229 * 9.03 ≈ 2.07. But that's worst case with all errors aligned; actual errors are random-ish.
+
+But we need the error relative to the reference y. What's the magnitude of the reference? The construction makes each row of A have projection onto x equal to target ≈ 0.5 + 0.02*N(0,1), i.e., about 0.5. Wait, the projection is computed in float64 on w (before cast to float32? Let's see: w = rng.standard_normal((64,128)) float64; target float64; projection float64; w adjusted; then w.astype(float32)). So (A x)_i ≈ target_i ≈ 0.5, and similarly for B. So reference y_i ≈ 0.5 + 0.5 = 1.0 (approximately, up to float32 rounding effects of order 1e-7... actually the float32 cast introduces small errors, and reference is computed on the float32 inputs in float64, so y_ref_i ≈ target_i + target'_i ≈ 1.0 ± 0.03).
+
+||reference||_2 ≈ sqrt(64 * 1.0) ≈ 8. So the denominator is about 8.
+
+Now, the quantization error: for each row, error_a_i = sum_j e_ij x_j where e_ij = a_ij - sa*round(a_ij/sa) is quantization error in [-sa/2, sa/2]. These errors are essentially random relative to x. Let me estimate.
+
+Hmm, actually the errors e_ij are deterministic given a, but they behave like roughly uniform random in [-sa/2, sa/2], uncorrelated with x. So error_a_i ≈ sqrt(sum_j e_ij^2 x_j^2) in typical magnitude ≈ (sa/sqrt(12)) * ||x||_2 ≈ (sa/sqrt(12)) * 1 = sa * 0.289.
+
+Wait, but there's a subtlety: the quantization error e_ij is not independent of a_ij... Actually for random a, the fractional parts of a/sa are roughly uniform, so e is roughly uniform on [-sa/2, sa/2], independent-ish of x (x is independent of A's construction? Actually A's rows were adjusted to have specific projections onto x, but the adjustment is small: ((target - projection)/||x||^2) x added to the row, where target - projection ≈ 0.5 - N(0, 128^0.5)... wait, projection = sum_j w_ij x_j with w_ij ~ N(0,1) and ||x||=1, so projection ~ N(0,1). target ≈ 0.5. So the adjustment magnitude is about |0.5 - N(0,1)| / 1 ≈ O(1) per row, times x. So the row adjustment is a vector of magnitude up to ~2 along direction x. Fine—this changes the rows slightly but the rows remain roughly standard-normal-ish.)
+
+Hmm wait, actually the adjustment could be significant: w row has norm ~sqrt(128) ≈ 11.3, and the adjustment adds a vector of magnitude |target - projection| ≈ up to ~3 along x. So rows are still dominated by the random part.
+
+So per-row error from quantizing A: σ_e ≈ sa/sqrt(12) where sa ≈ max|a_row|/7 ≈ 3.2/7 ≈ 0.457. So σ_e ≈ 0.132. Then error_a_i = sum_j e_ij x_j. If e were independent uniform, variance = sum_j var(e) x_j^2 = σ_e^2 * ||x||_2^2 = σ_e^2. So error_a_i ~ N(0, σ_e) roughly, magnitude ~0.132 typical.
+
+Hmm wait, but that's not quite right because the quantization error is bounded and depends on a. Also there's a subtlety: the projection of the row onto x is ~0.5 by construction, but the error vector e is roughly orthogonal-ish to x... hmm, is it? The quantization errors e_ij depend on a_ij and the scale; there's no particular correlation with x_j. So the dot product e·x is roughly a random sum with variance σ_e^2 ||x||^2 = σ_e^2.
+
+Hmm, but wait: actually there could be a correlation issue. Since a_i = w_i + c x (adjustment along x), the quantization error... it's complicated but roughly random.
+
+So each branch contributes per-row error ~0.13 (1-sigma), and combined error per row ~ sqrt(2)*0.13 ≈ 0.19 (if independent). Over 64 rows, ||error||_2 ≈ sqrt(64) * 0.19 ≈ 1.5. Hmm, but E = ||error||/||ref|| ≈ 1.5/8 ≈ 0.19. That's over 0.1! Hmm.
+
+Wait, let me redo this more carefully. Let me be careful with the numbers.
+
+sa = max_j |a_ij| / 7. For a row of 128 standard normals, max |a| ≈ 3.2 (more precisely, E[max] ≈ sqrt(2 ln(128)) ≈ sqrt(2*4.85) ≈ 3.11; typical values 2.8-3.6).
+
+Quantization step sa ≈ 0.45. Quantization error uniform in [-sa/2, sa/2] = [-0.225, 0.225], std = sa/sqrt(12) = 0.45/3.46 ≈ 0.13.
+
+error_a_i = sum_j e_ij x_j. Treating e_ij as iid uniform with std 0.13 and independent of x: variance = 0.13^2 * sum x_j^2 = 0.13^2 * 1. So std ≈ 0.13.
+
+Similarly for B: std ≈ 0.13.
+
+Total per-row error std ≈ sqrt(0.13^2 + 0.13^2) ≈ 0.184.
+
+||error||_2 over 64 rows: expected ≈ sqrt(64) * 0.184 ≈ 1.47.
+
+||ref||_2: y_i = target_i + target'_i where target ≈ 0.5 + 0.02 N(0,1). So y_i ≈ 1.0 with std 0.02*sqrt(2) ≈ 0.028. ||ref||_2 ≈ sqrt(64)*1.0 ≈ 8.
+
+E ≈ 1.47/8 ≈ 0.18 > 0.1.
+
+Hmm, that suggests the kernel would fail. But wait — this is a rough estimate. Let me reconsider.
+
+Hmm, but actually, wait. There's an important consideration: the quantization error e_ij is not independent of a_ij in a way that matters, but more importantly, is e·x really random? Let me think again.
+
+Actually, hold on. Let me reconsider: is the error per row really ~0.13 std? Let me reconsider whether the fractional parts are uniform.
+
+a_ij ~ N(0,1) roughly. sa ≈ 0.45. a_ij/sa ~ N(0, 1/0.45) = N(0, 2.2), std ≈ 2.2. Quantizing to integers: the fractional part of a/sa is roughly uniform on [0,1) for a continuous distribution spread over many quantization steps. So e ~ uniform on [-sa/2, sa/2], std sa/sqrt(12) ≈ 0.13. Yes.
+
+error_a_i = sum_j e_ij x_j. With 128 terms, x_j ~ 1/sqrt(128) ≈ 0.088 each. Each term e_ij x_j has std 0.13 * 0.088 ≈ 0.0115. Sum of 128 such (independent-ish) terms: std ≈ 0.0115 * sqrt(128) ≈ 0.13. Yes, consistent.
+
+So per-row error ~0.13 per branch. Hmm.
+
+But wait — maybe I should think about whether the errors e are actually correlated with x in a way that... no, they shouldn't be.
+
+Hmm, but hold on. Let me reconsider the problem. The problem says "Approximate intermediate values are allowed if the FINAL output meets this requirement. Either branch may individually exceed 0.1 without violating the contract." This hints that the test is about the combined output. The quantization to 4-bit-ish levels (7 levels, i.e., int4 range) is a lossy approximation. The question is whether the final combined output meets E <= 0.1.
+
+My estimate says E ≈ 0.18, which would fail. But my estimate is rough. Let me think more carefully, because this is the crux.
+
+Hmm, wait. Actually, let me reconsider. Maybe there's something special about the construction. The rows of A are adjusted so that A x = target ≈ 0.5. Similarly B x ≈ 0.5. But the quantization destroys this precision. The quantized A' = Q(A) has A' x ≈ A x + e·x where e·x ~ 0.13 magnitude. So (A' x)_i = 0.5 ± 0.13. Similarly B' x ≈ 0.5 ± 0.13. Sum ≈ 1.0 ± 0.18.
+
+Relative error per row ≈ 0.18. And in the 2-norm over rows, the errors accumulate as sqrt(64) while the signal also accumulates as sqrt(64) (since signal is roughly constant ~1 per row). So E ≈ 0.18/1.0 ≈ 0.18.
+
+That's > 0.1. Hmm. So the kernel would fail the contract?
+
+Wait, but let me double-check the scale factor. sa = max(|a|)/7. Quantization levels: q ∈ {-7,...,7}, so 15 levels. The quantization step is sa. The max element maps to exactly 7 (well, floor(7 + 0.5) = 7). So the grid has 15 points covering [-max, max]. Relative quantization error per element: sa/2 / |a_ij|... For the RMS error: the row's RMS value is ~1 (standard normal). sa ≈ 0.45. Step/RMS ≈ 0.45. Hmm, that's coarse quantization: SNR ≈ 12 * (RMS/step)^2... The quantization error std relative to signal std: 0.13/1 = 13%. 
+
+So quantizing a N(0,1) row with 15 levels uniformly spaced to cover ±max gives ~13% error on the row. Then the projection onto a random direction x (||x||=1): the error in the projection is ~13% of... hmm, of what? The projection of the error vector onto x. The error vector e has norm ≈ 0.13 * sqrt(128) ≈ 1.47. Its projection onto a fixed unit vector x is ~1.47/sqrt(128) ≈ 0.13 (if e is random direction). Yes.
+
+But the signal: the row a has norm ~sqrt(128) ≈ 11.3, and its projection onto x is forced to be 0.5. So the signal in the projection is small compared to the row norm! The projection of the row onto x is only 0.5, while the row is mostly orthogonal to x. The quantization error is a random-ish vector of norm ~1.5, and its projection onto x is ~0.13, which is 26% of the 0.5 signal!
+
+So the per-branch relative error is ~0.13/0.5 = 26%, and combined ~0.18/1.0 = 18%. E ≈ 0.18 > 0.1. Fails.
+
+Hmm wait, but let me double check ||ref||. Actually, wait: is the reference y = A@x + B@x where the projections are each ~0.5? Yes, by construction. So y_i ≈ 1.0.
+
+And the error per row: quantization error of A projected on x, plus quantization error of B projected on x. Each ~ N(0, 0.13^2)? Let me be more careful about the quantization error std.
+
+Actually, hmm, wait. Let me reconsider: is the quantization error really uniform over the full step? The values a_ij are continuous; a_ij/sa has fractional parts uniform in [0,1). The error a_ij - sa*round(a_ij/sa) is uniform in [-sa/2, sa/2]. Yes, std = sa/sqrt(12).
+
+sa = max|a|/7. For 128 samples of N(0,1), max|a|: let me compute more precisely. P(|Z| > m) = 2(1-Φ(m)). Expected max ≈ solution to 128 * 2(1-Φ(m)) ≈ 1, i.e., 1-Φ(m) ≈ 1/256 ≈ 0.0039, m ≈ 2.66? Hmm wait: 1-Φ(2.66) ≈ 0.0039. So expected max ≈ 2.7-ish. Actually E[max] is a bit above the median. Let me just say max ≈ 3.0 ± 0.3. So sa ≈ 0.43 ± 0.04. std of e ≈ 0.43/3.464 ≈ 0.124.
+
+Per-branch error per row: std ≈ 0.124 (projection of error vector onto unit x, where error entries iid-ish with std 0.124). Actually more precisely: variance of sum_j e_ij x_j = sum_j Var(e_ij) x_j^2 if independent = 0.124^2 * sum x_j^2 = 0.124^2 * 1 (since ||x||=1). So std 0.124. But e_ij are not exactly independent... they're deterministic given a, but across j they're like iid uniform. And x_j are fixed. So the sum is like a weighted sum of iid uniforms: std = 0.124 * ||x||_2 = 0.124. OK.
+
+Two branches: combined std ≈ sqrt(2)*0.124 ≈ 0.176 (assuming independence between A and B errors — yes, A and B are independent).
+
+Per row: y_i = 1.0 ± 0.176. ||error||_2 = sqrt(sum over 64 rows of err_i^2). E[||error||^2] = 64 * 0.176^2 = 64 * 0.031 = 1.98. So ||error||_2 ≈ 1.41. ||ref||_2 ≈ sqrt(64 * (1 + small)) ≈ 8.0. E ≈ 1.41/8 ≈ 0.176.
+
+So E ≈ 0.18 > 0.1. The kernel fails.
+
+Hmm, but wait. Let me double-check the reference more carefully. Also, hmm, is there something about `enable_fp_fusion=False`? That's just about floating point fusion, minor.
+
+But wait, maybe I should reconsider. Maybe there's a subtlety I'm missing: perhaps the error e·x is correlated with the signal in a way that reduces error? No—the construction forces A x ≈ 0.5, but after quantization, the projection is A'x = Ax + e·x. There's no mechanism making e·x small.
+
+Hmm, unless... wait. Let me reconsider the adjustment. The adjustment: w += ((target - projection)/sum(x*x))[:,None] * x[None,:]. So the final row a_i = w_i + c_i x where c_i = target_i - w_i·x. Then a_i · x = w_i·x + c_i = target_i. Yes, so A x = target exactly (in float64 before casting; after float32 cast, approximately).
+
+So A x ≈ 0.5 ± 0.02. B x ≈ 0.5 ± 0.02. y_ref ≈ 1.0 ± 0.03 per row. ||y_ref|| ≈ 8.
+
+Now the quantized computation: Q(a)·x = a·x + (Q(a)-a)·x = 0.5 + err. err std ≈ 0.124.
+
+Hmm, so per row, y_kernel_i = 1.0 + err_A_i + err_B_i, with combined std 0.176.
+
+E = ||err||_2 / ||ref||_2 ≈ (sqrt(64)*0.176) / 8 = 0.176.
+
+That's clearly above 0.1. Even with fluctuations, the probability that E <= 0.1 would require ||err||_2 <= 0.8, i.e., RMS per-row error <= 0.1, vs expected 0.176. That's like 2.5+ sigma below... chi-square with 64 dof: ||err||^2 ≈ 1.98 expected, need <= 0.64. That's a factor 3.1 below the mean; std of chi2_64 is sqrt(2*64)=11.3, mean 64, so need (0.64/1.98)*64 ≈ 20.7 vs mean 64, that's (64-20.7)/11.3 ≈ 3.8 sigma. So extremely unlikely.
+
+Hmm, so this kernel fails the contract? Let me double check my quantization error analysis though, because maybe I'm wrong about the error magnitude.
+
+Actually wait. Let me reconsider. Hmm, one thing: is the error per element really uniform in [-sa/2, sa/2]? The quantizer: q = floor(a/sa + 0.5), so q = round(a/sa). q*sa is the reconstruction. Error = a - q*sa = sa*(a/sa - round(a/sa)) = sa * frac-error, uniform in [-sa/2, sa/2] if fractional parts uniform. Yes.
+
+But hold on: with clamping to [-7,7]: since sa = max|a|/7, the element with max |a| maps to ±7 exactly (round(±7) = ±7... well floor(7+0.5)=7). Elements near max might round to 7.5? No: a/sa <= max/sa = 7, so round <= 7. So clamping never binds (except exactly at boundary, fine). OK.
+
+So the error analysis holds. Per-element error std ≈ sa/sqrt(12) ≈ 0.43/3.46 ≈ 0.124.
+
+Hmm, wait, but actually is the fractional part distribution uniform? a_ij/sa: sa ≈ 0.43, a_ij ~ N(0,1). The distribution of a_ij/sa is continuous with std ≈ 2.3, spanning many integers (from -7 to 7). The fractional part of a smooth distribution over multiple periods is approximately uniform. Yes.
+
+So the per-row projection error std ≈ 0.124 per branch. Hmm.
+
+But wait — actually, I want to double check the correlation between quantization error and x more carefully. There's a subtle point: a_i = w_i + c_i x. The quantization error of a_i... The elements a_ij for different j are iid-ish normal (plus the common c_i x_j adjustment). The quantization errors are deterministic functions of a_ij and sa (which depends on the whole row). So e_ij ≈ iid uniform, independent of x. e·x = sum e_ij x_j: this is a sum of 128 terms, each ~ uniform*0.088. By CLT, ~ N(0, sa^2/12 * ||x||^2) = N(0, 0.124^2). OK.
+
+So the total error per row std ≈ sqrt(0.124^2 + 0.124^2) = 0.175.
+
+Hmm OK so E ≈ 0.175. That fails E <= 0.1.
+
+Wait, but hold on. Let me reconsider whether the problem intends for the quantization to be accurate enough. The problem says "not a requirement to reproduce INT4 arithmetic bit-for-bit". So the intended implementation is INT4-ish quantization, and the reference... hmm. The problem statement says the reference is y = A@x + B@x in float64 on the original float32 inputs. So the quantization is an approximation. The question is whether this specific quantization scheme (per-row scale max/7, 15 levels, symmetric round) meets E <= 0.1 on this specific workload.
+
+Let me reconsider more carefully. Actually, maybe I should just try to compute this more precisely, since the seed is fixed. But I can't run code. Let me think about whether there's any chance the error is smaller than my estimate.
+
+Key quantities:
+- x: normalized 128-dim standard normal. ||x||=1. ||x||_1 ≈ 9. ||x||_2 = 1.
+- A rows: standard normal adjusted. max|a_row| ≈ 3.0. sa ≈ 0.43.
+- Quantization error per element: uniform ±0.215, std 0.124.
+- Projection error per row per branch: std 0.124.
+
+Hmm wait, actually, hold on. Let me reconsider: is the projection error std really sa/sqrt(12)*||x||_2? sum_j e_ij x_j. Var = sum_j x_j^2 Var(e_ij) = ||x||^2 * sa^2/12 = sa^2/12. Std = sa/sqrt(12) ≈ 0.43/3.464 ≈ 0.124. Yes.
+
+So per-row total error std = sqrt(2) * 0.124 ≈ 0.1755.
+
+RMS error over rows ≈ 0.1755. ||err||_2 ≈ 0.1755 * 8 = 1.40. ||ref||_2 ≈ 8.0 (well, sqrt(64*(1+0.0008)) ≈ 8.0). E ≈ 0.176.
+
+To pass E <= 0.1, we'd need per-row RMS error <= 0.1, i.e., sa/sqrt(12)*sqrt(2) <= 0.1, i.e., sa <= 0.245, i.e., max|a| <= 1.7. But max of 128 |N(0,1)| is ~3. So no.
+
+Alternatively, if the quantization were finer (e.g., max/7 with... hmm, 15 levels is what it is).
+
+Hmm, wait, maybe I'm wrong about the scale. Let me re-read the kernel:
+
+```
+sa = tl.max(tl.abs(a), 0) / 7.0
+qa = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(a / sa + 0.5)))
+ya = tl.sum((qa * sa) * x, 0)
+```
+
+So yes: scale = max/7, quantized values in [-7,7] (integers), reconstruction qa*sa. Standard symmetric quantization to int4 range. Error per element ≤ sa/2.
+
+Hmm, so the relative error per element of a: sa/2 / typical|a| ≈ 0.215/0.8 ≈ 27%. And the projection onto x: error 0.124 vs signal 0.5 → 25% per branch. Combined 17.6%. E ≈ 0.176 > 0.1.
+
+Hmm, so this seems to fail. But wait, let me reconsider the problem statement: "Either branch may individually exceed 0.1 without violating the contract." This suggests the test designer knows each branch (A@x alone, B@x alone) might exceed 0.1 relative... hmm, actually if each branch is 0.5 magnitude with error 0.124, the per-branch relative error is 0.124/0.5 = 0.25 > 0.1. And the combined is 0.176/1.0 = 0.176 > 0.1. So the combined also exceeds.
+
+Hmm, but hold on. Maybe I'm miscalculating. Let me reconsider: maybe the errors don't add up the way I think. Let me reconsider whether the quantization error projection is really ~sa/sqrt(12).
+
+Hmm, alternatively, maybe there's a subtle cancellation: The rows are adjusted so a·x = 0.5 exactly. After quantization Q(a)·x. Is there any reason Q(a)·x would be closer to a·x than random? The quantization error e = a - Q(a) is roughly uniform per element. e·x is roughly N(0, sa²/12). No cancellation mechanism.
+
+Unless... hmm, wait. Actually, let me reconsider: maybe the error is smaller because the elements with large |a| (which dominate the scale) are... no.
+
+Hmm, let me reconsider the problem. Maybe I'm wrong about the reference magnitude. target = 0.5 + 0.02*standard_normal(64). So targets ≈ 0.5 ± 0.02. A@x ≈ 0.5 per row. B@x ≈ 0.5 per row. y ≈ 1.0 per row. ||y||_2 ≈ sqrt(64) * 1.0 ≈ 8. Yes.
+
+So E ≈ 0.176. This exceeds 0.1. So the kernel should be rejected?
+
+Hmm wait, wait. But let me reconsider. Let me recompute the expected max of |a| over 128 standard normals more carefully, and think about whether the per-element error is really uniform.
+
+Actually, hmm, there's another consideration: the adjustment term. a_i = w_i + c_i x, c_i = target_i - w_i·x. w_i·x ~ N(0,1) (since ||x||=1, w_i standard normal). So c_i ≈ 0.5 - N(0,1), magnitude ~1.2 typical, up to ~3.5. The adjustment adds c_i x_j to each element: c_i x_j ~ 1.2 * 0.088 ≈ 0.1 typical. So the elements a_ij ≈ N(0,1) + small. Fine, my analysis holds.
+
+So per-row max ≈ 3.0 (max over 128 of |N(0,1)+ε|).
+
+Let me estimate the max more carefully: For n=128, E[max |Z_i|]: The distribution: P(M ≤ m) = (1-2Φ(-m))^128. Median: (1-2Φ(-m))^128 = 0.5 → 1-2Φ(-m) = 0.5^(1/128) = e^{ln0.5/128} = e^{-0.0054} ≈ 0.9946 → 2Φ(-m) ≈ 0.0054 → Φ(-m) = 0.0027 → m ≈ 2.77. Mean is slightly higher, ~2.9-3.0. So sa ≈ 0.41-0.43.
+
+Per-element error std ≈ 0.41/3.464 ≈ 0.118. Per-row branch error std ≈ 0.118. Combined ≈ 0.167. E ≈ 0.167.
+
+Still > 0.1. Comfortably above.
+
+Hmm, but hmm, wait. Let me reconsider. Am I sure about "the error in the projection equals sa/sqrt(12)"? Let me sanity check with a simple case: suppose x = e_1 (one-hot). Then error = e_{i1}, uniform ±sa/2, std 0.118. Signal 0.5. Relative 24%. For random x, the error is a weighted average, std sa/sqrt(12)*||x|| = same. Yes.
+
+OK here's the thing though — my analysis is a statistical estimate. The actual realized error on the fixed seed could differ, but not by a factor of 1.76 (needs 3.8 sigma). So the kernel fails with very high probability.
+
+Hmm, wait, but let me reconsider the problem statement once more: "Approximate intermediate values are allowed if the FINAL output meets this requirement." — This suggests the intended correct implementation might also use approximations (like splitting into branches, using bf16 or tf32 intermediates, etc.) as long as the final output is accurate. The quantization here is a *lossy* approximation of the inputs themselves, which introduces O(25%) errors — way beyond what's allowed.
+
+Actually hold on, wait. Let me reconsider. Maybe I should reconsider whether the problem is designed such that the quantization IS accurate enough. The problem mentions "not a requirement to reproduce INT4 arithmetic bit-for-bit" — this strongly suggests the intended implementation involves INT4 quantization. So the intended correct implementation presumably quantizes A and B to int4 somehow and still meets E <= 0.1? How could that be?
+
+Hmm, if the intended implementation quantizes with per-row scale max/7 and 15 levels, the error would be as I computed ~17%. Unless the intended implementation uses a smarter quantization: e.g., scale chosen to minimize error, or error feedback, or... hmm.
+
+Wait, actually, maybe the intended approach: since A x = target ≈ 0.5 exactly by construction, maybe the intended implementation computes something entirely different, like using the structure? Hmm, no.
+
+Wait, actually, let me re-read the problem statement: "Evaluate numerical compliance of run(*make_inputs()) on exactly the workload specified in kernel.py." So the workload is fixed by the seed. The reference is exact A@x + B@x in float64. The kernel under test quantizes. The question: does E <= 0.1?
+
+Given my analysis, E ≈ 0.17, so no. But let me double-check by considering the possibility that I'm wrong about the magnitude of quantization error.
+
+Let me redo it very concretely. Consider row i of A. Elements a_ij ~ N(0,1) (approx). max |a_ij| ≈ 2.9. sa = 2.9/7 = 0.414. Quantization grid: {-7,-6,...,0,...,6,7} * 0.414 = {-2.9, -2.49, ..., 2.9}, 15 points, spacing 0.414.
+
+Element a_ij = 0.5 → a/sa = 1.21 → q = 1 → recon 0.414. Error = 0.086.
+Element a_ij = 1.0 → 2.42 → q=2 → 0.83. Error 0.17.
+Element a_ij = -0.3 → -0.72 → q = -1 → -0.414. Error -0.114.
+
+So errors are on the order of ±0.2, std ~0.12. Yes.
+
+Now the projection error: sum over 128 elements of e_ij x_j, x_j ~ ±0.088 random. This is a random sum; std = 0.12 * 1 = 0.12. Some rows will have error 0.05, others 0.25. RMS over rows ≈ 0.12.
+
+Yes, E ≈ 0.17.
+
+Hmm, hold on, but wait. Let me reconsider — maybe I should double check with the L1 bound instead: worst case per row = (sa/2)*||x||_1 = 0.207 * 9 = 1.86. RMS actual ≈ 0.12. OK.
+
+So the verdict: the kernel introduces quantization error ~17% relative, exceeding the 10% threshold. Reject.
+
+But wait, hold on. Let me reconsider the problem statement once more. It says: "Contract: all outputs must be finite and E <= 0.1." and "Either branch may individually exceed 0.1 without violating the contract."
+
+Hmm, "either branch may individually exceed 0.1" — this is a hint about what? Perhaps in other (correct) implementations, the two branches A@x and B@x are computed... hmm. Actually maybe this hint is about implementations that compute y = (A+B)@x by first summing A+B — no wait.
+
+Hmm, actually, maybe the hint means: some implementations quantize only... no. Let me think about what the "branches" are: A@x and B@x. The statement says each branch individually may exceed 0.1 (presumably relative to its own norm) without violating the contract — only the combined E matters. This is just clarifying the metric applies to the final output.
+
+So the question remains: does the quantized computation meet E <= 0.1 on this workload? My analysis says E ≈ 0.17.
+
+Hmm, but wait, now I doubt myself: would the problem designers create a kernel that so clearly fails? This is a "verification" task — the kernel under test is presumably a candidate that either passes or fails, and I need to decide. The quantization to int4 with per-row max/7 scale is a plausible "wrong" implementation that a test-taker might produce if they thought int4 quantization was the intended approach. The problem says "not a requirement to reproduce INT4 arithmetic bit-for-bit" — suggesting the intended implementation DOES use int4 arithmetic but the requirement is only on the final numerical accuracy. Hmm! That's interesting. If the intended implementation uses INT4 quantization, then the quantization error must be within the tolerance... which contradicts my analysis.
+
+Unless the intended INT4 approach is different: e.g., quantize with error compensation, or use a residual: y = A@x + B@x computed as Q(A)x + (A - Q(A))x + ... no, that defeats the purpose.
+
+Hmm, wait. Let me reconsider. Maybe the intended implementation quantizes A and B to int4 and the inputs are constructed so that this is accurate? Let me re-read make_inputs.
+
+```python
+rng = np.random.Generator(np.random.PCG64(SEED))
+x = rng.standard_normal(128)
+x /= np.linalg.norm(x)
+matrices = []
+for _ in range(2):
+    w = rng.standard_normal((64, 128))
+    target = 0.5 + 0.02 * rng.standard_normal(64)
+    projection = np.sum(w * x[None, :], axis=1, dtype=np.float64)
+    w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]
+    matrices.append(w.astype(np.float32))
+```
+
+Hmm wait — `x /= np.linalg.norm(x)` — x is float64 here, normalized. Then w is float64 standard normal. target ≈ 0.5. projection = w @ x (float64). w adjusted so w @ x = target. Cast to float32.
+
+So A x ≈ 0.5 (up to float32 cast effects ~1e-6). B: note B = matrices[1][PERMUTATION] — a row permutation. Permuting rows doesn't change row contents; each row of B still satisfies B_i x ≈ 0.5 (the targets are attached to rows). So B x ≈ 0.5 too (permuted targets). y ≈ 1.0 per row.
+
+So the reference is ~1 per row, and the signal direction... The key: the rows have large random components orthogonal to x, with only a small controlled component along x. Quantization error is dominated by the random parts, projecting ~0.12 onto x. So relative error ~12% per branch, 17% combined.
+
+Hmm, so with this input construction, int4 per-row quantization gives ~17% error. That fails E<=0.1. So if the "intended" implementation is int4 quantization, the input construction would make it fail... unless the intended int4 implementation is more accurate, e.g.:
+
+- Asymmetric quantization (min/max with zero point)? Similar error.
+- Per-row scale = max|a|/7 with... hmm.
+- Quantizing to int8 (max/127)? That would give error ~ 2.9/127/2 ≈ 0.011 per element → projection error ~0.0064 → E ≈ 0.9%. Passes easily. But that's int8, not int4.
+
+Hmm, "not a requirement to reproduce INT4 arithmetic bit-for-bit" — maybe the reference behavior (some original kernel) used int4, but the contract only requires final numerical accuracy? That seems contradictory: if the original used int4 with this input, its output would be ~17% off, and the contract E<=0.1 would fail for the original too.
+
+Wait, unless... hmm. Let me reconsider. Maybe the original kernel used int4 arithmetic in a different way: e.g., decompose A = Q(A)*sa with sa per-row, and also store a correction? Or maybe the intended computation is (A+B)@x where A+B is quantized... no.
+
+Hmm, hold on, wait. Let me reconsider the input construction. Maybe I'm misreading: `w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]`. np.sum(x*x) = ||x||² = 1 (after normalization). So the adjustment is (target - projection) ⊗ x. Yes.
+
+Hmm, what if the intent of the construction is different: maybe the intended "signal" is such that A and B rows, when quantized... no.
+
+Alternatively, maybe the problem is one of those "the kernel is subtly wrong" tests where the correct version uses a finer quantization or fp16/tf32, and this candidate uses int4 which is too coarse. The phrase "not a requirement to reproduce INT4 arithmetic bit-for-bit" might be a red herring or might refer to the fact that approximate int4-like arithmetic is fine as long as final accuracy holds — i.e., you don't need to match a reference int4 kernel bit-for-bit; you need to match the exact float64 reference within 0.1.
+
+Hmm wait, actually, re-reading: "This is finite-workload compliance, not a claim about all inputs, and not a requirement to reproduce INT4 arithmetic bit-for-bit." I think this means: the contract is about the final output accuracy on this workload; you don't have to match some int4 reference exactly. So the mention of INT4 is because the kernel family under consideration uses int4-style quantization, and the contract clarifies that only the final accuracy matters.
+
+But then, if int4 quantization inherently gives ~17% error on this workload, the contract E<=0.1 would be unachievable by any int4 per-row symmetric quantization... unless the workload is designed such that a *smarter* quantization passes.
+
+Hmm, what smarter int4 quantization could pass? Let's think: we need ||Q(A)x - Ax|| per row <= ~0.07 (so combined sqrt(2)*0.07... wait, we need total E <= 0.1, i.e., per-row RMS error <= 0.1 (relative to per-row signal 1.0, since ||ref|| ≈ 8 and sqrt(64)=8). Actually E = ||err||/||ref||; if err_i iid with std σ, ||err|| ≈ 8σ, ||ref|| ≈ 8, so E ≈ σ. Need σ <= 0.1. Combined σ = sqrt(σ_A² + σ_B²) <= 0.1 → each σ_branch <= 0.07.
+
+Per-row branch error: sum_j (a_ij - Q(a_ij)) x_j. To make this small with int4 quantization... One approach: choose the scale to minimize ||(a - Q(a))·x||? But the quantizer here uses max/7.
+
+Alternatively: since a·x = 0.5 exactly, maybe an implementation could compute Q(a)·x + (a - Q(a))·x... trivial.
+
+OR: maybe the intended implementation quantizes differently: quantize (a·x) directly? No...
+
+OR: maybe the intended trick: A@x + B@x = (A+B)@x. Quantize A+B? Same issue.
+
+Hmm, hold on. Let me reconsider: maybe the intended implementation uses int4 for the *multiplication with x* — i.e., quantize x? No...
+
+Wait, actually, maybe I've got the wrong idea about what the "correct" implementation is. The task is just: given this kernel, decide if it meets the contract. I don't need to know the intended correct implementation. I need to determine whether E <= 0.1 for THIS kernel on THIS workload.
+
+My analysis says E ≈ 0.17 ± fluctuation. Let me try to be more careful and precise, because the decision hinges on this.
+
+Let me set up the computation more carefully.
+
+x: 128 iid N(0,1), normalized. ||x||_2 = 1 exactly. ||x||_1 ≈ E: for unit vector uniform on sphere in R^128, E||x||_1 = sqrt(2/π)*sqrt(128)/... hmm: E[||z||_1/||z||_2] where z iid N(0,1). ||z||_1 ≈ n sqrt(2/π) = 128*0.798 = 102.1, ||z||_2 ≈ sqrt(128) = 11.31. Ratio ≈ 9.03. OK.
+
+A: 64 rows. Row i: a_ij = w_ij + c_i x_j, w iid N(0,1), c_i = target_i - w_i·x. Note c_i and w_i are dependent (c_i = target_i - w_i·x). The row's max |a|: dominated by w. ≈ 2.9 ± 0.3.
+
+Quantization: sa = max/7. e_ij = a_ij - sa round(a_ij/sa). |e_ij| <= sa/2, roughly uniform.
+
+err_i^A = sum_j e_ij x_j.
+
+Now here's a subtlety: is e_ij correlated with x_j? a_ij = w_ij + c_i x_j. The quantization error is a deterministic function of a_ij. Since w_ij is independent of x_j, and the c_i x_j term is small (c_i ~ 1.2, x_j ~ 0.088 → 0.1), a_ij ≈ w_ij + small. e_ij is roughly a "random" function of w_ij. So e_ij x_j: e_ij depends on w_ij (independent of x_j) plus tiny dependence through c_i x_j. So essentially independent. Var(err_i^A) ≈ sum_j x_j² Var(e) = (sa²/12). With sa ≈ 0.414: Var ≈ 0.0143, std ≈ 0.12.
+
+Similarly for B. Note B's rows are a permutation of matrices[1]'s rows — same distribution.
+
+err_i = err_i^A + err_i^B, std ≈ 0.12*sqrt(2) ≈ 0.17.
+
+E ≈ ||err||/||ref|| ≈ (sqrt(64)*0.17)/(sqrt(64)*1.0) ≈ 0.17.
+
+Hmm, so unless my estimate of the quantization error std is way off, E ≈ 0.17 > 0.1.
+
+Let me double check Var(e) = sa²/12. e uniform on [-sa/2, sa/2]: Var = sa²/12. sa = 2.9/7 = 0.414. sa²/12 = 0.1717/12 = 0.0143. std = 0.1196. Yes.
+
+But is e really uniform? The values a_ij/sa spread over [-7, 7] with a roughly normal density with std 1/0.414 = 2.42. The fractional parts: for a distribution with std 2.42 (i.e., spanning ~ 5-6 quantization bins on each side), the fractional part distribution is close to uniform but not exactly — there's some non-uniformity, but close enough. Var(e) ≈ sa²/12 * (something like 0.9-1.0). Fine.
+
+So per-branch per-row error std ≈ 0.11-0.12. Combined ≈ 0.16-0.17.
+
+For E <= 0.1, we need per-row error RMS <= 0.1. The probability... if true std is 0.165, RMS over 64 rows concentrates at 0.165 with relative std 1/sqrt(2*64) = 8.8%. So RMS ∈ [0.15, 0.18] with high probability. 0.1 is 4 sigma below (in units of 0.0146). Extremely unlikely to pass.
+
+Therefore: REJECT.
+
+Hmm wait, but before finalizing, let me reconsider whether there's some subtlety in the kernel that makes it more accurate than I think.
+
+1. `sa = tl.max(tl.abs(a), 0) / 7.0` — per-row scale. Note: tl.max(tl.abs(a), 0) — max over the row of |a|. Yes.
+
+2. `qa = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(a / sa + 0.5)))` — round-to-nearest, clamp.
+
+3. `ya = tl.sum((qa * sa) * x, 0)` — dequantize and dot with x. In float32. qa*sa in fp32: exact-ish.
+
+4. `yb` similarly for B.
+
+5. `Y[row] = ya + yb`.
+
+One potential issue: if sa is 0 (row all zeros) → division by zero → inf/nan. But rows are random normals, max > 0 always. Not an issue.
+
+Another: `tl.floor(a/sa + 0.5)` — fine.
+
+So the computation is as I described: symmetric per-row int4 quantization (15 levels), dequantized dot products.
+
+The numerical error is dominated by quantization: ~17% relative. Fails E <= 0.1.
+
+Hold on, hold on. Let me reconsider the problem statement once more: "Reference: y = A @ x + B @ x on the original float32 inputs, evaluated in float64. Metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64))."
+
+So denominator = max(||ref||, 0.08) ≈ 8. E ≈ 0.17. Fails.
+
+Hmm, but wait. Now I'm worried: what if the problem designers intended for this to be the CORRECT implementation, and my analysis is wrong? Let me re-examine the input construction for anything that would make quantization accurate.
+
+Key insight attempt: What if the rows of A and B, after adjustment, have small max? No — w is standard normal (64,128), max per row ~2.9. The adjustment adds ~O(1) * x, small per-element.
+
+What if x is special? x is normalized gaussian — nothing special.
+
+What if the "target" 0.5 matters differently... The projection signal is 0.5 per branch. Quantization error projection ~0.12. So relative error per branch ~24%.
+
+Hmm, what if instead the intended reading is: the kernel is one of several candidates, and the grader wants me to detect that int4 quantization is too coarse for this workload. The problem explicitly says "Either branch may individually exceed 0.1 without violating the contract" — meaning: don't reject just because one branch is inaccurate; check the final output. In this case, both branches are inaccurate AND the final output is inaccurate. So reject.
+
+But hmm, wait: what if the final output IS accurate due to some cancellation? err^A and err^B are independent (A and B generated from independent randomness). No systematic cancellation. Combined error is sqrt(2)x branch error. No.
+
+Let me also double-check: is there any chance the quantization error is much smaller because... hmm, the clamp? No.
+
+What about the possibility that max|a| per row is much larger, making sa larger and error larger? Either way, error scales with max.
+
+Actually, let me compute E as a function of max|a|: per-branch per-row error std = max/(7*sqrt(12)) = max/24.25. Combined = max*sqrt(2)/24.25 = max/17.15. E ≈ max/17.15 (since per-row signal 1.0). For E <= 0.1: max <= 1.71. But max of 128 |N(0,1)| ~ 2.9. So E ≈ 2.9/17.15 ≈ 0.169. 
+
+For E to be <= 0.1 by luck, we'd need the realized chi-square to be tiny. No.
+
+Additionally, let me sanity-check the per-row max distribution: 64 rows, each max ~2.9 ± 0.3. Average 2.9. So E ≈ 0.169 ± a bit. Even the most favorable rows don't save the 2-norm.
+
+OK so my verdict: REJECT, because per-row int4 symmetric quantization with scale max/7 introduces ~15-20% relative error on this workload, exceeding the 0.1 tolerance.
+
+Wait, wait. Hmm, but let me reconsider the phrase "not a requirement to reproduce INT4 arithmetic bit-for-bit" once more. This strongly implies the reference/target implementation uses INT4 arithmetic. If the target implementation uses int4 arithmetic and passes E <= 0.1, then int4 quantization CAN pass on this workload. How?
+
+Possibility: the target int4 implementation uses a different scaling, e.g., scale = max/7 but with per-row *error minimization* along x? Or uses affine quantization? Affine (min/max) quantization with 15 levels: range [min, max] ≈ [-2.9, 2.9], step = 5.8/14 = 0.414 — same as symmetric here (since min ≈ -max for gaussian rows). Same error.
+
+Possibility: int4 with per-row scale but ALSO the dot product computed with the residual of x? Hmm.
+
+Possibility: the intended implementation splits differently: e.g., y = A@x computed via quantized A with per-row scale, PLUS a correction term computed in low precision... 
+
+Possibility: the intended implementation quantizes to int4 but uses MANY more effective levels via two-part decomposition (like int4 × int4 double quantization)? 
+
+Hmm, alternatively: maybe the intended implementation quantizes a·x per row?? Like, compute the row sums... no.
+
+OR: maybe the intended implementation doesn't quantize A and B at all — it uses int4 arithmetic for something else, like... hmm. Actually, maybe the original problem (from which this is derived) is about "int4 matmul emulation" where A and B are ALREADY int4-representable? But here they're not — they're arbitrary float32 gaussians.
+
+Hmm wait, actually, maybe I should reconsider: maybe the input construction intends A and B to be int4-friendly? Let me re-read: w = standard_normal. No rounding to int4 levels. So no.
+
+Hmm, so the mention of INT4 in the problem statement is puzzling. Let me re-read the problem statement once more:
+
+"Contract: all outputs must be finite and E <= 0.1. Approximate intermediate values are allowed if the FINAL output meets this requirement. Either branch may individually exceed 0.1 without violating the contract. Target implementation: the supplied Triton kernel, on an NVIDIA T4. Input generator uses NumPy PCG64 on CPU. This is finite-workload compliance, not a claim about all inputs, and not a requirement to reproduce INT4 arithmetic bit-for-bit."
+
+Hmm, "Approximate intermediate values are allowed if the FINAL output meets this requirement" — e.g., using tf32 or bf16 intermediates is fine. "Either branch may individually exceed 0.1" — the branch outputs (A@x and B@x separately) may be inaccurate, as long as the sum is fine. Hmm, when could the sum be fine but branches not? If errors cancel between branches! E.g., an implementation that computes y = (A+B)@x where... no. Or an implementation that quantizes A and B with the SAME scale and the errors... no.
+
+OR: maybe the intended implementation computes ya with quantized A and yb = (B - something)... 
+
+OR: think of it this way: maybe the intended implementation quantizes the COMBINED matrix (A+B)? (A+B) rows are N(0,2) with projection 1.0. Quantization error projection: sa' = max|a+b|/7 ≈ 4.1/7 = 0.59, error std = 0.59/3.46 = 0.17. Same. No.
+
+OR: maybe the intended implementation uses int4 quantization of A and B but with scale per row = max/7 and then computes the dot product in int8 accumulating... the quantization error is the same regardless of accumulation precision. So no int4 scheme with 15 uniform levels and per-row max scaling passes.
+
+Unless the scale is chosen smarter: e.g., scale = RMS*something, or scale chosen to minimize ||(a - Q(a))·x|| directly (since x is known!). Hmm! That's possible: an implementation could choose sa to minimize the projection error. But quantizing a 128-dim row to 15 levels will have per-element error ~step/2 regardless; the projection error can't be much below ~ step/(sqrt(12)) unless the scale is tuned to make e ⊥ x... With a single scalar scale, you could optimize, but you'd gain maybe a factor of 2-3 at best? To get from 0.17 to 0.07 (a factor 2.4)... marginal. Hmm, actually, could you? The error vector e(sa) as a function of sa is complicated; choosing sa to zero out e·x exactly is possible in principle (e·x is a piecewise-constant-ish function of sa? no, it varies). Hmm, this is too speculative.
+
+Let me step back. The task: verify THIS kernel. The decision: does it meet E <= 0.1 on this workload? My analysis: E ≈ 0.17. Reject.
+
+But let me now double-check my analysis by attempting a more careful "simulation" in my head, or at least bound things rigorously.
+
+Rigorous-ish bound: per row, |err^A| = |sum_j e_ij x_j| <= (sa/2) ||x||_1 ≈ 0.207 * 9.03 ≈ 1.87. That's a worst case. The typical is ~0.12.
+
+Could the typical be much smaller due to structure? err^A = (a - Q(a))·x. Note a·x = 0.5. Q(a)·x = 0.5 - err^A. Q(a) is on the grid {sa * z : z integer in [-7,7]}^128. So Q(a)·x = sa * sum_j z_ij x_j where z_ij integers. So err^A = a·x - sa*(z·x) = 0.5 - sa * S where S = sum_j z_ij x_j, and z_ij = round(a_ij/sa) clamped.
+
+Now, S = sum_j round(a_ij/sa) x_j. Hmm, is there any reason S ≈ 0.5/sa? S is a weighted sum of integers with weights x_j. Hmm. Note sum_j a_ij x_j = 0.5. And a_ij ≈ sa * z_ij + e_ij. So S = (0.5 - e·x)/sa. Circular.
+
+No structural reason for small error. The error is essentially "quantization noise projected onto x". For random gaussians, it's ~sa/sqrt(12) ≈ 0.12 per branch.
+
+Let me also verify with a slightly different angle: relative RMS error of quantized row: ||Q(a) - a||/||a|| ≈ (sa/sqrt(12)) / 1 = 0.12/1 = 12% per element RMS (since ||a|| ≈ sqrt(128), per-element std 1). So the quantized matrix has 12% element-wise error. The dot product with x: signal 0.5, and the error in the dot product ≈ 12% × ||a-projection-orthogonal...|| hmm, let me think of it as: err = e·x where e is the error vector with per-element std 0.12. Since e is "random", |e·x| ≈ ||e||/sqrt(128) × ... ||e|| = 0.12*sqrt(128) = 1.36. e·x for random e: std = ||e||/sqrt(128) = 0.12. Yes consistent.
+
+So E ≈ 0.17. Fails.
+
+Hmm, hmm, hmm. But wait — now let me reconsider the possibility that the problem intends E relative to a much smaller reference norm... no, ||ref|| ≈ 8.
+
+Or the possibility that "0.001*sqrt(64)" = 0.08 matters — no, ||ref|| ≈ 8 >> 0.08.
+
+OK, so at this point I'm fairly confident: E ≈ 0.15-0.20, which violates E <= 0.1. REJECT.
+
+But wait, let me reconsider the "INT4" mention once more, because it really bothers me. If the problem family is "int4 matmul kernels", maybe the original workload has A and B ALREADY quantized to int4-representable values, and the correct kernel dequantizes... but here make_inputs clearly generates continuous gaussians. And the problem says "no hidden input is involved" — the input construction is fully given. So the workload is as I analyzed.
+
+Actually, you know, let me reconsider: maybe this problem is from a family where the "reference implementation" being verified against uses int4 arithmetic and the CONTRACT was validated against a specific int4 kernel that passes. If the passing int4 kernel uses scale = max/7 per row... it wouldn't pass per my analysis. So either (a) the contract was validated with a different, more accurate kernel (and the mention of INT4 is about the general family, e.g., "you don't need to match the int4 reference bit-for-bit; you need to meet the accuracy bar"), or (b) my analysis is wrong.
+
+Let me triple-check my analysis with a small concrete example. Take a simpler case: n=8 instead of 128. Row a = [1.2, -0.5, 0.8, 2.9, -1.1, 0.3, -0.9, 0.7] (gaussian-ish, max 2.9). sa = 2.9/7 = 0.414. Grid: 0, ±0.414, ±0.83, ±1.24, ±1.66, ±2.07, ±2.49, ±2.9.
+
+Q(1.2) = 1.24 (round(2.9)=3 → 3*0.414=1.24). err = -0.04.
+Q(-0.5) = -0.414 (round(-1.21)=-1). err = -0.086.
+Q(0.8) = 0.83 (round(1.93)=2). err = -0.03.
+Q(2.9) = 2.9. err=0.
+Q(-1.1) = -1.24 (round(-2.66)=-3). err = 0.14.
+Q(0.3) = 0.414 (round(0.72)=1). err = -0.114.
+Q(-0.9) = -0.83 (round(-2.17)=-2). err = -0.07.
+Q(0.7) = 0.83 (round(1.69)=2). err = -0.13.
+
+Errors: [-0.04, -0.086, -0.03, 0, 0.14, -0.114, -0.07, -0.13]. RMS ≈ sqrt((0.0016+0.0074+0.0009+0+0.0196+0.013+0.0049+0.0169)/8) = sqrt(0.0643/8) = sqrt(0.008) = 0.09. Hmm, a bit less than 0.12 but same ballpark (small sample).
+
+Now with x random unit vector in R^8 (entries ~0.35): err·x = sum e_j x_j ≈ random ± 0.09ish. Signal 0.5. So ~18% error per branch. Consistent.
+
+OK so with 128 dims it'll be similar: per-branch error ~ (sa/sqrt(12)) with sa ≈ 0.41 → 0.12, i.e., 24% of the 0.5 signal; combined ~17% of the 1.0 signal.
+
+E ≈ 0.17 > 0.1. REJECT.
+
+Hmm, actually hold on. Let me reconsider one more time whether per-row max might be smaller than 2.9. The rows are w (gaussian) + adjustment. The adjustment: c_i x where c_i = target_i - w_i·x. w_i·x ~ N(0,1) (since ||x||=1). So c_i ~ 0.5 - N(0,1) ~ N(0.5, 1). |c_i| typically 0.5-1.5, occasionally 3. The adjustment adds c_i x_j to each element: typical |c_i x_j| ≈ 1.1 * 0.088 ≈ 0.1. This slightly increases the spread: a_ij ~ N(0, 1 + c_i² x_j²)... effectively variance ≈ 1 + c_i²/128 ≈ 1.01. Negligible. Max over 128 ≈ 2.9. Yes.
+
+Also note: the max is over |a_ij| which includes the adjustment; max ≈ 2.9 ± 0.35.
+
+So E ≈ 0.169 × (2.9/2.9) ≈ 0.17, with row-to-row variation averaging out. Even in the optimistic case where all 64 rows of both matrices have max = 2.5 (impossibly low), E ≈ 0.146. Still fails. To pass, need average max ≈ 1.7 — impossible for 128 gaussians.
+
+Therefore: REJECT with high confidence.
+
+Hmm, wait, but let me reconsider the alternative interpretations of the metric once more:
+
+"E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64))"
+
+output: shape (64,) — the kernel's output. reference: shape (64,) — exact. Norms are 2-norms of vectors. Yes. E ≈ 0.17.
+
+Contract: all outputs finite — yes, they're finite (quantization of finite values; sa > 0). So finiteness OK. But E <= 0.1 fails.
+
+So verdict: reject.
+
+Hmm, hold on, let me reconsider whether the errors might partially cancel between the A-branch and B-branch in a systematic way... A and B are generated sequentially from the same rng: A from first draws, B from second draws. Independent. PERMUTATION applied to B's rows — just reordering rows, doesn't change per-row errors, just assigns them to different output positions. No cancellation.
+
+Also the x used in the kernel is the float32 x; reference uses float32 inputs cast to float64. The float32 cast of x: x was normalized in float64 then cast to float32 — ||x_float32|| ≈ 1 ± 1e-7. Negligible.
+
+The A x in float32-exact terms: the float32 cast of w changes A x slightly from target: the cast error per element ~1e-7 relative, dot product error ~ 1e-7 * sqrt(128) ≈ 1e-6. Negligible.
+
+So reference y_i ≈ 1.0 ± 0.03 (targets 0.5±0.02 each, plus float noise).
+
+Kernel output y_i ≈ 1.0 + err_i, err_i ~ N(0, 0.17²) approximately (mixture over rows).
+
+E ≈ 0.17. REJECT.
+
+Wait, one more consideration: is it possible that the problem's tolerance is meant to accommodate this? Like, maybe the problem designers computed E for this exact kernel and found it to be, say, 0.08, and my estimate is off by 2x? Let me re-derive the per-branch error once more, very carefully, because everything hinges on it.
+
+The quantization error per element: e = a - sa·round(a/sa). For a continuous a with a density that's roughly flat over each bin, e is uniform in [-sa/2, sa/2]. Var = sa²/12.
+
+BUT: here's a thought — the density of a is N(0,1), NOT flat over bins. Does that change Var(e)? The fractional-part distribution: for density f, the fractional part density p(u) ∝ sum_k f(sa(u+k)). With f = N(0,1), sa = 0.41: bins at multiples of 0.41. The gaussian std 1 spans ~2.4 bins each side. The fractional part distribution: p(u) = sum over integers k of φ(sa(u+k))/sa... hmm, let me just say it's approximately uniform with slight wiggle. Var(e) ≈ sa²/12 × (1 - small correction). The correction: the characteristic function approach: Var(fractional error) = 1/12 - sum over m≥1 of Φ_hat(m)/(2π²m²)... For gaussian with std σ=2.42 bins: Φ_hat(m) = exp(-2π²σ²m²)... wait, the Fourier transform of N(0, σ²) evaluated at 2πm: exp(-2π²σ²m²) with σ = 1/sa = 2.42 bins. exp(-2π²*5.86*1) = exp(-115) ≈ 0. So the fractional part is essentially exactly uniform. Var(e) = sa²/12 exactly (to high precision). 
+
+So per-element error std = 0.41/3.464 = 0.1185.
+
+Per-branch per-row error: err^A_i = sum_j e_ij x_j. Now, e_ij across j: iid uniform-ish (a_ij iid). x_j fixed. Var = sum_j x_j² · sa²/12 = sa²/12 · ||x||² = sa²/12 = 0.0141. std = 0.1187.
+
+Hmm wait, but there's the clamp and the fact that e_ij for the max element is 0 and near-max elements are biased... negligible.
+
+Also the dependence: a_ij = w_ij + c_i x_j — the common c_i x_j creates slight correlation across j, tiny effect.
+
+So std(err^A_i) ≈ 0.119, std(err_i) ≈ 0.168.
+
+||err||_2 = sqrt(sum_i err_i²) ≈ sqrt(64 × 0.0282) = sqrt(1.806) = 1.344. ||ref||_2 = sqrt(sum_i (1.0 + δ_i)²) ≈ sqrt(64 + 64*0.0009 + ...) ≈ 8.005. E ≈ 1.344/8.005 ≈ 0.168.
+
+So E ≈ 0.17, comfortably above 0.1. The probability of E <= 0.1 by chance: need sum err_i² <= 0.64, i.e., chi-square 64 dof value <= 64×(0.64/1.806) = 22.7 vs mean 64. P(χ²_64 <= 22.7): that's about... z = (22.7-64)/11.3 = -3.65. p ≈ 0.00013. And even that requires my variance estimate to be right; it is.
+
+So: REJECT with ~high confidence.
+
+Hmm, hmm. But now the "INT4" mention in the problem statement nags me. Let me think about why the problem says "not a requirement to reproduce INT4 arithmetic bit-for-bit."
+
+Maybe the problem family: "given a kernel that emulates int4 matmul (quantize A, B to int4, compute), verify numerical compliance against exact reference with tolerance 0.1." And maybe the DESIGNERS checked that a proper int4 kernel passes? Let me reconsider: is there an int4 scheme with much lower error on THIS workload?
+
+What if the quantization is applied to the PRODUCT rather than the matrix? E.g., compute A@x in fp32, then quantize the result y_a to int4 with per-... no, that would add error to the output directly: 15 levels for values ~0.5±0.02... error would be huge unless scale tiny. Hmm, actually if you quantize the OUTPUT y_a (64 values, each ≈0.5) with scale max|y_a|/7 ≈ 0.5/7 = 0.071, error per output ~0.02 → E ~ 0.03. That passes! But that's quantizing the output, pointless.
+
+What if the intended kernel quantizes x and the rows jointly? Like compute exact dot products but with int4 MULTIPLICANDS on both sides? Error would be even bigger.
+
+What if the intended kernel uses int4 for A only and fp32 for B? Then error = err^A only, std 0.119, E ≈ 0.12. Still fails.
+
+Hmm what if the intended uses int4 with scale = max/7 but ALSO adds a rank-1 correction: since a·x is known... no, the kernel doesn't know a·x.
+
+What if the intended kernel uses int4 quantization of (A·x-ish)... 
+
+Alternatively, maybe the tolerance 0.1 was chosen by the designers based on the actual error of THIS kernel? I.e., the designers ran this kernel, got E ≈ 0.17... no, then they'd set tolerance 0.2. Or the designers set tolerance 0.1 and validated that the "golden" implementation passes. If the golden implementation is a straightforward fp32 matmul (with tf32 or fp32 accumulation), E ~ 1e-6. Passes trivially. And the mention of INT4 is a distractor: "we don't require you to reproduce int4 arithmetic bit-for-bit" = "the kernel family we're testing may claim to do int4; we only care about final accuracy." So the contract is: final accuracy within 0.1. This int4 kernel fails at 0.17.
+
+Hmm, but actually, wait. Maybe the intended-golden is int4 with per-row scale chosen as max/7 — and the designers validated it passes? For that, the input would need to be designed so int4 quantization is accurate. Is there anything in the input construction that makes quantization accurate? Let me look once more...
+
+```python
+x = rng.standard_normal(128)
+x /= np.linalg.norm(x)
+```
+
+x normalized. 
+
+```python
+w = rng.standard_normal((64, 128))
+target = 0.5 + 0.02 * rng.standard_normal(64)
+projection = np.sum(w * x[None, :], axis=1, dtype=np.float64)
+w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]
+```
+
+Hmm... nothing that makes w int4-friendly. w stays continuous gaussian.
+
+Unless... the kernel is supposed to quantize w and the ACCURACY target is relative to a QUANTIZED reference? No — the problem explicitly says reference = exact float64 A@x + B@x on original float32 inputs.
+
+OK here's another thought: maybe the problem is testing whether the verifier can catch that a plausible-looking int4 kernel is NOT accurate enough. The problem statement's hints ("Approximate intermediate values are allowed if the FINAL output meets this requirement", "Either branch may individually exceed 0.1") are there to prevent false rejections of implementations that use approximation but are accurate enough. This kernel uses approximation that is NOT accurate enough. So REJECT.
+
+Actually hmm, wait. "Either branch may individually exceed 0.1 without violating the contract." When would a branch individually exceed 0.1 but the final output pass? Consider an implementation that computes ya = Q(A)@x and yb = y_ref_a - ya + Q(B)... no. OR: consider an implementation that computes y = (A+B)@x via quantizing (A+B): branch A@x computed as ((A+B)@x) * (something)... no.
+
+OR consider: an implementation that quantizes A with scale sa and B with the SAME scale (or B's rows relative to A's), such that errors cancel? E.g., yb computed as B@x - (Q(A)-A)@x? Contrived.
+
+OR simpler: an implementation that computes y = Q(A)@x + Q(B)@x where Q uses error diffusion... 
+
+Honestly, the "either branch" clause might just be generic boilerplate for this problem family: the metric only applies to the final combined output; don't evaluate branches separately. In THIS kernel, the final combined output fails anyway.
+
+Hmm, let me also consider: maybe the designers' golden kernel is exactly this quantization scheme, and they set the tolerance based on measuring E ≈ 0.17?? But the contract says E <= 0.1. If the golden measured 0.17, they'd have set 0.2. Unless the tolerance 0.1 is the family standard and this particular instance... The problem says "Decide trust, reject, or needs_more_evidence." — it's a verification task, and the kernel is a candidate. I should evaluate on the merits.
+
+Let me also double check the kernel for OTHER defects that would matter regardless:
+
+1. Grid: (64,) programs, one per row. K=128 constexpr. Loads X (128), A row, B row. Fine.
+
+2. `tl.load(X + j)` — x is contiguous (128,). Fine. A + row*K + j — A contiguous (64,128). Fine.
+
+3. Output: Y[row] = ya + yb. Shape (64,). Fine.
+
+4. dtype: out float32. qa*sa*x products in fp32; sum over 128 in fp32 — accumulation error ~1e-6. Fine.
+
+5. Potential division by zero if a row is all zeros → sa = 0 → a/sa = inf/nan → qa = clamp(floor(nan+0.5)) = ... floor(nan)=nan, min/max with nan → nan → ya nan. But rows are gaussians, never all-zero. Fine (finite outputs guaranteed on this workload).
+
+6. enable_fp_fusion=False: avoids fma fusion differences; irrelevant to accuracy at this scale.
+
+So the only defect is the coarseness of int4 quantization → E ≈ 0.17 > 0.1.
+
+Hold on, hold on. Let me reconsider once more. I keep going back and forth, but let me reconsider the magnitude of the reference and the error more carefully, because there's one more subtlety: the rows' projections onto x are 0.5 each. But actually wait — is that right? Let me recheck: "target = 0.5 + 0.02*standard_normal(64)". Yes, ≈0.5 per row. And the adjustment makes w@x = target in float64. Then cast to float32: A@x (float32 A, float64 x) ≈ target ± tiny. So ref y_i = A_i@x + B_i@x ≈ 1.0 ± 0.03.
+
+And the kernel output y_i ≈ Q(A_i)@x + Q(B_i)@x = (0.5 + errA_i) + (0.5 + errB_i) = 1.0 + errA_i + errB_i.
+
+E = ||errA + errB|| / ||ref|| ≈ sqrt(64 * 2 * 0.0141) / 8 = sqrt(1.806)/8 = 1.344/8 = 0.168.
+
+Yes. E ≈ 0.17.
+
+For the contract E <= 0.1, the kernel would need per-branch per-row error std <= 0.0707, i.e., sa/sqrt(12) <= 0.0707, sa <= 0.245, max|row| <= 1.71. Impossible for gaussian rows of length 128 (P(max <= 1.71) = (2Φ(1.71)-1)^128 = (0.913)^128 ≈ e^{-128*0.091} = e^{-11.6} ≈ 9e-6 per row; over 128 rows (64×2), essentially zero).
+
+Even accounting for fluctuations in errA_i (each row's error is a realization; RMS over rows concentrates), E will be in [0.14, 0.20] with ~95% probability. So REJECT.
+
+Hmm, wait, actually, let me reconsider whether all rows have max ≈ 2.9. The average of max over rows: E[max of 128 |N(0,1)|] ≈ ? Let me compute: E[M] where M = max|Z_i|. Using extreme value theory: P(M ≤ m) = (1 - 2Φ̄(m))^128. E[M] = ∫ (1 - F(m)) dm. Approximation: E[M] ≈ sqrt(2 ln n) + γ/sqrt(2 ln n) with n = 256 (since |Z| has 256 "tails"? no...). For |Z| max over 128: effective n' = 256? Hmm: P(max|Z| > m) ≈ 128·2Φ̄(m) = 256Φ̄(m). Setting 256Φ̄(m) = 1: Φ̄(m) = 0.0039 → m = 2.66. E[M] ≈ 2.66 + γ·(1/m)·... ≈ 2.66 + 0.577/2.66·... The Gumbel correction: E ≈ u + γ/u where u solves... roughly E[M] ≈ 2.9. Yes.
+
+So E ≈ 2.9/(7·sqrt(12)) · sqrt(2) = 2.9·1.414/24.25 = 4.1/24.25 = 0.169.
+
+Great: E ≈ 0.17.
+
+So the verdict is REJECT.
+
+Wait, but now let me second-guess the "INT4" hint one final time. The phrase: "This is finite-workload compliance, not a claim about all inputs, and not a requirement to reproduce INT4 arithmetic bit-for-bit."
+
+Reading: "We're only checking this workload. We're not claiming the kernel must be correct for all inputs. And you don't need to reproduce INT4 arithmetic bit-for-bit." The last clause implies: the kernel under test (or its family) performs INT4-ish arithmetic; the contract doesn't require bit-exact int4 reproduction — only final accuracy within tolerance. This is consistent with: the golden implementation might do int4 quantization, and small differences in rounding (e.g., floor vs round, clamping details) are fine AS LONG AS final accuracy holds. 
+
+So if the golden is an int4 kernel that passes E <= 0.1... how?! Let me think REALLY hard about whether some int4 scheme could achieve E <= 0.1 here. 
+
+E <= 0.1 requires per-row total error <= 0.1 RMS (relative to per-row signal ~1). With 15 levels per row...
+
+Idea: per-row affine quantization with levels covering [min, max]: step = (max-min)/14. For gaussian rows, max-min ≈ 5.5-6, step ≈ 0.41. Same as symmetric. No.
+
+Idea: quantize with scale max/7 but round-to-nearest in the DOT-PRODUCT direction... no.
+
+Idea: INT4 with per-row scale = max/7, but computing y = Q(A)@x + Q(B)@x + correction where correction = (A - Q(A))@x + (B - Q(B))@x computed in fp32? Then it's exact-ish. But then why quantize at all? Some kernels do "split" computation: high part int4, low part int4 (residual), sum. With two int4 parts, effective 225 levels... error would be tiny. Hmm! That's plausible: a "double quantization" scheme. But THIS kernel doesn't do that.
+
+Idea: the golden might quantize A and B per-row with scale = max/7 but the workload's rows might have been constructed to be int4-friendly... they're not (continuous gaussians).
+
+So no plausible int4 single-quantization scheme passes; the golden must either be exact fp32/bf16/tf32 computation, or int4 with residual correction. Either way, THIS kernel (single int4 quantization, scale max/7, no residual) fails at E ≈ 0.17.
+
+Hmm, although — wait. What if the golden uses int4 and the tolerance was set at 0.1 because the golden's E ≈ 0.17?? No, then the golden wouldn't satisfy its own contract. The contract presumably was validated: "run(*make_inputs())" of the GOLDEN meets E <= 0.1. So golden E <= 0.1. This kernel E ≈ 0.17. Different. Reject.
+
+Actually, hmm, one more scenario: what if the problem is adversarial and the "golden" is this very kernel, and the designers measured E for this kernel and it's <= 0.1?? That would require my analysis to be wrong by 1.7x. Let me look for any error in my reasoning...
+
+Potential error source 1: Maybe the quantization error doesn't project onto x as sa/sqrt(12) but much less, because of correlation between e_ij and x_j through the row adjustment. The adjustment adds c_i x to the row. Hmm, does quantization of (w + c x) have error correlated with x? e = (w + cx) - sa·round((w+cx)/sa). The error is a "sawtooth" function of the element value. The element value has a component c x_j along x_j. The sawtooth is random w.r.t. j. So e_ij x_j summed over j: no systematic alignment. The variance: Var(e) ≈ sa²/12 regardless. Sum_j e_ij x_j: variance ≈ sa²/12 · sum_j x_j² = sa²/12. Yeah.
+
+Potential error source 2: Maybe ||ref|| is much larger than 8? y_i ≈ 1.0, so ||ref|| ≈ 8. Could y_i be larger? targets ≈ 0.5 each. Yes 8. Could the float32 cast change targets? No.
+
+Potential error source 3: maybe E is defined with ||·||_2 as the spectral norm or something? Vectors here. No.
+
+Potential error source 4: Maybe I have the wrong sa: sa = max/7, but maybe the values a/sa for typical gaussian elements are small (|a| ~ 1, sa ~ 0.41, a/sa ~ 2.4), and round() to integers {-7..7}: the RELATIVE error per element is |e|/|a| ~ 0.12/1 = 12%. The dot product signal 0.5 comes from the alignment of a with x. The error vector e is random, so e·x ~ ||e||/sqrt(128) = 0.12·sqrt(128)/sqrt(128) = 0.12. Yes.
+
+Hmm, actually wait: e·x ~ ||e||·|cos θ| where θ is the angle between e and x. For random e in 128 dims, cos θ ~ 1/sqrt(128) → e·x ~ ||e||/sqrt(128) = (0.118·sqrt(128))/sqrt(128)... wait: ||e|| = sqrt(128 · Var(e)) = sqrt(128)·0.118 = 1.34. e·x ≈ ||e|| · (1/sqrt(128)) = 1.34/11.3 = 0.118. Yes consistent.
+
+So per-branch error 0.118, signal 0.5. Per-branch relative error 24%. The problem statement's hint "Either branch may individually exceed 0.1 without violating the contract" — consistent with branches at ~24%! And the combined: 0.167/1.0 = 16.7% > 10%. So the final output ALSO exceeds. Reject.
+
+Hmm interesting — the hint about branches exceeding 0.1 makes sense in a world where branches are at 24%: the designers anticipated verifiers who check branch accuracy and reject; they clarify only the final matters. But the final is 17% > 10%... 
+
+UNLESS the golden implementation has branches at >10% but final <= 10% through CANCELLATION. What implementation would have that? Consider: y = Q(A)@x + Q(B)@x where Q(A) and Q(B) use the same scale and the errors cancel... they don't.
+
+Consider: an implementation that computes ya = Q(A)@x and yb = B@x - (Q(A) - A)@x... contrived.
+
+Consider: an implementation that quantizes A and B JOINTLY: e.g., quantize (A+B) and (A−B)? y = (A+B)@x. Q(A+B) error ~ max(A+B)/7/sqrt(12) ≈ 4.1/7/3.46 = 0.169. Worse.
+
+Consider: an implementation that computes y = A@x + B@x in bf16: bf16 has 8 bits mantissa; element-wise relative error 0.4%; dot product error ~ 0.4%·sqrt-ish... E ~ 0.005. Passes. Branches also pass. Not matching the hint.
+
+Consider: tf32 (10-bit mantissa): E ~ 0.001. Passes.
+
+Consider: fp16 accumulation in fp32: E ~ 1e-4 (values are O(1), fine in fp16 range... a_ij up to 3, x_j up to 0.4, products fine). Passes.
+
+Hmm, so what implementation has branch error > 0.1 but total <= 0.1?? 
+
+OH WAIT. I think I've got it: an implementation that quantizes with per-row scales and computes BOTH branches with the quantized matrices, where the quantization errors of A and B are ANTI-correlated... no.
+
+Alternatively: maybe the hint refers to the fact that the metric denominator uses the COMBINED reference norm: E_branch = ||ya - ref_a||/max(||ref_a||, 0.08) could exceed 0.1 while combined passes, if errors cancel between branches. When do errors cancel between branches? If the implementation computes yb with an error that cancels ya's error... 
+
+OR: if the implementation computes y = (A+B)@x by quantizing C = A+B: then ya "branch" would be... no.
+
+OR: consider an implementation that quantizes A to int4 AND computes the residual (A - Q(A)·sa) also to int4 (double-quantization): y = Q1(A)@x + Q2(A)@x + ... total error tiny. Branches fine. No.
+
+OR: consider an implementation with a BUG in one branch that's compensated... 
+
+Honestly, the "either branch" clause might just be generic boilerplate for this problem family: the metric only applies to the final combined output; don't evaluate branches separately. In THIS kernel, the final combined output fails anyway.
+
+Hmm, hmm. But let me consider yet another possibility: that the designers' reference for "correct" is THIS kernel and they measured E < 0.1 because... the input construction differs from my reading? Let me re-read make_inputs one final time, very carefully.
+
+```python
+def make_inputs(device="cuda"):
+    import numpy as np
+    rng = np.random.Generator(np.random.PCG64(SEED))
+    x = rng.standard_normal(128)
+    x /= np.linalg.norm(x)
+    matrices = []
+    for _ in range(2):
+        w = rng.standard_normal((64, 128))
+        target = 0.5 + 0.02 * rng.standard_normal(64)
+        projection = np.sum(w * x[None, :], axis=1, dtype=np.float64)
+        w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]
+        matrices.append(w.astype(np.float32))
+    arrays = [x.astype(np.float32), matrices[0], matrices[1][PERMUTATION].copy()]
+    return tuple(torch.from_numpy(a.copy()).to(device) for a in arrays)
+```
+
+Yes: x normalized float64 → float32. A = matrices[0] (float32). B = matrices[1] with rows permuted by PERMUTATION (float32). Each row of both matrices satisfies row·x ≈ target_row ≈ 0.5 (float64 exact before cast; float32 cast perturbs by ~1e-7 per element → dot product perturbation ~ sqrt(128)·1e-7·... negligible).
+
+So ref y ≈ 1.0 per row. Kernel output ≈ 1.0 + quantization errors ~ N(0, 0.17²) per row. E ≈ 0.17.
+
+I'm now quite confident. Let me also sanity-check the claim "target ≈ 0.5" — yes, 0.5 + 0.02·N(0,1), so targets ∈ [0.44, 0.56] typically. And ||ref||_2 = sqrt(sum (t_i + t'_i)²) ≈ sqrt(64·1.0) = 8.
+
+One more check: PERMUTATION is a list of 64 distinct indices 0-63? Let me verify quickly: [4, 1, 2, 53, 44, 13, 11, 56, 46, 57, 33, 8, 25, 35, 39, 20, 36, 14, 51, 52, 40, 29, 23, 26, 3, 31, 38, 16, 21, 62, 41, 24, 61, 45, 30, 59, 19, 42, 27, 28, 12, 17, 60, 47, 43, 54, 6, 34, 22, 10, 18, 50, 32, 0, 7, 15, 9, 5, 63, 55, 49, 37, 48, 58]. Count: let me count: 4,1,2,53,44,13,11,56 (8), 46,57,33,8,25,35,39,20 (16), 36,14,51,52,40,29,23,26 (24), 3,31,38,16,21,62,41,24 (32), 61,45,30,59,19,42,27,28 (40), 12,17,60,47,43,54,6,34 (48), 22,10,18,50,32,0,7,15 (56), 9,5,63,55,49,37,48,58 (64). Yes 64 entries. Duplicates? Seems like a permutation of 0..63 (spot check: 0 appears at position 53, 63 at position 58... fine). Doesn't matter for accuracy anyway — permutation just relabels rows; each B row still has projection ≈ its own target ≈ 0.5.
+
+So the final answer: REJECT.
+
+Actually, hmm, let me reconsider the confidence level. My analysis is analytical, not a executed measurement. The margin: expected E ≈ 0.17 vs threshold 0.1. That's a 70% margin, ~4 sigma. The main uncertainty: my model of quantization error (uniform fractional parts) — solid. The row max ≈ 2.9 — solid (statistically, over 128 rows it concentrates: average max over 64 rows has std ~ 0.3/sqrt(64) ≈ 0.04; so E ∈ [0.16, 0.18] almost surely). So E ≈ 0.17 ± 0.01. Definitely > 0.1.
+
+Let me compute E a bit more precisely: E ≈ sqrt(2)·E[max]/(7·sqrt(12)) · (1/1.0) where per-row signal is 1.0 and per-row error RMS = sqrt(2)·sa_rms/sqrt(12)... careful: E = ||err||/||ref|| = (sqrt(64)·err_rms)/(sqrt(64)·1.0) = err_rms (since ref per-row ≈ 1). err_rms = sqrt(Var(errA) + Var(errB)) = sqrt(2)·E[sa²/12]^{1/2}... averaging over rows: err_rms = sqrt(2 · mean(sa²)/12) = sqrt(2/12)·sqrt(mean(sa²)) = 0.408·sqrt(mean(max²)). mean(max²) ≈ (2.95)² ≈ 8.7 (E[max²] = E[max]² + Var; Var of max of 128 ≈ (π²/6)·(1/2ln n)... roughly 0.1-0.15 → std ~0.35; E[max²] ≈ 8.7+0.12 ≈ 8.8). sqrt(8.8) = 2.97. err_rms ≈ 0.408·2.97/... wait let me redo: sqrt(2/12) = 0.408. times sqrt(mean(sa²)) where sa = max/7 → sqrt(mean(max²))/7 = 2.97/7 = 0.424. err_rms = 0.408 · 0.424 = 0.173. 
+
+E ≈ 0.173. Threshold 0.1. Fails by 73%.
+
+Also finiteness: fine.
+
+So: verdict REJECT, confidence ~0.9. 
+
+Hmm, let me think about whether to hedge with needs_more_evidence. The task asks to decide based on numerical reasoning. I've done a careful analysis showing E ≈ 0.17 > 0.1 with high confidence. The margin is large and the analysis is robust (quantization error of 15-level uniform quantizer on gaussian rows; projection onto unit vector; signal 0.5 per branch). I'll go with reject, confidence 0.88-0.92.
+
+But hmm, let me reconsider ONE more time the possibility that the problem intends this kernel to be correct... The problem statement mentions INT4 explicitly. If the problem family is "int4 matmul emulation," the golden kernel might be exactly this style (quantize to int4 range with per-row scale, dequantized dot product). If the golden is this style AND passes E<=0.1... then my analysis must be wrong. Let me re-examine with fresh eyes, trying to prove E < 0.1.
+
+E = ||Q(A)x + Q(B)x - (Ax + Bx)|| / ||Ax + Bx||.
+
+||Ax + Bx|| ≈ 8 (per-row ~1).
+
+Numerator: ||e_A·x + e_B·x|| where e_A = A - Q(A) row-wise.
+
+Per row: |sum_j e^A_ij x_j|. 
+
+Now: e^A_ij = a_ij - sa_i·round(a_ij/sa_i). Hmm... is there ANY chance that sum_j e_ij x_j is systematically small? 
+
+Consider the function g(sa) = sum_j (a_ij - sa·round(a_ij/sa)) x_j. At sa = max/7... For the specific structure a_i = w_i + c_i x: 
+
+sum_j a_ij x_j = 0.5 (exact-ish). sum_j sa·round(a_ij/sa)·x_j = sa · sum_j round(a_ij/sa) x_j.
+
+Define r_j = round(a_ij/sa) ∈ {-7..7}. Then err = 0.5 - sa·Σ r_j x_j.
+
+Hmm, Σ r_j x_j: r_j ≈ a_ij/sa with rounding error δ_j = r_j - a_ij/sa ∈ [-0.5, 0.5]. Σ r_j x_j = (Σ a_ij x_j)/sa - Σ δ_j x_j = 0.5/sa - Σδ_j x_j. So err = 0.5 - sa(0.5/sa - Σδ_j x_j) = sa·Σδ_j x_j. δ_j ~ uniform [-0.5,0.5]. err = sa·Σ δ_j x_j, Var = sa²·(1/12)·Σx_j² = sa²/12. Same as before. No magic.
+
+So err ~ N(0, sa²/12), std ≈ 0.424/3.46 = 0.1225 per branch. Combined 0.173. Yes.
+
+There's no way around it: with 15 uniform levels per row and per-row max scaling, quantization noise in the dot product is ~ sa/sqrt(12) ≈ max/24.2, and the signal is 0.5 per branch = 1.0 combined, with max ≈ 2.95 → E ≈ 0.17.
+
+For an int4-style kernel to pass, it would need per-row signal much larger relative to max, e.g., rows aligned with x. Here rows are random gaussians with only a small forced alignment (0.5 out of row norm ~11.3). The designers CHOSE target=0.5 and random w — this makes the projection signal SMALL relative to quantization noise. If they wanted int4 to pass, they'd have made rows mostly aligned with x (e.g., w small, target large). They didn't. So the input construction is ADVERSARIAL to int4 quantization! The target 0.5 with random w means the useful signal (0.5) is tiny compared to the row's random mass (norm ~11.3), so any lossy quantization of the row destroys the signal.
+
+This strongly suggests the test is DESIGNED to catch int4-quantization kernels that fail accuracy. The hint "not a requirement to reproduce INT4 arithmetic bit-for-bit" tells us the contract is purely numerical — so a kernel that does int4 (perhaps the "original" kernel being emulated was int4) must still meet E<=0.1, and this one doesn't.
+
+Hmm, wait, but actually, hmm: if the original kernel was int4 and the workload makes int4 fail E<=0.1... then the "reference behavior" described (exact float64) with tolerance 0.1 would be unmeetable by the original. The problem says "Reference: y = A@x + B@x ... evaluated in float64" — this is the REFERENCE for the metric, not necessarily the original kernel's algorithm. The contract is on numerical compliance. So the original kernel (int4) might itself be non-compliant... but the task is just to verify THIS kernel against the contract. And it fails.
+
+Alternatively — maybe the original kernel did int4 with per-row scale = max/127 (int8-ish, "INT4" being a misnomer... no).
+
+OK here's yet another thought experiment: what E would the "naive correct" fp32 kernel get? ~1e-6. What tolerance did designers set? 0.1 — quite loose, accommodating bf16/tf32/int8-ish approximations. This int4 kernel gets 0.17 — just above. The tolerance 0.1 seems designed to separate "accurate enough approximations" (<= 0.1) from "too coarse" (> 0.1). This kernel is on the wrong side.
+
+Let me also double-check the claim E_branch ≈ 0.24 > 0.1 per the hint — consistent with the hint's premise that branches can exceed 0.1 (in a correct implementation, branches might exceed 0.1 but combined must not). Hmm, in THIS kernel branches are at 0.24 and combined at 0.17. For a CORRECT kernel to have branches > 0.1 but combined <= 0.1, you'd need cancellation... OR the branch metric uses a different denominator: E_branch = ||ya - ref_a||/max(||ref_a||, 0.08): ||ref_a|| ≈ 4 (0.5·8). If ya has error 0.4 in norm... e.g., an implementation computing ya in a way that's off by O(0.4) but yb compensates?? 
+
+OR maybe: an implementation that computes y = (A+B)@x where (A+B) is formed in float32 (fine), or... 
+
+OR: an implementation that quantizes A+B per-row to int4: error per row = s·Σδx with s = max(A+B)/7 ≈ 4.2/7 = 0.6, std = 0.6/3.46 = 0.173, E = 0.173. Fails too.
+
+OR: an implementation that computes ya = A@x in int4 (error 0.24 relative) and yb = B@x EXACTLY, total error = 0.122/1.0 → E = 0.122 > 0.1. Still fails! Interesting: even one int4 branch alone fails the combined metric.
+
+For combined E <= 0.1 with one branch int4: need per-branch error <= 0.1 → sa <= 0.346 → max <= 2.4. Still impossible (max ≈ 2.95 typical, and it's the AVERAGE over rows that matters: need sqrt(mean(sa²)) <= 0.346·... hmm: E = err_rms/1.0 with err_rms = sa_rms/sqrt(12) <= 0.1 → sa_rms <= 0.346 → max_rms <= 2.42. Actual max_rms ≈ 2.97. Fails even for one branch.)
+
+So NO int4-per-row-max-scaled scheme passes; any passing implementation must compute dot products more accurately (fp32/bf16/tf32/int8/fp16). Therefore the mention of INT4 in the problem is likely about the kernel family under test (this kernel emulates int4), and the contract explicitly says bit-exact int4 reproduction is NOT required — i.e., don't judge it by int4 fidelity; judge by final accuracy. Final accuracy: 0.17 > 0.1 → reject.
+
+Hmm, hmm, hmm. But wait — actually, now I realize I should double-check the possibility that the problem's tolerance and workload were set by actually running THIS kernel and finding E <= 0.1. For that, my analytical E ≈ 0.17 would need to be wrong by 1.7x. Where could a 1.7x error creep in? 
+
+- If sa were max/7 but with max over... no, per-row max over 128 elements ≈ 2.95. 
+- If the quantization used 15 levels over [-max, max] with step 2·max/14 = max/7 — same thing.
+- If x had smaller norm... ||x||=1.
+- If signal were larger: target 0.5 per branch → 1.0. Unless "target" multiplies differently... no.
+
+What if the reference is dominated by something else... no.
+
+What if the metric denominator is max(||ref||, 0.08) ≈ 8 — yes.
+
+So E ≈ 0.17 stands. Even if my estimate of E[max] were off (say 2.5 instead of 2.95), E ≈ 0.147 > 0.1. To get E <= 0.1, need E[max] <= 1.7 — impossible.
+
+Therefore: REJECT. Confidence: 0.9.
+
+Hmm, one more sanity check on Var(δ)=1/12 and independence across j: δ_j = frac-rounding of a_ij/sa_i. a_ij iid across j (given the row). sa_i depends on the row max — a global row property, inducing weak correlation among δ_j, but Var of Σδ_j x_j ≈ (1/12)Σx_j² + tiny cross terms. Cross terms: Cov(δ_j, δ_k) for j≠k — the dependence through sa_i (max) is weak (max is one element; changing sa shifts all bins slightly). Effect on variance: O(1/128) relative. Negligible.
+
+Also: the element achieving the max has δ = 0 and neighboring large elements have biased δ (since |a|/sa <= 7, elements near ±7 round to ±7 with δ ∈ [-0.5, 0] biased negative for +7 side? Actually for a/sa close to 7, round gives 7, δ = 7 - a/sa ∈ [0, 0.5]... wait δ = r - a/sa ∈ [-0.5, 0.5] by definition of round; for values in (6.5, 7], r=7, δ ∈ [0, 0.5). Only a couple elements per row are > 6.5·sa ≈ 2.8. Negligible bias.
+
+Great. Final: REJECT, confidence 0.9.
+
+Actually, let me reconsider confidence. The analysis is solid but I haven't executed the workload. The margin is 1.7x. The statistical concentration is tight (128 rows total → E is concentrated around 0.17 ± 0.015). The only way I'm wrong is a systematic misunderstanding of the kernel or input. I've read both carefully. I'll say confidence 0.9.
+
+Wait — one more careful read of the kernel for any trick that improves accuracy:
+
+```python
+sa = tl.max(tl.abs(a), 0) / 7.0
+```
+
+Hmm — `tl.max(tl.abs(a), 0)` — max over axis 0 of the 1-D tensor `a` (which is the row, indexed by j). In Triton, `tl.max(x, 0)` for a 1-D tensor reduces over axis 0 → scalar. Yes, per-row max of |a|. 
+
+Wait, actually — is `a` the row (128 elements)? `a = tl.load(A + row * K + j)` — yes, 128 elements of row `row`. `tl.max(tl.abs(a), 0)` — scalar max. Good.
+
+Hmm, but wait: could `tl.max(tl.abs(a), 0)` be interpreted as elementwise max(|a|, 0)?? In Triton, `tl.max(input, axis)` reduces along axis. For a 1-D tensor, axis=0 reduces to scalar. There's also `tl.maximum(x, y)` for elementwise. So `tl.max(tl.abs(a), 0)` is a reduction → scalar. Yes. (Though passing literal 0 as axis — fine.)
+
+So sa is a scalar per row. qa is a 128-vector of quantized ints (as floats). ya = Σ (qa·sa)·x. Yes.
+
+One more: `tl.floor(a / sa + 0.5)` — for negative values, floor(-2.3 + 0.5) = floor(-1.8) = -2. Round-to-nearest with ties... fine, standard.
+
+So the kernel is a straightforward per-row symmetric int4 emulation. Error ≈ 17% > 10%. REJECT.
+
+Let me also reconsider: is there any chance the workload's rows have max ≈ 1.7 due to the rng... no, standard normal.
+
+Also, let me double check E[max of 128 |N(0,1)|] ≈ 2.95: More precisely, for n=128: E[M] ≈ ∫₀^∞ 128·2φ̄(m)·(1-2φ̄(m))^127 dm... The standard approximation: E[M] ≈ b_n + γ/b_n where... for max of |Z|: P(|Z|>m) = 2φ̄(m). Effective rate: n·2φ̄(m) = 1 → φ̄(m) = 1/256 → m ≈ 2.66 (since φ̄(2.66) ≈ 0.0039). Gumbel: E[M] ≈ 2.66 + 0.577/2.66·(1/1)... the scale parameter a = 1/m ≈ 0.376; E = u + γ·a = 2.66 + 0.577·0.376 = 2.66 + 0.217 = 2.88. So E[max] ≈ 2.88, E[max²] ≈ 2.88² + Var(≈ (π²/6)·0.376² = 0.14) ≈ 8.45. sqrt = 2.91. sa_rms = 2.91/7 = 0.415. err_rms per branch = 0.415/3.464 = 0.1198. Combined = 0.1695. E ≈ 0.17.
+
+Yes. Final answer: reject, confidence 0.9.
+
+Reason: The kernel quantizes each row of A and B to 15 uniform levels with scale max|row|/7; the resulting quantization noise projected onto x is ~max/(7√12) ≈ 0.12 per branch per row, while the constructed signal is only ~0.5 per branch (~1.0 total, ||ref|| ≈ 8). Expected E ≈ 0.17 > 0.1, so the contract is violated.
+
+Let me write the final JSON.
+
+## Final response (verbatim)
+
+{"verdict": "reject", "confidence": 0.9, "reason": "The kernel lossily quantizes every row of A and B to 15 uniform levels with per-row scale max|row|/7 before the dot products. Rows are ~N(0,1) of length 128 (row max ≈ 2.9), so quantization noise std ≈ max/(7·√12) ≈ 0.12 per branch, while the constructed signal is only ~0.5 per branch (||ref|| ≈ 8, i.e. ~1.0 per row). The resulting relative error E ≈ √2·0.12/1.0 ≈ 0.17, well above the 0.1 tolerance, and the tight concentration over 128 rows makes passing by fluctuation essentially impossible."}
+
+## Verdict
+
+{
+  "verdict": "reject",
+  "confidence": 0.9,
+  "reason": "The kernel lossily quantizes every row of A and B to 15 uniform levels with per-row scale max|row|/7 before the dot products. Rows are ~N(0,1) of length 128 (row max ≈ 2.9), so quantization noise std ≈ max/(7·√12) ≈ 0.12 per branch, while the constructed signal is only ~0.5 per branch (||ref|| ≈ 8, i.e. ~1.0 per row). The resulting relative error E ≈ √2·0.12/1.0 ≈ 0.17, well above the 0.1 tolerance, and the tight concentration over 128 rows makes passing by fluctuation essentially impossible."
+}
+
+## Usage and stop reason
+
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "provider": "fireworks",
+  "response": {
+    "verdict": "reject",
+    "confidence": 0.9,
+    "reason": "The kernel lossily quantizes every row of A and B to 15 uniform levels with per-row scale max|row|/7 before the dot products. Rows are ~N(0,1) of length 128 (row max ≈ 2.9), so quantization noise std ≈ max/(7·√12) ≈ 0.12 per branch, while the constructed signal is only ~0.5 per branch (||ref|| ≈ 8, i.e. ~1.0 per row). The resulting relative error E ≈ √2·0.12/1.0 ≈ 0.17, well above the 0.1 tolerance, and the tight concentration over 128 rows makes passing by fluctuation essentially impossible."
+  },
+  "usage": {
+    "input_tokens": 1210,
+    "output_tokens": 25492
+  },
+  "stop_reason": "stop",
+  "max_tokens": 65536,
+  "elapsed_s": 305.1429737498984,
+  "kernel_sha256": "d8a260603a5468244aad73b857d00661c10e79b0ff6b2513ff5e04bed0cb3d65",
+  "problem_sha256": "2c1d05e7a11c885c731c03d3fb736f849bc67fdacddf8a7476b5613984f49e3c",
+  "prompt_variant": "original",
+  "estimated_usd": 0.02838,
+  "pricing": "existing project profile estimate; excludes GPU; not invoice"
+}

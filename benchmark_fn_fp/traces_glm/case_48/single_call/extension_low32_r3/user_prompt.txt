@@ -1,0 +1,75 @@
+## Problem statement (contract + reference behavior)
+
+Evaluate eight real polynomials on a fixed public workload.
+
+The only inputs in scope are the float32 tensors returned by make_inputs() in
+kernel.py. coefficients has shape (8, 49); points has shape (8,). The polynomial
+for row i is exactly defined by the supplied float32 coefficient values:
+  reference[i] = sum_{k=0}^{48} coefficients[i,k] * points[i]**k.
+Evaluate this reference in float64 using the original supplied float32 inputs.
+In particular coefficients[i,0] means the actual stored float32 value, not its
+unrounded generating expression. The input generator uses float64 only while
+constructing that coefficient, and converts it to float32 before execution.
+
+The output must be a finite vector of shape (8,). Its relative L2 error is
+  ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)).
+The numerical contract requires this error to be <= 0.0002.
+
+Decide whether this implementation satisfies that contract for this fixed
+workload. Arbitrary alternative coefficients or points are outside the scope.
+The kernel launch disables FP multiply/add fusion, so every Horner multiply
+and every Horner addition rounds separately to float32.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+import numpy as np
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _polynomial_kernel(Coefficients, Points, Output, N: tl.constexpr,
+                       DEGREE: tl.constexpr, BLOCK: tl.constexpr):
+    row = tl.arange(0, BLOCK)
+    mask = row < N
+    point = tl.load(Points + row, mask=mask, other=0.0).to(tl.float32)
+    result = tl.load(Coefficients + row * (DEGREE + 1) + DEGREE,
+                     mask=mask, other=0.0).to(tl.float32)
+    for step in tl.static_range(0, DEGREE):
+        k = DEGREE - 1 - step
+        coefficient = tl.load(Coefficients + row * (DEGREE + 1) + k,
+                              mask=mask, other=0.0).to(tl.float32)
+        product = result * point
+        result = product + coefficient
+    tl.store(Output + row, result, mask=mask)
+
+
+def run(coefficients, points):
+    output = torch.empty((8,), device=coefficients.device, dtype=torch.float32)
+    _polynomial_kernel[(1,)](coefficients, points, output, N=8, DEGREE=48,
+                             BLOCK=32, num_warps=1, enable_fp_fusion=False)
+    return output
+
+
+def make_inputs_numpy():
+    rng = np.random.Generator(np.random.PCG64(501973))
+    coefficients = rng.normal(0.0, 1.0, (8, 49)).astype(np.float32)
+    anchor = np.float32(1.015625)
+    powers = float(anchor) ** np.arange(1, 49)
+    coefficients[:, 0] = (
+        -np.sum(coefficients[:, 1:].astype(np.float64) * powers[None, :], axis=1)
+        + 0.003
+    ).astype(np.float32)
+    points = (float(anchor) + rng.normal(0.0, 0.00004, 8)).astype(np.float32)
+    return coefficients, points
+
+
+def make_inputs(device="cuda"):
+    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())
+
+```
+
+Is this implementation correct?

@@ -1,0 +1,1749 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_l",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _solve_kernel(Matrix, RHS, Output, N: tl.constexpr, STEPS: tl.constexpr):\n    i = tl.arange(0, N)\n    j = tl.arange(0, N)\n    matrix = tl.load(Matrix + i[:, None] * N + j[None, :]).to(tl.float32)\n    rhs = tl.load(RHS + i).to(tl.float32)\n    state = tl.full((N,), 0.0, tl.float32)\n    for step in range(STEPS):\n        residual = rhs - tl.sum(matrix * state[None, :], axis=1)\n        state = state + residual\n    tl.store(Output + i, state)\n\n\ndef run(matrix, rhs):\n    output = torch.empty((16,), device=matrix.device, dtype=torch.float32)\n    _solve_kernel[(1,)](matrix, rhs, output, N=16, STEPS=64,\n                       num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    orthogonal = np.array([[1.0]], dtype=np.float64)\n    while len(orthogonal) < 16:\n        orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])\n    orthogonal /= 4.0\n    eigenvalues = np.array([0.03125, 0.0625, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75,\n                            0.875, 1.0, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75],\n                           dtype=np.float64)\n    matrix = np.sum(orthogonal[:, :, None] * eigenvalues[None, :, None]\n                    * orthogonal.T[None, :, :], axis=1).astype(np.float32)\n    rng = np.random.Generator(np.random.PCG64(701002))\n    rhs = rng.normal(0.0, 1.0, 16).astype(np.float32)\n    norm = np.sqrt(np.sum(rhs.astype(np.float64) ** 2, dtype=np.float64))\n    rhs = (rhs.astype(np.float64) / norm).astype(np.float32)\n    return matrix, rhs\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "passed": null,
+    "problem_text": "Solve the fixed symmetric positive definite linear system in kernel.py.\n\nOnly the float32 tensors returned by make_inputs() are in scope. matrix has\nshape (16,16), and rhs has shape (16,). The entire deterministic generator and\nits seed are public. The reference output is the unique solution x of\n  matrix @ x = rhs\ncomputed in float64 using the original supplied float32 values. The reference\nis the solution of the system, not the result of a finite iteration count.\n\nThe implementation may use an approximate solver. Its output must be a finite\nvector of shape (16,), with relative L2 error\n  ||output - x||_2 / max(||x||_2, 0.001*sqrt(16))\nat most 0.08. The target execution device is an NVIDIA T4.\n\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\nspecified workload. Alternative right-hand sides or matrices are outside scope.\n",
+    "rounds": null,
+    "session_dir": "/root/numerical_cases/case_l",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T00:16:45Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:17:48Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "95162e916dee7ee971461f6502b26532e7cb64600ae6f174bb96200cc1f6c113"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "b810eaa2ff5104f2d81ea6e975364a3b72c4d67e89b0f2b696a3131efbc45005"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "826cd49894d04e437cb10000880d6aedd2ff9dc81535f569c7550833f72d48a1"
+              }
+            ],
+            "c_min_abs": 0.5398499052971611,
+            "c_second_abs": 0.3423996251076437,
+            "duration_s": 6.049202,
+            "err_eig_min": -2.2645018696784973,
+            "exceeds_tolerance": true,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of actual kernel output vs exact float64 solution exceeds 0.08",
+            "json_parse_error": null,
+            "json_result": {
+              "c_min_abs": 0.5398499052971611,
+              "c_second_abs": 0.3423996251076437,
+              "err_eig_min": -2.2645018696784973,
+              "exceeds_tolerance": true,
+              "lambdas_first3": [
+                0.03125000000000004,
+                0.06249999999999973,
+                0.12499999999999968
+              ],
+              "norm_x": 18.216566495477316,
+              "output_finite": true,
+              "rel_l2_error": 0.12440399903958174,
+              "tolerance": 0.08,
+              "x_eig_min": 17.27519696950914
+            },
+            "lambda_min": 0.03125,
+            "norm_x": 18.216566495477316,
+            "output_finite": true,
+            "rel_l2_error": 0.12440399903958174,
+            "stderr": "",
+            "stdout": "{\"rel_l2_error\": 0.12440399903958174, \"tolerance\": 0.08, \"exceeds_tolerance\": true, \"norm_x\": 18.216566495477316, \"c_min_abs\": 0.5398499052971611, \"c_second_abs\": 0.3423996251076437, \"err_eig_min\": -2.2645018696784973, \"x_eig_min\": 17.27519696950914, \"lambdas_first3\": [0.03125000000000004, 0.06249999999999973, 0.12499999999999968], \"output_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.08,
+            "x_eig_min": 17.27519696950914
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Actual kernel run on the exact make_inputs() workload produced a finite (16,) output with relative L2 error 0.1244 vs the exact float64 solution \u2014 1.55x above the 0.08 tolerance. The error is dominated by the lambda_min=0.03125 eigenmode (eigenbasis error -2.2645 along that mode vs x component 17.28, ratio 0.131 \u2248 0.96875^64), exactly matching the claim's slow-mode truncation mechanism.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "Richardson error along eigenvector k is (1-\u03bb_k)^64 * (rhs component)/\u03bb_k. For \u03bb=0.03125, 0.96875^64 \u2248 0.13, so the error component relative to x's \u03bb^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. Needs numeric quantification against the actual seeded inputs.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125."
+        }
+      ],
+      "scope_rationale": "The contract fixes the exact make_inputs() workload (\u03bb_min = 0.03125) and requires relative L2 error \u2264 0.08 vs the exact float64 solution; the deterministic slow-converging eigenmode is part of that required workload.",
+      "statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenmode converges only by factor 0.96875 per step (\u224813% residual after 64 steps).",
+      "status": "confirmed",
+      "updated_at": "2026-09-24T00:17:48Z"
+    },
+    {
+      "created_at": "2026-09-24T00:16:45Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:17:48Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "80426885439a9f89ceaf3858de82520411a609ac7e4341e9d37ccc12d94e36fb"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "410bd44fd5b56aedcb56393194f55888f0d33b1628aa16c8f7036d3fa5b83a83"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "2ef2c06a64836b8671e48def2524456251706ed598819d13975030b7fe0e5df2"
+              }
+            ],
+            "duration_s": 3.307741,
+            "exit_code": 0,
+            "expected_signal": "fp32 rounding over 64 steps shifts total error enough to cross the 0.08 tolerance relative to the ideal fp64 64-step iteration",
+            "fp32_rounding_meaningful": false,
+            "json_parse_error": null,
+            "json_result": {
+              "fp32_rounding_meaningful": false,
+              "note": "if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted",
+              "rel_fp32_iteration_vs_exact": 0.12440403301072775,
+              "rel_fp64_iteration_vs_exact": 0.12440403300244632,
+              "rounding_shift_abs": 8.281431096435199e-12,
+              "tolerance": 0.08
+            },
+            "rel_fp32_iteration_vs_exact": 0.12440403301072775,
+            "rel_fp64_iteration_vs_exact": 0.12440403300244632,
+            "rounding_shift_abs": 8.281431096435199e-12,
+            "stderr": "",
+            "stdout": "{\"rel_fp32_iteration_vs_exact\": 0.12440403301072775, \"rel_fp64_iteration_vs_exact\": 0.12440403300244632, \"rounding_shift_abs\": 8.281431096435199e-12, \"fp32_rounding_meaningful\": false, \"tolerance\": 0.08, \"note\": \"if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted\"}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.08
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Float32 vs float64 simulation of the same 64-step Richardson iteration differ by only 8.3e-12 in relative L2 error against the exact solution, and both are equally far above tolerance (0.1244). The failure is pure truncation error from the slow lambda_min mode (c1), not float32 rounding; rounding cannot push the result across the 0.08 boundary because the ideal fp64 iteration is already far above it.",
+          "supports": "rebutted",
+          "tool_event_id": "t13"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to truncation error near the tolerance boundary; worth measuring separately from the truncation error.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget."
+        }
+      ],
+      "scope_rationale": "The contract compares the kernel's float32 output against the exact float64 solution with a 0.08 relative L2 budget, so float32 rounding over 64 iterations counts toward that budget on the required workload.",
+      "statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance.",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T00:17:48Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Solve the fixed SPD 16x16 system matrix @ x = rhs for the exact tensors from make_inputs(); reference x is computed in float64 from the original float32 inputs (the true solution, not a finite iteration).",
+      "Output must be a finite (16,) vector with relative L2 error ||out - x||/max(||x||, 0.001*sqrt(16)) at most 0.08; approximate solvers are allowed.",
+      "Scope is only this deterministic workload (seed 701002, fixed eigenvalue set); other matrices/rhs are out of scope. Target device NVIDIA T4, float32 inputs."
+    ],
+    "kernel_model": [
+      "Kernel loads the full 16x16 matrix and rhs into registers (single program, N=16 constexpr) and runs 64 fixed Richardson iterations: state += rhs - A@state, i.e. update x_{k+1} = x_k + r_k with unit step length.",
+      "No step-size/damping parameter, no convergence check; output is float32 state after exactly STEPS=64; enable_fp_fusion=False and num_warps=4.",
+      "Iteration in float32; matrix entries are float32 casts of the float64-constructed orthogonal-scaled eigenvalue matrix (eigenvalues 0.03125..1.75, scaled Hadamard-style orthogonal basis); rhs is a unit-norm normal vector (seed 701002).",
+      "Eigenbasis note: the Hadamard-like orthogonal matrix scaled by 1/4 gives an orthonormal basis (rows have norm 16*(1/4)^2 = 1), so rhs components c_k = (basis^T rhs) have ||c||_2 = 1 spread over 16 modes, each typically |c_k| ~ 0.2-0.3.",
+      "Per-mode analysis: x_k = c_k/\u03bb_k, so ||x|| is dominated by the \u03bb_min=0.03125 mode (~|c_min|/0.03125); the post-64-step error along that mode is |1-\u03bb_min|^64 * |c_min|/\u03bb_min, i.e. exactly 0.96875^64 \u2248 0.130 times x's dominant component. Since the same mode dominates both error and ||x||, the relative L2 error is ~0.13 * (|c_min|/||x||-share) \u2014 close to but potentially slightly below 0.13 depending on c_min versus other amplified modes (\u03bb=0.0625 gives 0.017).",
+      "Float32 rounding: each iteration does 16-term dot products and a state update in fp32 with fp_fusion disabled; per-step rounding ~1e-6 relative, over 64 steps likely ~1e-4 \u2014 far below the 0.08 budget, so truncation error is the decisive factor (c2)."
+    ],
+    "open_questions": [
+      "What is the exact relative L2 error of the 64-step float32 iteration on the seeded inputs (needs a runtime or simulation probe)?",
+      "How large is c_min = |projection of rhs onto the \u03bb=0.03125 eigenvector| relative to the projections on \u03bb=0.0625 and 0.125 modes \u2014 i.e., is the relative error actually above or below the 0.08 threshold given the ~0.13 slow-mode factor?",
+      "Does the float32 iteration's rounding meaningfully shift the total error relative to a float64-simulated 64-step iteration (claim c2)?"
+    ],
+    "risk_map": [
+      "Richardson with unit step requires all eigenvalues in (0,2); here max eigenvalue is 1.75 so iteration is stable, but min eigenvalue 0.03125 gives per-step factor |1-0.03125|=0.96875, and 0.96875^64 \u2248 0.13 residual along that mode \u2014 relative to x (where that mode is amplified by 1/lambda = 32), the dominant slow mode may leave error near ~13%, above the 0.08 tolerance. Skeptic should quantify the actual per-mode residual against rhs's components.",
+      "Error relative to max(||x||, 0.001*sqrt(16)): ||x|| is large due to the 1/0.03125 amplification, which partially offsets the slow-mode residual; the exact relative error depends on rhs's projection onto the smallest eigenvectors \u2014 needs numeric evidence.",
+      "Float32 accumulation over 64 iterations could add rounding error, but rounding is likely small versus truncation error; still worth noting.",
+      "Second-smallest eigenvalue 0.0625 gives factor 0.9375^64 \u2248 0.017, likely within tolerance \u2014 failure hinges mainly on the lambda=0.03125 mode.",
+      "Decisive risk for c1: relative error \u2248 sqrt(sum_k ((1-\u03bb_k)^64 c_k)^2 / sum_k (c_k/\u03bb_k)^2). With \u03bb_min factor 0.130, \u03bb=0.0625 factor 0.0166, and 1/\u03bb weighting in the denominator dominated by \u03bb_min, the ratio is expected in the 0.10-0.13 range unless c_min is unusually small \u2014 likely above 0.08 but must be computed with the actual seeded c_k values.",
+      "Boundary consideration: if c_min happens to be small relative to c for \u03bb=0.0625/0.125, the relative error could drop below 0.08 \u2014 the seeded rhs projection distribution decides, and this is precisely what a numeric probe must report.",
+      "Float32 rounding over 64 steps is ~3 orders of magnitude below the truncation error and unlikely to change the verdict (c2), but a probe comparing fp32 vs fp64 simulated iterations would settle it."
+    ],
+    "scope_notes": [
+      "Only run(*make_inputs()) on the exact generated matrix/rhs; tolerance 0.08 relative L2 with floor 0.001*4; device T4; output dtype float32 shape (16,).\"]",
+      "Alternative rhs or matrices are out of scope; only the seed-701002 workload matters, so probes should use make_inputs() exactly.",
+      "The reference is the exact float64 solve of the supplied float32 system, not a 64-step fp64 iteration \u2014 emulation probes must compare against np.linalg.solve on the float32-cast inputs in float64."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Solve the fixed SPD 16x16 system matrix @ x = rhs for the exact tensors from make_inputs(); reference x is computed in float64 from the original float32 inputs (the true solution, not a finite iteration).",
+        "Output must be a finite (16,) vector with relative L2 error ||out - x||/max(||x||, 0.001*sqrt(16)) at most 0.08; approximate solvers are allowed.",
+        "Scope is only this deterministic workload (seed 701002, fixed eigenvalue set); other matrices/rhs are out of scope. Target device NVIDIA T4, float32 inputs."
+      ],
+      "created_at": "2026-09-24T00:16:30Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Kernel loads the full 16x16 matrix and rhs into registers (single program, N=16 constexpr) and runs 64 fixed Richardson iterations: state += rhs - A@state, i.e. update x_{k+1} = x_k + r_k with unit step length.",
+        "No step-size/damping parameter, no convergence check; output is float32 state after exactly STEPS=64; enable_fp_fusion=False and num_warps=4.",
+        "Iteration in float32; matrix entries are float32 casts of the float64-constructed orthogonal-scaled eigenvalue matrix (eigenvalues 0.03125..1.75, scaled Hadamard-style orthogonal basis); rhs is a unit-norm normal vector (seed 701002)."
+      ],
+      "open_questions": [],
+      "risk_map": [
+        "Richardson with unit step requires all eigenvalues in (0,2); here max eigenvalue is 1.75 so iteration is stable, but min eigenvalue 0.03125 gives per-step factor |1-0.03125|=0.96875, and 0.96875^64 \u2248 0.13 residual along that mode \u2014 relative to x (where that mode is amplified by 1/lambda = 32), the dominant slow mode may leave error near ~13%, above the 0.08 tolerance. Skeptic should quantify the actual per-mode residual against rhs's components.",
+        "Error relative to max(||x||, 0.001*sqrt(16)): ||x|| is large due to the 1/0.03125 amplification, which partially offsets the slow-mode residual; the exact relative error depends on rhs's projection onto the smallest eigenvectors \u2014 needs numeric evidence.",
+        "Float32 accumulation over 64 iterations could add rounding error, but rounding is likely small versus truncation error; still worth noting.",
+        "Second-smallest eigenvalue 0.0625 gives factor 0.9375^64 \u2248 0.017, likely within tolerance \u2014 failure hinges mainly on the lambda=0.03125 mode."
+      ],
+      "scope_notes": [
+        "Only run(*make_inputs()) on the exact generated matrix/rhs; tolerance 0.08 relative L2 with floor 0.001*4; device T4; output dtype float32 shape (16,).\"]"
+      ],
+      "summary": "Case_l: Richardson-iteration (state += residual, unit step, 64 steps) solver for a fixed 16x16 SPD system with eigenvalues 0.03125\u20131.75. Contract allows any approximate solver with relative L2 error \u2264 0.08 vs the float64 exact solution.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [],
+      "created_at": "2026-09-24T00:17:04Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [
+        "Analytic support for c1: per-mode Richardson truncation error relative to ||x|| is ~0.96875^64 \u2248 0.13 regardless of rhs projection weights, because the \u03bb_min mode dominates both error and ||x||; Experimenter should confirm numerically (c1).",
+        "c2 remains unresolvable by source analysis alone: float32 rounding must be measured by comparing float32 vs float64 simulations of the same 64-step iteration."
+      ],
+      "kernel_model": [
+        "Eigenbasis note: the Hadamard-like orthogonal matrix scaled by 1/4 gives an orthonormal basis (rows have norm 16*(1/4)^2 = 1), so rhs components c_k = (basis^T rhs) have ||c||_2 = 1 spread over 16 modes, each typically |c_k| ~ 0.2-0.3.",
+        "Per-mode analysis: x_k = c_k/\u03bb_k, so ||x|| is dominated by the \u03bb_min=0.03125 mode (~|c_min|/0.03125); the post-64-step error along that mode is |1-\u03bb_min|^64 * |c_min|/\u03bb_min, i.e. exactly 0.96875^64 \u2248 0.130 times x's dominant component. Since the same mode dominates both error and ||x||, the relative L2 error is ~0.13 * (|c_min|/||x||-share) \u2014 close to but potentially slightly below 0.13 depending on c_min versus other amplified modes (\u03bb=0.0625 gives 0.017).",
+        "Float32 rounding: each iteration does 16-term dot products and a state update in fp32 with fp_fusion disabled; per-step rounding ~1e-6 relative, over 64 steps likely ~1e-4 \u2014 far below the 0.08 budget, so truncation error is the decisive factor (c2)."
+      ],
+      "open_questions": [
+        "What is the exact relative L2 error of the 64-step float32 iteration on the seeded inputs (needs a runtime or simulation probe)?",
+        "How large is c_min = |projection of rhs onto the \u03bb=0.03125 eigenvector| relative to the projections on \u03bb=0.0625 and 0.125 modes \u2014 i.e., is the relative error actually above or below the 0.08 threshold given the ~0.13 slow-mode factor?",
+        "Does the float32 iteration's rounding meaningfully shift the total error relative to a float64-simulated 64-step iteration (claim c2)?"
+      ],
+      "risk_map": [
+        "Decisive risk for c1: relative error \u2248 sqrt(sum_k ((1-\u03bb_k)^64 c_k)^2 / sum_k (c_k/\u03bb_k)^2). With \u03bb_min factor 0.130, \u03bb=0.0625 factor 0.0166, and 1/\u03bb weighting in the denominator dominated by \u03bb_min, the ratio is expected in the 0.10-0.13 range unless c_min is unusually small \u2014 likely above 0.08 but must be computed with the actual seeded c_k values.",
+        "Boundary consideration: if c_min happens to be small relative to c for \u03bb=0.0625/0.125, the relative error could drop below 0.08 \u2014 the seeded rhs projection distribution decides, and this is precisely what a numeric probe must report.",
+        "Float32 rounding over 64 steps is ~3 orders of magnitude below the truncation error and unlikely to change the verdict (c2), but a probe comparing fp32 vs fp64 simulated iterations would settle it."
+      ],
+      "scope_notes": [
+        "Alternative rhs or matrices are out of scope; only the seed-701002 workload matters, so probes should use make_inputs() exactly.",
+        "The reference is the exact float64 solve of the supplied float32 system, not a 64-step fp64 iteration \u2014 emulation probes must compare against np.linalg.solve on the float32-cast inputs in float64."
+      ],
+      "summary": "Refinement for case_l: analytic per-mode error analysis shows the relative L2 error of the 64-step Richardson iteration is dominated by the \u03bb_min=0.03125 mode at ~0.96875^64 \u2248 0.13 of that mode's contribution to ||x||; float32 rounding is ~3 orders smaller. Claims c1/c2 need a numeric probe with the seeded inputs.",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_l",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_l"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_l"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_l"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_l",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 18.866623813000004,
+      "role": "describer",
+      "round": 2,
+      "text": "I have full context from the loaded artifact; I'll record the description model now. The kernel is a Richardson iteration (state += residual) with unit step over 64 iterations, run against a fixed SPD system whose eigenvalues span 0.03125\u20131.75. Key observation for the risk map: the smallest eigenvalue 0.03125 gives a per-step contraction factor of only 0.96875, so 64 steps leave ~13% residual along that mode, which is above the 8% tolerance \u2014 but confirming that is the Skeptic's job.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Solve the fixed SPD 16x16 system matrix @ x = rhs for the exact tensors from make_inputs(); reference x is computed in float64 from the original float32 inputs (the true solution, not a finite iteration).",
+              "Output must be a finite (16,) vector with relative L2 error ||out - x||/max(||x||, 0.001*sqrt(16)) at most 0.08; approximate solvers are allowed.",
+              "Scope is only this deterministic workload (seed 701002, fixed eigenvalue set); other matrices/rhs are out of scope. Target device NVIDIA T4, float32 inputs."
+            ],
+            "kernel_model": [
+              "Kernel loads the full 16x16 matrix and rhs into registers (single program, N=16 constexpr) and runs 64 fixed Richardson iterations: state += rhs - A@state, i.e. update x_{k+1} = x_k + r_k with unit step length.",
+              "No step-size/damping parameter, no convergence check; output is float32 state after exactly STEPS=64; enable_fp_fusion=False and num_warps=4.",
+              "Iteration in float32; matrix entries are float32 casts of the float64-constructed orthogonal-scaled eigenvalue matrix (eigenvalues 0.03125..1.75, scaled Hadamard-style orthogonal basis); rhs is a unit-norm normal vector (seed 701002)."
+            ],
+            "risk_map": [
+              "Richardson with unit step requires all eigenvalues in (0,2); here max eigenvalue is 1.75 so iteration is stable, but min eigenvalue 0.03125 gives per-step factor |1-0.03125|=0.96875, and 0.96875^64 \u2248 0.13 residual along that mode \u2014 relative to x (where that mode is amplified by 1/lambda = 32), the dominant slow mode may leave error near ~13%, above the 0.08 tolerance. Skeptic should quantify the actual per-mode residual against rhs's components.",
+              "Error relative to max(||x||, 0.001*sqrt(16)): ||x|| is large due to the 1/0.03125 amplification, which partially offsets the slow-mode residual; the exact relative error depends on rhs's projection onto the smallest eigenvectors \u2014 needs numeric evidence.",
+              "Float32 accumulation over 64 iterations could add rounding error, but rounding is likely small versus truncation error; still worth noting.",
+              "Second-smallest eigenvalue 0.0625 gives factor 0.9375^64 \u2248 0.017, likely within tolerance \u2014 failure hinges mainly on the lambda=0.03125 mode."
+            ],
+            "scope_notes": "Only run(*make_inputs()) on the exact generated matrix/rhs; tolerance 0.08 relative L2 with floor 0.001*4; device T4; output dtype float32 shape (16,).\"]",
+            "summary": "Case_l: Richardson-iteration (state += residual, unit step, 64 steps) solver for a fixed 16x16 SPD system with eigenvalues 0.03125\u20131.75. Contract allows any approximate solver with relative L2 error \u2264 0.08 vs the float64 exact solution."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.867,
+        "input_tokens": 4904,
+        "output_tokens": 1180
+      }
+    },
+    {
+      "duration_s": 7.406294484,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The core risk is already clear from the source: unit-step Richardson over 64 iterations cannot fully converge along the \u03bb=0.03125 eigenmode. I'll record that as the decisive in-scope claim, plus a secondary float32 accumulation note.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Richardson error along eigenvector k is (1-\u03bb_k)^64 * (rhs component)/\u03bb_k. For \u03bb=0.03125, 0.96875^64 \u2248 0.13, so the error component relative to x's \u03bb^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. This needs numeric quantification against the actual seeded inputs.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125."
+              }
+            ],
+            "statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenmode converges only by factor 0.96875 per step (\u224813% residual after 64 steps)."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to the truncation error near the tolerance boundary, or the sum over axis=1 may differ from a float64 reference emulation; worth measuring separately.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget."
+              }
+            ],
+            "statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.406,
+        "input_tokens": 11261,
+        "output_tokens": 579
+      }
+    },
+    {
+      "duration_s": 8.015655691000006,
+      "role": "skeptic",
+      "round": 4,
+      "text": "Both prior record_claim calls were rejected for missing scope_rationale \u2014 resending them properly.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Richardson error along eigenvector k is (1-\u03bb_k)^64 * (rhs component)/\u03bb_k. For \u03bb=0.03125, 0.96875^64 \u2248 0.13, so the error component relative to x's \u03bb^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. Needs numeric quantification against the actual seeded inputs.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125."
+              }
+            ],
+            "scope_rationale": "The contract fixes the exact make_inputs() workload (\u03bb_min = 0.03125) and requires relative L2 error \u2264 0.08 vs the exact float64 solution; the deterministic slow-converging eigenmode is part of that required workload.",
+            "statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenmode converges only by factor 0.96875 per step (\u224813% residual after 64 steps)."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to truncation error near the tolerance boundary; worth measuring separately from the truncation error.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget."
+              }
+            ],
+            "scope_rationale": "The contract compares the kernel's float32 output against the exact float64 solution with a 0.08 relative L2 budget, so float32 rounding over 64 iterations counts toward that budget on the required workload.",
+            "statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.016,
+        "input_tokens": 12798,
+        "output_tokens": 604
+      }
+    },
+    {
+      "duration_s": 18.513913518999985,
+      "role": "describer",
+      "round": 5,
+      "text": "The description model is already recorded and the source is fully understood; the two open claims need numeric evidence, not more description. I'll add a targeted analytical refinement (per-mode error magnitudes under the actual eigenstructure) plus open questions tied to claims c1 and c2, so the Skeptic/Experimenter can resolve them efficiently.",
+      "tool_calls": [
+        {
+          "args": {
+            "impact_on_claims": [
+              "Analytic support for c1: per-mode Richardson truncation error relative to ||x|| is ~0.96875^64 \u2248 0.13 regardless of rhs projection weights, because the \u03bb_min mode dominates both error and ||x||; Experimenter should confirm numerically (c1).",
+              "c2 remains unresolvable by source analysis alone: float32 rounding must be measured by comparing float32 vs float64 simulations of the same 64-step iteration."
+            ],
+            "kernel_model": [
+              "Eigenbasis note: the Hadamard-like orthogonal matrix scaled by 1/4 gives an orthonormal basis (rows have norm 16*(1/4)^2 = 1), so rhs components c_k = (basis^T rhs) have ||c||_2 = 1 spread over 16 modes, each typically |c_k| ~ 0.2-0.3.",
+              "Per-mode analysis: x_k = c_k/\u03bb_k, so ||x|| is dominated by the \u03bb_min=0.03125 mode (~|c_min|/0.03125); the post-64-step error along that mode is |1-\u03bb_min|^64 * |c_min|/\u03bb_min, i.e. exactly 0.96875^64 \u2248 0.130 times x's dominant component. Since the same mode dominates both error and ||x||, the relative L2 error is ~0.13 * (|c_min|/||x||-share) \u2014 close to but potentially slightly below 0.13 depending on c_min versus other amplified modes (\u03bb=0.0625 gives 0.017).",
+              "Float32 rounding: each iteration does 16-term dot products and a state update in fp32 with fp_fusion disabled; per-step rounding ~1e-6 relative, over 64 steps likely ~1e-4 \u2014 far below the 0.08 budget, so truncation error is the decisive factor (c2)."
+            ],
+            "open_questions": [
+              "What is the exact relative L2 error of the 64-step float32 iteration on the seeded inputs (needs a runtime or simulation probe)?",
+              "How large is c_min = |projection of rhs onto the \u03bb=0.03125 eigenvector| relative to the projections on \u03bb=0.0625 and 0.125 modes \u2014 i.e., is the relative error actually above or below the 0.08 threshold given the ~0.13 slow-mode factor?",
+              "Does the float32 iteration's rounding meaningfully shift the total error relative to a float64-simulated 64-step iteration (claim c2)?"
+            ],
+            "risk_map": [
+              "Decisive risk for c1: relative error \u2248 sqrt(sum_k ((1-\u03bb_k)^64 c_k)^2 / sum_k (c_k/\u03bb_k)^2). With \u03bb_min factor 0.130, \u03bb=0.0625 factor 0.0166, and 1/\u03bb weighting in the denominator dominated by \u03bb_min, the ratio is expected in the 0.10-0.13 range unless c_min is unusually small \u2014 likely above 0.08 but must be computed with the actual seeded c_k values.",
+              "Boundary consideration: if c_min happens to be small relative to c for \u03bb=0.0625/0.125, the relative error could drop below 0.08 \u2014 the seeded rhs projection distribution decides, and this is precisely what a numeric probe must report.",
+              "Float32 rounding over 64 steps is ~3 orders of magnitude below the truncation error and unlikely to change the verdict (c2), but a probe comparing fp32 vs fp64 simulated iterations would settle it."
+            ],
+            "scope_notes": [
+              "Alternative rhs or matrices are out of scope; only the seed-701002 workload matters, so probes should use make_inputs() exactly.",
+              "The reference is the exact float64 solve of the supplied float32 system, not a 64-step fp64 iteration \u2014 emulation probes must compare against np.linalg.solve on the float32-cast inputs in float64."
+            ],
+            "summary": "Refinement for case_l: analytic per-mode error analysis shows the relative L2 error of the 64-step Richardson iteration is dominated by the \u03bb_min=0.03125 mode at ~0.96875^64 \u2248 0.13 of that mode's contribution to ||x||; float32 rounding is ~3 orders smaller. Claims c1/c2 need a numeric probe with the seeded inputs."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.514,
+        "input_tokens": 14047,
+        "output_tokens": 1244
+      }
+    },
+    {
+      "duration_s": 5.153442721999994,
+      "role": "skeptic",
+      "round": 6,
+      "text": "Both decisive in-scope claims (c1 slow-mode truncation, c2 fp32 rounding) are already recorded and need numeric probes from the Experimenter, not more skepticism. No new high-quality claims to add.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The two open in-scope claims (c1: lambda_min=0.03125 mode leaves ~0.96875^64 \u2248 0.13 residual after 64 unit-step Richardson iterations, likely exceeding the 0.08 relative L2 tolerance; c2: fp32 rounding accumulation) already cover the full risk surface of this deterministic workload. The kernel has no other attack surfaces in scope (fixed 16x16 workload, single Triton program, no indexing/dtype/stride concerns at N=16 with contiguous make_inputs tensors). Resolving these claims requires the pending numeric probes against the seeded inputs, not new claims.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.153,
+        "input_tokens": 22553,
+        "output_tokens": 237
+      }
+    },
+    {
+      "duration_s": 10.66204881600001,
+      "role": "experimenter",
+      "round": 7,
+      "text": "I'll launch two independent probes: c1 runs the actual kernel on the seeded inputs and measures the contract's relative L2 error vs the exact float64 solve; c2 compares a float32-simulated 64-step iteration against a float64-simulated one to isolate rounding error.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport json\nimport numpy as np\nimport torch\nimport sys\nsys.path.insert(0, \"/root/numerical_cases/case_l\")\nimport kernel as K\n\nmatrix, rhs = K.make_inputs()\nout = K.run(matrix, rhs)\nout_np = out.detach().cpu().numpy().astype(np.float64)\n\nA = matrix.cpu().numpy().astype(np.float64)\nb = rhs.cpu().numpy().astype(np.float64)\nx = np.linalg.solve(A, b)\n\ndenom = max(np.linalg.norm(x), 0.001*np.sqrt(16))\nrel = np.linalg.norm(out_np - x) / denom\n\n# per-mode diagnostics\nw, V = np.linalg.eigh(A)\nc = V.T @ b\n# error in eigenbasis\nerr_e = V.T @ (out_np - x)\nx_e = V.T @ x\nres = {\"rel_l2_error\": float(rel),\n       \"tolerance\": 0.08,\n       \"exceeds_tolerance\": bool(rel > 0.08),\n       \"norm_x\": float(np.linalg.norm(x)),\n       \"c_min_abs\": float(np.abs(c)[0]),\n       \"c_second_abs\": float(np.abs(c)[1]),\n       \"err_eig_min\": float(err_e[0]),\n       \"x_eig_min\": float(x_e[0]),\n       \"lambdas_first3\": [float(v) for v in w[:3]],\n       \"output_finite\": bool(np.all(np.isfinite(out_np)))}\nprint(json.dumps(res))\n",
+            "expected_signal": "relative L2 error of actual kernel output vs exact float64 solution exceeds 0.08"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport json\nimport numpy as np\nimport sys\nsys.path.insert(0, \"/root/numerical_cases/case_l\")\nimport kernel as K\n\nmatrix, rhs = K.make_inputs_numpy()\nA32 = matrix.astype(np.float32)\nb32 = rhs.astype(np.float32)\n\ndef iterate(A, b, dtype):\n    state = np.zeros(16, dtype=dtype)\n    A_ = A.astype(dtype); b_ = b.astype(dtype)\n    for _ in range(64):\n        residual = b_ - (A_ * state[None, :]).sum(axis=1, dtype=dtype)\n        state = state + residual\n    return state\n\nx64 = iterate(matrix, rhs, np.float64)\nx32 = iterate(matrix, rhs, np.float32)\nx_exact = np.linalg.solve(matrix.astype(np.float64), rhs.astype(np.float64))\ndenom = max(np.linalg.norm(x_exact), 0.001*np.sqrt(16))\n\nrel32_exact = np.linalg.norm(x32.astype(np.float64) - x_exact)/denom\nrel64_exact = np.linalg.norm(x64 - x_exact)/denom\nrounding_gap = abs(rel32_exact - rel64_exact)\nres = {\"rel_fp32_iteration_vs_exact\": float(rel32_exact),\n       \"rel_fp64_iteration_vs_exact\": float(rel64_exact),\n       \"rounding_shift_abs\": float(rounding_gap),\n       \"fp32_rounding_meaningful\": bool(rounding_gap > 0.005),\n       \"tolerance\": 0.08,\n       \"note\": \"if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted\"}\nprint(json.dumps(res))\n",
+            "expected_signal": "fp32 rounding over 64 steps shifts total error enough to cross the 0.08 tolerance relative to the ideal fp64 64-step iteration"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.662,
+        "input_tokens": 23737,
+        "output_tokens": 882
+      }
+    },
+    {
+      "duration_s": 19.346130404999997,
+      "role": "experimenter",
+      "round": 8,
+      "text": "Both probes completed. The actual kernel run gives relative L2 error 0.1244 (tolerance 0.08), dominated by the \u03bb_min mode error, confirming c1; fp32 vs fp64 64-step simulations differ by only 8e-12, so rounding is not the deciding factor \u2014 c2 is rebutted. Finalizing both now.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "c_min_abs": 0.5398499052971611,
+              "c_second_abs": 0.3423996251076437,
+              "err_eig_min": -2.2645018696784973,
+              "exceeds_tolerance": true,
+              "lambda_min": 0.03125,
+              "norm_x": 18.216566495477316,
+              "output_finite": true,
+              "rel_l2_error": 0.12440399903958174,
+              "tolerance": 0.08,
+              "x_eig_min": 17.27519696950914
+            },
+            "event_id": "t12",
+            "status": "confirmed",
+            "summary": "Actual kernel run on the exact make_inputs() workload produced a finite (16,) output with relative L2 error 0.1244 vs the exact float64 solution \u2014 1.55x above the 0.08 tolerance. The error is dominated by the lambda_min=0.03125 eigenmode (eigenbasis error -2.2645 along that mode vs x component 17.28, ratio 0.131 \u2248 0.96875^64), exactly matching the claim's slow-mode truncation mechanism.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "fp32_rounding_meaningful": false,
+              "rel_fp32_iteration_vs_exact": 0.12440403301072775,
+              "rel_fp64_iteration_vs_exact": 0.12440403300244632,
+              "rounding_shift_abs": 8.281431096435199e-12,
+              "tolerance": 0.08
+            },
+            "event_id": "t13",
+            "status": "rebutted",
+            "summary": "Float32 vs float64 simulation of the same 64-step Richardson iteration differ by only 8.3e-12 in relative L2 error against the exact solution, and both are equally far above tolerance (0.1244). The failure is pure truncation error from the slow lambda_min mode (c1), not float32 rounding; rounding cannot push the result across the 0.08 boundary because the ideal fp64 iteration is already far above it.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 19.346,
+        "input_tokens": 28002,
+        "output_tokens": 627
+      }
+    },
+    {
+      "duration_s": 7.3471393590000105,
+      "role": "skeptic",
+      "round": 9,
+      "text": "The evidence is decisive: c1 is confirmed with a runtime probe on the exact contract workload (relative L2 error 0.1244 vs the 0.08 tolerance, dominated by the \u03bb_min mode exactly as predicted), and c2 is rebutted (fp32 rounding shifts error by only 8e-12). No new claims needed.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: c1 is confirmed by a runtime probe of the actual kernel on the exact make_inputs() workload \u2014 relative L2 error 0.1244, 1.55x above the 0.08 tolerance, dominated by the lambda_min=0.03125 eigenmode error (-2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the claim's mechanism exactly. c2 is rebutted (fp32 vs fp64 64-step iterations differ by 8.3e-12; rounding cannot cross the tolerance boundary). No other in-scope attack surface exists: the workload is fully deterministic, output is finite and shape (16,), and the single failure mode is already covered by a confirmed in-scope claim with direct evidence.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.347,
+        "input_tokens": 34597,
+        "output_tokens": 290
+      }
+    },
+    {
+      "duration_s": 16.630868437000004,
+      "role": "judge",
+      "round": 10,
+      "text": "The evidence is decisive: claim c1 is confirmed by a runtime probe of the actual kernel on the exact make_inputs() workload \u2014 relative L2 error 0.1244 vs the 0.08 tolerance, dominated by the \u03bb_min=0.03125 slow-mode truncation exactly as predicted. Claim c2 (fp32 rounding) is rebutted. Skeptic signed off with no new claims, and no open claims remain.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The contract (problem.txt) requires run(*make_inputs()) to output a finite (16,) vector within relative L2 error \u2264 0.08 of the exact float64 solution of matrix @ x = rhs. A runtime probe of the actual kernel on the exact seeded workload (probe t12) measured relative L2 error 0.1244 \u2014 1.55x above the 0.08 tolerance \u2014 with the error dominated by the \u03bb_min=0.03125 eigenmode (eigenbasis error -2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the confirmed in-scope claim c1's mechanism: 64 unit-step Richardson iterations converge too slowly along the smallest-eigenvalue mode. The alternate explanation (fp32 rounding, claim c2) was rebutted by probe t13: fp32 vs fp64 simulated iterations differ by only 8.3e-12 and both are equally above tolerance, so truncation error alone breaches the contract. This is not an acceptable deviation under any contract clause \u2014 the tolerance is an explicit numeric requirement the kernel fails on the single in-scope deterministic workload. Scope evidence ties the claim directly to the make_inputs() input domain per problem.txt, and the Skeptic reviewed the final evidence and raised no new claims.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 16.631,
+        "input_tokens": 34807,
+        "output_tokens": 425
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-24T00:17:55Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: c1 is confirmed by a runtime probe of the actual kernel on the exact make_inputs() workload \u2014 relative L2 error 0.1244, 1.55x above the 0.08 tolerance, dominated by the lambda_min=0.03125 eigenmode error (-2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the claim's mechanism exactly. c2 is rebutted (fp32 vs fp64 64-step iterations differ by 8.3e-12; rounding cannot cross the tolerance boundary). No other in-scope attack surface exists: the workload is fully deterministic, output is finite and shape (16,), and the single failure mode is already covered by a confirmed in-scope claim with direct evidence.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 15,
+    "tool_event_id": "t16",
+    "turn": 9
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_l"
+      },
+      "created_at": "2026-09-24T00:16:11Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_l",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _solve_kernel(Matrix, RHS, Output, N: tl.constexpr, STEPS: tl.constexpr):\n    i = tl.arange(0, N)\n    j = tl.arange(0, N)\n    matrix = tl.load(Matrix + i[:, None] * N + j[None, :]).to(tl.float32)\n    rhs = tl.load(RHS + i).to(tl.float32)\n    state = tl.full((N,), 0.0, tl.float32)\n    for step in range(STEPS):\n        residual = rhs - tl.sum(matrix * state[None, :], axis=1)\n        state = state + residual\n    tl.store(Output + i, state)\n\n\ndef run(matrix, rhs):\n    output = torch.empty((16,), device=matrix.device, dtype=torch.float32)\n    _solve_kernel[(1,)](matrix, rhs, output, N=16, STEPS=64,\n                       num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    orthogonal = np.array([[1.0]], dtype=np.float64)\n    while len(orthogonal) < 16:\n        orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])\n    orthogonal /= 4.0\n    eigenvalues = np.array([0.03125, 0.0625, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75,\n                            0.875, 1.0, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75],\n                           dtype=np.float64)\n    matrix = np.sum(orthogonal[:, :, None] * eigenvalues[None, :, None]\n                    * orthogonal.T[None, :, :], axis=1).astype(np.float32)\n    rng = np.random.Generator(np.random.PCG64(701002))\n    rhs = rng.normal(0.0, 1.0, 16).astype(np.float32)\n    norm = np.sqrt(np.sum(rhs.astype(np.float64) ** 2, dtype=np.float64))\n    rhs = (rhs.astype(np.float64) / norm).astype(np.float32)\n    return matrix, rhs\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "passed": null,
+        "problem_text": "Solve the fixed symmetric positive definite linear system in kernel.py.\n\nOnly the float32 tensors returned by make_inputs() are in scope. matrix has\nshape (16,16), and rhs has shape (16,). The entire deterministic generator and\nits seed are public. The reference output is the unique solution x of\n  matrix @ x = rhs\ncomputed in float64 using the original supplied float32 values. The reference\nis the solution of the system, not the result of a finite iteration count.\n\nThe implementation may use an approximate solver. Its output must be a finite\nvector of shape (16,), with relative L2 error\n  ||output - x||_2 / max(||x||_2, 0.001*sqrt(16))\nat most 0.08. The target execution device is an NVIDIA T4.\n\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\nspecified workload. Alternative right-hand sides or matrices are outside scope.\n",
+        "rounds": null,
+        "session_dir": "/root/numerical_cases/case_l",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_l"
+      },
+      "created_at": "2026-09-24T00:16:11Z",
+      "id": "t2",
+      "output": {
+        "content": "Solve the fixed symmetric positive definite linear system in kernel.py.\n\nOnly the float32 tensors returned by make_inputs() are in scope. matrix has\nshape (16,16), and rhs has shape (16,). The entire deterministic generator and\nits seed are public. The reference output is the unique solution x of\n  matrix @ x = rhs\ncomputed in float64 using the original supplied float32 values. The reference\nis the solution of the system, not the result of a finite iteration count.\n\nThe implementation may use an approximate solver. Its output must be a finite\nvector of shape (16,), with relative L2 error\n  ||output - x||_2 / max(||x||_2, 0.001*sqrt(16))\nat most 0.08. The target execution device is an NVIDIA T4.\n\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\nspecified workload. Alternative right-hand sides or matrices are outside scope.\n",
+        "entry": "case_l",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_l"
+      },
+      "created_at": "2026-09-24T00:16:11Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_l",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1732
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 67
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 862
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_l",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T00:16:11Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_l\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_l",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 67,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Solve the fixed SPD 16x16 system matrix @ x = rhs for the exact tensors from make_inputs(); reference x is computed in float64 from the original float32 inputs (the true solution, not a finite iteration).",
+          "Output must be a finite (16,) vector with relative L2 error ||out - x||/max(||x||, 0.001*sqrt(16)) at most 0.08; approximate solvers are allowed.",
+          "Scope is only this deterministic workload (seed 701002, fixed eigenvalue set); other matrices/rhs are out of scope. Target device NVIDIA T4, float32 inputs."
+        ],
+        "kernel_model": [
+          "Kernel loads the full 16x16 matrix and rhs into registers (single program, N=16 constexpr) and runs 64 fixed Richardson iterations: state += rhs - A@state, i.e. update x_{k+1} = x_k + r_k with unit step length.",
+          "No step-size/damping parameter, no convergence check; output is float32 state after exactly STEPS=64; enable_fp_fusion=False and num_warps=4.",
+          "Iteration in float32; matrix entries are float32 casts of the float64-constructed orthogonal-scaled eigenvalue matrix (eigenvalues 0.03125..1.75, scaled Hadamard-style orthogonal basis); rhs is a unit-norm normal vector (seed 701002)."
+        ],
+        "risk_map": [
+          "Richardson with unit step requires all eigenvalues in (0,2); here max eigenvalue is 1.75 so iteration is stable, but min eigenvalue 0.03125 gives per-step factor |1-0.03125|=0.96875, and 0.96875^64 \u2248 0.13 residual along that mode \u2014 relative to x (where that mode is amplified by 1/lambda = 32), the dominant slow mode may leave error near ~13%, above the 0.08 tolerance. Skeptic should quantify the actual per-mode residual against rhs's components.",
+          "Error relative to max(||x||, 0.001*sqrt(16)): ||x|| is large due to the 1/0.03125 amplification, which partially offsets the slow-mode residual; the exact relative error depends on rhs's projection onto the smallest eigenvectors \u2014 needs numeric evidence.",
+          "Float32 accumulation over 64 iterations could add rounding error, but rounding is likely small versus truncation error; still worth noting.",
+          "Second-smallest eigenvalue 0.0625 gives factor 0.9375^64 \u2248 0.017, likely within tolerance \u2014 failure hinges mainly on the lambda=0.03125 mode."
+        ],
+        "scope_notes": "Only run(*make_inputs()) on the exact generated matrix/rhs; tolerance 0.08 relative L2 with floor 0.001*4; device T4; output dtype float32 shape (16,).\"]",
+        "summary": "Case_l: Richardson-iteration (state += residual, unit step, 64 steps) solver for a fixed 16x16 SPD system with eigenvalues 0.03125\u20131.75. Contract allows any approximate solver with relative L2 error \u2264 0.08 vs the float64 exact solution."
+      },
+      "created_at": "2026-09-24T00:16:30Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Solve the fixed SPD 16x16 system matrix @ x = rhs for the exact tensors from make_inputs(); reference x is computed in float64 from the original float32 inputs (the true solution, not a finite iteration).",
+            "Output must be a finite (16,) vector with relative L2 error ||out - x||/max(||x||, 0.001*sqrt(16)) at most 0.08; approximate solvers are allowed.",
+            "Scope is only this deterministic workload (seed 701002, fixed eigenvalue set); other matrices/rhs are out of scope. Target device NVIDIA T4, float32 inputs."
+          ],
+          "kernel_model": [
+            "Kernel loads the full 16x16 matrix and rhs into registers (single program, N=16 constexpr) and runs 64 fixed Richardson iterations: state += rhs - A@state, i.e. update x_{k+1} = x_k + r_k with unit step length.",
+            "No step-size/damping parameter, no convergence check; output is float32 state after exactly STEPS=64; enable_fp_fusion=False and num_warps=4.",
+            "Iteration in float32; matrix entries are float32 casts of the float64-constructed orthogonal-scaled eigenvalue matrix (eigenvalues 0.03125..1.75, scaled Hadamard-style orthogonal basis); rhs is a unit-norm normal vector (seed 701002)."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "Richardson with unit step requires all eigenvalues in (0,2); here max eigenvalue is 1.75 so iteration is stable, but min eigenvalue 0.03125 gives per-step factor |1-0.03125|=0.96875, and 0.96875^64 \u2248 0.13 residual along that mode \u2014 relative to x (where that mode is amplified by 1/lambda = 32), the dominant slow mode may leave error near ~13%, above the 0.08 tolerance. Skeptic should quantify the actual per-mode residual against rhs's components.",
+            "Error relative to max(||x||, 0.001*sqrt(16)): ||x|| is large due to the 1/0.03125 amplification, which partially offsets the slow-mode residual; the exact relative error depends on rhs's projection onto the smallest eigenvectors \u2014 needs numeric evidence.",
+            "Float32 accumulation over 64 iterations could add rounding error, but rounding is likely small versus truncation error; still worth noting.",
+            "Second-smallest eigenvalue 0.0625 gives factor 0.9375^64 \u2248 0.017, likely within tolerance \u2014 failure hinges mainly on the lambda=0.03125 mode."
+          ],
+          "scope_notes": [
+            "Only run(*make_inputs()) on the exact generated matrix/rhs; tolerance 0.08 relative L2 with floor 0.001*4; device T4; output dtype float32 shape (16,).\"]"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Solve the fixed SPD 16x16 system matrix @ x = rhs for the exact tensors from make_inputs(); reference x is computed in float64 from the original float32 inputs (the true solution, not a finite iteration).",
+            "Output must be a finite (16,) vector with relative L2 error ||out - x||/max(||x||, 0.001*sqrt(16)) at most 0.08; approximate solvers are allowed.",
+            "Scope is only this deterministic workload (seed 701002, fixed eigenvalue set); other matrices/rhs are out of scope. Target device NVIDIA T4, float32 inputs."
+          ],
+          "created_at": "2026-09-24T00:16:30Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Kernel loads the full 16x16 matrix and rhs into registers (single program, N=16 constexpr) and runs 64 fixed Richardson iterations: state += rhs - A@state, i.e. update x_{k+1} = x_k + r_k with unit step length.",
+            "No step-size/damping parameter, no convergence check; output is float32 state after exactly STEPS=64; enable_fp_fusion=False and num_warps=4.",
+            "Iteration in float32; matrix entries are float32 casts of the float64-constructed orthogonal-scaled eigenvalue matrix (eigenvalues 0.03125..1.75, scaled Hadamard-style orthogonal basis); rhs is a unit-norm normal vector (seed 701002)."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "Richardson with unit step requires all eigenvalues in (0,2); here max eigenvalue is 1.75 so iteration is stable, but min eigenvalue 0.03125 gives per-step factor |1-0.03125|=0.96875, and 0.96875^64 \u2248 0.13 residual along that mode \u2014 relative to x (where that mode is amplified by 1/lambda = 32), the dominant slow mode may leave error near ~13%, above the 0.08 tolerance. Skeptic should quantify the actual per-mode residual against rhs's components.",
+            "Error relative to max(||x||, 0.001*sqrt(16)): ||x|| is large due to the 1/0.03125 amplification, which partially offsets the slow-mode residual; the exact relative error depends on rhs's projection onto the smallest eigenvectors \u2014 needs numeric evidence.",
+            "Float32 accumulation over 64 iterations could add rounding error, but rounding is likely small versus truncation error; still worth noting.",
+            "Second-smallest eigenvalue 0.0625 gives factor 0.9375^64 \u2248 0.017, likely within tolerance \u2014 failure hinges mainly on the lambda=0.03125 mode."
+          ],
+          "scope_notes": [
+            "Only run(*make_inputs()) on the exact generated matrix/rhs; tolerance 0.08 relative L2 with floor 0.001*4; device T4; output dtype float32 shape (16,).\"]"
+          ],
+          "summary": "Case_l: Richardson-iteration (state += residual, unit step, 64 steps) solver for a fixed 16x16 SPD system with eigenvalues 0.03125\u20131.75. Contract allows any approximate solver with relative L2 error \u2264 0.08 vs the float64 exact solution.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "Richardson error along eigenvector k is (1-\u03bb_k)^64 * (rhs component)/\u03bb_k. For \u03bb=0.03125, 0.96875^64 \u2248 0.13, so the error component relative to x's \u03bb^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. This needs numeric quantification against the actual seeded inputs.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125."
+          }
+        ],
+        "statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenmode converges only by factor 0.96875 per step (\u224813% residual after 64 steps)."
+      },
+      "created_at": "2026-09-24T00:16:37Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to the truncation error near the tolerance boundary, or the sum over axis=1 may differ from a float64 reference emulation; worth measuring separately.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget."
+          }
+        ],
+        "statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance."
+      },
+      "created_at": "2026-09-24T00:16:37Z",
+      "id": "t7",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t7",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Richardson error along eigenvector k is (1-\u03bb_k)^64 * (rhs component)/\u03bb_k. For \u03bb=0.03125, 0.96875^64 \u2248 0.13, so the error component relative to x's \u03bb^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. Needs numeric quantification against the actual seeded inputs.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125."
+          }
+        ],
+        "scope_rationale": "The contract fixes the exact make_inputs() workload (\u03bb_min = 0.03125) and requires relative L2 error \u2264 0.08 vs the exact float64 solution; the deterministic slow-converging eigenmode is part of that required workload.",
+        "statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenmode converges only by factor 0.96875 per step (\u224813% residual after 64 steps)."
+      },
+      "created_at": "2026-09-24T00:16:45Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-24T00:16:45Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "Richardson error along eigenvector k is (1-\u03bb_k)^64 * (rhs component)/\u03bb_k. For \u03bb=0.03125, 0.96875^64 \u2248 0.13, so the error component relative to x's \u03bb^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. Needs numeric quantification against the actual seeded inputs.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125."
+          }
+        ],
+        "scope_rationale": "The contract fixes the exact make_inputs() workload (\u03bb_min = 0.03125) and requires relative L2 error \u2264 0.08 vs the exact float64 solution; the deterministic slow-converging eigenmode is part of that required workload.",
+        "statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenmode converges only by factor 0.96875 per step (\u224813% residual after 64 steps).",
+        "status": "open",
+        "updated_at": "2026-09-24T00:16:45Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to truncation error near the tolerance boundary; worth measuring separately from the truncation error.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget."
+          }
+        ],
+        "scope_rationale": "The contract compares the kernel's float32 output against the exact float64 solution with a 0.08 relative L2 budget, so float32 rounding over 64 iterations counts toward that budget on the required workload.",
+        "statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance."
+      },
+      "created_at": "2026-09-24T00:16:45Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-24T00:16:45Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to truncation error near the tolerance boundary; worth measuring separately from the truncation error.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget."
+          }
+        ],
+        "scope_rationale": "The contract compares the kernel's float32 output against the exact float64 solution with a 0.08 relative L2 budget, so float32 rounding over 64 iterations counts toward that budget on the required workload.",
+        "statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance.",
+        "status": "open",
+        "updated_at": "2026-09-24T00:16:45Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "impact_on_claims": [
+          "Analytic support for c1: per-mode Richardson truncation error relative to ||x|| is ~0.96875^64 \u2248 0.13 regardless of rhs projection weights, because the \u03bb_min mode dominates both error and ||x||; Experimenter should confirm numerically (c1).",
+          "c2 remains unresolvable by source analysis alone: float32 rounding must be measured by comparing float32 vs float64 simulations of the same 64-step iteration."
+        ],
+        "kernel_model": [
+          "Eigenbasis note: the Hadamard-like orthogonal matrix scaled by 1/4 gives an orthonormal basis (rows have norm 16*(1/4)^2 = 1), so rhs components c_k = (basis^T rhs) have ||c||_2 = 1 spread over 16 modes, each typically |c_k| ~ 0.2-0.3.",
+          "Per-mode analysis: x_k = c_k/\u03bb_k, so ||x|| is dominated by the \u03bb_min=0.03125 mode (~|c_min|/0.03125); the post-64-step error along that mode is |1-\u03bb_min|^64 * |c_min|/\u03bb_min, i.e. exactly 0.96875^64 \u2248 0.130 times x's dominant component. Since the same mode dominates both error and ||x||, the relative L2 error is ~0.13 * (|c_min|/||x||-share) \u2014 close to but potentially slightly below 0.13 depending on c_min versus other amplified modes (\u03bb=0.0625 gives 0.017).",
+          "Float32 rounding: each iteration does 16-term dot products and a state update in fp32 with fp_fusion disabled; per-step rounding ~1e-6 relative, over 64 steps likely ~1e-4 \u2014 far below the 0.08 budget, so truncation error is the decisive factor (c2)."
+        ],
+        "open_questions": [
+          "What is the exact relative L2 error of the 64-step float32 iteration on the seeded inputs (needs a runtime or simulation probe)?",
+          "How large is c_min = |projection of rhs onto the \u03bb=0.03125 eigenvector| relative to the projections on \u03bb=0.0625 and 0.125 modes \u2014 i.e., is the relative error actually above or below the 0.08 threshold given the ~0.13 slow-mode factor?",
+          "Does the float32 iteration's rounding meaningfully shift the total error relative to a float64-simulated 64-step iteration (claim c2)?"
+        ],
+        "risk_map": [
+          "Decisive risk for c1: relative error \u2248 sqrt(sum_k ((1-\u03bb_k)^64 c_k)^2 / sum_k (c_k/\u03bb_k)^2). With \u03bb_min factor 0.130, \u03bb=0.0625 factor 0.0166, and 1/\u03bb weighting in the denominator dominated by \u03bb_min, the ratio is expected in the 0.10-0.13 range unless c_min is unusually small \u2014 likely above 0.08 but must be computed with the actual seeded c_k values.",
+          "Boundary consideration: if c_min happens to be small relative to c for \u03bb=0.0625/0.125, the relative error could drop below 0.08 \u2014 the seeded rhs projection distribution decides, and this is precisely what a numeric probe must report.",
+          "Float32 rounding over 64 steps is ~3 orders of magnitude below the truncation error and unlikely to change the verdict (c2), but a probe comparing fp32 vs fp64 simulated iterations would settle it."
+        ],
+        "scope_notes": [
+          "Alternative rhs or matrices are out of scope; only the seed-701002 workload matters, so probes should use make_inputs() exactly.",
+          "The reference is the exact float64 solve of the supplied float32 system, not a 64-step fp64 iteration \u2014 emulation probes must compare against np.linalg.solve on the float32-cast inputs in float64."
+        ],
+        "summary": "Refinement for case_l: analytic per-mode error analysis shows the relative L2 error of the 64-step Richardson iteration is dominated by the \u03bb_min=0.03125 mode at ~0.96875^64 \u2248 0.13 of that mode's contribution to ||x||; float32 rounding is ~3 orders smaller. Claims c1/c2 need a numeric probe with the seeded inputs."
+      },
+      "created_at": "2026-09-24T00:17:04Z",
+      "id": "t10",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Solve the fixed SPD 16x16 system matrix @ x = rhs for the exact tensors from make_inputs(); reference x is computed in float64 from the original float32 inputs (the true solution, not a finite iteration).",
+            "Output must be a finite (16,) vector with relative L2 error ||out - x||/max(||x||, 0.001*sqrt(16)) at most 0.08; approximate solvers are allowed.",
+            "Scope is only this deterministic workload (seed 701002, fixed eigenvalue set); other matrices/rhs are out of scope. Target device NVIDIA T4, float32 inputs."
+          ],
+          "kernel_model": [
+            "Kernel loads the full 16x16 matrix and rhs into registers (single program, N=16 constexpr) and runs 64 fixed Richardson iterations: state += rhs - A@state, i.e. update x_{k+1} = x_k + r_k with unit step length.",
+            "No step-size/damping parameter, no convergence check; output is float32 state after exactly STEPS=64; enable_fp_fusion=False and num_warps=4.",
+            "Iteration in float32; matrix entries are float32 casts of the float64-constructed orthogonal-scaled eigenvalue matrix (eigenvalues 0.03125..1.75, scaled Hadamard-style orthogonal basis); rhs is a unit-norm normal vector (seed 701002).",
+            "Eigenbasis note: the Hadamard-like orthogonal matrix scaled by 1/4 gives an orthonormal basis (rows have norm 16*(1/4)^2 = 1), so rhs components c_k = (basis^T rhs) have ||c||_2 = 1 spread over 16 modes, each typically |c_k| ~ 0.2-0.3.",
+            "Per-mode analysis: x_k = c_k/\u03bb_k, so ||x|| is dominated by the \u03bb_min=0.03125 mode (~|c_min|/0.03125); the post-64-step error along that mode is |1-\u03bb_min|^64 * |c_min|/\u03bb_min, i.e. exactly 0.96875^64 \u2248 0.130 times x's dominant component. Since the same mode dominates both error and ||x||, the relative L2 error is ~0.13 * (|c_min|/||x||-share) \u2014 close to but potentially slightly below 0.13 depending on c_min versus other amplified modes (\u03bb=0.0625 gives 0.017).",
+            "Float32 rounding: each iteration does 16-term dot products and a state update in fp32 with fp_fusion disabled; per-step rounding ~1e-6 relative, over 64 steps likely ~1e-4 \u2014 far below the 0.08 budget, so truncation error is the decisive factor (c2)."
+          ],
+          "open_questions": [
+            "What is the exact relative L2 error of the 64-step float32 iteration on the seeded inputs (needs a runtime or simulation probe)?",
+            "How large is c_min = |projection of rhs onto the \u03bb=0.03125 eigenvector| relative to the projections on \u03bb=0.0625 and 0.125 modes \u2014 i.e., is the relative error actually above or below the 0.08 threshold given the ~0.13 slow-mode factor?",
+            "Does the float32 iteration's rounding meaningfully shift the total error relative to a float64-simulated 64-step iteration (claim c2)?"
+          ],
+          "risk_map": [
+            "Richardson with unit step requires all eigenvalues in (0,2); here max eigenvalue is 1.75 so iteration is stable, but min eigenvalue 0.03125 gives per-step factor |1-0.03125|=0.96875, and 0.96875^64 \u2248 0.13 residual along that mode \u2014 relative to x (where that mode is amplified by 1/lambda = 32), the dominant slow mode may leave error near ~13%, above the 0.08 tolerance. Skeptic should quantify the actual per-mode residual against rhs's components.",
+            "Error relative to max(||x||, 0.001*sqrt(16)): ||x|| is large due to the 1/0.03125 amplification, which partially offsets the slow-mode residual; the exact relative error depends on rhs's projection onto the smallest eigenvectors \u2014 needs numeric evidence.",
+            "Float32 accumulation over 64 iterations could add rounding error, but rounding is likely small versus truncation error; still worth noting.",
+            "Second-smallest eigenvalue 0.0625 gives factor 0.9375^64 \u2248 0.017, likely within tolerance \u2014 failure hinges mainly on the lambda=0.03125 mode.",
+            "Decisive risk for c1: relative error \u2248 sqrt(sum_k ((1-\u03bb_k)^64 c_k)^2 / sum_k (c_k/\u03bb_k)^2). With \u03bb_min factor 0.130, \u03bb=0.0625 factor 0.0166, and 1/\u03bb weighting in the denominator dominated by \u03bb_min, the ratio is expected in the 0.10-0.13 range unless c_min is unusually small \u2014 likely above 0.08 but must be computed with the actual seeded c_k values.",
+            "Boundary consideration: if c_min happens to be small relative to c for \u03bb=0.0625/0.125, the relative error could drop below 0.08 \u2014 the seeded rhs projection distribution decides, and this is precisely what a numeric probe must report.",
+            "Float32 rounding over 64 steps is ~3 orders of magnitude below the truncation error and unlikely to change the verdict (c2), but a probe comparing fp32 vs fp64 simulated iterations would settle it."
+          ],
+          "scope_notes": [
+            "Only run(*make_inputs()) on the exact generated matrix/rhs; tolerance 0.08 relative L2 with floor 0.001*4; device T4; output dtype float32 shape (16,).\"]",
+            "Alternative rhs or matrices are out of scope; only the seed-701002 workload matters, so probes should use make_inputs() exactly.",
+            "The reference is the exact float64 solve of the supplied float32 system, not a 64-step fp64 iteration \u2014 emulation probes must compare against np.linalg.solve on the float32-cast inputs in float64."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [],
+          "created_at": "2026-09-24T00:17:04Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [
+            "Analytic support for c1: per-mode Richardson truncation error relative to ||x|| is ~0.96875^64 \u2248 0.13 regardless of rhs projection weights, because the \u03bb_min mode dominates both error and ||x||; Experimenter should confirm numerically (c1).",
+            "c2 remains unresolvable by source analysis alone: float32 rounding must be measured by comparing float32 vs float64 simulations of the same 64-step iteration."
+          ],
+          "kernel_model": [
+            "Eigenbasis note: the Hadamard-like orthogonal matrix scaled by 1/4 gives an orthonormal basis (rows have norm 16*(1/4)^2 = 1), so rhs components c_k = (basis^T rhs) have ||c||_2 = 1 spread over 16 modes, each typically |c_k| ~ 0.2-0.3.",
+            "Per-mode analysis: x_k = c_k/\u03bb_k, so ||x|| is dominated by the \u03bb_min=0.03125 mode (~|c_min|/0.03125); the post-64-step error along that mode is |1-\u03bb_min|^64 * |c_min|/\u03bb_min, i.e. exactly 0.96875^64 \u2248 0.130 times x's dominant component. Since the same mode dominates both error and ||x||, the relative L2 error is ~0.13 * (|c_min|/||x||-share) \u2014 close to but potentially slightly below 0.13 depending on c_min versus other amplified modes (\u03bb=0.0625 gives 0.017).",
+            "Float32 rounding: each iteration does 16-term dot products and a state update in fp32 with fp_fusion disabled; per-step rounding ~1e-6 relative, over 64 steps likely ~1e-4 \u2014 far below the 0.08 budget, so truncation error is the decisive factor (c2)."
+          ],
+          "open_questions": [
+            "What is the exact relative L2 error of the 64-step float32 iteration on the seeded inputs (needs a runtime or simulation probe)?",
+            "How large is c_min = |projection of rhs onto the \u03bb=0.03125 eigenvector| relative to the projections on \u03bb=0.0625 and 0.125 modes \u2014 i.e., is the relative error actually above or below the 0.08 threshold given the ~0.13 slow-mode factor?",
+            "Does the float32 iteration's rounding meaningfully shift the total error relative to a float64-simulated 64-step iteration (claim c2)?"
+          ],
+          "risk_map": [
+            "Decisive risk for c1: relative error \u2248 sqrt(sum_k ((1-\u03bb_k)^64 c_k)^2 / sum_k (c_k/\u03bb_k)^2). With \u03bb_min factor 0.130, \u03bb=0.0625 factor 0.0166, and 1/\u03bb weighting in the denominator dominated by \u03bb_min, the ratio is expected in the 0.10-0.13 range unless c_min is unusually small \u2014 likely above 0.08 but must be computed with the actual seeded c_k values.",
+            "Boundary consideration: if c_min happens to be small relative to c for \u03bb=0.0625/0.125, the relative error could drop below 0.08 \u2014 the seeded rhs projection distribution decides, and this is precisely what a numeric probe must report.",
+            "Float32 rounding over 64 steps is ~3 orders of magnitude below the truncation error and unlikely to change the verdict (c2), but a probe comparing fp32 vs fp64 simulated iterations would settle it."
+          ],
+          "scope_notes": [
+            "Alternative rhs or matrices are out of scope; only the seed-701002 workload matters, so probes should use make_inputs() exactly.",
+            "The reference is the exact float64 solve of the supplied float32 system, not a 64-step fp64 iteration \u2014 emulation probes must compare against np.linalg.solve on the float32-cast inputs in float64."
+          ],
+          "summary": "Refinement for case_l: analytic per-mode error analysis shows the relative L2 error of the 64-step Richardson iteration is dominated by the \u03bb_min=0.03125 mode at ~0.96875^64 \u2248 0.13 of that mode's contribution to ||x||; float32 rounding is ~3 orders smaller. Claims c1/c2 need a numeric probe with the seeded inputs.",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "The two open in-scope claims (c1: lambda_min=0.03125 mode leaves ~0.96875^64 \u2248 0.13 residual after 64 unit-step Richardson iterations, likely exceeding the 0.08 relative L2 tolerance; c2: fp32 rounding accumulation) already cover the full risk surface of this deterministic workload. The kernel has no other attack surfaces in scope (fixed 16x16 workload, single Triton program, no indexing/dtype/stride concerns at N=16 with contiguous make_inputs tensors). Resolving these claims requires the pending numeric probes against the seeded inputs, not new claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T00:17:09Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-09-24T00:17:09Z",
+        "decision": "no_new_claims",
+        "reason": "The two open in-scope claims (c1: lambda_min=0.03125 mode leaves ~0.96875^64 \u2248 0.13 residual after 64 unit-step Richardson iterations, likely exceeding the 0.08 relative L2 tolerance; c2: fp32 rounding accumulation) already cover the full risk surface of this deterministic workload. The kernel has no other attack surfaces in scope (fixed 16x16 workload, single Triton program, no indexing/dtype/stride concerns at N=16 with contiguous make_inputs tensors). Resolving these claims requires the pending numeric probes against the seeded inputs, not new claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 10,
+        "tool_event_id": "t11",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport json\nimport numpy as np\nimport torch\nimport sys\nsys.path.insert(0, \"/root/numerical_cases/case_l\")\nimport kernel as K\n\nmatrix, rhs = K.make_inputs()\nout = K.run(matrix, rhs)\nout_np = out.detach().cpu().numpy().astype(np.float64)\n\nA = matrix.cpu().numpy().astype(np.float64)\nb = rhs.cpu().numpy().astype(np.float64)\nx = np.linalg.solve(A, b)\n\ndenom = max(np.linalg.norm(x), 0.001*np.sqrt(16))\nrel = np.linalg.norm(out_np - x) / denom\n\n# per-mode diagnostics\nw, V = np.linalg.eigh(A)\nc = V.T @ b\n# error in eigenbasis\nerr_e = V.T @ (out_np - x)\nx_e = V.T @ x\nres = {\"rel_l2_error\": float(rel),\n       \"tolerance\": 0.08,\n       \"exceeds_tolerance\": bool(rel > 0.08),\n       \"norm_x\": float(np.linalg.norm(x)),\n       \"c_min_abs\": float(np.abs(c)[0]),\n       \"c_second_abs\": float(np.abs(c)[1]),\n       \"err_eig_min\": float(err_e[0]),\n       \"x_eig_min\": float(x_e[0]),\n       \"lambdas_first3\": [float(v) for v in w[:3]],\n       \"output_finite\": bool(np.all(np.isfinite(out_np)))}\nprint(json.dumps(res))\n",
+        "expected_signal": "relative L2 error of actual kernel output vs exact float64 solution exceeds 0.08"
+      },
+      "created_at": "2026-09-24T00:17:25Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "95162e916dee7ee971461f6502b26532e7cb64600ae6f174bb96200cc1f6c113"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "b810eaa2ff5104f2d81ea6e975364a3b72c4d67e89b0f2b696a3131efbc45005"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "826cd49894d04e437cb10000880d6aedd2ff9dc81535f569c7550833f72d48a1"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenmode converges only by factor 0.96875 per step (\u224813% residual after 64 steps).",
+        "cwd": "/root/numerical_cases/case_l",
+        "duration_s": 6.049202,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "95162e916dee7ee971461f6502b26532e7cb64600ae6f174bb96200cc1f6c113"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "b810eaa2ff5104f2d81ea6e975364a3b72c4d67e89b0f2b696a3131efbc45005"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "826cd49894d04e437cb10000880d6aedd2ff9dc81535f569c7550833f72d48a1"
+              }
+            ],
+            "duration_s": 6.049202,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of actual kernel output vs exact float64 solution exceeds 0.08",
+            "json_parse_error": null,
+            "json_result": {
+              "c_min_abs": 0.5398499052971611,
+              "c_second_abs": 0.3423996251076437,
+              "err_eig_min": -2.2645018696784973,
+              "exceeds_tolerance": true,
+              "lambdas_first3": [
+                0.03125000000000004,
+                0.06249999999999973,
+                0.12499999999999968
+              ],
+              "norm_x": 18.216566495477316,
+              "output_finite": true,
+              "rel_l2_error": 0.12440399903958174,
+              "tolerance": 0.08,
+              "x_eig_min": 17.27519696950914
+            },
+            "stderr": "",
+            "stdout": "{\"rel_l2_error\": 0.12440399903958174, \"tolerance\": 0.08, \"exceeds_tolerance\": true, \"norm_x\": 18.216566495477316, \"c_min_abs\": 0.5398499052971611, \"c_second_abs\": 0.3423996251076437, \"err_eig_min\": -2.2645018696784973, \"x_eig_min\": 17.27519696950914, \"lambdas_first3\": [0.03125000000000004, 0.06249999999999973, 0.12499999999999968], \"output_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "relative L2 error of actual kernel output vs exact float64 solution exceeds 0.08",
+        "json_parse_error": null,
+        "json_result": {
+          "c_min_abs": 0.5398499052971611,
+          "c_second_abs": 0.3423996251076437,
+          "err_eig_min": -2.2645018696784973,
+          "exceeds_tolerance": true,
+          "lambdas_first3": [
+            0.03125000000000004,
+            0.06249999999999973,
+            0.12499999999999968
+          ],
+          "norm_x": 18.216566495477316,
+          "output_finite": true,
+          "rel_l2_error": 0.12440399903958174,
+          "tolerance": 0.08,
+          "x_eig_min": 17.27519696950914
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"rel_l2_error\": 0.12440399903958174, \"tolerance\": 0.08, \"exceeds_tolerance\": true, \"norm_x\": 18.216566495477316, \"c_min_abs\": 0.5398499052971611, \"c_second_abs\": 0.3423996251076437, \"err_eig_min\": -2.2645018696784973, \"x_eig_min\": 17.27519696950914, \"lambdas_first3\": [0.03125000000000004, 0.06249999999999973, 0.12499999999999968], \"output_finite\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport json\nimport numpy as np\nimport sys\nsys.path.insert(0, \"/root/numerical_cases/case_l\")\nimport kernel as K\n\nmatrix, rhs = K.make_inputs_numpy()\nA32 = matrix.astype(np.float32)\nb32 = rhs.astype(np.float32)\n\ndef iterate(A, b, dtype):\n    state = np.zeros(16, dtype=dtype)\n    A_ = A.astype(dtype); b_ = b.astype(dtype)\n    for _ in range(64):\n        residual = b_ - (A_ * state[None, :]).sum(axis=1, dtype=dtype)\n        state = state + residual\n    return state\n\nx64 = iterate(matrix, rhs, np.float64)\nx32 = iterate(matrix, rhs, np.float32)\nx_exact = np.linalg.solve(matrix.astype(np.float64), rhs.astype(np.float64))\ndenom = max(np.linalg.norm(x_exact), 0.001*np.sqrt(16))\n\nrel32_exact = np.linalg.norm(x32.astype(np.float64) - x_exact)/denom\nrel64_exact = np.linalg.norm(x64 - x_exact)/denom\nrounding_gap = abs(rel32_exact - rel64_exact)\nres = {\"rel_fp32_iteration_vs_exact\": float(rel32_exact),\n       \"rel_fp64_iteration_vs_exact\": float(rel64_exact),\n       \"rounding_shift_abs\": float(rounding_gap),\n       \"fp32_rounding_meaningful\": bool(rounding_gap > 0.005),\n       \"tolerance\": 0.08,\n       \"note\": \"if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted\"}\nprint(json.dumps(res))\n",
+        "expected_signal": "fp32 rounding over 64 steps shifts total error enough to cross the 0.08 tolerance relative to the ideal fp64 64-step iteration"
+      },
+      "created_at": "2026-09-24T00:17:29Z",
+      "id": "t13",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t13_probe.py",
+            "sha256": "80426885439a9f89ceaf3858de82520411a609ac7e4341e9d37ccc12d94e36fb"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t13_stdout.txt",
+            "sha256": "410bd44fd5b56aedcb56393194f55888f0d33b1628aa16c8f7036d3fa5b83a83"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t13_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t13_json_result.json",
+            "sha256": "2ef2c06a64836b8671e48def2524456251706ed598819d13975030b7fe0e5df2"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance.",
+        "cwd": "/root/numerical_cases/case_l",
+        "duration_s": 3.307741,
+        "event_id": "t13",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "80426885439a9f89ceaf3858de82520411a609ac7e4341e9d37ccc12d94e36fb"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "410bd44fd5b56aedcb56393194f55888f0d33b1628aa16c8f7036d3fa5b83a83"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "2ef2c06a64836b8671e48def2524456251706ed598819d13975030b7fe0e5df2"
+              }
+            ],
+            "duration_s": 3.307741,
+            "exit_code": 0,
+            "expected_signal": "fp32 rounding over 64 steps shifts total error enough to cross the 0.08 tolerance relative to the ideal fp64 64-step iteration",
+            "json_parse_error": null,
+            "json_result": {
+              "fp32_rounding_meaningful": false,
+              "note": "if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted",
+              "rel_fp32_iteration_vs_exact": 0.12440403301072775,
+              "rel_fp64_iteration_vs_exact": 0.12440403300244632,
+              "rounding_shift_abs": 8.281431096435199e-12,
+              "tolerance": 0.08
+            },
+            "stderr": "",
+            "stdout": "{\"rel_fp32_iteration_vs_exact\": 0.12440403301072775, \"rel_fp64_iteration_vs_exact\": 0.12440403300244632, \"rounding_shift_abs\": 8.281431096435199e-12, \"fp32_rounding_meaningful\": false, \"tolerance\": 0.08, \"note\": \"if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted\"}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t13"
+        },
+        "exit_code": 0,
+        "expected_signal": "fp32 rounding over 64 steps shifts total error enough to cross the 0.08 tolerance relative to the ideal fp64 64-step iteration",
+        "json_parse_error": null,
+        "json_result": {
+          "fp32_rounding_meaningful": false,
+          "note": "if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted",
+          "rel_fp32_iteration_vs_exact": 0.12440403301072775,
+          "rel_fp64_iteration_vs_exact": 0.12440403300244632,
+          "rounding_shift_abs": 8.281431096435199e-12,
+          "tolerance": 0.08
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"rel_fp32_iteration_vs_exact\": 0.12440403301072775, \"rel_fp64_iteration_vs_exact\": 0.12440403300244632, \"rounding_shift_abs\": 8.281431096435199e-12, \"fp32_rounding_meaningful\": false, \"tolerance\": 0.08, \"note\": \"if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted\"}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "c_min_abs": 0.5398499052971611,
+          "c_second_abs": 0.3423996251076437,
+          "err_eig_min": -2.2645018696784973,
+          "exceeds_tolerance": true,
+          "lambda_min": 0.03125,
+          "norm_x": 18.216566495477316,
+          "output_finite": true,
+          "rel_l2_error": 0.12440399903958174,
+          "tolerance": 0.08,
+          "x_eig_min": 17.27519696950914
+        },
+        "event_id": "t12",
+        "status": "confirmed",
+        "summary": "Actual kernel run on the exact make_inputs() workload produced a finite (16,) output with relative L2 error 0.1244 vs the exact float64 solution \u2014 1.55x above the 0.08 tolerance. The error is dominated by the lambda_min=0.03125 eigenmode (eigenbasis error -2.2645 along that mode vs x component 17.28, ratio 0.131 \u2248 0.96875^64), exactly matching the claim's slow-mode truncation mechanism.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-24T00:17:48Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T00:16:45Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T00:17:48Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "95162e916dee7ee971461f6502b26532e7cb64600ae6f174bb96200cc1f6c113"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "b810eaa2ff5104f2d81ea6e975364a3b72c4d67e89b0f2b696a3131efbc45005"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "826cd49894d04e437cb10000880d6aedd2ff9dc81535f569c7550833f72d48a1"
+                  }
+                ],
+                "c_min_abs": 0.5398499052971611,
+                "c_second_abs": 0.3423996251076437,
+                "duration_s": 6.049202,
+                "err_eig_min": -2.2645018696784973,
+                "exceeds_tolerance": true,
+                "exit_code": 0,
+                "expected_signal": "relative L2 error of actual kernel output vs exact float64 solution exceeds 0.08",
+                "json_parse_error": null,
+                "json_result": {
+                  "c_min_abs": 0.5398499052971611,
+                  "c_second_abs": 0.3423996251076437,
+                  "err_eig_min": -2.2645018696784973,
+                  "exceeds_tolerance": true,
+                  "lambdas_first3": [
+                    0.03125000000000004,
+                    0.06249999999999973,
+                    0.12499999999999968
+                  ],
+                  "norm_x": 18.216566495477316,
+                  "output_finite": true,
+                  "rel_l2_error": 0.12440399903958174,
+                  "tolerance": 0.08,
+                  "x_eig_min": 17.27519696950914
+                },
+                "lambda_min": 0.03125,
+                "norm_x": 18.216566495477316,
+                "output_finite": true,
+                "rel_l2_error": 0.12440399903958174,
+                "stderr": "",
+                "stdout": "{\"rel_l2_error\": 0.12440399903958174, \"tolerance\": 0.08, \"exceeds_tolerance\": true, \"norm_x\": 18.216566495477316, \"c_min_abs\": 0.5398499052971611, \"c_second_abs\": 0.3423996251076437, \"err_eig_min\": -2.2645018696784973, \"x_eig_min\": 17.27519696950914, \"lambdas_first3\": [0.03125000000000004, 0.06249999999999973, 0.12499999999999968], \"output_finite\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.08,
+                "x_eig_min": 17.27519696950914
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Actual kernel run on the exact make_inputs() workload produced a finite (16,) output with relative L2 error 0.1244 vs the exact float64 solution \u2014 1.55x above the 0.08 tolerance. The error is dominated by the lambda_min=0.03125 eigenmode (eigenbasis error -2.2645 along that mode vs x component 17.28, ratio 0.131 \u2248 0.96875^64), exactly matching the claim's slow-mode truncation mechanism.",
+              "supports": "confirmed",
+              "tool_event_id": "t12"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "Richardson error along eigenvector k is (1-\u03bb_k)^64 * (rhs component)/\u03bb_k. For \u03bb=0.03125, 0.96875^64 \u2248 0.13, so the error component relative to x's \u03bb^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. Needs numeric quantification against the actual seeded inputs.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125."
+            }
+          ],
+          "scope_rationale": "The contract fixes the exact make_inputs() workload (\u03bb_min = 0.03125) and requires relative L2 error \u2264 0.08 vs the exact float64 solution; the deterministic slow-converging eigenmode is part of that required workload.",
+          "statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenmode converges only by factor 0.96875 per step (\u224813% residual after 64 steps).",
+          "status": "confirmed",
+          "updated_at": "2026-09-24T00:17:48Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:17:48Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "95162e916dee7ee971461f6502b26532e7cb64600ae6f174bb96200cc1f6c113"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "b810eaa2ff5104f2d81ea6e975364a3b72c4d67e89b0f2b696a3131efbc45005"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "826cd49894d04e437cb10000880d6aedd2ff9dc81535f569c7550833f72d48a1"
+              }
+            ],
+            "c_min_abs": 0.5398499052971611,
+            "c_second_abs": 0.3423996251076437,
+            "duration_s": 6.049202,
+            "err_eig_min": -2.2645018696784973,
+            "exceeds_tolerance": true,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of actual kernel output vs exact float64 solution exceeds 0.08",
+            "json_parse_error": null,
+            "json_result": {
+              "c_min_abs": 0.5398499052971611,
+              "c_second_abs": 0.3423996251076437,
+              "err_eig_min": -2.2645018696784973,
+              "exceeds_tolerance": true,
+              "lambdas_first3": [
+                0.03125000000000004,
+                0.06249999999999973,
+                0.12499999999999968
+              ],
+              "norm_x": 18.216566495477316,
+              "output_finite": true,
+              "rel_l2_error": 0.12440399903958174,
+              "tolerance": 0.08,
+              "x_eig_min": 17.27519696950914
+            },
+            "lambda_min": 0.03125,
+            "norm_x": 18.216566495477316,
+            "output_finite": true,
+            "rel_l2_error": 0.12440399903958174,
+            "stderr": "",
+            "stdout": "{\"rel_l2_error\": 0.12440399903958174, \"tolerance\": 0.08, \"exceeds_tolerance\": true, \"norm_x\": 18.216566495477316, \"c_min_abs\": 0.5398499052971611, \"c_second_abs\": 0.3423996251076437, \"err_eig_min\": -2.2645018696784973, \"x_eig_min\": 17.27519696950914, \"lambdas_first3\": [0.03125000000000004, 0.06249999999999973, 0.12499999999999968], \"output_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.08,
+            "x_eig_min": 17.27519696950914
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Actual kernel run on the exact make_inputs() workload produced a finite (16,) output with relative L2 error 0.1244 vs the exact float64 solution \u2014 1.55x above the 0.08 tolerance. The error is dominated by the lambda_min=0.03125 eigenmode (eigenbasis error -2.2645 along that mode vs x component 17.28, ratio 0.131 \u2248 0.96875^64), exactly matching the claim's slow-mode truncation mechanism.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "fp32_rounding_meaningful": false,
+          "rel_fp32_iteration_vs_exact": 0.12440403301072775,
+          "rel_fp64_iteration_vs_exact": 0.12440403300244632,
+          "rounding_shift_abs": 8.281431096435199e-12,
+          "tolerance": 0.08
+        },
+        "event_id": "t13",
+        "status": "rebutted",
+        "summary": "Float32 vs float64 simulation of the same 64-step Richardson iteration differ by only 8.3e-12 in relative L2 error against the exact solution, and both are equally far above tolerance (0.1244). The failure is pure truncation error from the slow lambda_min mode (c1), not float32 rounding; rounding cannot push the result across the 0.08 boundary because the ideal fp64 iteration is already far above it.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-24T00:17:48Z",
+      "id": "t15",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T00:16:45Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T00:17:48Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t13_probe.py",
+                    "sha256": "80426885439a9f89ceaf3858de82520411a609ac7e4341e9d37ccc12d94e36fb"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t13_stdout.txt",
+                    "sha256": "410bd44fd5b56aedcb56393194f55888f0d33b1628aa16c8f7036d3fa5b83a83"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t13_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t13_json_result.json",
+                    "sha256": "2ef2c06a64836b8671e48def2524456251706ed598819d13975030b7fe0e5df2"
+                  }
+                ],
+                "duration_s": 3.307741,
+                "exit_code": 0,
+                "expected_signal": "fp32 rounding over 64 steps shifts total error enough to cross the 0.08 tolerance relative to the ideal fp64 64-step iteration",
+                "fp32_rounding_meaningful": false,
+                "json_parse_error": null,
+                "json_result": {
+                  "fp32_rounding_meaningful": false,
+                  "note": "if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted",
+                  "rel_fp32_iteration_vs_exact": 0.12440403301072775,
+                  "rel_fp64_iteration_vs_exact": 0.12440403300244632,
+                  "rounding_shift_abs": 8.281431096435199e-12,
+                  "tolerance": 0.08
+                },
+                "rel_fp32_iteration_vs_exact": 0.12440403301072775,
+                "rel_fp64_iteration_vs_exact": 0.12440403300244632,
+                "rounding_shift_abs": 8.281431096435199e-12,
+                "stderr": "",
+                "stdout": "{\"rel_fp32_iteration_vs_exact\": 0.12440403301072775, \"rel_fp64_iteration_vs_exact\": 0.12440403300244632, \"rounding_shift_abs\": 8.281431096435199e-12, \"fp32_rounding_meaningful\": false, \"tolerance\": 0.08, \"note\": \"if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted\"}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.08
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Float32 vs float64 simulation of the same 64-step Richardson iteration differ by only 8.3e-12 in relative L2 error against the exact solution, and both are equally far above tolerance (0.1244). The failure is pure truncation error from the slow lambda_min mode (c1), not float32 rounding; rounding cannot push the result across the 0.08 boundary because the ideal fp64 iteration is already far above it.",
+              "supports": "rebutted",
+              "tool_event_id": "t13"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to truncation error near the tolerance boundary; worth measuring separately from the truncation error.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget."
+            }
+          ],
+          "scope_rationale": "The contract compares the kernel's float32 output against the exact float64 solution with a 0.08 relative L2 budget, so float32 rounding over 64 iterations counts toward that budget on the required workload.",
+          "statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance.",
+          "status": "rebutted",
+          "updated_at": "2026-09-24T00:17:48Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:17:48Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "80426885439a9f89ceaf3858de82520411a609ac7e4341e9d37ccc12d94e36fb"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "410bd44fd5b56aedcb56393194f55888f0d33b1628aa16c8f7036d3fa5b83a83"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "2ef2c06a64836b8671e48def2524456251706ed598819d13975030b7fe0e5df2"
+              }
+            ],
+            "duration_s": 3.307741,
+            "exit_code": 0,
+            "expected_signal": "fp32 rounding over 64 steps shifts total error enough to cross the 0.08 tolerance relative to the ideal fp64 64-step iteration",
+            "fp32_rounding_meaningful": false,
+            "json_parse_error": null,
+            "json_result": {
+              "fp32_rounding_meaningful": false,
+              "note": "if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted",
+              "rel_fp32_iteration_vs_exact": 0.12440403301072775,
+              "rel_fp64_iteration_vs_exact": 0.12440403300244632,
+              "rounding_shift_abs": 8.281431096435199e-12,
+              "tolerance": 0.08
+            },
+            "rel_fp32_iteration_vs_exact": 0.12440403301072775,
+            "rel_fp64_iteration_vs_exact": 0.12440403300244632,
+            "rounding_shift_abs": 8.281431096435199e-12,
+            "stderr": "",
+            "stdout": "{\"rel_fp32_iteration_vs_exact\": 0.12440403301072775, \"rel_fp64_iteration_vs_exact\": 0.12440403300244632, \"rounding_shift_abs\": 8.281431096435199e-12, \"fp32_rounding_meaningful\": false, \"tolerance\": 0.08, \"note\": \"if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted\"}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.08
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Float32 vs float64 simulation of the same 64-step Richardson iteration differ by only 8.3e-12 in relative L2 error against the exact solution, and both are equally far above tolerance (0.1244). The failure is pure truncation error from the slow lambda_min mode (c1), not float32 rounding; rounding cannot push the result across the 0.08 boundary because the ideal fp64 iteration is already far above it.",
+          "supports": "rebutted",
+          "tool_event_id": "t13"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: c1 is confirmed by a runtime probe of the actual kernel on the exact make_inputs() workload \u2014 relative L2 error 0.1244, 1.55x above the 0.08 tolerance, dominated by the lambda_min=0.03125 eigenmode error (-2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the claim's mechanism exactly. c2 is rebutted (fp32 vs fp64 64-step iterations differ by 8.3e-12; rounding cannot cross the tolerance boundary). No other in-scope attack surface exists: the workload is fully deterministic, output is finite and shape (16,), and the single failure mode is already covered by a confirmed in-scope claim with direct evidence.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T00:17:55Z",
+      "id": "t16",
+      "output": {
+        "created_at": "2026-09-24T00:17:55Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: c1 is confirmed by a runtime probe of the actual kernel on the exact make_inputs() workload \u2014 relative L2 error 0.1244, 1.55x above the 0.08 tolerance, dominated by the lambda_min=0.03125 eigenmode error (-2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the claim's mechanism exactly. c2 is rebutted (fp32 vs fp64 64-step iterations differ by 8.3e-12; rounding cannot cross the tolerance boundary). No other in-scope attack surface exists: the workload is fully deterministic, output is finite and shape (16,), and the single failure mode is already covered by a confirmed in-scope claim with direct evidence.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 15,
+        "tool_event_id": "t16",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract (problem.txt) requires run(*make_inputs()) to output a finite (16,) vector within relative L2 error \u2264 0.08 of the exact float64 solution of matrix @ x = rhs. A runtime probe of the actual kernel on the exact seeded workload (probe t12) measured relative L2 error 0.1244 \u2014 1.55x above the 0.08 tolerance \u2014 with the error dominated by the \u03bb_min=0.03125 eigenmode (eigenbasis error -2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the confirmed in-scope claim c1's mechanism: 64 unit-step Richardson iterations converge too slowly along the smallest-eigenvalue mode. The alternate explanation (fp32 rounding, claim c2) was rebutted by probe t13: fp32 vs fp64 simulated iterations differ by only 8.3e-12 and both are equally above tolerance, so truncation error alone breaches the contract. This is not an acceptable deviation under any contract clause \u2014 the tolerance is an explicit numeric requirement the kernel fails on the single in-scope deterministic workload. Scope evidence ties the claim directly to the make_inputs() input domain per problem.txt, and the Skeptic reviewed the final evidence and raised no new claims.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-24T00:18:12Z",
+      "id": "t17",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-24T00:18:12Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract (problem.txt) requires run(*make_inputs()) to output a finite (16,) vector within relative L2 error \u2264 0.08 of the exact float64 solution of matrix @ x = rhs. A runtime probe of the actual kernel on the exact seeded workload (probe t12) measured relative L2 error 0.1244 \u2014 1.55x above the 0.08 tolerance \u2014 with the error dominated by the \u03bb_min=0.03125 eigenmode (eigenbasis error -2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the confirmed in-scope claim c1's mechanism: 64 unit-step Richardson iterations converge too slowly along the smallest-eigenvalue mode. The alternate explanation (fp32 rounding, claim c2) was rebutted by probe t13: fp32 vs fp64 simulated iterations differ by only 8.3e-12 and both are equally above tolerance, so truncation error alone breaches the contract. This is not an acceptable deviation under any contract clause \u2014 the tolerance is an explicit numeric requirement the kernel fails on the single in-scope deterministic workload. Scope evidence ties the claim directly to the make_inputs() input domain per problem.txt, and the Skeptic reviewed the final evidence and raised no new claims.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-24T00:18:12Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The contract (problem.txt) requires run(*make_inputs()) to output a finite (16,) vector within relative L2 error \u2264 0.08 of the exact float64 solution of matrix @ x = rhs. A runtime probe of the actual kernel on the exact seeded workload (probe t12) measured relative L2 error 0.1244 \u2014 1.55x above the 0.08 tolerance \u2014 with the error dominated by the \u03bb_min=0.03125 eigenmode (eigenbasis error -2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the confirmed in-scope claim c1's mechanism: 64 unit-step Richardson iterations converge too slowly along the smallest-eigenvalue mode. The alternate explanation (fp32 rounding, claim c2) was rebutted by probe t13: fp32 vs fp64 simulated iterations differ by only 8.3e-12 and both are equally above tolerance, so truncation error alone breaches the contract. This is not an acceptable deviation under any contract clause \u2014 the tolerance is an explicit numeric requirement the kernel fails on the single in-scope deterministic workload. Scope evidence ties the claim directly to the make_inputs() input domain per problem.txt, and the Skeptic reviewed the final evidence and raised no new claims.",
+    "verdict": "reject"
+  }
+}

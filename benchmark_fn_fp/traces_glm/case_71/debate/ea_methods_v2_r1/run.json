@@ -1,0 +1,1756 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_e10",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\nSEED = 734201\nN, STEPS = 128, 6\n\n\n@triton.jit\ndef _momentum_step(Weights, Velocity, Gradient, N: tl.constexpr):\n    index = tl.arange(0, N)\n    old_weights = tl.load(Weights + index)\n    old_velocity = tl.load(Velocity + index)\n    gradient = tl.load(Gradient + index)\n    next_velocity = 0.75 * old_velocity + 0.25 * gradient\n    next_weights = old_weights - 0.03125 * next_velocity\n    tl.store(Velocity + index, next_velocity)\n    tl.store(Weights + index, next_weights)\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    weights = rng.uniform(0.5, 1.5, N).astype(np.float32)\n    velocity = rng.normal(0.0, 0.001, N).astype(np.float32)\n    gradient_scale = 10.0 ** rng.uniform(-4.0, 2.0)\n    persistent = rng.normal(0.0, 1.0, N)\n    gradients = (gradient_scale * (\n        persistent[None, :] + rng.normal(0.0, 0.25, (STEPS, N)))).astype(np.float32)\n    return weights, velocity, gradients\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(x).to(device) for x in make_inputs_numpy())\n\n\ndef step(weights, velocity, gradient):\n    _momentum_step[(1,)](weights, velocity, gradient, N=N,\n                        num_warps=1, enable_fp_fusion=False)\n    return weights.view(N)\n\n\ndef run_sequence(weights, velocity, gradients):\n    history = []\n    for gradient in gradients:\n        history.append(step(weights, velocity, gradient).detach())\n    return history\n\n\ndef run(weights, velocity, gradients):\n    return torch.stack(run_sequence(weights, velocity, gradients))\n\n\ndef initial_probe(device=\"cuda\"):\n    weights, velocity, gradients = make_inputs(device)\n    reference_weights = weights.clone()\n    reference_velocity = velocity.clone()\n    actual_history, reference_history = [], []\n    for gradient in gradients:\n        actual_history.append(step(weights, velocity, gradient).detach())\n        reference_velocity.copy_(0.75 * reference_velocity + 0.25 * gradient)\n        reference_weights.copy_(reference_weights - 0.03125 * reference_velocity)\n        reference_history.append(reference_weights.view(N).detach())\n    actual, expected = torch.stack(actual_history), torch.stack(reference_history)\n    def error(a, b):\n        return float((torch.linalg.vector_norm(a.double() - b.double()) /\n            torch.clamp(torch.linalg.vector_norm(b.double()), min=0.1)).item())\n    history_error = error(actual, expected)\n    weights_error = error(weights, reference_weights)\n    velocity_error = error(velocity, reference_velocity)\n    return {\"history_relative_error\": history_error,\n            \"final_weights_relative_error\": weights_error,\n            \"final_velocity_relative_error\": velocity_error,\n            \"tolerance\": 0.025, \"state_tolerance\": 0.00001,\n            \"passed\": bool(history_error <= 0.025 and weights_error <= 0.00001\n                           and velocity_error <= 0.00001),\n            \"observation\": \"both retained histories stacked after all six updates\"}\n",
+    "passed": null,
+    "problem_text": "Validate retained outputs of an in-place momentum optimizer transaction.\n\nThe fixed workload is the actual float32 arrays returned by make_inputs():\ninitial weights w0 and velocity v0 each have shape (128,), and gradients G\nhave shape (6, 128). The six rows of G are consumed in order, exactly once.\nAll target calculations use the actual stored input values, in float64 or\nmore accurately. Define, for t = 0,...,5:\n  v[t+1] = (3/4) * v[t] + (1/4) * G[t]\n  w[t+1] = w[t] - (1/32) * v[t+1].\n\nstep(weights, velocity, gradient) updates the two state tensors in place and\nreturns a float32 tensor of shape (128,). run_sequence() performs all six\nsteps and returns the six tensors in their original order. The caller retains\nthose returned tensors and observes ALL of them only AFTER the full sequence\nhas completed. Let H be their values stacked at this observation time.\nThe target is H_target[t] = mathematical w[t+1]. Acceptance requires:\n  ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025,\n  ||final_weights-w[6]||_2 / max(||w[6]||_2, 0.1) <= 0.00001,\n  ||final_velocity-v[6]||_2 / max(||v[6]||_2, 0.1) <= 0.00001.\nAll outputs and final state must be finite float32 with their stated shapes.\nG must remain byte-for-byte unchanged. Mutating weights and velocity is\npermitted and required. Storage aliasing itself is neither forbidden nor a\nfailure: only the stated numerical values at the stated observation time and\nthe explicit input-mutation requirements determine acceptance.\n\nrun() stacks the values returned by run_sequence() at the same final\nobservation time. Every fresh transaction starts with new make_inputs()\nstate; do not carry updated state across independent trials. Other inputs,\ndifferent step counts, and observations between updates are out of scope.\n\ninitial_probe() is a prior experiment using a PyTorch implementation with\npreallocated optimizer state. Its executable source and measured results\nare evidence for review, not an authoritative verdict or an extra contract.\nAll evaluation systems receive the same kernel, contract, and probe.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"history_relative_error\": 0.0,\n  \"final_weights_relative_error\": 0.0,\n  \"final_velocity_relative_error\": 0.0,\n  \"tolerance\": 0.025,\n  \"state_tolerance\": 1e-05,\n  \"passed\": true,\n  \"observation\": \"both retained histories stacked after all six updates\"\n}\n",
+    "rounds": null,
+    "session_dir": "/root/evidence_cases/case_e10",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T06:41:26Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T06:42:19Z",
+          "data": {
+            "all_rows_equal_w6_at_observation": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "35dac1902e96c8c8728511bbd39a683c65e32535d4a6518c5942e51f072deeac"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "8df305557ba2837d46fa5a1021c7b0153bead318c6acb9c63cb044e39f8df29e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "a46f2739cf8d3846d9ab9f41031501dda08be119ea1435bdbe45321c485dc524"
+              }
+            ],
+            "duration_s": 6.634657,
+            "exit_code": 0,
+            "expected_signal": "history relative error > 0.025 with all retained rows equal to w[6]",
+            "history_relative_error": 0.8989803703905964,
+            "history_tensors_share_storage": true,
+            "json_parse_error": null,
+            "json_result": {
+              "all_rows_equal_w6_at_observation": true,
+              "exceeds_tolerance": true,
+              "history_relative_error": 0.8989803703905964,
+              "history_tensors_share_storage": true,
+              "target_norm": 59.93094864954865,
+              "tolerance": 0.025
+            },
+            "stderr": "",
+            "stdout": "{\"history_relative_error\": 0.8989803703905964, \"tolerance\": 0.025, \"exceeds_tolerance\": true, \"all_rows_equal_w6_at_observation\": true, \"history_tensors_share_storage\": true, \"target_norm\": 59.93094864954865}\n",
+            "target_norm": 59.93094864954865,
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.025
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "At post-sequence observation time, all six retained history tensors share the same storage (weights.view(N)) and every row equals w[6]; measured history relative Frobenius error vs float64 w[t+1] reference is 0.899, far above the 0.025 tolerance.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 where H_target[t]=w[t+1]. Aliasing itself is not a failure \u2014 only the observed numerical values at observation time decide acceptance."
+        }
+      ],
+      "scope_rationale": "problem.txt defines the fixed workload (seed 734201, N=128, 6 steps), requires the caller to retain all six returned tensors and observe them only after the sequence completes, and requires ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 with H_target[t]=w[t+1]. If every retained row equals w[6] instead, this stated acceptance criterion is violated on the contract's own fixed inputs.",
+      "statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates the required history tolerance ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 for the fixed seeded workload (seed 734201, N=128, 6 steps).",
+      "status": "confirmed",
+      "updated_at": "2026-09-24T06:42:19Z"
+    },
+    {
+      "created_at": "2026-09-24T06:41:26Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T06:42:19Z",
+          "data": {
+            "G_byte_identical": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "8f4613115b15ef55d52ca79087fe274c1dac20d9b00ee9e9fa773aea5d81cb6f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "8a51c912555622a75624149f78a5c3e01bd3ea167a1bd385f808b0bfb522145d"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "95c76342fd4660e30069d6ed2de2cf31478710bed4301b60595d0b1f51b8f64c"
+              }
+            ],
+            "duration_s": 5.305982,
+            "exit_code": 0,
+            "expected_signal": "final state rel errors <= 1e-5 and G byte-for-byte unchanged",
+            "final_velocity_relative_error": 4.510977036715875e-08,
+            "final_weights_relative_error": 5.051213701513941e-08,
+            "finite_correct_shapes": true,
+            "json_parse_error": null,
+            "json_result": {
+              "G_byte_identical": true,
+              "final_velocity_relative_error": 4.510977036715875e-08,
+              "final_weights_relative_error": 5.051213701513941e-08,
+              "finite_correct_shapes": true,
+              "state_ok": true,
+              "state_tolerance": 1e-05
+            },
+            "state_tolerance": 1e-05,
+            "stderr": "",
+            "stdout": "{\"final_weights_relative_error\": 5.051213701513941e-08, \"final_velocity_relative_error\": 4.510977036715875e-08, \"state_tolerance\": 1e-05, \"state_ok\": true, \"G_byte_identical\": true, \"finite_correct_shapes\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Final weights/velocity match float64 w[6]/v[6] with relative errors 5.05e-8 and 4.51e-8 (\u2264 1e-5), both finite float32 of shape (128,), and G is byte-for-byte unchanged. Only the retained-history criterion fails.",
+          "supports": "confirmed",
+          "tool_event_id": "t13"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "Source shows no store to Gradient and sequential exact-order arithmetic, so final state should match a float64 reference; a runtime byte-compare of G and final-state error check would confirm the only failing requirement is the retained history values.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64-computed w[6]/v[6], and finite float32 outputs of stated shapes."
+        }
+      ],
+      "scope_rationale": "problem.txt explicitly requires final weights/velocity relative errors <= 0.00001 vs float64 w[6]/v[6] on the fixed seeded workload, and requires G to remain byte-for-byte unchanged; these are stated contract requirements, so verifying they hold isolates the failure to the history criterion.",
+      "statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged.",
+      "status": "confirmed",
+      "updated_at": "2026-09-24T06:42:19Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Momentum update: v[t+1] = 0.75*v[t] + 0.25*G[t]; w[t+1] = w[t] - (1/32)*v[t+1], six steps, N=128, fixed seeded inputs.",
+      "step() must update state in place and return a float32 (128,) tensor; caller retains all six returned tensors and stacks them only AFTER the sequence completes.",
+      "H = stacked retained values at observation time must satisfy rel-Frobenius error <= 0.025 vs mathematical w[t+1]; final weights/velocity rel error <= 1e-05 vs w[6]/v[6] computed in float64 or better.",
+      "G must remain byte-for-byte unchanged; mutating weights/velocity is required; storage aliasing itself is explicitly not a failure \u2014 only observed values and input-mutation rules decide acceptance.",
+      "Single fixed workload (make_inputs with seed 734201); different step counts, other inputs, and mid-sequence observations are out of scope.",
+      "Acceptance is judged on the values of the retained six tensors at the post-sequence observation time: H[t] must equal w[t+1] (mathematical), with rel-Frobenius error <= 0.025.",
+      "Final state w[6]/v[6] must match a float64-or-better reference within 1e-05 relative error; G must stay byte-for-byte unchanged.",
+      "Storage aliasing is explicitly permitted; only observed numerical values and input-mutation rules decide acceptance."
+    ],
+    "kernel_model": [
+      "Triton kernel _momentum_step loads w, v, g for indices 0..127, computes next_velocity = 0.75*v + 0.25*g and next_weights = w - 0.03125*next_velocity, stores both back into the same buffers (lines 12-19); math matches the contract exactly with representable constants.",
+      "step() launches with grid (1,), num_warps=1, enable_fp_fusion=False, and returns weights.view(N) \u2014 a VIEW of the same mutated storage, not a copy (kernel.py line 40).",
+      "run_sequence() appends these views and returns them; run() stacks at final observation time. Since all six returned tensors alias the same 128-float storage, every history row observed after the full sequence equals the final w[6], not w[t+1].",
+      "Single-threaded sequential execution, so final state w[6]/v[6] should be computed correctly; only the retained-history values are affected by the aliasing behavior.",
+      "initial_probe uses a cloned PyTorch reference and compares post-hoc; its recorded zero errors are from the probe's own reference implementation, not an oracle over this Triton kernel's aliasing behavior.",
+      "step() returns weights.view(N) then run_sequence stores .detach() of it \u2014 detach shares storage with the live weights buffer, so all six retained history tensors alias the same 128 floats and, at observation time, every row equals w[6].",
+      "The recorded initial_probe result (all errors 0.0) is degenerate on the history axis: its reference also retains reference_weights.view(N).detach() of its own mutated buffer, so both actual and expected histories collapse to their final w[6] and compare equal. The probe therefore masks, rather than tests, the aliasing behavior; only the state (weights/velocity) comparisons in the probe are informative.",
+      "The Triton kernel arithmetic (0.75*v + 0.25*g, w - 0.03125*v_next, grid (1,), num_warps=1, fp fusion disabled) matches the contract math exactly and stores only to Velocity and Weights; Gradient is load-only."
+    ],
+    "open_questions": [
+      "Does any evaluation harness copy/clone the returned tensors before continuing (which would make aliasing harmless)? The contract wording ('retains those returned tensors and observes ALL of them only AFTER') strongly suggests no copy, but runtime confirmation is needed.",
+      "What is the actual measured history error at observation time for the Triton kernel? Exact value depends on w[6] vs intermediate w[t+1] norms.",
+      "Runtime confirmation of the actual measured history error at observation time for the Triton kernel (claim c1) is still needed.",
+      "Whether the evaluation harness clones returned tensors before continuing \u2014 contract wording implies it does not, but no runtime evidence yet."
+    ],
+    "risk_map": [
+      "Aliased history: because step returns a view of the mutable weights buffer, H[t] at observation time equals w[6] for all six rows; early rows (especially t=0) will deviate from w[t+1], likely exceeding the 0.025 history tolerance \u2014 this is the primary mutation_audit failure surface.",
+      "Final-state correctness (w[6], v[6]) should still hold since the arithmetic is exact-order sequential; a probe of final state alone could pass while history fails.",
+      "G mutation: kernel only loads Gradient, never stores it \u2014 low risk, but worth verifying no stray writes.",
+      "Precision: fp32 kernel vs float64 reference; differences should be tiny (~1e-7 relative), far below the 1e-05 state tolerance; enable_fp_fusion=False avoids fused rounding surprises.",
+      "Non-contiguous or differently-shaped inputs are out of scope; N is a constexpr of 128 matching the fixed workload.",
+      "Primary: aliased retained history (all rows equal w[6] at observation time) likely violates the 0.025 history tolerance; the initial_probe's 0.0 history error must not be read as evidence against this because both sides of that probe alias equally.",
+      "Secondary: final-state correctness and G invariance should pass, so a state-only probe could falsely suggest overall correctness \u2014 probe design must compare retained history rows against an independent float64 w[t+1] reference."
+    ],
+    "scope_notes": [
+      "Family: mutation_audit (meta.json); the contract explicitly decouples storage aliasing from failure, so the verdict must rest on observed values only.",
+      "Only the fixed seeded workload (N=128, 6 steps) is in scope; no other shapes, seeds, or step counts.",
+      "The recorded initial_probe result (all-zero errors, passed=true) is evidence from a PyTorch reference implementation, not an authoritative verdict and not a statement about this Triton kernel's retained-history behavior.",
+      "Only the fixed seeded workload (N=128, 6 steps, seed 734201) is in scope.",
+      "The initial_probe is explicitly evidence for review, not an authoritative verdict; its history comparison is degenerate due to matching aliasing on both sides."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Momentum update: v[t+1] = 0.75*v[t] + 0.25*G[t]; w[t+1] = w[t] - (1/32)*v[t+1], six steps, N=128, fixed seeded inputs.",
+        "step() must update state in place and return a float32 (128,) tensor; caller retains all six returned tensors and stacks them only AFTER the sequence completes.",
+        "H = stacked retained values at observation time must satisfy rel-Frobenius error <= 0.025 vs mathematical w[t+1]; final weights/velocity rel error <= 1e-05 vs w[6]/v[6] computed in float64 or better.",
+        "G must remain byte-for-byte unchanged; mutating weights/velocity is required; storage aliasing itself is explicitly not a failure \u2014 only observed values and input-mutation rules decide acceptance.",
+        "Single fixed workload (make_inputs with seed 734201); different step counts, other inputs, and mid-sequence observations are out of scope."
+      ],
+      "created_at": "2026-09-24T06:41:07Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel _momentum_step loads w, v, g for indices 0..127, computes next_velocity = 0.75*v + 0.25*g and next_weights = w - 0.03125*next_velocity, stores both back into the same buffers (lines 12-19); math matches the contract exactly with representable constants.",
+        "step() launches with grid (1,), num_warps=1, enable_fp_fusion=False, and returns weights.view(N) \u2014 a VIEW of the same mutated storage, not a copy (kernel.py line 40).",
+        "run_sequence() appends these views and returns them; run() stacks at final observation time. Since all six returned tensors alias the same 128-float storage, every history row observed after the full sequence equals the final w[6], not w[t+1].",
+        "Single-threaded sequential execution, so final state w[6]/v[6] should be computed correctly; only the retained-history values are affected by the aliasing behavior.",
+        "initial_probe uses a cloned PyTorch reference and compares post-hoc; its recorded zero errors are from the probe's own reference implementation, not an oracle over this Triton kernel's aliasing behavior."
+      ],
+      "open_questions": [
+        "Does any evaluation harness copy/clone the returned tensors before continuing (which would make aliasing harmless)? The contract wording ('retains those returned tensors and observes ALL of them only AFTER') strongly suggests no copy, but runtime confirmation is needed.",
+        "What is the actual measured history error at observation time for the Triton kernel? Exact value depends on w[6] vs intermediate w[t+1] norms."
+      ],
+      "risk_map": [
+        "Aliased history: because step returns a view of the mutable weights buffer, H[t] at observation time equals w[6] for all six rows; early rows (especially t=0) will deviate from w[t+1], likely exceeding the 0.025 history tolerance \u2014 this is the primary mutation_audit failure surface.",
+        "Final-state correctness (w[6], v[6]) should still hold since the arithmetic is exact-order sequential; a probe of final state alone could pass while history fails.",
+        "G mutation: kernel only loads Gradient, never stores it \u2014 low risk, but worth verifying no stray writes.",
+        "Precision: fp32 kernel vs float64 reference; differences should be tiny (~1e-7 relative), far below the 1e-05 state tolerance; enable_fp_fusion=False avoids fused rounding surprises.",
+        "Non-contiguous or differently-shaped inputs are out of scope; N is a constexpr of 128 matching the fixed workload."
+      ],
+      "scope_notes": [
+        "Family: mutation_audit (meta.json); the contract explicitly decouples storage aliasing from failure, so the verdict must rest on observed values only.",
+        "Only the fixed seeded workload (N=128, 6 steps) is in scope; no other shapes, seeds, or step counts.",
+        "The recorded initial_probe result (all-zero errors, passed=true) is evidence from a PyTorch reference implementation, not an authoritative verdict and not a statement about this Triton kernel's retained-history behavior."
+      ],
+      "summary": "In-place momentum optimizer (N=128, 6 steps, fp32). Kernel math matches the contract, but step() returns a live view of the mutated weights buffer, so all six retained history tensors alias one storage; at the post-sequence observation time every history row equals w[6], likely violating the history tolerance. Final state w[6]/v[6] itself is computed correctly and sequentially.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [
+        "Acceptance is judged on the values of the retained six tensors at the post-sequence observation time: H[t] must equal w[t+1] (mathematical), with rel-Frobenius error <= 0.025.",
+        "Final state w[6]/v[6] must match a float64-or-better reference within 1e-05 relative error; G must stay byte-for-byte unchanged.",
+        "Storage aliasing is explicitly permitted; only observed numerical values and input-mutation rules decide acceptance."
+      ],
+      "created_at": "2026-09-24T06:41:42Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "step() returns weights.view(N) then run_sequence stores .detach() of it \u2014 detach shares storage with the live weights buffer, so all six retained history tensors alias the same 128 floats and, at observation time, every row equals w[6].",
+        "The recorded initial_probe result (all errors 0.0) is degenerate on the history axis: its reference also retains reference_weights.view(N).detach() of its own mutated buffer, so both actual and expected histories collapse to their final w[6] and compare equal. The probe therefore masks, rather than tests, the aliasing behavior; only the state (weights/velocity) comparisons in the probe are informative.",
+        "The Triton kernel arithmetic (0.75*v + 0.25*g, w - 0.03125*v_next, grid (1,), num_warps=1, fp fusion disabled) matches the contract math exactly and stores only to Velocity and Weights; Gradient is load-only."
+      ],
+      "open_questions": [
+        "Runtime confirmation of the actual measured history error at observation time for the Triton kernel (claim c1) is still needed.",
+        "Whether the evaluation harness clones returned tensors before continuing \u2014 contract wording implies it does not, but no runtime evidence yet."
+      ],
+      "risk_map": [
+        "Primary: aliased retained history (all rows equal w[6] at observation time) likely violates the 0.025 history tolerance; the initial_probe's 0.0 history error must not be read as evidence against this because both sides of that probe alias equally.",
+        "Secondary: final-state correctness and G invariance should pass, so a state-only probe could falsely suggest overall correctness \u2014 probe design must compare retained history rows against an independent float64 w[t+1] reference."
+      ],
+      "scope_notes": [
+        "Only the fixed seeded workload (N=128, 6 steps, seed 734201) is in scope.",
+        "The initial_probe is explicitly evidence for review, not an authoritative verdict; its history comparison is degenerate due to matching aliasing on both sides."
+      ],
+      "summary": "Refinement: initial_probe's zero history error is degenerate because its reference implementation also retains aliased views, so both actual and expected collapse to final w[6] and compare equal; the probe masks rather than tests the kernel's aliasing behavior. The kernel's own retained history (views of the mutated weights buffer) still collapses to w[6] at observation time, which likely violates the contract's history tolerance.",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_e10",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_e10"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_e10"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_e10"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_e10",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 17.29348400799998,
+      "role": "describer",
+      "round": 2,
+      "text": "The key thing I see: `step()` returns `weights.view(N)` \u2014 a view of the in-place buffer \u2014 so every retained history tensor aliases the same storage, and all six observed values at observation time equal w[6]. The contract explicitly permits aliasing but judges values at observation time, so the history requirement is likely violated. Recording the description model now.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Momentum update: v[t+1] = 0.75*v[t] + 0.25*G[t]; w[t+1] = w[t] - (1/32)*v[t+1], six steps, N=128, fixed seeded inputs.",
+              "step() must update state in place and return a float32 (128,) tensor; caller retains all six returned tensors and stacks them only AFTER the sequence completes.",
+              "H = stacked retained values at observation time must satisfy rel-Frobenius error <= 0.025 vs mathematical w[t+1]; final weights/velocity rel error <= 1e-05 vs w[6]/v[6] computed in float64 or better.",
+              "G must remain byte-for-byte unchanged; mutating weights/velocity is required; storage aliasing itself is explicitly not a failure \u2014 only observed values and input-mutation rules decide acceptance.",
+              "Single fixed workload (make_inputs with seed 734201); different step counts, other inputs, and mid-sequence observations are out of scope."
+            ],
+            "kernel_model": [
+              "Triton kernel _momentum_step loads w, v, g for indices 0..127, computes next_velocity = 0.75*v + 0.25*g and next_weights = w - 0.03125*next_velocity, stores both back into the same buffers (lines 12-19); math matches the contract exactly with representable constants.",
+              "step() launches with grid (1,), num_warps=1, enable_fp_fusion=False, and returns weights.view(N) \u2014 a VIEW of the same mutated storage, not a copy (kernel.py line 40).",
+              "run_sequence() appends these views and returns them; run() stacks at final observation time. Since all six returned tensors alias the same 128-float storage, every history row observed after the full sequence equals the final w[6], not w[t+1].",
+              "Single-threaded sequential execution, so final state w[6]/v[6] should be computed correctly; only the retained-history values are affected by the aliasing behavior.",
+              "initial_probe uses a cloned PyTorch reference and compares post-hoc; its recorded zero errors are from the probe's own reference implementation, not an oracle over this Triton kernel's aliasing behavior."
+            ],
+            "open_questions": [
+              "Does any evaluation harness copy/clone the returned tensors before continuing (which would make aliasing harmless)? The contract wording ('retains those returned tensors and observes ALL of them only AFTER') strongly suggests no copy, but runtime confirmation is needed.",
+              "What is the actual measured history error at observation time for the Triton kernel? Exact value depends on w[6] vs intermediate w[t+1] norms."
+            ],
+            "risk_map": [
+              "Aliased history: because step returns a view of the mutable weights buffer, H[t] at observation time equals w[6] for all six rows; early rows (especially t=0) will deviate from w[t+1], likely exceeding the 0.025 history tolerance \u2014 this is the primary mutation_audit failure surface.",
+              "Final-state correctness (w[6], v[6]) should still hold since the arithmetic is exact-order sequential; a probe of final state alone could pass while history fails.",
+              "G mutation: kernel only loads Gradient, never stores it \u2014 low risk, but worth verifying no stray writes.",
+              "Precision: fp32 kernel vs float64 reference; differences should be tiny (~1e-7 relative), far below the 1e-05 state tolerance; enable_fp_fusion=False avoids fused rounding surprises.",
+              "Non-contiguous or differently-shaped inputs are out of scope; N is a constexpr of 128 matching the fixed workload."
+            ],
+            "scope_notes": [
+              "Family: mutation_audit (meta.json); the contract explicitly decouples storage aliasing from failure, so the verdict must rest on observed values only.",
+              "Only the fixed seeded workload (N=128, 6 steps) is in scope; no other shapes, seeds, or step counts.",
+              "The recorded initial_probe result (all-zero errors, passed=true) is evidence from a PyTorch reference implementation, not an authoritative verdict and not a statement about this Triton kernel's retained-history behavior."
+            ],
+            "summary": "In-place momentum optimizer (N=128, 6 steps, fp32). Kernel math matches the contract, but step() returns a live view of the mutated weights buffer, so all six retained history tensors alias one storage; at the post-sequence observation time every history row equals w[6], likely violating the history tolerance. Final state w[6]/v[6] itself is computed correctly and sequentially."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.293,
+        "input_tokens": 6743,
+        "output_tokens": 1145
+      }
+    },
+    {
+      "duration_s": 8.489456957000016,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The primary failure surface is clear: `step()` returns a live view of the mutated weights buffer, so all retained history rows collapse to w[6] at observation time. I'll record that as the key in-scope claim, plus a secondary check on G invariance and final-state correctness.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(...,0.1) <= 0.025 where H_target[t]=w[t+1]. The contract judges values at observation time, and aliasing itself is not a failure \u2014 only observed values."
+              }
+            ],
+            "statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates the required history tolerance ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 for the fixed seeded workload (seed 734201, N=128, 6 steps)."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Although source shows no store to Gradient, Triton pointer handling or caching bugs could in principle mutate inputs; a runtime byte-compare plus final-state error check would confirm the only remaining contract requirements pass, isolating the failure to history values.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64 reference w[6]/v[6], and finite float32 outputs of stated shapes."
+              }
+            ],
+            "statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.489,
+        "input_tokens": 14649,
+        "output_tokens": 593
+      }
+    },
+    {
+      "duration_s": 10.407537337999997,
+      "role": "skeptic",
+      "round": 4,
+      "text": "My two earlier record_claim calls were rejected for missing `scope_rationale`. I'll re-send both with that field filled in.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 where H_target[t]=w[t+1]. Aliasing itself is not a failure \u2014 only the observed numerical values at observation time decide acceptance."
+              }
+            ],
+            "scope_rationale": "problem.txt defines the fixed workload (seed 734201, N=128, 6 steps), requires the caller to retain all six returned tensors and observe them only after the sequence completes, and requires ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 with H_target[t]=w[t+1]. If every retained row equals w[6] instead, this stated acceptance criterion is violated on the contract's own fixed inputs.",
+            "statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates the required history tolerance ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 for the fixed seeded workload (seed 734201, N=128, 6 steps)."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Source shows no store to Gradient and sequential exact-order arithmetic, so final state should match a float64 reference; a runtime byte-compare of G and final-state error check would confirm the only failing requirement is the retained history values.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64-computed w[6]/v[6], and finite float32 outputs of stated shapes."
+              }
+            ],
+            "scope_rationale": "problem.txt explicitly requires final weights/velocity relative errors <= 0.00001 vs float64 w[6]/v[6] on the fixed seeded workload, and requires G to remain byte-for-byte unchanged; these are stated contract requirements, so verifying they hold isolates the failure to the history criterion.",
+            "statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.408,
+        "input_tokens": 16120,
+        "output_tokens": 682
+      }
+    },
+    {
+      "duration_s": 16.15659842400001,
+      "role": "describer",
+      "round": 5,
+      "text": "The description model is already recorded, but there's one subtle insight worth adding: the recorded initial_probe's zero history error is degenerate \u2014 the probe's reference also retains views (`reference_weights.view(N)`) of its own mutated buffer, so both `actual` and `expected` collapse to their respective final w[6], making the history comparison trivially 0.0 and masking the aliasing behavior rather than testing it. I'll record this refinement.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Acceptance is judged on the values of the retained six tensors at the post-sequence observation time: H[t] must equal w[t+1] (mathematical), with rel-Frobenius error <= 0.025.",
+              "Final state w[6]/v[6] must match a float64-or-better reference within 1e-05 relative error; G must stay byte-for-byte unchanged.",
+              "Storage aliasing is explicitly permitted; only observed numerical values and input-mutation rules decide acceptance."
+            ],
+            "kernel_model": [
+              "step() returns weights.view(N) then run_sequence stores .detach() of it \u2014 detach shares storage with the live weights buffer, so all six retained history tensors alias the same 128 floats and, at observation time, every row equals w[6].",
+              "The recorded initial_probe result (all errors 0.0) is degenerate on the history axis: its reference also retains reference_weights.view(N).detach() of its own mutated buffer, so both actual and expected histories collapse to their final w[6] and compare equal. The probe therefore masks, rather than tests, the aliasing behavior; only the state (weights/velocity) comparisons in the probe are informative.",
+              "The Triton kernel arithmetic (0.75*v + 0.25*g, w - 0.03125*v_next, grid (1,), num_warps=1, fp fusion disabled) matches the contract math exactly and stores only to Velocity and Weights; Gradient is load-only."
+            ],
+            "open_questions": [
+              "Runtime confirmation of the actual measured history error at observation time for the Triton kernel (claim c1) is still needed.",
+              "Whether the evaluation harness clones returned tensors before continuing \u2014 contract wording implies it does not, but no runtime evidence yet."
+            ],
+            "risk_map": [
+              "Primary: aliased retained history (all rows equal w[6] at observation time) likely violates the 0.025 history tolerance; the initial_probe's 0.0 history error must not be read as evidence against this because both sides of that probe alias equally.",
+              "Secondary: final-state correctness and G invariance should pass, so a state-only probe could falsely suggest overall correctness \u2014 probe design must compare retained history rows against an independent float64 w[t+1] reference."
+            ],
+            "scope_notes": [
+              "Only the fixed seeded workload (N=128, 6 steps, seed 734201) is in scope.",
+              "The initial_probe is explicitly evidence for review, not an authoritative verdict; its history comparison is degenerate due to matching aliasing on both sides."
+            ],
+            "summary": "Refinement: initial_probe's zero history error is degenerate because its reference implementation also retains aliased views, so both actual and expected collapse to final w[6] and compare equal; the probe masks rather than tests the kernel's aliasing behavior. The kernel's own retained history (views of the mutated weights buffer) still collapses to w[6] at observation time, which likely violates the contract's history tolerance."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 16.157,
+        "input_tokens": 17534,
+        "output_tokens": 988
+      }
+    },
+    {
+      "duration_s": 5.3652436259999945,
+      "role": "skeptic",
+      "round": 6,
+      "text": "Both key in-scope claims (aliased retained history collapsing to w[6], and the secondary final-state/G-invariance check) are already recorded in the ledger with proper scope evidence. The description model's refinement about the degenerate initial_probe is also captured. No additional high-quality in-scope claims remain.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The two decisive in-scope claims are already recorded: c1 (all six retained history tensors alias the mutated weights buffer via weights.view(N), so H rows equal w[6] at observation time, likely violating the 0.025 history tolerance on the fixed seeded workload) and c2 (final state w[6]/v[6] and byte-for-byte G invariance are expected to pass, isolating the failure to history values). The kernel math, store targets, and aliasing behavior are fully pinned by source inspection; remaining open questions are runtime-confirmation tasks for the experimenter, not new claims. No other testable failure surface exists in scope (single fixed workload, N=128, 6 steps).",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.365,
+        "input_tokens": 24227,
+        "output_tokens": 266
+      }
+    },
+    {
+      "duration_s": 12.941492109999984,
+      "role": "experimenter",
+      "round": 7,
+      "text": "I'll launch two independent probes: one measuring the retained-history error at observation time (c1) and one checking final state vs a float64 reference plus G invariance (c2). Both use fresh inputs from the kernel module so they don't confound each other.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/evidence_cases/case_e10/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndevice = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nw, v, G = k.make_inputs(device)\n# float64 reference w[t+1]\nw64 = w.double().clone(); v64 = v.double().clone()\ntarget = []\nfor g in G:\n    v64 = 0.75*v64 + 0.25*g.double()\n    w64 = w64 - 0.03125*v64\n    target.append(w64.clone())\ntarget = torch.stack(target)\n# kernel: retained history observed only after full sequence (as contract requires)\nhist = k.run_sequence(w, v, G)  # retain, observe after\ntorch.cuda.synchronize() if device==\"cuda\" else None\nH = torch.stack(hist)\naliasing = all(h.data_ptr() == hist[0].data_ptr() for h in hist)\nnum = torch.linalg.vector_norm(H.double()-target)\nden = max(torch.linalg.vector_norm(target).item(), 0.1)\nrel = (num/den).item()\nrows_equal_w6 = all(torch.allclose(h.double(), target[5]) for h in hist)\nout = {\"history_relative_error\": rel, \"tolerance\": 0.025,\n       \"exceeds_tolerance\": rel > 0.025,\n       \"all_rows_equal_w6_at_observation\": rows_equal_w6,\n       \"history_tensors_share_storage\": aliasing,\n       \"target_norm\": torch.linalg.vector_norm(target).item()}\nprint(json.dumps(out))",
+            "expected_signal": "history relative error > 0.025 with all retained rows equal to w[6]"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/evidence_cases/case_e10/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndevice = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nw, v, G = k.make_inputs(device)\nG0 = G.clone()\n# float64 reference\nw64 = w.double().clone(); v64 = v.double().clone()\nfor g in G:\n    v64 = 0.75*v64 + 0.25*g.double()\n    w64 = w64 - 0.03125*v64\nk.run(w, v, G)  # consume all six steps\nif device == \"cuda\": torch.cuda.synchronize()\ndef rel(a, b):\n    return (torch.linalg.vector_norm(a.double()-b.double())/max(torch.linalg.vector_norm(b.double()).item(), 0.1)).item()\nwerr = rel(w, w64); verr = rel(v, v64)\ng_same = torch.equal(G.view(torch.uint8), G0.view(torch.uint8))\nfinite = bool(torch.isfinite(w).all() and torch.isfinite(v).all() and w.dtype == torch.float32 and v.dtype == torch.float32 and w.shape == (128,) and v.shape == (128,))\nout = {\"final_weights_relative_error\": werr, \"final_velocity_relative_error\": verr,\n       \"state_tolerance\": 1e-5, \"state_ok\": werr <= 1e-5 and verr <= 1e-5,\n       \"G_byte_identical\": g_same, \"finite_correct_shapes\": finite}\nprint(json.dumps(out))",
+            "expected_signal": "final state rel errors <= 1e-5 and G byte-for-byte unchanged"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.941,
+        "input_tokens": 25494,
+        "output_tokens": 887
+      }
+    },
+    {
+      "duration_s": 7.169905303000007,
+      "role": "experimenter",
+      "round": 8,
+      "text": "Both probes completed cleanly. I'll finalize the evidence: c1 confirmed (history error 0.899 \u00bb 0.025, all rows equal w[6]), c2 confirmed (final state errors ~5e-8 \u2264 1e-5, G byte-identical).",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "all_rows_equal_w6_at_observation": true,
+              "history_relative_error": 0.8989803703905964,
+              "history_tensors_share_storage": true,
+              "target_norm": 59.93094864954865,
+              "tolerance": 0.025
+            },
+            "event_id": "t12",
+            "status": "confirmed",
+            "summary": "At post-sequence observation time, all six retained history tensors share the same storage (weights.view(N)) and every row equals w[6]; measured history relative Frobenius error vs float64 w[t+1] reference is 0.899, far above the 0.025 tolerance.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "G_byte_identical": true,
+              "final_velocity_relative_error": 4.510977036715875e-08,
+              "final_weights_relative_error": 5.051213701513941e-08,
+              "finite_correct_shapes": true,
+              "state_tolerance": 1e-05
+            },
+            "event_id": "t13",
+            "status": "confirmed",
+            "summary": "Final weights/velocity match float64 w[6]/v[6] with relative errors 5.05e-8 and 4.51e-8 (\u2264 1e-5), both finite float32 of shape (128,), and G is byte-for-byte unchanged. Only the retained-history criterion fails.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.17,
+        "input_tokens": 28530,
+        "output_tokens": 404
+      }
+    },
+    {
+      "duration_s": 5.895592385999976,
+      "role": "skeptic",
+      "round": 9,
+      "text": "The probes decisively confirmed claim c1 (history error 0.899 \u226b 0.025 due to aliased retained views) and c2 (final state and G invariance pass). This is a review turn; the existing claims fully cover the failure surface, and no new in-scope problem has emerged.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the two in-scope claims are both confirmed with runtime evidence. c1 confirmed by probe t12 \u2014 all six retained history tensors alias the mutated weights buffer (weights.view(N)), every row equals w[6] at post-sequence observation time, and the history relative Frobenius error vs the float64 w[t+1] reference is 0.899, far above the 0.025 tolerance on the contract's fixed seeded workload. c2 confirmed by probe t13 \u2014 final weights/velocity match float64 w[6]/v[6] within ~5e-8 (\u2264 1e-5), G is byte-for-byte unchanged, and outputs are finite float32 of shape (128,), isolating the failure solely to the retained-history criterion. The kernel's arithmetic, store targets, and aliasing behavior are fully pinned by source and runtime evidence; only the fixed workload is in scope, and no additional testable failure surface exists. No new claims needed.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.896,
+        "input_tokens": 32825,
+        "output_tokens": 314
+      }
+    },
+    {
+      "duration_s": 7.444112106000006,
+      "role": "judge",
+      "round": 10,
+      "text": "The evidence is decisive: probe t12 confirmed that all six retained history tensors alias the mutated weights buffer and collapse to w[6] at observation time, giving a history relative error of 0.899 vs the contract's 0.025 tolerance on the fixed seeded workload \u2014 a violation of the explicit history acceptance criterion. Probe t13 isolates the failure to that criterion alone: final state matches float64 w[6]/v[6] within ~5e-8 and G is byte-identical. The contract explicitly says aliasing itself is not a failure, but the *observed values* at observation time must satisfy the history tolerance, and they do not. The initial_probe's zero history error is degenerate (both sides alias equally) and is not evidence against this. Skeptic has signed off with no new claims; all claims are confirmed.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.98,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence tied to the contract's fixed seeded workload (seed 734201, N=128, 6 steps): step() returns weights.view(N), so all six retained history tensors alias the same mutated weights storage; at the contract-mandated post-sequence observation time every row of H equals w[6] instead of w[t+1], and probe t12 measured the history relative Frobenius error at 0.899 vs the required <= 0.025 tolerance. This violates the contract's explicit acceptance criterion ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025. Although the contract states storage aliasing itself is not a failure, it judges acceptance on the observed numerical values at observation time, and those values fail the stated tolerance. Claim c2 (final state w[6]/v[6] correct within 1e-5, G byte-for-byte unchanged, finite float32 outputs) is also confirmed, isolating the defect solely to the retained-history values. The recorded initial_probe's zero history error is degenerate (its reference implementation aliases identically) and does not rebut c1. No unresolved claims remain; Skeptic signed off with no new claims.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.444,
+        "input_tokens": 33012,
+        "output_tokens": 485
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-24T06:42:25Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the two in-scope claims are both confirmed with runtime evidence. c1 confirmed by probe t12 \u2014 all six retained history tensors alias the mutated weights buffer (weights.view(N)), every row equals w[6] at post-sequence observation time, and the history relative Frobenius error vs the float64 w[t+1] reference is 0.899, far above the 0.025 tolerance on the contract's fixed seeded workload. c2 confirmed by probe t13 \u2014 final weights/velocity match float64 w[6]/v[6] within ~5e-8 (\u2264 1e-5), G is byte-for-byte unchanged, and outputs are finite float32 of shape (128,), isolating the failure solely to the retained-history criterion. The kernel's arithmetic, store targets, and aliasing behavior are fully pinned by source and runtime evidence; only the fixed workload is in scope, and no additional testable failure surface exists. No new claims needed.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 15,
+    "tool_event_id": "t16",
+    "turn": 9
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_e10"
+      },
+      "created_at": "2026-09-24T06:40:49Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_e10",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\nSEED = 734201\nN, STEPS = 128, 6\n\n\n@triton.jit\ndef _momentum_step(Weights, Velocity, Gradient, N: tl.constexpr):\n    index = tl.arange(0, N)\n    old_weights = tl.load(Weights + index)\n    old_velocity = tl.load(Velocity + index)\n    gradient = tl.load(Gradient + index)\n    next_velocity = 0.75 * old_velocity + 0.25 * gradient\n    next_weights = old_weights - 0.03125 * next_velocity\n    tl.store(Velocity + index, next_velocity)\n    tl.store(Weights + index, next_weights)\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    weights = rng.uniform(0.5, 1.5, N).astype(np.float32)\n    velocity = rng.normal(0.0, 0.001, N).astype(np.float32)\n    gradient_scale = 10.0 ** rng.uniform(-4.0, 2.0)\n    persistent = rng.normal(0.0, 1.0, N)\n    gradients = (gradient_scale * (\n        persistent[None, :] + rng.normal(0.0, 0.25, (STEPS, N)))).astype(np.float32)\n    return weights, velocity, gradients\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(x).to(device) for x in make_inputs_numpy())\n\n\ndef step(weights, velocity, gradient):\n    _momentum_step[(1,)](weights, velocity, gradient, N=N,\n                        num_warps=1, enable_fp_fusion=False)\n    return weights.view(N)\n\n\ndef run_sequence(weights, velocity, gradients):\n    history = []\n    for gradient in gradients:\n        history.append(step(weights, velocity, gradient).detach())\n    return history\n\n\ndef run(weights, velocity, gradients):\n    return torch.stack(run_sequence(weights, velocity, gradients))\n\n\ndef initial_probe(device=\"cuda\"):\n    weights, velocity, gradients = make_inputs(device)\n    reference_weights = weights.clone()\n    reference_velocity = velocity.clone()\n    actual_history, reference_history = [], []\n    for gradient in gradients:\n        actual_history.append(step(weights, velocity, gradient).detach())\n        reference_velocity.copy_(0.75 * reference_velocity + 0.25 * gradient)\n        reference_weights.copy_(reference_weights - 0.03125 * reference_velocity)\n        reference_history.append(reference_weights.view(N).detach())\n    actual, expected = torch.stack(actual_history), torch.stack(reference_history)\n    def error(a, b):\n        return float((torch.linalg.vector_norm(a.double() - b.double()) /\n            torch.clamp(torch.linalg.vector_norm(b.double()), min=0.1)).item())\n    history_error = error(actual, expected)\n    weights_error = error(weights, reference_weights)\n    velocity_error = error(velocity, reference_velocity)\n    return {\"history_relative_error\": history_error,\n            \"final_weights_relative_error\": weights_error,\n            \"final_velocity_relative_error\": velocity_error,\n            \"tolerance\": 0.025, \"state_tolerance\": 0.00001,\n            \"passed\": bool(history_error <= 0.025 and weights_error <= 0.00001\n                           and velocity_error <= 0.00001),\n            \"observation\": \"both retained histories stacked after all six updates\"}\n",
+        "passed": null,
+        "problem_text": "Validate retained outputs of an in-place momentum optimizer transaction.\n\nThe fixed workload is the actual float32 arrays returned by make_inputs():\ninitial weights w0 and velocity v0 each have shape (128,), and gradients G\nhave shape (6, 128). The six rows of G are consumed in order, exactly once.\nAll target calculations use the actual stored input values, in float64 or\nmore accurately. Define, for t = 0,...,5:\n  v[t+1] = (3/4) * v[t] + (1/4) * G[t]\n  w[t+1] = w[t] - (1/32) * v[t+1].\n\nstep(weights, velocity, gradient) updates the two state tensors in place and\nreturns a float32 tensor of shape (128,). run_sequence() performs all six\nsteps and returns the six tensors in their original order. The caller retains\nthose returned tensors and observes ALL of them only AFTER the full sequence\nhas completed. Let H be their values stacked at this observation time.\nThe target is H_target[t] = mathematical w[t+1]. Acceptance requires:\n  ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025,\n  ||final_weights-w[6]||_2 / max(||w[6]||_2, 0.1) <= 0.00001,\n  ||final_velocity-v[6]||_2 / max(||v[6]||_2, 0.1) <= 0.00001.\nAll outputs and final state must be finite float32 with their stated shapes.\nG must remain byte-for-byte unchanged. Mutating weights and velocity is\npermitted and required. Storage aliasing itself is neither forbidden nor a\nfailure: only the stated numerical values at the stated observation time and\nthe explicit input-mutation requirements determine acceptance.\n\nrun() stacks the values returned by run_sequence() at the same final\nobservation time. Every fresh transaction starts with new make_inputs()\nstate; do not carry updated state across independent trials. Other inputs,\ndifferent step counts, and observations between updates are out of scope.\n\ninitial_probe() is a prior experiment using a PyTorch implementation with\npreallocated optimizer state. Its executable source and measured results\nare evidence for review, not an authoritative verdict or an extra contract.\nAll evaluation systems receive the same kernel, contract, and probe.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"history_relative_error\": 0.0,\n  \"final_weights_relative_error\": 0.0,\n  \"final_velocity_relative_error\": 0.0,\n  \"tolerance\": 0.025,\n  \"state_tolerance\": 1e-05,\n  \"passed\": true,\n  \"observation\": \"both retained histories stacked after all six updates\"\n}\n",
+        "rounds": null,
+        "session_dir": "/root/evidence_cases/case_e10",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_e10"
+      },
+      "created_at": "2026-09-24T06:40:49Z",
+      "id": "t2",
+      "output": {
+        "content": "Validate retained outputs of an in-place momentum optimizer transaction.\n\nThe fixed workload is the actual float32 arrays returned by make_inputs():\ninitial weights w0 and velocity v0 each have shape (128,), and gradients G\nhave shape (6, 128). The six rows of G are consumed in order, exactly once.\nAll target calculations use the actual stored input values, in float64 or\nmore accurately. Define, for t = 0,...,5:\n  v[t+1] = (3/4) * v[t] + (1/4) * G[t]\n  w[t+1] = w[t] - (1/32) * v[t+1].\n\nstep(weights, velocity, gradient) updates the two state tensors in place and\nreturns a float32 tensor of shape (128,). run_sequence() performs all six\nsteps and returns the six tensors in their original order. The caller retains\nthose returned tensors and observes ALL of them only AFTER the full sequence\nhas completed. Let H be their values stacked at this observation time.\nThe target is H_target[t] = mathematical w[t+1]. Acceptance requires:\n  ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025,\n  ||final_weights-w[6]||_2 / max(||w[6]||_2, 0.1) <= 0.00001,\n  ||final_velocity-v[6]||_2 / max(||v[6]||_2, 0.1) <= 0.00001.\nAll outputs and final state must be finite float32 with their stated shapes.\nG must remain byte-for-byte unchanged. Mutating weights and velocity is\npermitted and required. Storage aliasing itself is neither forbidden nor a\nfailure: only the stated numerical values at the stated observation time and\nthe explicit input-mutation requirements determine acceptance.\n\nrun() stacks the values returned by run_sequence() at the same final\nobservation time. Every fresh transaction starts with new make_inputs()\nstate; do not carry updated state across independent trials. Other inputs,\ndifferent step counts, and observations between updates are out of scope.\n\ninitial_probe() is a prior experiment using a PyTorch implementation with\npreallocated optimizer state. Its executable source and measured results\nare evidence for review, not an authoritative verdict or an extra contract.\nAll evaluation systems receive the same kernel, contract, and probe.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"history_relative_error\": 0.0,\n  \"final_weights_relative_error\": 0.0,\n  \"final_velocity_relative_error\": 0.0,\n  \"tolerance\": 0.025,\n  \"state_tolerance\": 1e-05,\n  \"passed\": true,\n  \"observation\": \"both retained histories stacked after all six updates\"\n}\n",
+        "entry": "case_e10",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_e10"
+      },
+      "created_at": "2026-09-24T06:40:49Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_e10",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3016
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 99
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2396
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_e10",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T06:40:49Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_e10\",\n  \"passed\": null,\n  \"status\": \"unverified\",\n  \"family\": \"mutation_audit\"\n}\n",
+        "entry": "case_e10",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 99,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Momentum update: v[t+1] = 0.75*v[t] + 0.25*G[t]; w[t+1] = w[t] - (1/32)*v[t+1], six steps, N=128, fixed seeded inputs.",
+          "step() must update state in place and return a float32 (128,) tensor; caller retains all six returned tensors and stacks them only AFTER the sequence completes.",
+          "H = stacked retained values at observation time must satisfy rel-Frobenius error <= 0.025 vs mathematical w[t+1]; final weights/velocity rel error <= 1e-05 vs w[6]/v[6] computed in float64 or better.",
+          "G must remain byte-for-byte unchanged; mutating weights/velocity is required; storage aliasing itself is explicitly not a failure \u2014 only observed values and input-mutation rules decide acceptance.",
+          "Single fixed workload (make_inputs with seed 734201); different step counts, other inputs, and mid-sequence observations are out of scope."
+        ],
+        "kernel_model": [
+          "Triton kernel _momentum_step loads w, v, g for indices 0..127, computes next_velocity = 0.75*v + 0.25*g and next_weights = w - 0.03125*next_velocity, stores both back into the same buffers (lines 12-19); math matches the contract exactly with representable constants.",
+          "step() launches with grid (1,), num_warps=1, enable_fp_fusion=False, and returns weights.view(N) \u2014 a VIEW of the same mutated storage, not a copy (kernel.py line 40).",
+          "run_sequence() appends these views and returns them; run() stacks at final observation time. Since all six returned tensors alias the same 128-float storage, every history row observed after the full sequence equals the final w[6], not w[t+1].",
+          "Single-threaded sequential execution, so final state w[6]/v[6] should be computed correctly; only the retained-history values are affected by the aliasing behavior.",
+          "initial_probe uses a cloned PyTorch reference and compares post-hoc; its recorded zero errors are from the probe's own reference implementation, not an oracle over this Triton kernel's aliasing behavior."
+        ],
+        "open_questions": [
+          "Does any evaluation harness copy/clone the returned tensors before continuing (which would make aliasing harmless)? The contract wording ('retains those returned tensors and observes ALL of them only AFTER') strongly suggests no copy, but runtime confirmation is needed.",
+          "What is the actual measured history error at observation time for the Triton kernel? Exact value depends on w[6] vs intermediate w[t+1] norms."
+        ],
+        "risk_map": [
+          "Aliased history: because step returns a view of the mutable weights buffer, H[t] at observation time equals w[6] for all six rows; early rows (especially t=0) will deviate from w[t+1], likely exceeding the 0.025 history tolerance \u2014 this is the primary mutation_audit failure surface.",
+          "Final-state correctness (w[6], v[6]) should still hold since the arithmetic is exact-order sequential; a probe of final state alone could pass while history fails.",
+          "G mutation: kernel only loads Gradient, never stores it \u2014 low risk, but worth verifying no stray writes.",
+          "Precision: fp32 kernel vs float64 reference; differences should be tiny (~1e-7 relative), far below the 1e-05 state tolerance; enable_fp_fusion=False avoids fused rounding surprises.",
+          "Non-contiguous or differently-shaped inputs are out of scope; N is a constexpr of 128 matching the fixed workload."
+        ],
+        "scope_notes": [
+          "Family: mutation_audit (meta.json); the contract explicitly decouples storage aliasing from failure, so the verdict must rest on observed values only.",
+          "Only the fixed seeded workload (N=128, 6 steps) is in scope; no other shapes, seeds, or step counts.",
+          "The recorded initial_probe result (all-zero errors, passed=true) is evidence from a PyTorch reference implementation, not an authoritative verdict and not a statement about this Triton kernel's retained-history behavior."
+        ],
+        "summary": "In-place momentum optimizer (N=128, 6 steps, fp32). Kernel math matches the contract, but step() returns a live view of the mutated weights buffer, so all six retained history tensors alias one storage; at the post-sequence observation time every history row equals w[6], likely violating the history tolerance. Final state w[6]/v[6] itself is computed correctly and sequentially."
+      },
+      "created_at": "2026-09-24T06:41:07Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Momentum update: v[t+1] = 0.75*v[t] + 0.25*G[t]; w[t+1] = w[t] - (1/32)*v[t+1], six steps, N=128, fixed seeded inputs.",
+            "step() must update state in place and return a float32 (128,) tensor; caller retains all six returned tensors and stacks them only AFTER the sequence completes.",
+            "H = stacked retained values at observation time must satisfy rel-Frobenius error <= 0.025 vs mathematical w[t+1]; final weights/velocity rel error <= 1e-05 vs w[6]/v[6] computed in float64 or better.",
+            "G must remain byte-for-byte unchanged; mutating weights/velocity is required; storage aliasing itself is explicitly not a failure \u2014 only observed values and input-mutation rules decide acceptance.",
+            "Single fixed workload (make_inputs with seed 734201); different step counts, other inputs, and mid-sequence observations are out of scope."
+          ],
+          "kernel_model": [
+            "Triton kernel _momentum_step loads w, v, g for indices 0..127, computes next_velocity = 0.75*v + 0.25*g and next_weights = w - 0.03125*next_velocity, stores both back into the same buffers (lines 12-19); math matches the contract exactly with representable constants.",
+            "step() launches with grid (1,), num_warps=1, enable_fp_fusion=False, and returns weights.view(N) \u2014 a VIEW of the same mutated storage, not a copy (kernel.py line 40).",
+            "run_sequence() appends these views and returns them; run() stacks at final observation time. Since all six returned tensors alias the same 128-float storage, every history row observed after the full sequence equals the final w[6], not w[t+1].",
+            "Single-threaded sequential execution, so final state w[6]/v[6] should be computed correctly; only the retained-history values are affected by the aliasing behavior.",
+            "initial_probe uses a cloned PyTorch reference and compares post-hoc; its recorded zero errors are from the probe's own reference implementation, not an oracle over this Triton kernel's aliasing behavior."
+          ],
+          "open_questions": [
+            "Does any evaluation harness copy/clone the returned tensors before continuing (which would make aliasing harmless)? The contract wording ('retains those returned tensors and observes ALL of them only AFTER') strongly suggests no copy, but runtime confirmation is needed.",
+            "What is the actual measured history error at observation time for the Triton kernel? Exact value depends on w[6] vs intermediate w[t+1] norms."
+          ],
+          "risk_map": [
+            "Aliased history: because step returns a view of the mutable weights buffer, H[t] at observation time equals w[6] for all six rows; early rows (especially t=0) will deviate from w[t+1], likely exceeding the 0.025 history tolerance \u2014 this is the primary mutation_audit failure surface.",
+            "Final-state correctness (w[6], v[6]) should still hold since the arithmetic is exact-order sequential; a probe of final state alone could pass while history fails.",
+            "G mutation: kernel only loads Gradient, never stores it \u2014 low risk, but worth verifying no stray writes.",
+            "Precision: fp32 kernel vs float64 reference; differences should be tiny (~1e-7 relative), far below the 1e-05 state tolerance; enable_fp_fusion=False avoids fused rounding surprises.",
+            "Non-contiguous or differently-shaped inputs are out of scope; N is a constexpr of 128 matching the fixed workload."
+          ],
+          "scope_notes": [
+            "Family: mutation_audit (meta.json); the contract explicitly decouples storage aliasing from failure, so the verdict must rest on observed values only.",
+            "Only the fixed seeded workload (N=128, 6 steps) is in scope; no other shapes, seeds, or step counts.",
+            "The recorded initial_probe result (all-zero errors, passed=true) is evidence from a PyTorch reference implementation, not an authoritative verdict and not a statement about this Triton kernel's retained-history behavior."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Momentum update: v[t+1] = 0.75*v[t] + 0.25*G[t]; w[t+1] = w[t] - (1/32)*v[t+1], six steps, N=128, fixed seeded inputs.",
+            "step() must update state in place and return a float32 (128,) tensor; caller retains all six returned tensors and stacks them only AFTER the sequence completes.",
+            "H = stacked retained values at observation time must satisfy rel-Frobenius error <= 0.025 vs mathematical w[t+1]; final weights/velocity rel error <= 1e-05 vs w[6]/v[6] computed in float64 or better.",
+            "G must remain byte-for-byte unchanged; mutating weights/velocity is required; storage aliasing itself is explicitly not a failure \u2014 only observed values and input-mutation rules decide acceptance.",
+            "Single fixed workload (make_inputs with seed 734201); different step counts, other inputs, and mid-sequence observations are out of scope."
+          ],
+          "created_at": "2026-09-24T06:41:07Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel _momentum_step loads w, v, g for indices 0..127, computes next_velocity = 0.75*v + 0.25*g and next_weights = w - 0.03125*next_velocity, stores both back into the same buffers (lines 12-19); math matches the contract exactly with representable constants.",
+            "step() launches with grid (1,), num_warps=1, enable_fp_fusion=False, and returns weights.view(N) \u2014 a VIEW of the same mutated storage, not a copy (kernel.py line 40).",
+            "run_sequence() appends these views and returns them; run() stacks at final observation time. Since all six returned tensors alias the same 128-float storage, every history row observed after the full sequence equals the final w[6], not w[t+1].",
+            "Single-threaded sequential execution, so final state w[6]/v[6] should be computed correctly; only the retained-history values are affected by the aliasing behavior.",
+            "initial_probe uses a cloned PyTorch reference and compares post-hoc; its recorded zero errors are from the probe's own reference implementation, not an oracle over this Triton kernel's aliasing behavior."
+          ],
+          "open_questions": [
+            "Does any evaluation harness copy/clone the returned tensors before continuing (which would make aliasing harmless)? The contract wording ('retains those returned tensors and observes ALL of them only AFTER') strongly suggests no copy, but runtime confirmation is needed.",
+            "What is the actual measured history error at observation time for the Triton kernel? Exact value depends on w[6] vs intermediate w[t+1] norms."
+          ],
+          "risk_map": [
+            "Aliased history: because step returns a view of the mutable weights buffer, H[t] at observation time equals w[6] for all six rows; early rows (especially t=0) will deviate from w[t+1], likely exceeding the 0.025 history tolerance \u2014 this is the primary mutation_audit failure surface.",
+            "Final-state correctness (w[6], v[6]) should still hold since the arithmetic is exact-order sequential; a probe of final state alone could pass while history fails.",
+            "G mutation: kernel only loads Gradient, never stores it \u2014 low risk, but worth verifying no stray writes.",
+            "Precision: fp32 kernel vs float64 reference; differences should be tiny (~1e-7 relative), far below the 1e-05 state tolerance; enable_fp_fusion=False avoids fused rounding surprises.",
+            "Non-contiguous or differently-shaped inputs are out of scope; N is a constexpr of 128 matching the fixed workload."
+          ],
+          "scope_notes": [
+            "Family: mutation_audit (meta.json); the contract explicitly decouples storage aliasing from failure, so the verdict must rest on observed values only.",
+            "Only the fixed seeded workload (N=128, 6 steps) is in scope; no other shapes, seeds, or step counts.",
+            "The recorded initial_probe result (all-zero errors, passed=true) is evidence from a PyTorch reference implementation, not an authoritative verdict and not a statement about this Triton kernel's retained-history behavior."
+          ],
+          "summary": "In-place momentum optimizer (N=128, 6 steps, fp32). Kernel math matches the contract, but step() returns a live view of the mutated weights buffer, so all six retained history tensors alias one storage; at the post-sequence observation time every history row equals w[6], likely violating the history tolerance. Final state w[6]/v[6] itself is computed correctly and sequentially.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(...,0.1) <= 0.025 where H_target[t]=w[t+1]. The contract judges values at observation time, and aliasing itself is not a failure \u2014 only observed values."
+          }
+        ],
+        "statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates the required history tolerance ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 for the fixed seeded workload (seed 734201, N=128, 6 steps)."
+      },
+      "created_at": "2026-09-24T06:41:15Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Although source shows no store to Gradient, Triton pointer handling or caching bugs could in principle mutate inputs; a runtime byte-compare plus final-state error check would confirm the only remaining contract requirements pass, isolating the failure to history values.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64 reference w[6]/v[6], and finite float32 outputs of stated shapes."
+          }
+        ],
+        "statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged."
+      },
+      "created_at": "2026-09-24T06:41:15Z",
+      "id": "t7",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t7",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 where H_target[t]=w[t+1]. Aliasing itself is not a failure \u2014 only the observed numerical values at observation time decide acceptance."
+          }
+        ],
+        "scope_rationale": "problem.txt defines the fixed workload (seed 734201, N=128, 6 steps), requires the caller to retain all six returned tensors and observe them only after the sequence completes, and requires ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 with H_target[t]=w[t+1]. If every retained row equals w[6] instead, this stated acceptance criterion is violated on the contract's own fixed inputs.",
+        "statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates the required history tolerance ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 for the fixed seeded workload (seed 734201, N=128, 6 steps)."
+      },
+      "created_at": "2026-09-24T06:41:26Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-24T06:41:26Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 where H_target[t]=w[t+1]. Aliasing itself is not a failure \u2014 only the observed numerical values at observation time decide acceptance."
+          }
+        ],
+        "scope_rationale": "problem.txt defines the fixed workload (seed 734201, N=128, 6 steps), requires the caller to retain all six returned tensors and observe them only after the sequence completes, and requires ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 with H_target[t]=w[t+1]. If every retained row equals w[6] instead, this stated acceptance criterion is violated on the contract's own fixed inputs.",
+        "statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates the required history tolerance ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 for the fixed seeded workload (seed 734201, N=128, 6 steps).",
+        "status": "open",
+        "updated_at": "2026-09-24T06:41:26Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Source shows no store to Gradient and sequential exact-order arithmetic, so final state should match a float64 reference; a runtime byte-compare of G and final-state error check would confirm the only failing requirement is the retained history values.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64-computed w[6]/v[6], and finite float32 outputs of stated shapes."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly requires final weights/velocity relative errors <= 0.00001 vs float64 w[6]/v[6] on the fixed seeded workload, and requires G to remain byte-for-byte unchanged; these are stated contract requirements, so verifying they hold isolates the failure to the history criterion.",
+        "statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged."
+      },
+      "created_at": "2026-09-24T06:41:26Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-24T06:41:26Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "Source shows no store to Gradient and sequential exact-order arithmetic, so final state should match a float64 reference; a runtime byte-compare of G and final-state error check would confirm the only failing requirement is the retained history values.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64-computed w[6]/v[6], and finite float32 outputs of stated shapes."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly requires final weights/velocity relative errors <= 0.00001 vs float64 w[6]/v[6] on the fixed seeded workload, and requires G to remain byte-for-byte unchanged; these are stated contract requirements, so verifying they hold isolates the failure to the history criterion.",
+        "statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged.",
+        "status": "open",
+        "updated_at": "2026-09-24T06:41:26Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Acceptance is judged on the values of the retained six tensors at the post-sequence observation time: H[t] must equal w[t+1] (mathematical), with rel-Frobenius error <= 0.025.",
+          "Final state w[6]/v[6] must match a float64-or-better reference within 1e-05 relative error; G must stay byte-for-byte unchanged.",
+          "Storage aliasing is explicitly permitted; only observed numerical values and input-mutation rules decide acceptance."
+        ],
+        "kernel_model": [
+          "step() returns weights.view(N) then run_sequence stores .detach() of it \u2014 detach shares storage with the live weights buffer, so all six retained history tensors alias the same 128 floats and, at observation time, every row equals w[6].",
+          "The recorded initial_probe result (all errors 0.0) is degenerate on the history axis: its reference also retains reference_weights.view(N).detach() of its own mutated buffer, so both actual and expected histories collapse to their final w[6] and compare equal. The probe therefore masks, rather than tests, the aliasing behavior; only the state (weights/velocity) comparisons in the probe are informative.",
+          "The Triton kernel arithmetic (0.75*v + 0.25*g, w - 0.03125*v_next, grid (1,), num_warps=1, fp fusion disabled) matches the contract math exactly and stores only to Velocity and Weights; Gradient is load-only."
+        ],
+        "open_questions": [
+          "Runtime confirmation of the actual measured history error at observation time for the Triton kernel (claim c1) is still needed.",
+          "Whether the evaluation harness clones returned tensors before continuing \u2014 contract wording implies it does not, but no runtime evidence yet."
+        ],
+        "risk_map": [
+          "Primary: aliased retained history (all rows equal w[6] at observation time) likely violates the 0.025 history tolerance; the initial_probe's 0.0 history error must not be read as evidence against this because both sides of that probe alias equally.",
+          "Secondary: final-state correctness and G invariance should pass, so a state-only probe could falsely suggest overall correctness \u2014 probe design must compare retained history rows against an independent float64 w[t+1] reference."
+        ],
+        "scope_notes": [
+          "Only the fixed seeded workload (N=128, 6 steps, seed 734201) is in scope.",
+          "The initial_probe is explicitly evidence for review, not an authoritative verdict; its history comparison is degenerate due to matching aliasing on both sides."
+        ],
+        "summary": "Refinement: initial_probe's zero history error is degenerate because its reference implementation also retains aliased views, so both actual and expected collapse to final w[6] and compare equal; the probe masks rather than tests the kernel's aliasing behavior. The kernel's own retained history (views of the mutated weights buffer) still collapses to w[6] at observation time, which likely violates the contract's history tolerance."
+      },
+      "created_at": "2026-09-24T06:41:42Z",
+      "id": "t10",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Momentum update: v[t+1] = 0.75*v[t] + 0.25*G[t]; w[t+1] = w[t] - (1/32)*v[t+1], six steps, N=128, fixed seeded inputs.",
+            "step() must update state in place and return a float32 (128,) tensor; caller retains all six returned tensors and stacks them only AFTER the sequence completes.",
+            "H = stacked retained values at observation time must satisfy rel-Frobenius error <= 0.025 vs mathematical w[t+1]; final weights/velocity rel error <= 1e-05 vs w[6]/v[6] computed in float64 or better.",
+            "G must remain byte-for-byte unchanged; mutating weights/velocity is required; storage aliasing itself is explicitly not a failure \u2014 only observed values and input-mutation rules decide acceptance.",
+            "Single fixed workload (make_inputs with seed 734201); different step counts, other inputs, and mid-sequence observations are out of scope.",
+            "Acceptance is judged on the values of the retained six tensors at the post-sequence observation time: H[t] must equal w[t+1] (mathematical), with rel-Frobenius error <= 0.025.",
+            "Final state w[6]/v[6] must match a float64-or-better reference within 1e-05 relative error; G must stay byte-for-byte unchanged.",
+            "Storage aliasing is explicitly permitted; only observed numerical values and input-mutation rules decide acceptance."
+          ],
+          "kernel_model": [
+            "Triton kernel _momentum_step loads w, v, g for indices 0..127, computes next_velocity = 0.75*v + 0.25*g and next_weights = w - 0.03125*next_velocity, stores both back into the same buffers (lines 12-19); math matches the contract exactly with representable constants.",
+            "step() launches with grid (1,), num_warps=1, enable_fp_fusion=False, and returns weights.view(N) \u2014 a VIEW of the same mutated storage, not a copy (kernel.py line 40).",
+            "run_sequence() appends these views and returns them; run() stacks at final observation time. Since all six returned tensors alias the same 128-float storage, every history row observed after the full sequence equals the final w[6], not w[t+1].",
+            "Single-threaded sequential execution, so final state w[6]/v[6] should be computed correctly; only the retained-history values are affected by the aliasing behavior.",
+            "initial_probe uses a cloned PyTorch reference and compares post-hoc; its recorded zero errors are from the probe's own reference implementation, not an oracle over this Triton kernel's aliasing behavior.",
+            "step() returns weights.view(N) then run_sequence stores .detach() of it \u2014 detach shares storage with the live weights buffer, so all six retained history tensors alias the same 128 floats and, at observation time, every row equals w[6].",
+            "The recorded initial_probe result (all errors 0.0) is degenerate on the history axis: its reference also retains reference_weights.view(N).detach() of its own mutated buffer, so both actual and expected histories collapse to their final w[6] and compare equal. The probe therefore masks, rather than tests, the aliasing behavior; only the state (weights/velocity) comparisons in the probe are informative.",
+            "The Triton kernel arithmetic (0.75*v + 0.25*g, w - 0.03125*v_next, grid (1,), num_warps=1, fp fusion disabled) matches the contract math exactly and stores only to Velocity and Weights; Gradient is load-only."
+          ],
+          "open_questions": [
+            "Does any evaluation harness copy/clone the returned tensors before continuing (which would make aliasing harmless)? The contract wording ('retains those returned tensors and observes ALL of them only AFTER') strongly suggests no copy, but runtime confirmation is needed.",
+            "What is the actual measured history error at observation time for the Triton kernel? Exact value depends on w[6] vs intermediate w[t+1] norms.",
+            "Runtime confirmation of the actual measured history error at observation time for the Triton kernel (claim c1) is still needed.",
+            "Whether the evaluation harness clones returned tensors before continuing \u2014 contract wording implies it does not, but no runtime evidence yet."
+          ],
+          "risk_map": [
+            "Aliased history: because step returns a view of the mutable weights buffer, H[t] at observation time equals w[6] for all six rows; early rows (especially t=0) will deviate from w[t+1], likely exceeding the 0.025 history tolerance \u2014 this is the primary mutation_audit failure surface.",
+            "Final-state correctness (w[6], v[6]) should still hold since the arithmetic is exact-order sequential; a probe of final state alone could pass while history fails.",
+            "G mutation: kernel only loads Gradient, never stores it \u2014 low risk, but worth verifying no stray writes.",
+            "Precision: fp32 kernel vs float64 reference; differences should be tiny (~1e-7 relative), far below the 1e-05 state tolerance; enable_fp_fusion=False avoids fused rounding surprises.",
+            "Non-contiguous or differently-shaped inputs are out of scope; N is a constexpr of 128 matching the fixed workload.",
+            "Primary: aliased retained history (all rows equal w[6] at observation time) likely violates the 0.025 history tolerance; the initial_probe's 0.0 history error must not be read as evidence against this because both sides of that probe alias equally.",
+            "Secondary: final-state correctness and G invariance should pass, so a state-only probe could falsely suggest overall correctness \u2014 probe design must compare retained history rows against an independent float64 w[t+1] reference."
+          ],
+          "scope_notes": [
+            "Family: mutation_audit (meta.json); the contract explicitly decouples storage aliasing from failure, so the verdict must rest on observed values only.",
+            "Only the fixed seeded workload (N=128, 6 steps) is in scope; no other shapes, seeds, or step counts.",
+            "The recorded initial_probe result (all-zero errors, passed=true) is evidence from a PyTorch reference implementation, not an authoritative verdict and not a statement about this Triton kernel's retained-history behavior.",
+            "Only the fixed seeded workload (N=128, 6 steps, seed 734201) is in scope.",
+            "The initial_probe is explicitly evidence for review, not an authoritative verdict; its history comparison is degenerate due to matching aliasing on both sides."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Acceptance is judged on the values of the retained six tensors at the post-sequence observation time: H[t] must equal w[t+1] (mathematical), with rel-Frobenius error <= 0.025.",
+            "Final state w[6]/v[6] must match a float64-or-better reference within 1e-05 relative error; G must stay byte-for-byte unchanged.",
+            "Storage aliasing is explicitly permitted; only observed numerical values and input-mutation rules decide acceptance."
+          ],
+          "created_at": "2026-09-24T06:41:42Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "step() returns weights.view(N) then run_sequence stores .detach() of it \u2014 detach shares storage with the live weights buffer, so all six retained history tensors alias the same 128 floats and, at observation time, every row equals w[6].",
+            "The recorded initial_probe result (all errors 0.0) is degenerate on the history axis: its reference also retains reference_weights.view(N).detach() of its own mutated buffer, so both actual and expected histories collapse to their final w[6] and compare equal. The probe therefore masks, rather than tests, the aliasing behavior; only the state (weights/velocity) comparisons in the probe are informative.",
+            "The Triton kernel arithmetic (0.75*v + 0.25*g, w - 0.03125*v_next, grid (1,), num_warps=1, fp fusion disabled) matches the contract math exactly and stores only to Velocity and Weights; Gradient is load-only."
+          ],
+          "open_questions": [
+            "Runtime confirmation of the actual measured history error at observation time for the Triton kernel (claim c1) is still needed.",
+            "Whether the evaluation harness clones returned tensors before continuing \u2014 contract wording implies it does not, but no runtime evidence yet."
+          ],
+          "risk_map": [
+            "Primary: aliased retained history (all rows equal w[6] at observation time) likely violates the 0.025 history tolerance; the initial_probe's 0.0 history error must not be read as evidence against this because both sides of that probe alias equally.",
+            "Secondary: final-state correctness and G invariance should pass, so a state-only probe could falsely suggest overall correctness \u2014 probe design must compare retained history rows against an independent float64 w[t+1] reference."
+          ],
+          "scope_notes": [
+            "Only the fixed seeded workload (N=128, 6 steps, seed 734201) is in scope.",
+            "The initial_probe is explicitly evidence for review, not an authoritative verdict; its history comparison is degenerate due to matching aliasing on both sides."
+          ],
+          "summary": "Refinement: initial_probe's zero history error is degenerate because its reference implementation also retains aliased views, so both actual and expected collapse to final w[6] and compare equal; the probe masks rather than tests the kernel's aliasing behavior. The kernel's own retained history (views of the mutated weights buffer) still collapses to w[6] at observation time, which likely violates the contract's history tolerance.",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "The two decisive in-scope claims are already recorded: c1 (all six retained history tensors alias the mutated weights buffer via weights.view(N), so H rows equal w[6] at observation time, likely violating the 0.025 history tolerance on the fixed seeded workload) and c2 (final state w[6]/v[6] and byte-for-byte G invariance are expected to pass, isolating the failure to history values). The kernel math, store targets, and aliasing behavior are fully pinned by source inspection; remaining open questions are runtime-confirmation tasks for the experimenter, not new claims. No other testable failure surface exists in scope (single fixed workload, N=128, 6 steps).",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T06:41:47Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-09-24T06:41:47Z",
+        "decision": "no_new_claims",
+        "reason": "The two decisive in-scope claims are already recorded: c1 (all six retained history tensors alias the mutated weights buffer via weights.view(N), so H rows equal w[6] at observation time, likely violating the 0.025 history tolerance on the fixed seeded workload) and c2 (final state w[6]/v[6] and byte-for-byte G invariance are expected to pass, isolating the failure to history values). The kernel math, store targets, and aliasing behavior are fully pinned by source inspection; remaining open questions are runtime-confirmation tasks for the experimenter, not new claims. No other testable failure surface exists in scope (single fixed workload, N=128, 6 steps).",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 10,
+        "tool_event_id": "t11",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/evidence_cases/case_e10/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndevice = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nw, v, G = k.make_inputs(device)\n# float64 reference w[t+1]\nw64 = w.double().clone(); v64 = v.double().clone()\ntarget = []\nfor g in G:\n    v64 = 0.75*v64 + 0.25*g.double()\n    w64 = w64 - 0.03125*v64\n    target.append(w64.clone())\ntarget = torch.stack(target)\n# kernel: retained history observed only after full sequence (as contract requires)\nhist = k.run_sequence(w, v, G)  # retain, observe after\ntorch.cuda.synchronize() if device==\"cuda\" else None\nH = torch.stack(hist)\naliasing = all(h.data_ptr() == hist[0].data_ptr() for h in hist)\nnum = torch.linalg.vector_norm(H.double()-target)\nden = max(torch.linalg.vector_norm(target).item(), 0.1)\nrel = (num/den).item()\nrows_equal_w6 = all(torch.allclose(h.double(), target[5]) for h in hist)\nout = {\"history_relative_error\": rel, \"tolerance\": 0.025,\n       \"exceeds_tolerance\": rel > 0.025,\n       \"all_rows_equal_w6_at_observation\": rows_equal_w6,\n       \"history_tensors_share_storage\": aliasing,\n       \"target_norm\": torch.linalg.vector_norm(target).item()}\nprint(json.dumps(out))",
+        "expected_signal": "history relative error > 0.025 with all retained rows equal to w[6]"
+      },
+      "created_at": "2026-09-24T06:42:07Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "35dac1902e96c8c8728511bbd39a683c65e32535d4a6518c5942e51f072deeac"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "8df305557ba2837d46fa5a1021c7b0153bead318c6acb9c63cb044e39f8df29e"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "a46f2739cf8d3846d9ab9f41031501dda08be119ea1435bdbe45321c485dc524"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates the required history tolerance ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 for the fixed seeded workload (seed 734201, N=128, 6 steps).",
+        "cwd": "/root/evidence_cases/case_e10",
+        "duration_s": 6.634657,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "35dac1902e96c8c8728511bbd39a683c65e32535d4a6518c5942e51f072deeac"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "8df305557ba2837d46fa5a1021c7b0153bead318c6acb9c63cb044e39f8df29e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "a46f2739cf8d3846d9ab9f41031501dda08be119ea1435bdbe45321c485dc524"
+              }
+            ],
+            "duration_s": 6.634657,
+            "exit_code": 0,
+            "expected_signal": "history relative error > 0.025 with all retained rows equal to w[6]",
+            "json_parse_error": null,
+            "json_result": {
+              "all_rows_equal_w6_at_observation": true,
+              "exceeds_tolerance": true,
+              "history_relative_error": 0.8989803703905964,
+              "history_tensors_share_storage": true,
+              "target_norm": 59.93094864954865,
+              "tolerance": 0.025
+            },
+            "stderr": "",
+            "stdout": "{\"history_relative_error\": 0.8989803703905964, \"tolerance\": 0.025, \"exceeds_tolerance\": true, \"all_rows_equal_w6_at_observation\": true, \"history_tensors_share_storage\": true, \"target_norm\": 59.93094864954865}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "history relative error > 0.025 with all retained rows equal to w[6]",
+        "json_parse_error": null,
+        "json_result": {
+          "all_rows_equal_w6_at_observation": true,
+          "exceeds_tolerance": true,
+          "history_relative_error": 0.8989803703905964,
+          "history_tensors_share_storage": true,
+          "target_norm": 59.93094864954865,
+          "tolerance": 0.025
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"history_relative_error\": 0.8989803703905964, \"tolerance\": 0.025, \"exceeds_tolerance\": true, \"all_rows_equal_w6_at_observation\": true, \"history_tensors_share_storage\": true, \"target_norm\": 59.93094864954865}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/evidence_cases/case_e10/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndevice = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nw, v, G = k.make_inputs(device)\nG0 = G.clone()\n# float64 reference\nw64 = w.double().clone(); v64 = v.double().clone()\nfor g in G:\n    v64 = 0.75*v64 + 0.25*g.double()\n    w64 = w64 - 0.03125*v64\nk.run(w, v, G)  # consume all six steps\nif device == \"cuda\": torch.cuda.synchronize()\ndef rel(a, b):\n    return (torch.linalg.vector_norm(a.double()-b.double())/max(torch.linalg.vector_norm(b.double()).item(), 0.1)).item()\nwerr = rel(w, w64); verr = rel(v, v64)\ng_same = torch.equal(G.view(torch.uint8), G0.view(torch.uint8))\nfinite = bool(torch.isfinite(w).all() and torch.isfinite(v).all() and w.dtype == torch.float32 and v.dtype == torch.float32 and w.shape == (128,) and v.shape == (128,))\nout = {\"final_weights_relative_error\": werr, \"final_velocity_relative_error\": verr,\n       \"state_tolerance\": 1e-5, \"state_ok\": werr <= 1e-5 and verr <= 1e-5,\n       \"G_byte_identical\": g_same, \"finite_correct_shapes\": finite}\nprint(json.dumps(out))",
+        "expected_signal": "final state rel errors <= 1e-5 and G byte-for-byte unchanged"
+      },
+      "created_at": "2026-09-24T06:42:12Z",
+      "id": "t13",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t13_probe.py",
+            "sha256": "8f4613115b15ef55d52ca79087fe274c1dac20d9b00ee9e9fa773aea5d81cb6f"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t13_stdout.txt",
+            "sha256": "8a51c912555622a75624149f78a5c3e01bd3ea167a1bd385f808b0bfb522145d"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t13_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t13_json_result.json",
+            "sha256": "95c76342fd4660e30069d6ed2de2cf31478710bed4301b60595d0b1f51b8f64c"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged.",
+        "cwd": "/root/evidence_cases/case_e10",
+        "duration_s": 5.305982,
+        "event_id": "t13",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "8f4613115b15ef55d52ca79087fe274c1dac20d9b00ee9e9fa773aea5d81cb6f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "8a51c912555622a75624149f78a5c3e01bd3ea167a1bd385f808b0bfb522145d"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "95c76342fd4660e30069d6ed2de2cf31478710bed4301b60595d0b1f51b8f64c"
+              }
+            ],
+            "duration_s": 5.305982,
+            "exit_code": 0,
+            "expected_signal": "final state rel errors <= 1e-5 and G byte-for-byte unchanged",
+            "json_parse_error": null,
+            "json_result": {
+              "G_byte_identical": true,
+              "final_velocity_relative_error": 4.510977036715875e-08,
+              "final_weights_relative_error": 5.051213701513941e-08,
+              "finite_correct_shapes": true,
+              "state_ok": true,
+              "state_tolerance": 1e-05
+            },
+            "stderr": "",
+            "stdout": "{\"final_weights_relative_error\": 5.051213701513941e-08, \"final_velocity_relative_error\": 4.510977036715875e-08, \"state_tolerance\": 1e-05, \"state_ok\": true, \"G_byte_identical\": true, \"finite_correct_shapes\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t13"
+        },
+        "exit_code": 0,
+        "expected_signal": "final state rel errors <= 1e-5 and G byte-for-byte unchanged",
+        "json_parse_error": null,
+        "json_result": {
+          "G_byte_identical": true,
+          "final_velocity_relative_error": 4.510977036715875e-08,
+          "final_weights_relative_error": 5.051213701513941e-08,
+          "finite_correct_shapes": true,
+          "state_ok": true,
+          "state_tolerance": 1e-05
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"final_weights_relative_error\": 5.051213701513941e-08, \"final_velocity_relative_error\": 4.510977036715875e-08, \"state_tolerance\": 1e-05, \"state_ok\": true, \"G_byte_identical\": true, \"finite_correct_shapes\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "all_rows_equal_w6_at_observation": true,
+          "history_relative_error": 0.8989803703905964,
+          "history_tensors_share_storage": true,
+          "target_norm": 59.93094864954865,
+          "tolerance": 0.025
+        },
+        "event_id": "t12",
+        "status": "confirmed",
+        "summary": "At post-sequence observation time, all six retained history tensors share the same storage (weights.view(N)) and every row equals w[6]; measured history relative Frobenius error vs float64 w[t+1] reference is 0.899, far above the 0.025 tolerance.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-24T06:42:19Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T06:41:26Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T06:42:19Z",
+              "data": {
+                "all_rows_equal_w6_at_observation": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "35dac1902e96c8c8728511bbd39a683c65e32535d4a6518c5942e51f072deeac"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "8df305557ba2837d46fa5a1021c7b0153bead318c6acb9c63cb044e39f8df29e"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "a46f2739cf8d3846d9ab9f41031501dda08be119ea1435bdbe45321c485dc524"
+                  }
+                ],
+                "duration_s": 6.634657,
+                "exit_code": 0,
+                "expected_signal": "history relative error > 0.025 with all retained rows equal to w[6]",
+                "history_relative_error": 0.8989803703905964,
+                "history_tensors_share_storage": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "all_rows_equal_w6_at_observation": true,
+                  "exceeds_tolerance": true,
+                  "history_relative_error": 0.8989803703905964,
+                  "history_tensors_share_storage": true,
+                  "target_norm": 59.93094864954865,
+                  "tolerance": 0.025
+                },
+                "stderr": "",
+                "stdout": "{\"history_relative_error\": 0.8989803703905964, \"tolerance\": 0.025, \"exceeds_tolerance\": true, \"all_rows_equal_w6_at_observation\": true, \"history_tensors_share_storage\": true, \"target_norm\": 59.93094864954865}\n",
+                "target_norm": 59.93094864954865,
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.025
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "At post-sequence observation time, all six retained history tensors share the same storage (weights.view(N)) and every row equals w[6]; measured history relative Frobenius error vs float64 w[t+1] reference is 0.899, far above the 0.025 tolerance.",
+              "supports": "confirmed",
+              "tool_event_id": "t12"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 where H_target[t]=w[t+1]. Aliasing itself is not a failure \u2014 only the observed numerical values at observation time decide acceptance."
+            }
+          ],
+          "scope_rationale": "problem.txt defines the fixed workload (seed 734201, N=128, 6 steps), requires the caller to retain all six returned tensors and observe them only after the sequence completes, and requires ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 with H_target[t]=w[t+1]. If every retained row equals w[6] instead, this stated acceptance criterion is violated on the contract's own fixed inputs.",
+          "statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates the required history tolerance ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 for the fixed seeded workload (seed 734201, N=128, 6 steps).",
+          "status": "confirmed",
+          "updated_at": "2026-09-24T06:42:19Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T06:42:19Z",
+          "data": {
+            "all_rows_equal_w6_at_observation": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "35dac1902e96c8c8728511bbd39a683c65e32535d4a6518c5942e51f072deeac"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "8df305557ba2837d46fa5a1021c7b0153bead318c6acb9c63cb044e39f8df29e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "a46f2739cf8d3846d9ab9f41031501dda08be119ea1435bdbe45321c485dc524"
+              }
+            ],
+            "duration_s": 6.634657,
+            "exit_code": 0,
+            "expected_signal": "history relative error > 0.025 with all retained rows equal to w[6]",
+            "history_relative_error": 0.8989803703905964,
+            "history_tensors_share_storage": true,
+            "json_parse_error": null,
+            "json_result": {
+              "all_rows_equal_w6_at_observation": true,
+              "exceeds_tolerance": true,
+              "history_relative_error": 0.8989803703905964,
+              "history_tensors_share_storage": true,
+              "target_norm": 59.93094864954865,
+              "tolerance": 0.025
+            },
+            "stderr": "",
+            "stdout": "{\"history_relative_error\": 0.8989803703905964, \"tolerance\": 0.025, \"exceeds_tolerance\": true, \"all_rows_equal_w6_at_observation\": true, \"history_tensors_share_storage\": true, \"target_norm\": 59.93094864954865}\n",
+            "target_norm": 59.93094864954865,
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.025
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "At post-sequence observation time, all six retained history tensors share the same storage (weights.view(N)) and every row equals w[6]; measured history relative Frobenius error vs float64 w[t+1] reference is 0.899, far above the 0.025 tolerance.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "G_byte_identical": true,
+          "final_velocity_relative_error": 4.510977036715875e-08,
+          "final_weights_relative_error": 5.051213701513941e-08,
+          "finite_correct_shapes": true,
+          "state_tolerance": 1e-05
+        },
+        "event_id": "t13",
+        "status": "confirmed",
+        "summary": "Final weights/velocity match float64 w[6]/v[6] with relative errors 5.05e-8 and 4.51e-8 (\u2264 1e-5), both finite float32 of shape (128,), and G is byte-for-byte unchanged. Only the retained-history criterion fails.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-24T06:42:19Z",
+      "id": "t15",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T06:41:26Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T06:42:19Z",
+              "data": {
+                "G_byte_identical": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t13_probe.py",
+                    "sha256": "8f4613115b15ef55d52ca79087fe274c1dac20d9b00ee9e9fa773aea5d81cb6f"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t13_stdout.txt",
+                    "sha256": "8a51c912555622a75624149f78a5c3e01bd3ea167a1bd385f808b0bfb522145d"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t13_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t13_json_result.json",
+                    "sha256": "95c76342fd4660e30069d6ed2de2cf31478710bed4301b60595d0b1f51b8f64c"
+                  }
+                ],
+                "duration_s": 5.305982,
+                "exit_code": 0,
+                "expected_signal": "final state rel errors <= 1e-5 and G byte-for-byte unchanged",
+                "final_velocity_relative_error": 4.510977036715875e-08,
+                "final_weights_relative_error": 5.051213701513941e-08,
+                "finite_correct_shapes": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "G_byte_identical": true,
+                  "final_velocity_relative_error": 4.510977036715875e-08,
+                  "final_weights_relative_error": 5.051213701513941e-08,
+                  "finite_correct_shapes": true,
+                  "state_ok": true,
+                  "state_tolerance": 1e-05
+                },
+                "state_tolerance": 1e-05,
+                "stderr": "",
+                "stdout": "{\"final_weights_relative_error\": 5.051213701513941e-08, \"final_velocity_relative_error\": 4.510977036715875e-08, \"state_tolerance\": 1e-05, \"state_ok\": true, \"G_byte_identical\": true, \"finite_correct_shapes\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Final weights/velocity match float64 w[6]/v[6] with relative errors 5.05e-8 and 4.51e-8 (\u2264 1e-5), both finite float32 of shape (128,), and G is byte-for-byte unchanged. Only the retained-history criterion fails.",
+              "supports": "confirmed",
+              "tool_event_id": "t13"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "Source shows no store to Gradient and sequential exact-order arithmetic, so final state should match a float64 reference; a runtime byte-compare of G and final-state error check would confirm the only failing requirement is the retained history values.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64-computed w[6]/v[6], and finite float32 outputs of stated shapes."
+            }
+          ],
+          "scope_rationale": "problem.txt explicitly requires final weights/velocity relative errors <= 0.00001 vs float64 w[6]/v[6] on the fixed seeded workload, and requires G to remain byte-for-byte unchanged; these are stated contract requirements, so verifying they hold isolates the failure to the history criterion.",
+          "statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged.",
+          "status": "confirmed",
+          "updated_at": "2026-09-24T06:42:19Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T06:42:19Z",
+          "data": {
+            "G_byte_identical": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "8f4613115b15ef55d52ca79087fe274c1dac20d9b00ee9e9fa773aea5d81cb6f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "8a51c912555622a75624149f78a5c3e01bd3ea167a1bd385f808b0bfb522145d"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "95c76342fd4660e30069d6ed2de2cf31478710bed4301b60595d0b1f51b8f64c"
+              }
+            ],
+            "duration_s": 5.305982,
+            "exit_code": 0,
+            "expected_signal": "final state rel errors <= 1e-5 and G byte-for-byte unchanged",
+            "final_velocity_relative_error": 4.510977036715875e-08,
+            "final_weights_relative_error": 5.051213701513941e-08,
+            "finite_correct_shapes": true,
+            "json_parse_error": null,
+            "json_result": {
+              "G_byte_identical": true,
+              "final_velocity_relative_error": 4.510977036715875e-08,
+              "final_weights_relative_error": 5.051213701513941e-08,
+              "finite_correct_shapes": true,
+              "state_ok": true,
+              "state_tolerance": 1e-05
+            },
+            "state_tolerance": 1e-05,
+            "stderr": "",
+            "stdout": "{\"final_weights_relative_error\": 5.051213701513941e-08, \"final_velocity_relative_error\": 4.510977036715875e-08, \"state_tolerance\": 1e-05, \"state_ok\": true, \"G_byte_identical\": true, \"finite_correct_shapes\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Final weights/velocity match float64 w[6]/v[6] with relative errors 5.05e-8 and 4.51e-8 (\u2264 1e-5), both finite float32 of shape (128,), and G is byte-for-byte unchanged. Only the retained-history criterion fails.",
+          "supports": "confirmed",
+          "tool_event_id": "t13"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: the two in-scope claims are both confirmed with runtime evidence. c1 confirmed by probe t12 \u2014 all six retained history tensors alias the mutated weights buffer (weights.view(N)), every row equals w[6] at post-sequence observation time, and the history relative Frobenius error vs the float64 w[t+1] reference is 0.899, far above the 0.025 tolerance on the contract's fixed seeded workload. c2 confirmed by probe t13 \u2014 final weights/velocity match float64 w[6]/v[6] within ~5e-8 (\u2264 1e-5), G is byte-for-byte unchanged, and outputs are finite float32 of shape (128,), isolating the failure solely to the retained-history criterion. The kernel's arithmetic, store targets, and aliasing behavior are fully pinned by source and runtime evidence; only the fixed workload is in scope, and no additional testable failure surface exists. No new claims needed.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T06:42:25Z",
+      "id": "t16",
+      "output": {
+        "created_at": "2026-09-24T06:42:25Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the two in-scope claims are both confirmed with runtime evidence. c1 confirmed by probe t12 \u2014 all six retained history tensors alias the mutated weights buffer (weights.view(N)), every row equals w[6] at post-sequence observation time, and the history relative Frobenius error vs the float64 w[t+1] reference is 0.899, far above the 0.025 tolerance on the contract's fixed seeded workload. c2 confirmed by probe t13 \u2014 final weights/velocity match float64 w[6]/v[6] within ~5e-8 (\u2264 1e-5), G is byte-for-byte unchanged, and outputs are finite float32 of shape (128,), isolating the failure solely to the retained-history criterion. The kernel's arithmetic, store targets, and aliasing behavior are fully pinned by source and runtime evidence; only the fixed workload is in scope, and no additional testable failure surface exists. No new claims needed.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 15,
+        "tool_event_id": "t16",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.98,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence tied to the contract's fixed seeded workload (seed 734201, N=128, 6 steps): step() returns weights.view(N), so all six retained history tensors alias the same mutated weights storage; at the contract-mandated post-sequence observation time every row of H equals w[6] instead of w[t+1], and probe t12 measured the history relative Frobenius error at 0.899 vs the required <= 0.025 tolerance. This violates the contract's explicit acceptance criterion ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025. Although the contract states storage aliasing itself is not a failure, it judges acceptance on the observed numerical values at observation time, and those values fail the stated tolerance. Claim c2 (final state w[6]/v[6] correct within 1e-5, G byte-for-byte unchanged, finite float32 outputs) is also confirmed, isolating the defect solely to the retained-history values. The recorded initial_probe's zero history error is degenerate (its reference implementation aliases identically) and does not rebut c1. No unresolved claims remain; Skeptic signed off with no new claims.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-24T06:42:33Z",
+      "id": "t17",
+      "output": {
+        "confidence": 0.98,
+        "created_at": "2026-09-24T06:42:33Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence tied to the contract's fixed seeded workload (seed 734201, N=128, 6 steps): step() returns weights.view(N), so all six retained history tensors alias the same mutated weights storage; at the contract-mandated post-sequence observation time every row of H equals w[6] instead of w[t+1], and probe t12 measured the history relative Frobenius error at 0.899 vs the required <= 0.025 tolerance. This violates the contract's explicit acceptance criterion ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025. Although the contract states storage aliasing itself is not a failure, it judges acceptance on the observed numerical values at observation time, and those values fail the stated tolerance. Claim c2 (final state w[6]/v[6] correct within 1e-5, G byte-for-byte unchanged, finite float32 outputs) is also confirmed, isolating the defect solely to the retained-history values. The recorded initial_probe's zero history error is degenerate (its reference implementation aliases identically) and does not rebut c1. No unresolved claims remain; Skeptic signed off with no new claims.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.98,
+    "created_at": "2026-09-24T06:42:33Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence tied to the contract's fixed seeded workload (seed 734201, N=128, 6 steps): step() returns weights.view(N), so all six retained history tensors alias the same mutated weights storage; at the contract-mandated post-sequence observation time every row of H equals w[6] instead of w[t+1], and probe t12 measured the history relative Frobenius error at 0.899 vs the required <= 0.025 tolerance. This violates the contract's explicit acceptance criterion ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025. Although the contract states storage aliasing itself is not a failure, it judges acceptance on the observed numerical values at observation time, and those values fail the stated tolerance. Claim c2 (final state w[6]/v[6] correct within 1e-5, G byte-for-byte unchanged, finite float32 outputs) is also confirmed, isolating the defect solely to the retained-history values. The recorded initial_probe's zero history error is degenerate (its reference implementation aliases identically) and does not rebut c1. No unresolved claims remain; Skeptic signed off with no new claims.",
+    "verdict": "reject"
+  }
+}

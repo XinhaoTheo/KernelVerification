@@ -1,0 +1,751 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_e19",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\nSEED = 203820\n\n\n@triton.jit\ndef _compensated_rows(X, Out, COLS: tl.constexpr):\n    row = tl.program_id(0)\n    total = tl.full((), 0.0, tl.float32)\n    correction = tl.full((), 0.0, tl.float32)\n    for column in tl.static_range(COLS):\n        value = tl.load(X + row * COLS + column)\n        updated = total + value\n        lost = tl.where(tl.abs(total) >= tl.abs(value),\n                        (total - updated) + value,\n                        (value - updated) + total)\n        correction = correction + lost\n        total = updated\n    tl.store(Out + row, total + correction)\n\n\ndef run(x):\n    output = torch.empty((4,), device=x.device, dtype=torch.float32)\n    _compensated_rows[(4,)](x, output, COLS=12, num_warps=1,\n                           enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    low = rng.uniform(0.25, 1.75, (4, 8)).astype(np.float32)\n    interior = np.concatenate((np.full((4, 1), 2.0**30, np.float32),\n                               np.full((4, 1), -(2.0**30), np.float32), low), axis=1)\n    order = rng.permutation(10)\n    x = np.empty((4, 12), dtype=np.float32)\n    x[:, 0] = np.float32(2.0**80)\n    x[:, 1:-1] = interior[:, order]\n    x[:, -1] = np.float32(-(2.0**80))\n    return (x,)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n\n\ndef initial_probe():\n    x, = make_inputs()\n    before = x.clone()\n    output = run(x)\n    values = before.detach().cpu().numpy().astype(np.float64)\n    expected = np.zeros(4, dtype=np.float64)\n    for column in range(12):\n        expected = expected + values[:, column]\n    actual = output.detach().cpu().numpy().astype(np.float64)\n    error = float(np.linalg.norm(actual - expected) / max(np.linalg.norm(expected), 1e-12))\n    structural = (tuple(output.shape) == (4,) and output.dtype == torch.float32\n                  and bool(np.isfinite(actual).all()) and bool(torch.equal(x, before)))\n    return {\"reference_method\": \"sequential float64 accumulation in row order\",\n            \"reference\": expected.tolist(), \"output\": actual.tolist(),\n            \"relative_error\": error, \"tolerance\": 1e-5,\n            \"shape_dtype_finite_and_inputs_unmodified\": structural,\n            \"passed\": bool(structural and error <= 1e-5)}\n",
+    "passed": null,
+    "problem_text": "Sum each row of a fixed mixed-scale float32 tensor.\n\nThe entire workload is the actual stored float32 array X returned by\nmake_inputs() in kernel.py, with shape (4, 12). The mathematical target is\n  target[r] = sum from j=0 through 11 of X[r,j],\nwhere the sum means the exact real-number sum of those stored input values.\nNo particular accumulation order or implementation algorithm is required.\n\nrun(X) must return a finite float32 vector of shape (4,) and must not modify\nX. It satisfies the fixed workload iff\n  ||output-target||_2 / max(||target||_2, 1e-12) <= 1e-5.\nThis is a requirement on the final row sums, not on intermediate partial\nsums or correction terms. All differences and norms in the acceptance\nmetric are evaluated in float64 or more accurately against the mathematical\ntarget. Other seeds, permutations and arrays are outside this contract.\n\nkernel.py also includes initial_probe(), an executable prior experiment.\nIts code and observed result are evidence to assess, not an authoritative\nverdict or an alternative specification. All evaluation systems receive\nthe same material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"reference_method\": \"sequential float64 accumulation in row order\",\n  \"reference\": [\n    0.0,\n    0.0,\n    0.0,\n    0.0\n  ],\n  \"output\": [\n    7.625068664550781,\n    9.749828338623047,\n    7.219432353973389,\n    7.062338829040527\n  ],\n  \"relative_error\": 15974907136553.33,\n  \"tolerance\": 1e-05,\n  \"shape_dtype_finite_and_inputs_unmodified\": true,\n  \"passed\": false\n}\n",
+    "rounds": null,
+    "session_dir": "/root/evidence_cases/case_e19",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T07:16:44Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T07:17:13Z",
+          "data": {
+            "actual": [
+              7.625068664550781,
+              9.749828338623047,
+              7.219432353973389,
+              7.062338829040527
+            ],
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "cebdc3f3898d07ae9d43799104a361fc07dc0d286df0aed2fd79181dd61bb40b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "03a8aabaf7f9ca2e4f72563607ac61071b9432754f3add8fb8a4ea4d7c482491"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 5.036846,
+            "exit_code": 0,
+            "expected_signal": null,
+            "finite": true,
+            "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+            "json_result": null,
+            "passed": true,
+            "relative_error": 5.725813846601292e-08,
+            "shape_ok": true,
+            "stderr": "",
+            "stdout": "{'target': [7.625068694353104, 9.749828726053238, 7.219431936740875, 7.06233811378479], 'actual': [7.625068664550781, 9.749828338623047, 7.219432353973389, 7.062338829040527], 'relative_error': 5.725813846601292e-08, 'tolerance': 1e-05, 'shape_ok': True, 'finite': True, 'unmodified': True, 'passed': True}\n",
+            "target_exact": [
+              7.625068694353104,
+              9.749828726053238,
+              7.219431936740875,
+              7.06233811378479
+            ],
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-05,
+            "unmodified": true
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exact (Fraction-based) row-sum targets are ~7.6/9.7/7.2/7.06, essentially matching the kernel's compensated outputs; relative L2 error is 5.73e-8, far below the 1e-5 tolerance. Shape (4,), float32, finite, inputs unmodified. The recorded initial-probe failure was an artifact of naive float64 accumulation, not a contract violation.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The recorded initial probe compares against naive sequential float64 accumulation, which absorbs the small values once 2^80 dominates, yielding a false reference of 0.0. The contract requires the exact real-number sum; the kernel's compensated summation may satisfy it, so the true error must be measured against an exact target.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "run(X) satisfies the workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target[r] is 'the exact real-number sum' of the stored float32 values; the initial probe is 'evidence to assess, not an authoritative verdict or an alternative specification'."
+        }
+      ],
+      "scope_rationale": "The contract's acceptance metric is the relative L2 error against the exact real-number row sums of the fixed make_inputs array; a measured error above 1e-5 against that exact target would violate this required behaviour.",
+      "statement": "run(X) fails the contract's acceptance metric (relative L2 error > 1e-5) when evaluated against the exact real-number row sums of the make_inputs array.",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T07:17:13Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_e19",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_e19"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_e19"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_e19"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_e19",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 17.716329442000017,
+      "role": "solo",
+      "round": 2,
+      "text": "The contract requires the exact real-number row sums; the recorded initial-probe reference (0.0) is itself suspect because plain sequential float64 accumulation from 2^80 absorbs the small values. The kernel uses Kahan compensation, which may actually produce the correct ~small sums. I'll test against an exact target.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The recorded initial probe compares against naive sequential float64 accumulation, which loses small values once 2^80 dominates; the contract instead requires the exact real-number sum. The kernel's compensated summation may satisfy the contract even though the initial probe failed.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "run(X) satisfies the workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target is the exact real-number sum of the stored float32 values; the initial probe is 'evidence to assess, not an authoritative verdict'."
+              }
+            ],
+            "statement": "run(X) fails the contract's acceptance metric (relative L2 error > 1e-5) when evaluated against the exact real-number row sums of the make_inputs array."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.716,
+        "input_tokens": 8575,
+        "output_tokens": 1138
+      }
+    },
+    {
+      "duration_s": 11.725883815000003,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll re-record the claim with the required scope rationale, then run a probe comparing the kernel output to the exact real-number target (computed exactly, not by naive float64 accumulation).",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The recorded initial probe compares against naive sequential float64 accumulation, which absorbs the small values once 2^80 dominates, yielding a false reference of 0.0. The contract requires the exact real-number sum; the kernel's compensated summation may satisfy it, so the true error must be measured against an exact target.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "run(X) satisfies the workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target[r] is 'the exact real-number sum' of the stored float32 values; the initial probe is 'evidence to assess, not an authoritative verdict or an alternative specification'."
+              }
+            ],
+            "scope_rationale": "The contract's acceptance metric is the relative L2 error against the exact real-number row sums of the fixed make_inputs array; a measured error above 1e-5 against that exact target would violate this required behaviour.",
+            "statement": "run(X) fails the contract's acceptance metric (relative L2 error > 1e-5) when evaluated against the exact real-number row sums of the make_inputs array."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.726,
+        "input_tokens": 9286,
+        "output_tokens": 881
+      }
+    },
+    {
+      "duration_s": 16.755174856000025,
+      "role": "solo",
+      "round": 4,
+      "text": "The recorded \"reference\" of 0.0 is itself a float64 accumulation artifact. I'll run a probe computing the exact real-number target (via Fractions) and compare the kernel output against it.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import importlib.util, torch\nfrom fractions import Fraction\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e19/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nx, = k.make_inputs()\nbefore = x.clone()\nout = k.run(x)\nvals = before.cpu().numpy().astype(object)\n# exact real-number sums via Fractions\ntarget = [float(sum(Fraction(int(v)) for v in row) / Fraction(2**0) if False else sum(Fraction(v) for v in row)) for row in vals]\nactual = out.cpu().numpy().astype(\"float64\")\nimport numpy as np, math\nnorm_t = math.sqrt(sum(t*t for t in target))\nerr = math.sqrt(sum((a-t)**2 for a,t in zip(actual,target))) / max(norm_t, 1e-12)\nprint({ \"target\": target, \"actual\": actual.tolist(),\n        \"relative_error\": err, \"tolerance\": 1e-5,\n        \"shape_ok\": tuple(out.shape)==(4,) and out.dtype==torch.float32,\n        \"finite\": bool(np.isfinite(actual).all()),\n        \"unmodified\": bool(torch.equal(x, before)),\n        \"passed\": bool(tuple(out.shape)==(4,) and out.dtype==torch.float32 and np.isfinite(actual).all() and torch.equal(x,before) and err<=1e-5)})"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 16.755,
+        "input_tokens": 10665,
+        "output_tokens": 1160
+      }
+    },
+    {
+      "duration_s": 6.341211377999997,
+      "role": "solo",
+      "round": 5,
+      "text": "The probe shows the kernel's Kahan-compensated summation matches the exact real-number row sums to ~5.7e-8 relative error, well within the 1e-5 tolerance. The initial probe's \"0.0\" reference was a float64 accumulation artifact, as suspected. I'll record this evidence and close the claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "actual": [
+                7.625068664550781,
+                9.749828338623047,
+                7.219432353973389,
+                7.062338829040527
+              ],
+              "finite": true,
+              "passed": true,
+              "relative_error": 5.725813846601292e-08,
+              "shape_ok": true,
+              "target_exact": [
+                7.625068694353104,
+                9.749828726053238,
+                7.219431936740875,
+                7.06233811378479
+              ],
+              "tolerance": 1e-05,
+              "unmodified": true
+            },
+            "event_id": "t7",
+            "status": "rebutted",
+            "summary": "Exact (Fraction-based) row-sum targets are ~7.6/9.7/7.2/7.06, essentially matching the kernel's compensated outputs; relative L2 error is 5.73e-8, far below the 1e-5 tolerance. Shape (4,), float32, finite, inputs unmodified. The recorded initial-probe failure was an artifact of naive float64 accumulation, not a contract violation.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.341,
+        "input_tokens": 12749,
+        "output_tokens": 399
+      }
+    },
+    {
+      "duration_s": 6.578463104000008,
+      "role": "solo",
+      "round": 6,
+      "text": "The single in-scope claim has been decisively rebutted: the kernel's Kahan-compensated summation matches the exact real-number row sums (relative error 5.7e-8 vs 1e-5 tolerance), and the recorded initial-probe \"failure\" was an artifact of naive float64 accumulation. Shape, dtype, finiteness, and input immutability all check out. I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t7 compared run(X) output against the exact real-number row sums computed with Fractions from the fixed make_inputs array. Kernel output [7.62506866, 9.74982834, 7.21943235, 7.06233883] vs exact targets [7.62506869, 9.74982873, 7.21943194, 7.06233811]; relative L2 error 5.73e-8, far below the 1e-5 contract tolerance. Output is float32 shape (4,), finite, and X is unmodified. The recorded initial-probe failure used naive sequential float64 accumulation, which cannot represent the exact sum when 2^80 terms are present; the contract explicitly defines the target as the exact real-number sum and calls the initial probe non-authoritative, so that failure was a reference artifact. The kernel satisfies the contract.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.578,
+        "input_tokens": 16344,
+        "output_tokens": 349
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_e19"
+      },
+      "created_at": "2026-09-24T07:16:15Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_e19",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\nSEED = 203820\n\n\n@triton.jit\ndef _compensated_rows(X, Out, COLS: tl.constexpr):\n    row = tl.program_id(0)\n    total = tl.full((), 0.0, tl.float32)\n    correction = tl.full((), 0.0, tl.float32)\n    for column in tl.static_range(COLS):\n        value = tl.load(X + row * COLS + column)\n        updated = total + value\n        lost = tl.where(tl.abs(total) >= tl.abs(value),\n                        (total - updated) + value,\n                        (value - updated) + total)\n        correction = correction + lost\n        total = updated\n    tl.store(Out + row, total + correction)\n\n\ndef run(x):\n    output = torch.empty((4,), device=x.device, dtype=torch.float32)\n    _compensated_rows[(4,)](x, output, COLS=12, num_warps=1,\n                           enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    low = rng.uniform(0.25, 1.75, (4, 8)).astype(np.float32)\n    interior = np.concatenate((np.full((4, 1), 2.0**30, np.float32),\n                               np.full((4, 1), -(2.0**30), np.float32), low), axis=1)\n    order = rng.permutation(10)\n    x = np.empty((4, 12), dtype=np.float32)\n    x[:, 0] = np.float32(2.0**80)\n    x[:, 1:-1] = interior[:, order]\n    x[:, -1] = np.float32(-(2.0**80))\n    return (x,)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n\n\ndef initial_probe():\n    x, = make_inputs()\n    before = x.clone()\n    output = run(x)\n    values = before.detach().cpu().numpy().astype(np.float64)\n    expected = np.zeros(4, dtype=np.float64)\n    for column in range(12):\n        expected = expected + values[:, column]\n    actual = output.detach().cpu().numpy().astype(np.float64)\n    error = float(np.linalg.norm(actual - expected) / max(np.linalg.norm(expected), 1e-12))\n    structural = (tuple(output.shape) == (4,) and output.dtype == torch.float32\n                  and bool(np.isfinite(actual).all()) and bool(torch.equal(x, before)))\n    return {\"reference_method\": \"sequential float64 accumulation in row order\",\n            \"reference\": expected.tolist(), \"output\": actual.tolist(),\n            \"relative_error\": error, \"tolerance\": 1e-5,\n            \"shape_dtype_finite_and_inputs_unmodified\": structural,\n            \"passed\": bool(structural and error <= 1e-5)}\n",
+        "passed": null,
+        "problem_text": "Sum each row of a fixed mixed-scale float32 tensor.\n\nThe entire workload is the actual stored float32 array X returned by\nmake_inputs() in kernel.py, with shape (4, 12). The mathematical target is\n  target[r] = sum from j=0 through 11 of X[r,j],\nwhere the sum means the exact real-number sum of those stored input values.\nNo particular accumulation order or implementation algorithm is required.\n\nrun(X) must return a finite float32 vector of shape (4,) and must not modify\nX. It satisfies the fixed workload iff\n  ||output-target||_2 / max(||target||_2, 1e-12) <= 1e-5.\nThis is a requirement on the final row sums, not on intermediate partial\nsums or correction terms. All differences and norms in the acceptance\nmetric are evaluated in float64 or more accurately against the mathematical\ntarget. Other seeds, permutations and arrays are outside this contract.\n\nkernel.py also includes initial_probe(), an executable prior experiment.\nIts code and observed result are evidence to assess, not an authoritative\nverdict or an alternative specification. All evaluation systems receive\nthe same material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"reference_method\": \"sequential float64 accumulation in row order\",\n  \"reference\": [\n    0.0,\n    0.0,\n    0.0,\n    0.0\n  ],\n  \"output\": [\n    7.625068664550781,\n    9.749828338623047,\n    7.219432353973389,\n    7.062338829040527\n  ],\n  \"relative_error\": 15974907136553.33,\n  \"tolerance\": 1e-05,\n  \"shape_dtype_finite_and_inputs_unmodified\": true,\n  \"passed\": false\n}\n",
+        "rounds": null,
+        "session_dir": "/root/evidence_cases/case_e19",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_e19"
+      },
+      "created_at": "2026-09-24T07:16:15Z",
+      "id": "t2",
+      "output": {
+        "content": "Sum each row of a fixed mixed-scale float32 tensor.\n\nThe entire workload is the actual stored float32 array X returned by\nmake_inputs() in kernel.py, with shape (4, 12). The mathematical target is\n  target[r] = sum from j=0 through 11 of X[r,j],\nwhere the sum means the exact real-number sum of those stored input values.\nNo particular accumulation order or implementation algorithm is required.\n\nrun(X) must return a finite float32 vector of shape (4,) and must not modify\nX. It satisfies the fixed workload iff\n  ||output-target||_2 / max(||target||_2, 1e-12) <= 1e-5.\nThis is a requirement on the final row sums, not on intermediate partial\nsums or correction terms. All differences and norms in the acceptance\nmetric are evaluated in float64 or more accurately against the mathematical\ntarget. Other seeds, permutations and arrays are outside this contract.\n\nkernel.py also includes initial_probe(), an executable prior experiment.\nIts code and observed result are evidence to assess, not an authoritative\nverdict or an alternative specification. All evaluation systems receive\nthe same material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"reference_method\": \"sequential float64 accumulation in row order\",\n  \"reference\": [\n    0.0,\n    0.0,\n    0.0,\n    0.0\n  ],\n  \"output\": [\n    7.625068664550781,\n    9.749828338623047,\n    7.219432353973389,\n    7.062338829040527\n  ],\n  \"relative_error\": 15974907136553.33,\n  \"tolerance\": 1e-05,\n  \"shape_dtype_finite_and_inputs_unmodified\": true,\n  \"passed\": false\n}\n",
+        "entry": "case_e19",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_e19"
+      },
+      "created_at": "2026-09-24T07:16:15Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_e19",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2413
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 69
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1545
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_e19",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T07:16:15Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_e19\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_e19",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 69,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The recorded initial probe compares against naive sequential float64 accumulation, which loses small values once 2^80 dominates; the contract instead requires the exact real-number sum. The kernel's compensated summation may satisfy the contract even though the initial probe failed.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "run(X) satisfies the workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target is the exact real-number sum of the stored float32 values; the initial probe is 'evidence to assess, not an authoritative verdict'."
+          }
+        ],
+        "statement": "run(X) fails the contract's acceptance metric (relative L2 error > 1e-5) when evaluated against the exact real-number row sums of the make_inputs array."
+      },
+      "created_at": "2026-09-24T07:16:33Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t5",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The recorded initial probe compares against naive sequential float64 accumulation, which absorbs the small values once 2^80 dominates, yielding a false reference of 0.0. The contract requires the exact real-number sum; the kernel's compensated summation may satisfy it, so the true error must be measured against an exact target.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "run(X) satisfies the workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target[r] is 'the exact real-number sum' of the stored float32 values; the initial probe is 'evidence to assess, not an authoritative verdict or an alternative specification'."
+          }
+        ],
+        "scope_rationale": "The contract's acceptance metric is the relative L2 error against the exact real-number row sums of the fixed make_inputs array; a measured error above 1e-5 against that exact target would violate this required behaviour.",
+        "statement": "run(X) fails the contract's acceptance metric (relative L2 error > 1e-5) when evaluated against the exact real-number row sums of the make_inputs array."
+      },
+      "created_at": "2026-09-24T07:16:44Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-24T07:16:44Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The recorded initial probe compares against naive sequential float64 accumulation, which absorbs the small values once 2^80 dominates, yielding a false reference of 0.0. The contract requires the exact real-number sum; the kernel's compensated summation may satisfy it, so the true error must be measured against an exact target.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "run(X) satisfies the workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target[r] is 'the exact real-number sum' of the stored float32 values; the initial probe is 'evidence to assess, not an authoritative verdict or an alternative specification'."
+          }
+        ],
+        "scope_rationale": "The contract's acceptance metric is the relative L2 error against the exact real-number row sums of the fixed make_inputs array; a measured error above 1e-5 against that exact target would violate this required behaviour.",
+        "statement": "run(X) fails the contract's acceptance metric (relative L2 error > 1e-5) when evaluated against the exact real-number row sums of the make_inputs array.",
+        "status": "open",
+        "updated_at": "2026-09-24T07:16:44Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import importlib.util, torch\nfrom fractions import Fraction\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e19/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nx, = k.make_inputs()\nbefore = x.clone()\nout = k.run(x)\nvals = before.cpu().numpy().astype(object)\n# exact real-number sums via Fractions\ntarget = [float(sum(Fraction(int(v)) for v in row) / Fraction(2**0) if False else sum(Fraction(v) for v in row)) for row in vals]\nactual = out.cpu().numpy().astype(\"float64\")\nimport numpy as np, math\nnorm_t = math.sqrt(sum(t*t for t in target))\nerr = math.sqrt(sum((a-t)**2 for a,t in zip(actual,target))) / max(norm_t, 1e-12)\nprint({ \"target\": target, \"actual\": actual.tolist(),\n        \"relative_error\": err, \"tolerance\": 1e-5,\n        \"shape_ok\": tuple(out.shape)==(4,) and out.dtype==torch.float32,\n        \"finite\": bool(np.isfinite(actual).all()),\n        \"unmodified\": bool(torch.equal(x, before)),\n        \"passed\": bool(tuple(out.shape)==(4,) and out.dtype==torch.float32 and np.isfinite(actual).all() and torch.equal(x,before) and err<=1e-5)})"
+      },
+      "created_at": "2026-09-24T07:17:06Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "cebdc3f3898d07ae9d43799104a361fc07dc0d286df0aed2fd79181dd61bb40b"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "03a8aabaf7f9ca2e4f72563607ac61071b9432754f3add8fb8a4ea4d7c482491"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "run(X) fails the contract's acceptance metric (relative L2 error > 1e-5) when evaluated against the exact real-number row sums of the make_inputs array.",
+        "cwd": "/root/evidence_cases/case_e19",
+        "duration_s": 5.036846,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "cebdc3f3898d07ae9d43799104a361fc07dc0d286df0aed2fd79181dd61bb40b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "03a8aabaf7f9ca2e4f72563607ac61071b9432754f3add8fb8a4ea4d7c482491"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 5.036846,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{'target': [7.625068694353104, 9.749828726053238, 7.219431936740875, 7.06233811378479], 'actual': [7.625068664550781, 9.749828338623047, 7.219432353973389, 7.062338829040527], 'relative_error': 5.725813846601292e-08, 'tolerance': 1e-05, 'shape_ok': True, 'finite': True, 'unmodified': True, 'passed': True}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{'target': [7.625068694353104, 9.749828726053238, 7.219431936740875, 7.06233811378479], 'actual': [7.625068664550781, 9.749828338623047, 7.219432353973389, 7.062338829040527], 'relative_error': 5.725813846601292e-08, 'tolerance': 1e-05, 'shape_ok': True, 'finite': True, 'unmodified': True, 'passed': True}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "actual": [
+            7.625068664550781,
+            9.749828338623047,
+            7.219432353973389,
+            7.062338829040527
+          ],
+          "finite": true,
+          "passed": true,
+          "relative_error": 5.725813846601292e-08,
+          "shape_ok": true,
+          "target_exact": [
+            7.625068694353104,
+            9.749828726053238,
+            7.219431936740875,
+            7.06233811378479
+          ],
+          "tolerance": 1e-05,
+          "unmodified": true
+        },
+        "event_id": "t7",
+        "status": "rebutted",
+        "summary": "Exact (Fraction-based) row-sum targets are ~7.6/9.7/7.2/7.06, essentially matching the kernel's compensated outputs; relative L2 error is 5.73e-8, far below the 1e-5 tolerance. Shape (4,), float32, finite, inputs unmodified. The recorded initial-probe failure was an artifact of naive float64 accumulation, not a contract violation.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-24T07:17:13Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T07:16:44Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T07:17:13Z",
+              "data": {
+                "actual": [
+                  7.625068664550781,
+                  9.749828338623047,
+                  7.219432353973389,
+                  7.062338829040527
+                ],
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "cebdc3f3898d07ae9d43799104a361fc07dc0d286df0aed2fd79181dd61bb40b"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "03a8aabaf7f9ca2e4f72563607ac61071b9432754f3add8fb8a4ea4d7c482491"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "duration_s": 5.036846,
+                "exit_code": 0,
+                "expected_signal": null,
+                "finite": true,
+                "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+                "json_result": null,
+                "passed": true,
+                "relative_error": 5.725813846601292e-08,
+                "shape_ok": true,
+                "stderr": "",
+                "stdout": "{'target': [7.625068694353104, 9.749828726053238, 7.219431936740875, 7.06233811378479], 'actual': [7.625068664550781, 9.749828338623047, 7.219432353973389, 7.062338829040527], 'relative_error': 5.725813846601292e-08, 'tolerance': 1e-05, 'shape_ok': True, 'finite': True, 'unmodified': True, 'passed': True}\n",
+                "target_exact": [
+                  7.625068694353104,
+                  9.749828726053238,
+                  7.219431936740875,
+                  7.06233811378479
+                ],
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 1e-05,
+                "unmodified": true
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exact (Fraction-based) row-sum targets are ~7.6/9.7/7.2/7.06, essentially matching the kernel's compensated outputs; relative L2 error is 5.73e-8, far below the 1e-5 tolerance. Shape (4,), float32, finite, inputs unmodified. The recorded initial-probe failure was an artifact of naive float64 accumulation, not a contract violation.",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The recorded initial probe compares against naive sequential float64 accumulation, which absorbs the small values once 2^80 dominates, yielding a false reference of 0.0. The contract requires the exact real-number sum; the kernel's compensated summation may satisfy it, so the true error must be measured against an exact target.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "run(X) satisfies the workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target[r] is 'the exact real-number sum' of the stored float32 values; the initial probe is 'evidence to assess, not an authoritative verdict or an alternative specification'."
+            }
+          ],
+          "scope_rationale": "The contract's acceptance metric is the relative L2 error against the exact real-number row sums of the fixed make_inputs array; a measured error above 1e-5 against that exact target would violate this required behaviour.",
+          "statement": "run(X) fails the contract's acceptance metric (relative L2 error > 1e-5) when evaluated against the exact real-number row sums of the make_inputs array.",
+          "status": "rebutted",
+          "updated_at": "2026-09-24T07:17:13Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T07:17:13Z",
+          "data": {
+            "actual": [
+              7.625068664550781,
+              9.749828338623047,
+              7.219432353973389,
+              7.062338829040527
+            ],
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "cebdc3f3898d07ae9d43799104a361fc07dc0d286df0aed2fd79181dd61bb40b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "03a8aabaf7f9ca2e4f72563607ac61071b9432754f3add8fb8a4ea4d7c482491"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 5.036846,
+            "exit_code": 0,
+            "expected_signal": null,
+            "finite": true,
+            "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+            "json_result": null,
+            "passed": true,
+            "relative_error": 5.725813846601292e-08,
+            "shape_ok": true,
+            "stderr": "",
+            "stdout": "{'target': [7.625068694353104, 9.749828726053238, 7.219431936740875, 7.06233811378479], 'actual': [7.625068664550781, 9.749828338623047, 7.219432353973389, 7.062338829040527], 'relative_error': 5.725813846601292e-08, 'tolerance': 1e-05, 'shape_ok': True, 'finite': True, 'unmodified': True, 'passed': True}\n",
+            "target_exact": [
+              7.625068694353104,
+              9.749828726053238,
+              7.219431936740875,
+              7.06233811378479
+            ],
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-05,
+            "unmodified": true
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exact (Fraction-based) row-sum targets are ~7.6/9.7/7.2/7.06, essentially matching the kernel's compensated outputs; relative L2 error is 5.73e-8, far below the 1e-5 tolerance. Shape (4,), float32, finite, inputs unmodified. The recorded initial-probe failure was an artifact of naive float64 accumulation, not a contract violation.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t7 compared run(X) output against the exact real-number row sums computed with Fractions from the fixed make_inputs array. Kernel output [7.62506866, 9.74982834, 7.21943235, 7.06233883] vs exact targets [7.62506869, 9.74982873, 7.21943194, 7.06233811]; relative L2 error 5.73e-8, far below the 1e-5 contract tolerance. Output is float32 shape (4,), finite, and X is unmodified. The recorded initial-probe failure used naive sequential float64 accumulation, which cannot represent the exact sum when 2^80 terms are present; the contract explicitly defines the target as the exact real-number sum and calls the initial probe non-authoritative, so that failure was a reference artifact. The kernel satisfies the contract.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-24T07:17:19Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-24T07:17:19Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t7 compared run(X) output against the exact real-number row sums computed with Fractions from the fixed make_inputs array. Kernel output [7.62506866, 9.74982834, 7.21943235, 7.06233883] vs exact targets [7.62506869, 9.74982873, 7.21943194, 7.06233811]; relative L2 error 5.73e-8, far below the 1e-5 contract tolerance. Output is float32 shape (4,), finite, and X is unmodified. The recorded initial-probe failure used naive sequential float64 accumulation, which cannot represent the exact sum when 2^80 terms are present; the contract explicitly defines the target as the exact real-number sum and calls the initial probe non-authoritative, so that failure was a reference artifact. The kernel satisfies the contract.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-24T07:17:19Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t7 compared run(X) output against the exact real-number row sums computed with Fractions from the fixed make_inputs array. Kernel output [7.62506866, 9.74982834, 7.21943235, 7.06233883] vs exact targets [7.62506869, 9.74982873, 7.21943194, 7.06233811]; relative L2 error 5.73e-8, far below the 1e-5 contract tolerance. Output is float32 shape (4,), finite, and X is unmodified. The recorded initial-probe failure used naive sequential float64 accumulation, which cannot represent the exact sum when 2^80 terms are present; the contract explicitly defines the target as the exact real-number sum and calls the initial probe non-authoritative, so that failure was a reference artifact. The kernel satisfies the contract.",
+    "verdict": "trust"
+  }
+}

@@ -16,7 +16,7 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT.parent / "eval"))
+sys.path.insert(0, str(ROOT.parent / "eval_scripts"))
 from baseline2_single_llm import SYSTEM_PROMPT, USER_TEMPLATE, VERDICT_SCHEMA
 
 

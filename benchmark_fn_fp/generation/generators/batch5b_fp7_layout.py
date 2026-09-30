@@ -20,7 +20,8 @@ import pathlib
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
 NAME = "fp7_nchw_nhwc_channel_scale_layout"
-OUT = REPO / "benchmark_fn_fp" / "triton" / NAME
+from _case_paths import source_case_path
+OUT = source_case_path(REPO / "benchmark_fn_fp" / "triton", NAME)
 
 KERNEL = '''"""Triton kernel under test: {name}."""
 import torch

@@ -1,0 +1,284 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Skeptic agent in an agentic kernel verification system.\nYour job is to raise concrete, testable bug hypotheses about the kernel.\n\nRules:\n- Read description_model first: contract_model bounds scope, kernel_model explains implementation, risk_map suggests attack surfaces.\n- Prefer specific claims over generic doubt.\n- In one turn, record at most 3 highest-risk, directly testable claims unless existing evidence clearly requires more.\n- A claim must describe a condition and a possible wrong behavior.\n- Before recording a claim, decide whether its input/case is inside the stated contract, not just general PyTorch behavior.\n- The contract is whatever the artifact actually states. problem.txt is always authoritative. test.py, get_inputs, get_init_inputs, seed files, meta.json, and artifact metadata are additional sources when the artifact provides them; many artifacts provide only problem.txt and kernel.py, which is sufficient.\n- Avoid dtype, shape, stride/non-contiguous, NaN/Inf, autograd, zero-size, broadcasting, and module-config changes unless the stated contract explicitly requires them.\n- When calling record_claim, include scope as one of: in_scope, out_of_scope, unknown.\n- Include scope_rationale explaining which contract detail makes the claim in-scope or why scope is unknown/out-of-scope.\n- For scope=in_scope, include scope_evidence with at least one {source, summary} item drawn from whichever contract sources the artifact provides (problem.txt alone is a valid source).\n- If the contract states a required behavior (a formula, an invariant, a tie-break rule, a declared numeric format), a claim that the kernel may violate that stated behavior is in_scope even when no test file exists to pin exact inputs; choose representative inputs the contract admits and say so in scope_rationale.\n- Do not mark a claim in_scope merely because it is interesting or because PyTorch would generally support it; scope_evidence must tie it to the stated input/output contract.\n- Rationale is only the reason for suspicion; it is not evidence.\n- Use record_claim to add a claim to the ledger. It requires BOTH `statement` (what might be wrong) and `rationale` (why you suspect it) -- these are two separate fields, and neither is `scope_rationale`, which answers a different question. Omitting `rationale` is rejected and costs the turn; it happened four times across a 64-run evaluation, three of them in a single case.\n- After reviewing the latest claims, evidence, and tool events, if you find no additional high-quality in-scope claims, call record_no_new_claims.\n- Do not call record_no_new_claims in the same turn where you record_claim.\n- REVIEW TURN: when run state `convergence.request` is \"skeptic_final_review\", this turn is a review, not a new round of attack. This round's probes are already finished and the Judge is waiting on you. Default to record_no_new_claims. Record a claim instead only if the new evidence exposes a material, testable, in-scope problem that no existing claim already covers -- curiosity, generalization questions, or lines you would like to explore further are not sufficient reason to hold up the verdict.\n- Use request_description when source interpretation, contract scope, or prior evidence is ambiguous and should be clarified by Describer.\n- Use inspect_problem, inspect_kernel_source, read_artifact_file, or read_claim_ledger when more context is needed.\n- Do not run experiments yourself unless explicitly acting as the experimenter.\n- Do not output a final verdict.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"__pycache__/kernel.cpython-313.pyc\",\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_f\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import numpy as np\\n2: import torch\\n3: import triton\\n4: import triton.language as tl\\n5: \\n6: \\n7: @triton.jit\\n8: def _recurrence_kernel(Matrix, Initial, Drive, Output, N: tl.constexpr, STEPS: tl.constexpr):\\n9:     i = tl.arange(0, N)\\n10:     j = tl.arange(0, N)\\n11:     matrix = tl.load(Matrix + i[:, None] * N + j[None, :])\\n12:     state = tl.load(Initial + i).to(tl.float32)\\n13:     for step in range(STEPS):\\n14:         forcing = tl.load(Drive + step * N + i)\\n15:         next_state = tl.sum(matrix * state[None, :], axis=1) + forcing\\n16:         state = next_state.to(tl.float16).to(tl.float32)\\n17:     tl.store(Output + i, state)\\n18: \\n19: \\n20: def run(matrix, initial, drive):\\n21:     output = torch.empty((16,), device=matrix.device, dtype=torch.float32)\\n22:     _recurrence_kernel[(1,)](matrix, initial, drive, output, N=16, STEPS=64,\\n23:                             num_warps=4, enable_fp_fusion=False)\\n24:     return output\\n25: \\n26: \\n27: def make_inputs_numpy():\\n28:     orthogonal = np.array([[1.0]], dtype=np.float64)\\n29:     while len(orthogonal) < 16:\\n30:         orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])\\n31:     orthogonal /= 4.0\\n32:     matrix_rng = np.random.Generator(np.random.PCG64(20260923))\\n33:     diagonal = matrix_rng.choice(np.array([0.875, 0.90625, 0.9375, 0.96875]), size=16)\\n34:     upper = np.diag(diagonal)\\n35:     upper += np.diag(np.full(15, 0.1875), 1)\\n36:     upper += np.diag(matrix_rng.choice([-0.03125, 0.03125], size=14), 2)\\n37:     left = np.sum(orthogonal[:, :, None] * upper[None, :, :], axis=1)\\n38:     matrix = np.sum(left[:, :, None] * orthogonal.T[None, :, :], axis=1).astype(np.float32)\\n39:     rng = np.random.Generator(np.random.PCG64(202002))\\n40:     initial = rng.normal(0.0, 0.1, 16).astype(np.float32)\\n41:     drive = rng.normal(0.0, 0.1, (64, 16)).astype(np.float32)\\n42:     return matrix, initial, drive\\n43: \\n44: \\n45: def make_inputs(device=\\\"cuda\\\"):\\n46:     return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Evaluate a recurrent linear state update on the fixed workload in kernel.py.\\n\\nThe only inputs in scope are the float32 tensors returned by make_inputs():\\nmatrix has shape (16,16), initial has shape (16,), and drive has shape (64,16).\\nThe full input generator and its seeds are public. The desired output is the\\nfinal state of this recurrence, evaluated in float64 on those float32 inputs:\\n  reference_state = initial\\n  for t in range(64):\\n      reference_state = matrix @ reference_state + drive[t]\\n\\nThe implementation may approximate intermediate states. Its final output must\\nbe a finite vector of shape (16,), with relative L2 error\\n  ||output - reference_state||_2 / max(||reference_state||_2, 0.001*sqrt(16))\\nat most 0.002. The target execution device is an NVIDIA T4.\\n\\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\\nspecified workload. Alternative inputs are outside this question's scope.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/numerical_cases/case_f\",\n    \"status\": \"unverified\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [\n      \"Fixed workload only: run(*make_inputs()) with float32 matrix (16,16), initial (16,), drive (64,16); alternative inputs out of scope.\",\n      \"Reference is the recurrence state_{t+1} = matrix @ state_t + drive[t] evaluated in float64 on the float32 inputs, 64 steps.\",\n      \"Output must be finite, shape (16,), relative L2 error <= 0.002 with denominator max(||ref||_2, 0.001*sqrt(16)).\",\n      \"Intermediate states may be approximated; only the final vector is judged. Target device NVIDIA T4.\"\n    ],\n    \"kernel_model\": [\n      \"Triton kernel with a single program: loads full 16x16 matrix and initial state in fp32, loops STEPS=64, computes next_state = row-wise sum(matrix * state) + drive row, then casts state to fp16 and back to fp32 each step (kernel.py lines 13-16).\",\n      \"Output stored to a pre-allocated fp32 tensor of shape (16,) (lines 17, 21-23); grid is (1,), N=16, STEPS=64, num_warps=4, enable_fp_fusion=False.\",\n      \"Input generator builds an orthogonally-similar upper-triangular matrix with eigenvalues in {0.875..0.96875} plus small off-diagonals, so spectral radius < 1 and states stay O(0.1); inputs are exact dyadic values in the matrix (0.875, 0.90625, 0.1875, 0.03125) while initial/drive are fp32 Gaussians at scale 0.1.\",\n      \"The per-step fp16 round-trip (line 16) is the approximation mechanism; matrix multiply and forcing are accumulated in fp32 (tl.sum over fp32 products).\"\n    ],\n    \"open_questions\": [\n      \"Does the fp16-cast accumulated error on this specific seeded workload stay under 0.002, or exceed it? Needs runtime evidence (Experimenter).\",\n      \"Is the state magnitude O(0.1) assumption correct across all 64 steps for this seeded input? If states decay toward ~0, absolute fp16 rounding shrinks proportionally, which would help; if any component stays large, rounding grows.\",\n      \"Confirm the reference uses the same input tensors (fp32 -> fp64 upcast) and no fp16 anywhere, so the entire error budget is kernel-side.\"\n    ],\n    \"risk_map\": [\n      \"Per-step fp16 rounding of state: 64 sequential quantizations accumulate; relative error per step ~2^-11 and errors compound through the recurrence (not purely random-walk since the linear map can amplify). Whether total relative L2 error stays under 0.002 is the central question.\",\n      \"fp16 dynamic range: state entries ~O(0.1) are far from overflow; subnormal/flush risk is low but small entries rounding to zero could matter if the reference state is small relative to the denominator floor (0.004).\",\n      \"tl.sum accumulation order in fp32 vs float64 reference: minor fp32 accumulation error, likely negligible relative to fp16 rounding but worth separating in evidence.\",\n      \"enable_fp_fusion=False suggests deliberate control of fusion; if fusion were on, multiply-add rounding would change slightly \\u2014 but kernel still uses fp32 for the arithmetic.\",\n      \"Driver: run ignores strides/assumes contiguous row-major inputs; fine here since make_inputs produces contiguous tensors, but any non-contiguous input is out of scope anyway.\"\n    ],\n    \"scope_notes\": [\n      \"Only the fixed seeded workload (PCG64 seeds 20260923 and 202002) is judged; tolerance is a single final-output L2 metric, not per-step accuracy.\\\", \\\"The problem explicitly permits approximate intermediate states, so fp16 casting is contractually allowed if the final tolerance is met.\\\", \\\"No test_code file exists; problem.txt is the sole contract source.\\\"]\"\n    ]\n  },\n  \"entry\": \"case_f\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_f\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_f\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_f\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_f\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"describer\",\n      \"round\": 2,\n      \"text\": \"I have full artifact context already; the key observation is that the kernel quantizes intermediate states to fp16 every step while the contract allows approximations but bounds final relative L2 error at 0.002 over 64 steps \\u2014 a per-step fp16 rounding accumulation surface. Recording the description model now.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"contract_model\": [\n              \"Fixed workload only: run(*make_inputs()) with float32 matrix (16,16), initial (16,), drive (64,16); alternative inputs out of scope.\",\n              \"Reference is the recurrence state_{t+1} = matrix @ state_t + drive[t] evaluated in float64 on the float32 inputs, 64 steps.\",\n              \"Output must be finite, shape (16,), relative L2 error <= 0.002 with denominator max(||ref||_2, 0.001*sqrt(16)).\",\n              \"Intermediate states may be approximated; only the final vector is judged. Target device NVIDIA T4.\"\n            ],\n            \"kernel_model\": [\n              \"Triton kernel with a single program: loads full 16x16 matrix and initial state in fp32, loops STEPS=64, computes next_state = row-wise sum(matrix * state) + drive row, then casts state to fp16 and back to fp32 each step (kernel.py lines 13-16).\",\n              \"Output stored to a pre-allocated fp32 tensor of shape (16,) (lines 17, 21-23); grid is (1,), N=16, STEPS=64, num_warps=4, enable_fp_fusion=False.\",\n              \"Input generator builds an orthogonally-similar upper-triangular matrix with eigenvalues in {0.875..0.96875} plus small off-diagonals, so spectral radius < 1 and states stay O(0.1); inputs are exact dyadic values in the matrix (0.875, 0.90625, 0.1875, 0.03125) while initial/drive are fp32 Gaussians at scale 0.1.\",\n              \"The per-step fp16 round-trip (line 16) is the approximation mechanism; matrix multiply and forcing are accumulated in fp32 (tl.sum over fp32 products).\"\n            ],\n            \"open_questions\": [\n              \"Does the fp16-cast accumulated error on this specific seeded workload stay under 0.002, or exceed it? Needs runtime evidence (Experimenter).\",\n              \"Is the state magnitude O(0.1) assumption correct across all 64 steps for this seeded input? If states decay toward ~0, absolute fp16 rounding shrinks proportionally, which would help; if any component stays large, rounding grows.\",\n              \"Confirm the reference uses the same input tensors (fp32 -> fp64 upcast) and no fp16 anywhere, so the entire error budget is kernel-side.\"\n            ],\n            \"risk_map\": [\n              \"Per-step fp16 rounding of state: 64 sequential quantizations accumulate; relative error per step ~2^-11 and errors compound through the recurrence (not purely random-walk since the linear map can amplify). Whether total relative L2 error stays under 0.002 is the central question.\",\n              \"fp16 dynamic range: state entries ~O(0.1) are far from overflow; subnormal/flush risk is low but small entries rounding to zero could matter if the reference state is small relative to the denominator floor (0.004).\",\n              \"tl.sum accumulation order in fp32 vs float64 reference: minor fp32 accumulation error, likely negligible relative to fp16 rounding but worth separating in evidence.\",\n              \"enable_fp_fusion=False suggests deliberate control of fusion; if fusion were on, multiply-add rounding would change slightly \\u2014 but kernel still uses fp32 for the arithmetic.\",\n              \"Driver: run ignores strides/assumes contiguous row-major inputs; fine here since make_inputs produces contiguous tensors, but any non-contiguous input is out of scope anyway.\"\n            ],\n            \"scope_notes\": \"Only the fixed seeded workload (PCG64 seeds 20260923 and 202002) is judged; tolerance is a single final-output L2 metric, not per-step accuracy.\\\", \\\"The problem explicitly permits approximate intermediate states, so fp16 casting is contractually allowed if the final tolerance is met.\\\", \\\"No test_code file exists; problem.txt is the sole contract source.\\\"]\",\n            \"summary\": \"case_f: linear recurrence kernel (16x16, 64 steps) with per-step fp16 state quantization against a float64 reference and 0.002 relative-L2 tolerance.\"\n          },\n          \"tool\": \"record_description_update\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [\n    {\n      \"contract_model\": [\n        \"Fixed workload only: run(*make_inputs()) with float32 matrix (16,16), initial (16,), drive (64,16); alternative inputs out of scope.\",\n        \"Reference is the recurrence state_{t+1} = matrix @ state_t + drive[t] evaluated in float64 on the float32 inputs, 64 steps.\",\n        \"Output must be finite, shape (16,), relative L2 error <= 0.002 with denominator max(||ref||_2, 0.001*sqrt(16)).\",\n        \"Intermediate states may be approximated; only the final vector is judged. Target device NVIDIA T4.\"\n      ],\n      \"created_at\": \"2026-09-23T21:41:45Z\",\n      \"created_by\": \"describer\",\n      \"id\": \"du1\",\n      \"impact_on_claims\": [],\n      \"kernel_model\": [\n        \"Triton kernel with a single program: loads full 16x16 matrix and initial state in fp32, loops STEPS=64, computes next_state = row-wise sum(matrix * state) + drive row, then casts state to fp16 and back to fp32 each step (kernel.py lines 13-16).\",\n        \"Output stored to a pre-allocated fp32 tensor of shape (16,) (lines 17, 21-23); grid is (1,), N=16, STEPS=64, num_warps=4, enable_fp_fusion=False.\",\n        \"Input generator builds an orthogonally-similar upper-triangular matrix with eigenvalues in {0.875..0.96875} plus small off-diagonals, so spectral radius < 1 and states stay O(0.1); inputs are exact dyadic values in the matrix (0.875, 0.90625, 0.1875, 0.03125) while initial/drive are fp32 Gaussians at scale 0.1.\",\n        \"The per-step fp16 round-trip (line 16) is the approximation mechanism; matrix multiply and forcing are accumulated in fp32 (tl.sum over fp32 products).\"\n      ],\n      \"open_questions\": [\n        \"Does the fp16-cast accumulated error on this specific seeded workload stay under 0.002, or exceed it? Needs runtime evidence (Experimenter).\",\n        \"Is the state magnitude O(0.1) assumption correct across all 64 steps for this seeded input? If states decay toward ~0, absolute fp16 rounding shrinks proportionally, which would help; if any component stays large, rounding grows.\",\n        \"Confirm the reference uses the same input tensors (fp32 -> fp64 upcast) and no fp16 anywhere, so the entire error budget is kernel-side.\"\n      ],\n      \"risk_map\": [\n        \"Per-step fp16 rounding of state: 64 sequential quantizations accumulate; relative error per step ~2^-11 and errors compound through the recurrence (not purely random-walk since the linear map can amplify). Whether total relative L2 error stays under 0.002 is the central question.\",\n        \"fp16 dynamic range: state entries ~O(0.1) are far from overflow; subnormal/flush risk is low but small entries rounding to zero could matter if the reference state is small relative to the denominator floor (0.004).\",\n        \"tl.sum accumulation order in fp32 vs float64 reference: minor fp32 accumulation error, likely negligible relative to fp16 rounding but worth separating in evidence.\",\n        \"enable_fp_fusion=False suggests deliberate control of fusion; if fusion were on, multiply-add rounding would change slightly \\u2014 but kernel still uses fp32 for the arithmetic.\",\n        \"Driver: run ignores strides/assumes contiguous row-major inputs; fine here since make_inputs produces contiguous tensors, but any non-contiguous input is out of scope anyway.\"\n      ],\n      \"scope_notes\": [\n        \"Only the fixed seeded workload (PCG64 seeds 20260923 and 202002) is judged; tolerance is a single final-output L2 metric, not per-step accuracy.\\\", \\\"The problem explicitly permits approximate intermediate states, so fp16 casting is contractually allowed if the final tolerance is met.\\\", \\\"No test_code file exists; problem.txt is the sole contract source.\\\"]\"\n      ],\n      \"summary\": \"case_f: linear recurrence kernel (16x16, 64 steps) with per-step fp16 state quantization against a float64 reference and 0.002 relative-L2 tolerance.\",\n      \"task_ids\": [],\n      \"turn\": 2\n    }\n  ],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_f\"\n      },\n      \"created_at\": \"2026-09-23T21:41:31Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"__pycache__/kernel.cpython-313.pyc\",\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_f\",\n        \"has_error\": null,\n        \"kernel_code\": \"import numpy as np\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _recurrence_kernel(Matrix, Initial, Drive, Output, N: tl.constexpr, STEPS: tl.constexpr):\\n    i = tl.arange(0, N)\\n    j = tl.arange(0, N)\\n    matrix = tl.load(Matrix + i[:, None] * N + j[None, :])\\n    state = tl.load(Initial + i).to(tl.float32)\\n    for step in range(STEPS):\\n        forcing = tl.load(Drive + step * N + i)\\n        next_state = tl.sum(matrix * state[None, :], axis=1) + forcing\\n        state = next_state.to(tl.float16).to(tl.float32)\\n    tl.store(Output + i, state)\\n\\n\\ndef run(matrix, initial, drive):\\n    output = torch.empty((16,), device=matrix.device, dtype=torch.float32)\\n    _recurrence_kernel[(1,)](matrix, initial, drive, output, N=16, STEPS=64,\\n                            num_warps=4, enable_fp_fusion=False)\\n    return output\\n\\n\\ndef make_inputs_numpy():\\n    orthogonal = np.array([[1.0]], dtype=np.float64)\\n    while len(orthogonal) < 16:\\n        orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])\\n    orthogonal /= 4.0\\n    matrix_rng = np.random.Generator(np.random.PCG64(20260923))\\n    diagonal = matrix_rng.choice(np.array([0.875, 0.90625, 0.9375, 0.96875]), size=16)\\n    upper = np.diag(diagonal)\\n    upper += np.diag(np.full(15, 0.1875), 1)\\n    upper += np.diag(matrix_rng.choice([-0.03125, 0.03125], size=14), 2)\\n    left = np.sum(orthogonal[:, :, None] * upper[None, :, :], axis=1)\\n    matrix = np.sum(left[:, :, None] * orthogonal.T[None, :, :], axis=1).astype(np.float32)\\n    rng = np.random.Generator(np.random.PCG64(202002))\\n    initial = rng.normal(0.0, 0.1, 16).astype(np.float32)\\n    drive = rng.normal(0.0, 0.1, (64, 16)).astype(np.float32)\\n    return matrix, initial, drive\\n\\n\\ndef make_inputs(device=\\\"cuda\\\"):\\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Evaluate a recurrent linear state update on the fixed workload in kernel.py.\\n\\nThe only inputs in scope are the float32 tensors returned by make_inputs():\\nmatrix has shape (16,16), initial has shape (16,), and drive has shape (64,16).\\nThe full input generator and its seeds are public. The desired output is the\\nfinal state of this recurrence, evaluated in float64 on those float32 inputs:\\n  reference_state = initial\\n  for t in range(64):\\n      reference_state = matrix @ reference_state + drive[t]\\n\\nThe implementation may approximate intermediate states. Its final output must\\nbe a finite vector of shape (16,), with relative L2 error\\n  ||output - reference_state||_2 / max(||reference_state||_2, 0.001*sqrt(16))\\nat most 0.002. The target execution device is an NVIDIA T4.\\n\\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\\nspecified workload. Alternative inputs are outside this question's scope.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/numerical_cases/case_f\",\n        \"status\": \"unverified\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_f\"\n      },\n      \"created_at\": \"2026-09-23T21:41:31Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Evaluate a recurrent linear state update on the fixed workload in kernel.py.\\n\\nThe only inputs in scope are the float32 tensors returned by make_inputs():\\nmatrix has shape (16,16), initial has shape (16,), and drive has shape (64,16).\\nThe full input generator and its seeds are public. The desired output is the\\nfinal state of this recurrence, evaluated in float64 on those float32 inputs:\\n  reference_state = initial\\n  for t in range(64):\\n      reference_state = matrix @ reference_state + drive[t]\\n\\nThe implementation may approximate intermediate states. Its final output must\\nbe a finite vector of shape (16,), with relative L2 error\\n  ||output - reference_state||_2 / max(||reference_state||_2, 0.001*sqrt(16))\\nat most 0.002. The target execution device is an NVIDIA T4.\\n\\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\\nspecified workload. Alternative inputs are outside this question's scope.\\n\",\n        \"entry\": \"case_f\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_f\"\n      },\n      \"created_at\": \"2026-09-23T21:41:31Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_f\",\n        \"files\": [\n          {\n            \"kind\": \"other\",\n            \"path\": \"__pycache__/kernel.cpython-313.pyc\",\n            \"size_bytes\": 4581\n          },\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 1855\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 67\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 926\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_f\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-23T21:41:31Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_f\\\",\\n  \\\"passed\\\": null,\\n  \\\"status\\\": \\\"unverified\\\"\\n}\\n\",\n        \"entry\": \"case_f\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 67,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"contract_model\": [\n          \"Fixed workload only: run(*make_inputs()) with float32 matrix (16,16), initial (16,), drive (64,16); alternative inputs out of scope.\",\n          \"Reference is the recurrence state_{t+1} = matrix @ state_t + drive[t] evaluated in float64 on the float32 inputs, 64 steps.\",\n          \"Output must be finite, shape (16,), relative L2 error <= 0.002 with denominator max(||ref||_2, 0.001*sqrt(16)).\",\n          \"Intermediate states may be approximated; only the final vector is judged. Target device NVIDIA T4.\"\n        ],\n        \"kernel_model\": [\n          \"Triton kernel with a single program: loads full 16x16 matrix and initial state in fp32, loops STEPS=64, computes next_state = row-wise sum(matrix * state) + drive row, then casts state to fp16 and back to fp32 each step (kernel.py lines 13-16).\",\n          \"Output stored to a pre-allocated fp32 tensor of shape (16,) (lines 17, 21-23); grid is (1,), N=16, STEPS=64, num_warps=4, enable_fp_fusion=False.\",\n          \"Input generator builds an orthogonally-similar upper-triangular matrix with eigenvalues in {0.875..0.96875} plus small off-diagonals, so spectral radius < 1 and states stay O(0.1); inputs are exact dyadic values in the matrix (0.875, 0.90625, 0.1875, 0.03125) while initial/drive are fp32 Gaussians at scale 0.1.\",\n          \"The per-step fp16 round-trip (line 16) is the approximation mechanism; matrix multiply and forcing are accumulated in fp32 (tl.sum over fp32 products).\"\n        ],\n        \"open_questions\": [\n          \"Does the fp16-cast accumulated error on this specific seeded workload stay under 0.002, or exceed it? Needs runtime evidence (Experimenter).\",\n          \"Is the state magnitude O(0.1) assumption correct across all 64 steps for this seeded input? If states decay toward ~0, absolute fp16 rounding shrinks proportionally, which would help; if any component stays large, rounding grows.\",\n          \"Confirm the reference uses the same input tensors (fp32 -> fp64 upcast) and no fp16 anywhere, so the entire error budget is kernel-side.\"\n        ],\n        \"risk_map\": [\n          \"Per-step fp16 rounding of state: 64 sequential quantizations accumulate; relative error per step ~2^-11 and errors compound through the recurrence (not purely random-walk since the linear map can amplify). Whether total relative L2 error stays under 0.002 is the central question.\",\n          \"fp16 dynamic range: state entries ~O(0.1) are far from overflow; subnormal/flush risk is low but small entries rounding to zero could matter if the reference state is small relative to the denominator floor (0.004).\",\n          \"tl.sum accumulation order in fp32 vs float64 reference: minor fp32 accumulation error, likely negligible relative to fp16 rounding but worth separating in evidence.\",\n          \"enable_fp_fusion=False suggests deliberate control of fusion; if fusion were on, multiply-add rounding would change slightly \\u2014 but kernel still uses fp32 for the arithmetic.\",\n          \"Driver: run ignores strides/assumes contiguous row-major inputs; fine here since make_inputs produces contiguous tensors, but any non-contiguous input is out of scope anyway.\"\n        ],\n        \"scope_notes\": \"Only the fixed seeded workload (PCG64 seeds 20260923 and 202002) is judged; tolerance is a single final-output L2 metric, not per-step accuracy.\\\", \\\"The problem explicitly permits approximate intermediate states, so fp16 casting is contractually allowed if the final tolerance is met.\\\", \\\"No test_code file exists; problem.txt is the sole contract source.\\\"]\",\n        \"summary\": \"case_f: linear recurrence kernel (16x16, 64 steps) with per-step fp16 state quantization against a float64 reference and 0.002 relative-L2 tolerance.\"\n      },\n      \"created_at\": \"2026-09-23T21:41:45Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"description_model\": {\n          \"contract_model\": [\n            \"Fixed workload only: run(*make_inputs()) with float32 matrix (16,16), initial (16,), drive (64,16); alternative inputs out of scope.\",\n            \"Reference is the recurrence state_{t+1} = matrix @ state_t + drive[t] evaluated in float64 on the float32 inputs, 64 steps.\",\n            \"Output must be finite, shape (16,), relative L2 error <= 0.002 with denominator max(||ref||_2, 0.001*sqrt(16)).\",\n            \"Intermediate states may be approximated; only the final vector is judged. Target device NVIDIA T4.\"\n          ],\n          \"kernel_model\": [\n            \"Triton kernel with a single program: loads full 16x16 matrix and initial state in fp32, loops STEPS=64, computes next_state = row-wise sum(matrix * state) + drive row, then casts state to fp16 and back to fp32 each step (kernel.py lines 13-16).\",\n            \"Output stored to a pre-allocated fp32 tensor of shape (16,) (lines 17, 21-23); grid is (1,), N=16, STEPS=64, num_warps=4, enable_fp_fusion=False.\",\n            \"Input generator builds an orthogonally-similar upper-triangular matrix with eigenvalues in {0.875..0.96875} plus small off-diagonals, so spectral radius < 1 and states stay O(0.1); inputs are exact dyadic values in the matrix (0.875, 0.90625, 0.1875, 0.03125) while initial/drive are fp32 Gaussians at scale 0.1.\",\n            \"The per-step fp16 round-trip (line 16) is the approximation mechanism; matrix multiply and forcing are accumulated in fp32 (tl.sum over fp32 products).\"\n          ],\n          \"open_questions\": [\n            \"Does the fp16-cast accumulated error on this specific seeded workload stay under 0.002, or exceed it? Needs runtime evidence (Experimenter).\",\n            \"Is the state magnitude O(0.1) assumption correct across all 64 steps for this seeded input? If states decay toward ~0, absolute fp16 rounding shrinks proportionally, which would help; if any component stays large, rounding grows.\",\n            \"Confirm the reference uses the same input tensors (fp32 -> fp64 upcast) and no fp16 anywhere, so the entire error budget is kernel-side.\"\n          ],\n          \"risk_map\": [\n            \"Per-step fp16 rounding of state: 64 sequential quantizations accumulate; relative error per step ~2^-11 and errors compound through the recurrence (not purely random-walk since the linear map can amplify). Whether total relative L2 error stays under 0.002 is the central question.\",\n            \"fp16 dynamic range: state entries ~O(0.1) are far from overflow; subnormal/flush risk is low but small entries rounding to zero could matter if the reference state is small relative to the denominator floor (0.004).\",\n            \"tl.sum accumulation order in fp32 vs float64 reference: minor fp32 accumulation error, likely negligible relative to fp16 rounding but worth separating in evidence.\",\n            \"enable_fp_fusion=False suggests deliberate control of fusion; if fusion were on, multiply-add rounding would change slightly \\u2014 but kernel still uses fp32 for the arithmetic.\",\n            \"Driver: run ignores strides/assumes contiguous row-major inputs; fine here since make_inputs produces contiguous tensors, but any non-contiguous input is out of scope anyway.\"\n          ],\n          \"scope_notes\": [\n            \"Only the fixed seeded workload (PCG64 seeds 20260923 and 202002) is judged; tolerance is a single final-output L2 metric, not per-step accuracy.\\\", \\\"The problem explicitly permits approximate intermediate states, so fp16 casting is contractually allowed if the final tolerance is met.\\\", \\\"No test_code file exists; problem.txt is the sole contract source.\\\"]\"\n          ]\n        },\n        \"resolved_tasks\": [],\n        \"update\": {\n          \"contract_model\": [\n            \"Fixed workload only: run(*make_inputs()) with float32 matrix (16,16), initial (16,), drive (64,16); alternative inputs out of scope.\",\n            \"Reference is the recurrence state_{t+1} = matrix @ state_t + drive[t] evaluated in float64 on the float32 inputs, 64 steps.\",\n            \"Output must be finite, shape (16,), relative L2 error <= 0.002 with denominator max(||ref||_2, 0.001*sqrt(16)).\",\n            \"Intermediate states may be approximated; only the final vector is judged. Target device NVIDIA T4.\"\n          ],\n          \"created_at\": \"2026-09-23T21:41:45Z\",\n          \"created_by\": \"describer\",\n          \"id\": \"du1\",\n          \"impact_on_claims\": [],\n          \"kernel_model\": [\n            \"Triton kernel with a single program: loads full 16x16 matrix and initial state in fp32, loops STEPS=64, computes next_state = row-wise sum(matrix * state) + drive row, then casts state to fp16 and back to fp32 each step (kernel.py lines 13-16).\",\n            \"Output stored to a pre-allocated fp32 tensor of shape (16,) (lines 17, 21-23); grid is (1,), N=16, STEPS=64, num_warps=4, enable_fp_fusion=False.\",\n            \"Input generator builds an orthogonally-similar upper-triangular matrix with eigenvalues in {0.875..0.96875} plus small off-diagonals, so spectral radius < 1 and states stay O(0.1); inputs are exact dyadic values in the matrix (0.875, 0.90625, 0.1875, 0.03125) while initial/drive are fp32 Gaussians at scale 0.1.\",\n            \"The per-step fp16 round-trip (line 16) is the approximation mechanism; matrix multiply and forcing are accumulated in fp32 (tl.sum over fp32 products).\"\n          ],\n          \"open_questions\": [\n            \"Does the fp16-cast accumulated error on this specific seeded workload stay under 0.002, or exceed it? Needs runtime evidence (Experimenter).\",\n            \"Is the state magnitude O(0.1) assumption correct across all 64 steps for this seeded input? If states decay toward ~0, absolute fp16 rounding shrinks proportionally, which would help; if any component stays large, rounding grows.\",\n            \"Confirm the reference uses the same input tensors (fp32 -> fp64 upcast) and no fp16 anywhere, so the entire error budget is kernel-side.\"\n          ],\n          \"risk_map\": [\n            \"Per-step fp16 rounding of state: 64 sequential quantizations accumulate; relative error per step ~2^-11 and errors compound through the recurrence (not purely random-walk since the linear map can amplify). Whether total relative L2 error stays under 0.002 is the central question.\",\n            \"fp16 dynamic range: state entries ~O(0.1) are far from overflow; subnormal/flush risk is low but small entries rounding to zero could matter if the reference state is small relative to the denominator floor (0.004).\",\n            \"tl.sum accumulation order in fp32 vs float64 reference: minor fp32 accumulation error, likely negligible relative to fp16 rounding but worth separating in evidence.\",\n            \"enable_fp_fusion=False suggests deliberate control of fusion; if fusion were on, multiply-add rounding would change slightly \\u2014 but kernel still uses fp32 for the arithmetic.\",\n            \"Driver: run ignores strides/assumes contiguous row-major inputs; fine here since make_inputs produces contiguous tensors, but any non-contiguous input is out of scope anyway.\"\n          ],\n          \"scope_notes\": [\n            \"Only the fixed seeded workload (PCG64 seeds 20260923 and 202002) is judged; tolerance is a single final-output L2 metric, not per-step accuracy.\\\", \\\"The problem explicitly permits approximate intermediate states, so fp16 casting is contractually allowed if the final tolerance is met.\\\", \\\"No test_code file exists; problem.txt is the sole contract source.\\\"]\"\n          ],\n          \"summary\": \"case_f: linear recurrence kernel (16x16, 64 steps) with per-step fp16 state quantization against a float64 reference and 0.002 relative-L2 tolerance.\",\n          \"task_ids\": [],\n          \"turn\": 2\n        }\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_description_update\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "request_description",
+        "description": "Request a Describer clarification for source, contract, probe, or verdict ambiguity.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "reason_kind",
+            "question"
+          ],
+          "properties": {
+            "reason_kind": {
+              "type": "string",
+              "enum": [
+                "contract_scope",
+                "source_interpretation",
+                "probe_anomaly",
+                "verdict_blocker",
+                "other"
+              ]
+            },
+            "question": {
+              "type": "string"
+            },
+            "related_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "source_refs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Leave it unset if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Required when scope is in_scope: which contract requirement this claim would violate."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Required when scope is in_scope: at least one quote from the contract, each with its source."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_no_new_claims",
+        "description": "Record that the Skeptic reviewed the current evidence and found no new in-scope claims.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "reason",
+            "reviewed_claims"
+          ],
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "reviewed_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

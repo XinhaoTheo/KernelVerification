@@ -1,0 +1,281 @@
+[
+  {
+    "created_at": "2026-09-24T07:01:55Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:03:15Z",
+        "data": {
+          "absorption_fires": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t16_probe.py",
+              "sha256": "bd56ae28b855aa7d2f834037a0cc9738e9c07aeae317deb42285b52d7291fa05"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t16_stdout.txt",
+              "sha256": "6b7de361858924ecd8bae9227470f3ede49f2ab82fe332f32283084a51a2695e"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t16_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t16_json_result.json",
+              "sha256": "c49c19711f3d4092b552a312559596dc70a61ecf85af9ed7996668487c841023"
+            }
+          ],
+          "duration_s": 0.170436,
+          "exit_code": 0,
+          "expected_signal": "whether any low lies between the +2^30 and -2^30 columns and whether rel err vs exact target exceeds 1e-5",
+          "json_parse_error": null,
+          "json_result": {
+            "absorption_fires": false,
+            "exact_targets": [
+              6.505321681499481,
+              7.741500437259674,
+              5.5564670860767365,
+              7.190612614154816
+            ],
+            "lows_between": [],
+            "lows_between_pm2p30_count": 0,
+            "max_row_abs_error": 1.7881393432617188e-07,
+            "neg30_idx": 0,
+            "perm_order": [
+              1,
+              0,
+              5,
+              2,
+              6,
+              9,
+              3,
+              7,
+              4,
+              8
+            ],
+            "pos30_idx": 1,
+            "relative_error_vs_exact": 1.9235792803862544e-08,
+            "sim_fp32_outputs": [
+              6.505321502685547,
+              7.741500377655029,
+              5.556467056274414,
+              7.19061279296875
+            ],
+            "tolerance": 1e-05
+          },
+          "lows_between_pm2p30_count": 0,
+          "neg30_idx": 0,
+          "perm_order": [
+            1,
+            0,
+            5,
+            2,
+            6,
+            9,
+            3,
+            7,
+            4,
+            8
+          ],
+          "pos30_idx": 1,
+          "relative_error_vs_exact": 1.9235792803862544e-08,
+          "sim_matches_recorded_gpu": true,
+          "stderr": "",
+          "stdout": "{\"perm_order\": [1, 0, 5, 2, 6, 9, 3, 7, 4, 8], \"pos30_idx\": 1, \"neg30_idx\": 0, \"lows_between_pm2p30_count\": 0, \"lows_between\": [], \"exact_targets\": [6.505321681499481, 7.741500437259674, 5.5564670860767365, 7.190612614154816], \"sim_fp32_outputs\": [6.505321502685547, 7.741500377655029, 5.556467056274414, 7.19061279296875], \"relative_error_vs_exact\": 1.9235792803862544e-08, \"tolerance\": 1e-05, \"absorption_fires\": false, \"max_row_abs_error\": 1.7881393432617188e-07}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 1e-05
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On the fixed seed-193662 array, the permutation places -2^30 at interior index 0 and +2^30 at index 1 (adjacent), so no small low value falls between the \u00b12^30 columns; absorption cannot fire. The fp32 simulation of the kernel path exactly reproduces the recorded GPU outputs and has relative error 1.92e-8 vs the exact Fraction target, far inside the 1e-5 tolerance. Claim's hypothesized O(1) error does not occur on the in-scope input.",
+        "supports": "rebutted",
+        "tool_event_id": "t16"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "Line 20 accumulates the Kahan correction in plain float32; after the +2^30 term is captured into correction, any small low value added while correction \u2248 2^30 rounds away entirely (float32 spacing at 2^30 is 2^7), so those lows are permanently lost and the final row sum is off by O(1) \u2014 far above the 1e-5 relative tolerance. Whether it fires depends on the fixed seed-193662 permutation of the interior columns.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The workload is the exact array X from make_inputs() with shape (4,12); target is the exact real-number row sum and acceptance requires ||output-target||_2/max(||target||,1e-12) <= 1e-5. The interior permutation placing +2^30, -2^30 and the 8 lows is fixed by make_inputs_numpy, so whether lows fall between the \u00b12^30 columns is a property of the in-scope array."
+      }
+    ],
+    "scope_rationale": "The fixed in-scope array (make_inputs, seed 193662) places +2^30, -2^30 and 8 small values in a fixed interior permutation; the contract requires the exact real-number row sum within 1e-5 relative tolerance. If any low value is absorbed by the naive float32 correction accumulation while correction holds ~2^30, the final row sum violates that stated tolerance on the fixed workload.",
+    "statement": "On the fixed in-scope input (seed 193662), small uniform[0.25,1.75] values that enter the float32 'correction' while correction holds \u22482^30 (i.e., low values stored between the +2^30 and -2^30 columns in the permuted interior) are absorbed, making run(X)'s final row sums differ from the exact target by more than the 1e-5 relative tolerance.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T07:03:15Z"
+  },
+  {
+    "created_at": "2026-09-24T07:01:55Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:03:26Z",
+        "data": {
+          "exact_real_targets_fraction": [
+            "109141187/16777216",
+            "129880825/16777216",
+            "186444097/33554432",
+            "120638461/16777216"
+          ],
+          "exact_targets_float64": [
+            6.505321681499481,
+            7.741500437259674,
+            5.5564670860767365,
+            7.190612614154816
+          ],
+          "float64_ulp_at_2p80": 1.3407807929942598e+26,
+          "probe_reference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "probe_reference_matches_exact_target": false,
+          "source_refs": [
+            "probes/t17_json_result.json",
+            "problem.txt"
+          ]
+        },
+        "id": "c2.e1",
+        "kind": "agent_analysis",
+        "summary": "Claim c2 confirmed: the contract target is the exact real-number row sum, which the deterministic CPU reconstruction (probe t16/t17) computes as [109141187/16777216, 129880825/16777216, 186444097/33554432, 120638461/16777216] \u2248 [6.505, 7.742, 5.556, 7.191] \u2014 nonzero, since \u00b12^80 and \u00b12^30 cancel exactly in real arithmetic. The initial_probe's recorded reference [0,0,0,0] comes from sequential float64 accumulation, which is lossy here: float64 spacing at 2^80 is 2^27 (~1.34e26), so every small value (\u22641.75) and both 2^30 terms round away. problem.txt explicitly states the probe is 'evidence to assess, not an authoritative verdict or an alternative specification' and that the metric is evaluated 'in float64 or more accurately against the mathematical target.' Therefore the probe's 'passed: false' (rel err 1.36e13 vs its own 0.0 reference) is an artifact of the lossy reference, not a contract failure; against the exact target the recorded GPU output has relative error 1.92e-8, well within 1e-5.",
+        "supports": "confirmed",
+        "tool_event_id": null
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The probe's recorded reference [0,0,0,0] comes from sequential float64 accumulation where 2^80's spacing (2^27) swallows all 8 small values; the true exact target is the sum of the 8 lows (~2-14 per row). Comparing with the probe's reference would spuriously fail a possibly-correct kernel.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The target is 'the exact real-number sum of those stored input values' and 'all differences and norms in the acceptance metric are evaluated in float64 or more accurately against the mathematical target'; the initial probe is explicitly 'evidence to assess, not an authoritative verdict or an alternative specification.'"
+      }
+    ],
+    "scope_rationale": "problem.txt defines the target as the exact real-number sum (evaluated in float64 or more accurately) and explicitly states the initial probe is evidence, not a specification; so judging the kernel against the probe's lossy 0.0 reference rather than the exact sum of the 8 lows would misapply the stated contract.",
+    "statement": "The initial_probe's float64 sequential reference (0.0 per row) is not the contract target; the decisive comparison must use the exact real-number sum, which equals the sum of the 8 small values per row, so the probe's 'passed: false' is not contract-decisive.",
+    "status": "confirmed",
+    "updated_at": "2026-09-24T07:03:37Z"
+  },
+  {
+    "created_at": "2026-09-24T07:01:55Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:03:15Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t17_probe.py",
+              "sha256": "390749ab66d359b0145744629a37e83ca3d40634b255905e90407efddfb17e7d"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t17_stdout.txt",
+              "sha256": "82652db910cce9cfa67e518116b2ae23049ab11cd7f05ef58ec1c7d3250edcf0"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t17_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t17_json_result.json",
+              "sha256": "56054352cb0e1458983b427b728485151ebd943eb2d39e06105282afc02f7427"
+            }
+          ],
+          "duration_s": 0.184726,
+          "exact_targets": [
+            6.505321681499481,
+            7.741500437259674,
+            5.5564670860767365,
+            7.190612614154816
+          ],
+          "exit_code": 0,
+          "expected_signal": "relative error of kernel-path simulation and recorded GPU outputs vs exact sum of lows vs 1e-5 tolerance",
+          "fp32_representable_gap": 1.7881393432617188e-07,
+          "json_parse_error": null,
+          "json_result": {
+            "exact_targets": [
+              6.505321681499481,
+              7.741500437259674,
+              5.5564670860767365,
+              7.190612614154816
+            ],
+            "exact_targets_fraction": [
+              "109141187/16777216",
+              "129880825/16777216",
+              "186444097/33554432",
+              "120638461/16777216"
+            ],
+            "fp32_representable_gap": 1.7881393432617188e-07,
+            "recorded_gpu_output": [
+              6.505321502685547,
+              7.741500377655029,
+              5.556467056274414,
+              7.19061279296875
+            ],
+            "recorded_gpu_rel_err_vs_exact": 1.9235792803862544e-08,
+            "sim_fp32": [
+              6.505321502685547,
+              7.741500377655029,
+              5.556467056274414,
+              7.19061279296875
+            ],
+            "sim_rel_err": 1.9235792803862544e-08,
+            "tolerance": 1e-05,
+            "within_tolerance_recorded": true,
+            "within_tolerance_sim": true
+          },
+          "recorded_gpu_rel_err_vs_exact": 1.9235792803862544e-08,
+          "sim_rel_err": 1.9235792803862544e-08,
+          "stderr": "",
+          "stdout": "{\"exact_targets\": [6.505321681499481, 7.741500437259674, 5.5564670860767365, 7.190612614154816], \"exact_targets_fraction\": [\"109141187/16777216\", \"129880825/16777216\", \"186444097/33554432\", \"120638461/16777216\"], \"sim_fp32\": [6.505321502685547, 7.741500377655029, 5.556467056274414, 7.19061279296875], \"sim_rel_err\": 1.9235792803862544e-08, \"recorded_gpu_output\": [6.505321502685547, 7.741500377655029, 5.556467056274414, 7.19061279296875], \"recorded_gpu_rel_err_vs_exact\": 1.9235792803862544e-08, \"tolerance\": 1e-05, \"within_tolerance_sim\": true, \"within_tolerance_recorded\": true, \"fp32_representable_gap\": 1.7881393432617188e-07}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 1e-05,
+          "within_tolerance_recorded": true,
+          "within_tolerance_sim": true
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "Residual fp32 rounding does not push the output outside tolerance: the kernel-path fp32 simulation (bit-identical to the recorded GPU outputs) differs from the exact Fraction real-number targets by only ~1.79e-7 absolute per row, giving a 4-vector relative error of 1.92e-8, ~500x inside the 1e-5 contract tolerance. The remaining gap is exactly the fp32 representable spacing (2^-23 ulp at ~6.5), unavoidable for a float32 output.",
+        "supports": "rebutted",
+        "tool_event_id": "t17"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "Even if no absorption occurs, the kernel sums the 8 lows via the Kahan lost-term path entirely in float32, and the final 'total + correction' store rounds in fp32; observed outputs (5.556-7.742) must be compared against exact per-row sums (computed with exact/extended-precision arithmetic) to confirm the 4-vector relative error is <= 1e-5.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Acceptance requires ||output-target||_2 / max(||target||_2, 1e-12) <= 1e-5 on the final row sums for the fixed stored array, evaluated in float64 or more accurately against the mathematical target; output must be finite float32 of shape (4,)."
+      }
+    ],
+    "scope_rationale": "The contract's acceptance metric is on final row sums for the fixed stored array at 1e-5 relative tolerance, so any residual float32 rounding in the kernel's compensated path that pushes the output outside that band on this fixed input is an in-scope contract violation.",
+    "statement": "Residual float32 rounding in the compensated path (the naive 'correction = correction + lost' accumulation of the 8 small values and the final 'total + correction' store) may leave run(X)'s output outside the 1e-5 relative-tolerance band versus the exact sum of the 8 low values per row on the fixed input.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T07:03:15Z"
+  }
+]

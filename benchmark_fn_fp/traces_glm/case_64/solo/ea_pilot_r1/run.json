@@ -1,0 +1,748 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "__pycache__/kernel.cpython-313.pyc",
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_e03",
+    "has_error": null,
+    "kernel_code": "import itertools\nimport numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\nSEED = 941201\nN, D = 8, 32\nSMOKE_WORDS = ((2,), (0, 2), (1, 2), (0, 0, 2), (1, 1, 2))\n\n\n@triton.jit\ndef _reorder(Order, Permutation, Next, N: tl.constexpr):\n    row = tl.arange(0, N)\n    source = tl.load(Permutation + row)\n    tl.store(Next + row, tl.load(Order + source))\n\n\n@triton.jit\ndef _append(Cache, Order, Delta, N: tl.constexpr, D: tl.constexpr):\n    row = tl.arange(0, N)[:, None]\n    col = tl.arange(0, D)[None, :]\n    source = tl.load(Order + row)\n    current = tl.load(Cache + row * D + col)\n    increment = tl.load(Delta + source * D + col)\n    tl.store(Cache + row * D + col, current + increment)\n\n\n@triton.jit\ndef _materialize(Cache, Order, Output, N: tl.constexpr, D: tl.constexpr):\n    row = tl.arange(0, N)[:, None]\n    col = tl.arange(0, D)[None, :]\n    physical = tl.load(Order + row)\n    tl.store(Output + row * D + col, tl.load(Cache + physical * D + col))\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    initial = (rng.integers(-64, 65, size=(N, D)) / 16).astype(np.float32)\n    increment = (rng.integers(-32, 33, size=(N, D)) / 16).astype(np.float32)\n    permutations = []\n    for _ in range(2):\n        pairs = rng.permutation(N).reshape(-1, 2)\n        permutation = np.arange(N, dtype=np.int32)\n        for a, b in pairs:\n            permutation[a], permutation[b] = b, a\n        permutations.append(permutation)\n    return initial, increment, np.stack(permutations)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n\n\ndef run_sequence(initial, increment, permutations, operations):\n    physical = initial.clone()\n    order = torch.arange(N, device=initial.device, dtype=torch.int32)\n    for operation in tuple(operations):\n        if operation in (0, 1):\n            next_order = torch.empty_like(order)\n            _reorder[(1,)](order, permutations[operation], next_order, N=N, num_warps=1)\n            order = next_order\n        elif operation == 2:\n            _append[(1,)](physical, order, increment, N=N, D=D, num_warps=1)\n        else:\n            raise ValueError(\"operations must contain only 0, 1, or 2\")\n    output = torch.empty_like(initial)\n    _materialize[(1,)](physical, order, output, N=N, D=D, num_warps=1)\n    return output\n\n\ndef run(initial, increment, permutations, operations=(0, 1, 2)):\n    return run_sequence(initial, increment, permutations, operations)\n\n\ndef initial_probe(device=\"cuda\"):\n    cpu = make_inputs_numpy()\n    gpu = make_inputs(device)\n    rows = []\n    for operations in SMOKE_WORDS:\n        reference = cpu[0].astype(np.float64).copy()\n        for operation in operations:\n            reference = (reference[cpu[2][operation]].copy() if operation < 2\n                         else reference + cpu[1].astype(np.float64))\n        actual = run_sequence(*gpu, operations).detach().cpu().numpy()\n        error = float(np.max(np.abs(actual.astype(np.float64) - reference)))\n        passed = actual.shape == (N, D) and actual.dtype == np.float32 and bool(\n            np.isfinite(actual).all()) and error <= 0.00001\n        rows.append({\"operations\": list(operations), \"max_absolute_error\": error,\n                     \"passed\": bool(passed)})\n    return {\"scope\": \"five smoke words, each from fresh state\",\n            \"all_passed\": all(row[\"passed\"] for row in rows), \"records\": rows}\n",
+    "passed": null,
+    "problem_text": "Validate a lazily reordered beam-cache implementation over a finite API domain.\n\nThe only numeric inputs in scope are the float32 initial cache C, float32\nincrement Delta, and two int32 permutations P returned by make_inputs_numpy().\nC and Delta have shape (8, 32), and P has shape (2, 8). Every sequence starts\nfrom a fresh C. Allowed operation words are ALL words of length 0 through 4\nover {0, 1, 2}: 121 sequences, including the empty word.\n\nMathematical semantics, applied consecutively to the current logical cache:\n  operation 0: C_next = C_current[P[0], :]\n  operation 1: C_next = C_current[P[1], :]\n  operation 2: C_next = C_current + Delta\nDelta always addresses CURRENT LOGICAL rows, regardless of previous reorders.\nThe return value is the final logical cache, not the internal physical storage.\nFor each of the 121 sequences the output must have shape (8, 32), be float32\nand finite, and max(abs(output - mathematical_reference)) <= 0.00001.\nAll values are multiples of 1/16; these short reference updates are exactly\nrepresentable in float32 and can also be computed in float64 or integer units.\n\nCall run_sequence(*make_inputs(), operations) to evaluate a word. run() is a\nconvenience wrapper whose default word is (0, 1, 2); it is not the whole domain.\nEach public permutation is individually an involution. Do not assume any\nadditional property of their composition without checking the generated data.\n\nAn initial_probe() is supplied as an existing smoke test. It checks five\nexplicit words, each from fresh state, against the logical CPU reference.\nIts recorded result is that all five words pass. That fact is evidence about\nthose words only; the contract above still covers all 121 words. The probe\nsource and exact generated inputs are available for audit and further tests.\nDecide whether the implementation satisfies the complete finite contract.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"scope\": \"five smoke words, each from fresh state\",\n  \"all_passed\": true,\n  \"records\": [\n    {\n      \"operations\": [\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        0,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        1,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        0,\n        0,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        1,\n        1,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    }\n  ]\n}\n",
+    "rounds": null,
+    "session_dir": "/root/evidence_cases/case_e03",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T06:11:21Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T06:11:39Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "cb44bb630e0b8737a7b3726ae5dbe21bbffaa77bbc9215e862fba0e127d27402"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "f6cc07573ae4b734bac2091b4bad4294759e1ce4c42698bb287e31fd4ad94f82"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "29a6a7fb62b2a9a999c17dbf021030072f9a2fab4903ec322b185bcbdaa81657"
+              }
+            ],
+            "duration_s": 5.392899,
+            "exit_code": 0,
+            "expected_signal": null,
+            "first_failures": [],
+            "json_parse_error": null,
+            "json_result": {
+              "claim_confirmed": false,
+              "first_failures": [],
+              "max_abs_error_over_all": 0.0,
+              "num_failures": 0,
+              "num_words": 121
+            },
+            "max_abs_error_over_all": 0.0,
+            "num_failures": 0,
+            "num_words": 121,
+            "stderr": "",
+            "stdout": "{\"num_words\": 121, \"num_failures\": 0, \"max_abs_error_over_all\": 0.0, \"first_failures\": [], \"claim_confirmed\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "_append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001."
+        }
+      ],
+      "scope_rationale": "The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.",
+      "statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T06:11:39Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_e03",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_e03"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_e03"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_e03"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_e03",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 24.687805751,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel's `_append` indexes Delta by `Order[row]` (physical index) rather than by logical row, which could violate the contract's \"Delta always addresses CURRENT LOGICAL rows\" for words with an odd number of reorders before an append. The exhaustive 121-word probe is the decisive test. I'll record that claim and run it.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "_append loads Delta from source = Order[row] (the physical index of logical row r) instead of Delta[r], so whenever the order map is non-identity at append time the wrong Delta row is added; the smoke words may accidentally avoid exposing this, so all 121 words must be tested.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences ... Delta always addresses CURRENT LOGICAL rows ... max(abs(output - mathematical_reference)) <= 0.00001."
+              }
+            ],
+            "statement": "There exists at least one word among the 121 in-scope operation sequences (length 0-4 over {0,1,2}) for which run_sequence output differs from the mathematical reference by more than 1e-5."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 24.688,
+        "input_tokens": 10154,
+        "output_tokens": 1514
+      }
+    },
+    {
+      "duration_s": 3.6199935940000003,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll re-record the claim with scope_rationale, then run the exhaustive 121-word probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "_append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001."
+              }
+            ],
+            "scope_rationale": "The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.",
+            "statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.62,
+        "input_tokens": 10882,
+        "output_tokens": 270
+      }
+    },
+    {
+      "duration_s": 5.771595364999996,
+      "role": "solo",
+      "round": 4,
+      "text": "I'll run the exhaustive 121-word probe against the mathematical reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import itertools, sys, json\nsys.path.insert(0, \"/root/evidence_cases/case_e03\")\nimport numpy as np, torch\nimport kernel as K\n\ncpu = K.make_inputs_numpy()\ngpu = K.make_inputs(\"cuda\")\nC, Delta, P = cpu[0].astype(np.float64), cpu[1].astype(np.float64), cpu[2]\n\nwords = [tuple(w) for L in range(5) for w in itertools.product((0,1,2), repeat=L)]\nassert len(words) == 121\nfails = []\nmaxerr = 0.0\nfor w in words:\n    ref = C.copy()\n    for op in w:\n        if op < 2: ref = ref[P[op]].copy()\n        else: ref = ref + Delta\n    out = K.run_sequence(*gpu, w).detach().cpu().numpy()\n    err = float(np.max(np.abs(out.astype(np.float64) - ref)))\n    ok = out.shape == (8,32) and out.dtype == np.float32 and np.isfinite(out).all() and err <= 1e-5\n    maxerr = max(maxerr, err)\n    if not ok:\n        fails.append({\"word\": list(w), \"err\": err})\n\nprint(json.dumps({\"num_words\": len(words), \"num_failures\": len(fails),\n                  \"max_abs_error_over_all\": maxerr,\n                  \"first_failures\": fails[:5],\n                  \"claim_confirmed\": len(fails) > 0}))"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.772,
+        "input_tokens": 12107,
+        "output_tokens": 352
+      }
+    },
+    {
+      "duration_s": 6.159952552000007,
+      "role": "solo",
+      "round": 5,
+      "text": "The exhaustive probe ran cleanly: all 121 in-scope words passed with zero error, so the suspected Delta-indexing defect did not materialize (the reorder composition makes the physical indexing consistent). I'll finalize the evidence, mark c1 rebutted, and record a trust verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "first_failures": [],
+              "max_abs_error_over_all": 0.0,
+              "num_failures": 0,
+              "num_words": 121
+            },
+            "event_id": "t7",
+            "status": "rebutted",
+            "summary": "Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.16,
+        "input_tokens": 14187,
+        "output_tokens": 279
+      }
+    },
+    {
+      "duration_s": 5.607946427000002,
+      "role": "solo",
+      "round": 6,
+      "text": "The exhaustive 121-word probe covered the entire finite contract domain with zero error, so nothing further is needed \u2014 I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 1,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.608,
+        "input_tokens": 16931,
+        "output_tokens": 260
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_e03"
+      },
+      "created_at": "2026-09-24T06:10:53Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "__pycache__/kernel.cpython-313.pyc",
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_e03",
+        "has_error": null,
+        "kernel_code": "import itertools\nimport numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\nSEED = 941201\nN, D = 8, 32\nSMOKE_WORDS = ((2,), (0, 2), (1, 2), (0, 0, 2), (1, 1, 2))\n\n\n@triton.jit\ndef _reorder(Order, Permutation, Next, N: tl.constexpr):\n    row = tl.arange(0, N)\n    source = tl.load(Permutation + row)\n    tl.store(Next + row, tl.load(Order + source))\n\n\n@triton.jit\ndef _append(Cache, Order, Delta, N: tl.constexpr, D: tl.constexpr):\n    row = tl.arange(0, N)[:, None]\n    col = tl.arange(0, D)[None, :]\n    source = tl.load(Order + row)\n    current = tl.load(Cache + row * D + col)\n    increment = tl.load(Delta + source * D + col)\n    tl.store(Cache + row * D + col, current + increment)\n\n\n@triton.jit\ndef _materialize(Cache, Order, Output, N: tl.constexpr, D: tl.constexpr):\n    row = tl.arange(0, N)[:, None]\n    col = tl.arange(0, D)[None, :]\n    physical = tl.load(Order + row)\n    tl.store(Output + row * D + col, tl.load(Cache + physical * D + col))\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    initial = (rng.integers(-64, 65, size=(N, D)) / 16).astype(np.float32)\n    increment = (rng.integers(-32, 33, size=(N, D)) / 16).astype(np.float32)\n    permutations = []\n    for _ in range(2):\n        pairs = rng.permutation(N).reshape(-1, 2)\n        permutation = np.arange(N, dtype=np.int32)\n        for a, b in pairs:\n            permutation[a], permutation[b] = b, a\n        permutations.append(permutation)\n    return initial, increment, np.stack(permutations)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n\n\ndef run_sequence(initial, increment, permutations, operations):\n    physical = initial.clone()\n    order = torch.arange(N, device=initial.device, dtype=torch.int32)\n    for operation in tuple(operations):\n        if operation in (0, 1):\n            next_order = torch.empty_like(order)\n            _reorder[(1,)](order, permutations[operation], next_order, N=N, num_warps=1)\n            order = next_order\n        elif operation == 2:\n            _append[(1,)](physical, order, increment, N=N, D=D, num_warps=1)\n        else:\n            raise ValueError(\"operations must contain only 0, 1, or 2\")\n    output = torch.empty_like(initial)\n    _materialize[(1,)](physical, order, output, N=N, D=D, num_warps=1)\n    return output\n\n\ndef run(initial, increment, permutations, operations=(0, 1, 2)):\n    return run_sequence(initial, increment, permutations, operations)\n\n\ndef initial_probe(device=\"cuda\"):\n    cpu = make_inputs_numpy()\n    gpu = make_inputs(device)\n    rows = []\n    for operations in SMOKE_WORDS:\n        reference = cpu[0].astype(np.float64).copy()\n        for operation in operations:\n            reference = (reference[cpu[2][operation]].copy() if operation < 2\n                         else reference + cpu[1].astype(np.float64))\n        actual = run_sequence(*gpu, operations).detach().cpu().numpy()\n        error = float(np.max(np.abs(actual.astype(np.float64) - reference)))\n        passed = actual.shape == (N, D) and actual.dtype == np.float32 and bool(\n            np.isfinite(actual).all()) and error <= 0.00001\n        rows.append({\"operations\": list(operations), \"max_absolute_error\": error,\n                     \"passed\": bool(passed)})\n    return {\"scope\": \"five smoke words, each from fresh state\",\n            \"all_passed\": all(row[\"passed\"] for row in rows), \"records\": rows}\n",
+        "passed": null,
+        "problem_text": "Validate a lazily reordered beam-cache implementation over a finite API domain.\n\nThe only numeric inputs in scope are the float32 initial cache C, float32\nincrement Delta, and two int32 permutations P returned by make_inputs_numpy().\nC and Delta have shape (8, 32), and P has shape (2, 8). Every sequence starts\nfrom a fresh C. Allowed operation words are ALL words of length 0 through 4\nover {0, 1, 2}: 121 sequences, including the empty word.\n\nMathematical semantics, applied consecutively to the current logical cache:\n  operation 0: C_next = C_current[P[0], :]\n  operation 1: C_next = C_current[P[1], :]\n  operation 2: C_next = C_current + Delta\nDelta always addresses CURRENT LOGICAL rows, regardless of previous reorders.\nThe return value is the final logical cache, not the internal physical storage.\nFor each of the 121 sequences the output must have shape (8, 32), be float32\nand finite, and max(abs(output - mathematical_reference)) <= 0.00001.\nAll values are multiples of 1/16; these short reference updates are exactly\nrepresentable in float32 and can also be computed in float64 or integer units.\n\nCall run_sequence(*make_inputs(), operations) to evaluate a word. run() is a\nconvenience wrapper whose default word is (0, 1, 2); it is not the whole domain.\nEach public permutation is individually an involution. Do not assume any\nadditional property of their composition without checking the generated data.\n\nAn initial_probe() is supplied as an existing smoke test. It checks five\nexplicit words, each from fresh state, against the logical CPU reference.\nIts recorded result is that all five words pass. That fact is evidence about\nthose words only; the contract above still covers all 121 words. The probe\nsource and exact generated inputs are available for audit and further tests.\nDecide whether the implementation satisfies the complete finite contract.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"scope\": \"five smoke words, each from fresh state\",\n  \"all_passed\": true,\n  \"records\": [\n    {\n      \"operations\": [\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        0,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        1,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        0,\n        0,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        1,\n        1,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    }\n  ]\n}\n",
+        "rounds": null,
+        "session_dir": "/root/evidence_cases/case_e03",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_e03"
+      },
+      "created_at": "2026-09-24T06:10:53Z",
+      "id": "t2",
+      "output": {
+        "content": "Validate a lazily reordered beam-cache implementation over a finite API domain.\n\nThe only numeric inputs in scope are the float32 initial cache C, float32\nincrement Delta, and two int32 permutations P returned by make_inputs_numpy().\nC and Delta have shape (8, 32), and P has shape (2, 8). Every sequence starts\nfrom a fresh C. Allowed operation words are ALL words of length 0 through 4\nover {0, 1, 2}: 121 sequences, including the empty word.\n\nMathematical semantics, applied consecutively to the current logical cache:\n  operation 0: C_next = C_current[P[0], :]\n  operation 1: C_next = C_current[P[1], :]\n  operation 2: C_next = C_current + Delta\nDelta always addresses CURRENT LOGICAL rows, regardless of previous reorders.\nThe return value is the final logical cache, not the internal physical storage.\nFor each of the 121 sequences the output must have shape (8, 32), be float32\nand finite, and max(abs(output - mathematical_reference)) <= 0.00001.\nAll values are multiples of 1/16; these short reference updates are exactly\nrepresentable in float32 and can also be computed in float64 or integer units.\n\nCall run_sequence(*make_inputs(), operations) to evaluate a word. run() is a\nconvenience wrapper whose default word is (0, 1, 2); it is not the whole domain.\nEach public permutation is individually an involution. Do not assume any\nadditional property of their composition without checking the generated data.\n\nAn initial_probe() is supplied as an existing smoke test. It checks five\nexplicit words, each from fresh state, against the logical CPU reference.\nIts recorded result is that all five words pass. That fact is evidence about\nthose words only; the contract above still covers all 121 words. The probe\nsource and exact generated inputs are available for audit and further tests.\nDecide whether the implementation satisfies the complete finite contract.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"scope\": \"five smoke words, each from fresh state\",\n  \"all_passed\": true,\n  \"records\": [\n    {\n      \"operations\": [\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        0,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        1,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        0,\n        0,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    },\n    {\n      \"operations\": [\n        1,\n        1,\n        2\n      ],\n      \"max_absolute_error\": 0.0,\n      \"passed\": true\n    }\n  ]\n}\n",
+        "entry": "case_e03",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_e03"
+      },
+      "created_at": "2026-09-24T06:10:53Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_e03",
+        "files": [
+          {
+            "kind": "other",
+            "path": "__pycache__/kernel.cpython-313.pyc",
+            "size_bytes": 7401
+          },
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3449
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 99
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2647
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_e03",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T06:10:53Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_e03\",\n  \"passed\": null,\n  \"status\": \"unverified\",\n  \"family\": \"sequence_audit\"\n}\n",
+        "entry": "case_e03",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 99,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "_append loads Delta from source = Order[row] (the physical index of logical row r) instead of Delta[r], so whenever the order map is non-identity at append time the wrong Delta row is added; the smoke words may accidentally avoid exposing this, so all 121 words must be tested.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences ... Delta always addresses CURRENT LOGICAL rows ... max(abs(output - mathematical_reference)) <= 0.00001."
+          }
+        ],
+        "statement": "There exists at least one word among the 121 in-scope operation sequences (length 0-4 over {0,1,2}) for which run_sequence output differs from the mathematical reference by more than 1e-5."
+      },
+      "created_at": "2026-09-24T06:11:18Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t5",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "_append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001."
+          }
+        ],
+        "scope_rationale": "The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.",
+        "statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5."
+      },
+      "created_at": "2026-09-24T06:11:21Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-24T06:11:21Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "_append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001."
+          }
+        ],
+        "scope_rationale": "The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.",
+        "statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
+        "status": "open",
+        "updated_at": "2026-09-24T06:11:21Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import itertools, sys, json\nsys.path.insert(0, \"/root/evidence_cases/case_e03\")\nimport numpy as np, torch\nimport kernel as K\n\ncpu = K.make_inputs_numpy()\ngpu = K.make_inputs(\"cuda\")\nC, Delta, P = cpu[0].astype(np.float64), cpu[1].astype(np.float64), cpu[2]\n\nwords = [tuple(w) for L in range(5) for w in itertools.product((0,1,2), repeat=L)]\nassert len(words) == 121\nfails = []\nmaxerr = 0.0\nfor w in words:\n    ref = C.copy()\n    for op in w:\n        if op < 2: ref = ref[P[op]].copy()\n        else: ref = ref + Delta\n    out = K.run_sequence(*gpu, w).detach().cpu().numpy()\n    err = float(np.max(np.abs(out.astype(np.float64) - ref)))\n    ok = out.shape == (8,32) and out.dtype == np.float32 and np.isfinite(out).all() and err <= 1e-5\n    maxerr = max(maxerr, err)\n    if not ok:\n        fails.append({\"word\": list(w), \"err\": err})\n\nprint(json.dumps({\"num_words\": len(words), \"num_failures\": len(fails),\n                  \"max_abs_error_over_all\": maxerr,\n                  \"first_failures\": fails[:5],\n                  \"claim_confirmed\": len(fails) > 0}))"
+      },
+      "created_at": "2026-09-24T06:11:32Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "cb44bb630e0b8737a7b3726ae5dbe21bbffaa77bbc9215e862fba0e127d27402"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "f6cc07573ae4b734bac2091b4bad4294759e1ce4c42698bb287e31fd4ad94f82"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "29a6a7fb62b2a9a999c17dbf021030072f9a2fab4903ec322b185bcbdaa81657"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
+        "cwd": "/root/evidence_cases/case_e03",
+        "duration_s": 5.392899,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "cb44bb630e0b8737a7b3726ae5dbe21bbffaa77bbc9215e862fba0e127d27402"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "f6cc07573ae4b734bac2091b4bad4294759e1ce4c42698bb287e31fd4ad94f82"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "29a6a7fb62b2a9a999c17dbf021030072f9a2fab4903ec322b185bcbdaa81657"
+              }
+            ],
+            "duration_s": 5.392899,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "claim_confirmed": false,
+              "first_failures": [],
+              "max_abs_error_over_all": 0.0,
+              "num_failures": 0,
+              "num_words": 121
+            },
+            "stderr": "",
+            "stdout": "{\"num_words\": 121, \"num_failures\": 0, \"max_abs_error_over_all\": 0.0, \"first_failures\": [], \"claim_confirmed\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "claim_confirmed": false,
+          "first_failures": [],
+          "max_abs_error_over_all": 0.0,
+          "num_failures": 0,
+          "num_words": 121
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"num_words\": 121, \"num_failures\": 0, \"max_abs_error_over_all\": 0.0, \"first_failures\": [], \"claim_confirmed\": false}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "first_failures": [],
+          "max_abs_error_over_all": 0.0,
+          "num_failures": 0,
+          "num_words": 121
+        },
+        "event_id": "t7",
+        "status": "rebutted",
+        "summary": "Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-24T06:11:39Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T06:11:21Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T06:11:39Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "cb44bb630e0b8737a7b3726ae5dbe21bbffaa77bbc9215e862fba0e127d27402"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "f6cc07573ae4b734bac2091b4bad4294759e1ce4c42698bb287e31fd4ad94f82"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "29a6a7fb62b2a9a999c17dbf021030072f9a2fab4903ec322b185bcbdaa81657"
+                  }
+                ],
+                "duration_s": 5.392899,
+                "exit_code": 0,
+                "expected_signal": null,
+                "first_failures": [],
+                "json_parse_error": null,
+                "json_result": {
+                  "claim_confirmed": false,
+                  "first_failures": [],
+                  "max_abs_error_over_all": 0.0,
+                  "num_failures": 0,
+                  "num_words": 121
+                },
+                "max_abs_error_over_all": 0.0,
+                "num_failures": 0,
+                "num_words": 121,
+                "stderr": "",
+                "stdout": "{\"num_words\": 121, \"num_failures\": 0, \"max_abs_error_over_all\": 0.0, \"first_failures\": [], \"claim_confirmed\": false}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "_append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001."
+            }
+          ],
+          "scope_rationale": "The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.",
+          "statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
+          "status": "rebutted",
+          "updated_at": "2026-09-24T06:11:39Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T06:11:39Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "cb44bb630e0b8737a7b3726ae5dbe21bbffaa77bbc9215e862fba0e127d27402"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "f6cc07573ae4b734bac2091b4bad4294759e1ce4c42698bb287e31fd4ad94f82"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "29a6a7fb62b2a9a999c17dbf021030072f9a2fab4903ec322b185bcbdaa81657"
+              }
+            ],
+            "duration_s": 5.392899,
+            "exit_code": 0,
+            "expected_signal": null,
+            "first_failures": [],
+            "json_parse_error": null,
+            "json_result": {
+              "claim_confirmed": false,
+              "first_failures": [],
+              "max_abs_error_over_all": 0.0,
+              "num_failures": 0,
+              "num_words": 121
+            },
+            "max_abs_error_over_all": 0.0,
+            "num_failures": 0,
+            "num_words": 121,
+            "stderr": "",
+            "stdout": "{\"num_words\": 121, \"num_failures\": 0, \"max_abs_error_over_all\": 0.0, \"first_failures\": [], \"claim_confirmed\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 1,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-24T06:11:44Z",
+      "id": "t9",
+      "output": {
+        "confidence": 1.0,
+        "created_at": "2026-09-24T06:11:44Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 1.0,
+    "created_at": "2026-09-24T06:11:44Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
+    "verdict": "trust"
+  }
+}

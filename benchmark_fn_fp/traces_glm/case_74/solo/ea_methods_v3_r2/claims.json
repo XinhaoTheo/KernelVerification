@@ -1,0 +1,101 @@
+[
+  {
+    "created_at": "2026-09-24T07:00:23Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:00:39Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "c0153e1c246919bb1795ad4705aeec6676a93dbd3525a73ac09a0ab0b7ddf5d8"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "e5036686a8deab342a574f591f15f58b4fd505871d40fbb63d34af202e7de370"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t7_json_result.json",
+              "sha256": "a472b61b2bf00e7fa3cbfd79f24c6bf53446482b251f3f7ee7ab7d262193e756"
+            }
+          ],
+          "duration_s": 4.82406,
+          "exit_code": 0,
+          "expected_signal": "relative_error far above 1e-5 on the fixed contract input",
+          "json_parse_error": null,
+          "json_result": {
+            "metric": "relative 2-norm error vs exact float64 row sums",
+            "output": [
+              6.505321502685547,
+              7.741500377655029,
+              5.556467056274414,
+              7.19061279296875
+            ],
+            "passed_metric": false,
+            "relative_error": 13595193063594.375,
+            "structural": true,
+            "target": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "tolerance": 1e-05
+          },
+          "metric": "relative 2-norm error vs exact float64 row sums",
+          "output": [
+            6.505321502685547,
+            7.741500377655029,
+            5.556467056274414,
+            7.19061279296875
+          ],
+          "relative_error": 13595193063594.375,
+          "stderr": "",
+          "stdout": "{\"metric\": \"relative 2-norm error vs exact float64 row sums\", \"target\": [0.0, 0.0, 0.0, 0.0], \"output\": [6.505321502685547, 7.741500377655029, 5.556467056274414, 7.19061279296875], \"relative_error\": 13595193063594.375, \"tolerance\": 1e-05, \"passed_metric\": false, \"structural\": true}\n",
+          "structural": true,
+          "target": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 1e-05
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On the real GPU with the contract's fixed make_inputs() array, run(X) returned [6.505, 7.742, 5.556, 7.191] while the exact float64 row sums are 0.0; relative 2-norm error = 13595193063594.375 \u226b 1e-5 tolerance. Structural checks (shape, dtype, finiteness, input unmodified) passed, so the failure is purely the acceptance metric.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The kernel accumulates in float32 with compensation; with a leading 2^80 magnitude term, the correction terms themselves are lost in float32, so the small-value tail (up to ~8 plus 2^30 pair canceling) never gets represented, leaving a large relative error against the near-zero exact target. The recorded initial probe already suggests this, but I'll verify independently on the real GPU.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "target[r] is the exact real-number sum of stored X[r,j]; acceptance iff ||output-target||_2/max(||target||_2,1e-12) <= 1e-5; the workload is exactly the fixed array X from make_inputs() with 2^80 and -2^80 entries and low-magnitude interior."
+      }
+    ],
+    "scope_rationale": "The contract requires run(X) to match the exact real-number row sums of the fixed make_inputs() array within relative 2-norm tolerance 1e-5; failing that on this fixed workload is a direct contract violation.",
+    "statement": "run(X) on the contract's fixed input fails the acceptance metric: the exact real-number row sums are the low-magnitude interior values (\u22480 to 8), but the kernel returns row sums around 5.5\u20137.7 with relative error far above 1e-5.",
+    "status": "confirmed",
+    "updated_at": "2026-09-24T07:00:39Z"
+  }
+]

@@ -1,0 +1,75 @@
+Audit a channel canonicalizer for a shared multi-view latent space.
+
+Two sensor views use the same four latent channels. A view can have an
+unobserved channel: a zero column means that feature is absent from that
+view, not that its identity is a new independent channel. The fixed workload
+is exactly the stored float32 arrays returned by make_inputs() in kernel.py:
+features has shape (2, 8, 4), and anchors has shape (2, 4). Anchors are
+per-view summaries used by this candidate canonicalizer; they do not change
+the mathematical target or the permitted representation equivalence.
+
+The mathematical target is the input features tensor itself, up to ONE
+shared signed permutation of its four latent columns. Precisely, define
+  E = min over p in permutations(0,1,2,3), s in {-1,+1}^4 of
+      ||output[v,r,k] - s[k] * features[v,r,p[k]]||_F
+      / max(||features||_F, 1e-12).
+The numerator and denominator include BOTH views and ALL eight rows.
+The same p and s must be used for every view and every row. There are exactly
+384 permitted transforms; arbitrary rotations, row-dependent transforms,
+and view-dependent transforms are outside this equivalence. Missing columns
+can make a view's best-fitting transform nonunique. No particular canonical
+column order or sign is required as long as one shared transform fits.
+
+run(features, anchors) must return finite float32 output of shape (2, 8, 4)
+without modifying either input. It satisfies this fixed workload iff E <=
+0.05, computed in float64 or more accurately from the actual float32 inputs
+and output. Other seeds and arrays are outside this contract.
+
+kernel.py includes initial_probe(), an executable prior experiment. Its code
+and observed output are evidence to assess, not an authoritative verdict or
+a separate specification. All evaluation systems receive the same material.
+
+Recorded initial-probe execution on NVIDIA T4 (not an oracle verdict):
+{
+  "per_view_alignment": [
+    {
+      "view": 0,
+      "relative_error": 0.0,
+      "chosen_transform": {
+        "permutation": [
+          1,
+          0,
+          2,
+          3
+        ],
+        "signs": [
+          1,
+          1,
+          -1,
+          -1
+        ]
+      }
+    },
+    {
+      "view": 1,
+      "relative_error": 0.0,
+      "chosen_transform": {
+        "permutation": [
+          0,
+          2,
+          1,
+          3
+        ],
+        "signs": [
+          -1,
+          -1,
+          -1,
+          -1
+        ]
+      }
+    }
+  ],
+  "within_view_gram_error": 0.0,
+  "tolerance": 0.05,
+  "passed": true
+}

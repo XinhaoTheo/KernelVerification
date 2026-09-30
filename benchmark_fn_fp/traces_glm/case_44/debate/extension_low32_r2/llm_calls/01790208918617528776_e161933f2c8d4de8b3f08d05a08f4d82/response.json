@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-50cd831919b14bdfb94aae99bca84108",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run one probe that executes the actual kernel on the seeded input and computes the contract metric, plus the raw float32 single-pass variance to decide both c1 and c2 in a single experiment. Both claims concern the same fixed workload, so one run covers both; I'm not launching separate probes because c1 and c2 share the identical computation path.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a95ea0e2ae7d96ef",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import numpy as np, torch, json, sys\\nsys.path.insert(0, \\\"/root/numerical_cases/case_i\\\")\\nimport kernel as K\\n\\nx, = K.make_inputs()\\nout = K.run(x)\\n\\n# float64 reference per problem.txt\\nxd = x.to(torch.float64).numpy()\\nmean = xd.sum() / 128\\nvar = ((xd - mean) ** 2).sum() / 128\\nref = (xd - mean) / np.sqrt(var + 1e-5)\\n\\nerr = np.linalg.norm(out.numpy().astype(np.float64) - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))\\n\\n# emulate kernel's float32 single-pass stats (sequential accumulation)\\nxf = x.numpy().astype(np.float32)\\ntotal = np.float32(0.0); squares = np.float32(0.0)\\nfor v in xf:\\n    v = np.float32(v)\\n    total = np.float32(total + v)\\n    squares = np.float32(squares + np.float32(v * v))\\nmean_f = np.float32(total / np.float32(128))\\nsq_over_n = np.float32(squares / np.float32(128))\\nmean_sq = np.float32(mean_f * mean_f)\\nraw_var = np.float32(sq_over_n - mean_sq)\\nclamped = np.float32(max(raw_var, np.float32(0.0)))\\ndenom = np.float32(np.sqrt(np.float32(clamped + np.float32(1e-5))))\\n\\nprint(json.dumps({\\n    \\\"rel_l2_error\\\": float(err),\\n    \\\"tolerance\\\": 0.02,\\n    \\\"passes\\\": bool(err <= 0.02),\\n    \\\"out_finite\\\": bool(np.isfinite(out.numpy()).all()),\\n    \\\"float64_variance\\\": float(var),\\n    \\\"float32_single_pass_variance_raw\\\": float(raw_var),\\n    \\\"raw_negative\\\": bool(float(raw_var) < 0),\\n    \\\"clamped_to_zero\\\": bool(float(clamped) == 0.0),\\n    \\\"kernel_denominator_est\\\": float(denom),\\n    \\\"float64_denominator\\\": float(np.sqrt(var + 1e-5)),\\n    \\\"kernel_output_max_abs\\\": float(np.abs(out.numpy()).max()),\\n}))\\n\", \"expected_signal\": \"relative L2 error of kernel output vs float64 reference on the seeded vector, plus the float32 single-pass variance sign and value\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790208919,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 595,
+    "prompt_tokens": 14969,
+    "total_tokens": 15564,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 10,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

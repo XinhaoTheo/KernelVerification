@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-316f14c7989a457bb13aa93626fac30f",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two probes together: c1 (does any vertex exceed the 1.0 residual bound, with actual kernel error measured) and c2 (vertex enumeration vs smoke coverage). They're independent tests of the same enumeration, so both can go now.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-845256c111791828",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import numpy as np, torch, json, sys, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel_mod\\\", \\\"/root/evidence_cases/case_e12/kernel.py\\\")\\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\nsmoke, W, b, c = km.make_inputs(dev)\\n# enumerate all 4096 vertices\\nbits = ((np.arange(4096)[:, None] >> np.arange(12)) & 1)\\nV = torch.from_numpy((2*bits.astype(np.float32) - 1)).to(dev)\\nout = km.run(V, W, b, c)\\nVd, Wd, Bd, Cd = V.double(), W.double(), b.double(), c.double()\\nref = 0.25*Vd[:,0] + 0.5*Vd[:,1] + torch.relu(Vd @ Wd.T - Bd) @ Cd\\nerr = (out.double() - ref).abs()\\nresidual = (torch.relu(Vd @ Wd.T - Bd) @ Cd)\\nmaxres = float(residual.max())\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"max absolute error over all 4096 box vertices, float64 reference; decisive because residual is convex so box-max attained at vertices\\\",\\n  \\\"n_vertices\\\": 4096,\\n  \\\"max_abs_error\\\": float(err.max()),\\n  \\\"max_residual\\\": maxres,\\n  \\\"tolerance\\\": 1.0,\\n  \\\"exceeds_tolerance\\\": bool(float(err.max()) > 1.0),\\n  \\\"worst_vertex_index\\\": int(err.argmax()),\\n  \\\"per_neuron_margins_at_worst\\\": [float(v) for v in torch.relu(Vd @ Wd.T - Bd)[int(err.argmax())].tolist()],\\n  \\\"out_finite_f32_shape_ok\\\": bool(out.dtype==torch.float32 and out.shape==(4096,) and torch.isfinite(out).all()),\\n  \\\"inputs_unmodified\\\": True\\n}))\\n\", \"expected_signal\": \"max_abs_error over 4096 vertices vs 1.0 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-a85653c5a2af9b2c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import numpy as np, torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel_mod\\\", \\\"/root/evidence_cases/case_e12/kernel.py\\\")\\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\nsmoke, W, b, c = km.make_inputs(dev)\\nbits = ((np.arange(4096)[:, None] >> np.arange(12)) & 1)\\nV = torch.from_numpy((2*bits.astype(np.float32) - 1)).to(dev)\\nVd, Wd, Bd, Cd = V.double(), W.double(), b.double(), c.double()\\nresidual = (torch.relu(Vd @ Wd.T - Bd) @ Cd)\\nsmoke_err = float(torch.relu(smoke.double() @ Wd.T - Bd) @ Cd .max())\\nmax_vertex_res = float(residual.max())\\nco_act = (torch.relu(Vd @ Wd.T - Bd) > 0).sum(dim=1)\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"residual (omitted relu term) at all 4096 vertices vs the smoke-batch max residual; shows whether smoke rows miss worst case\\\",\\n  \\\"smoke_max_residual\\\": smoke_err,\\n  \\\"vertex_max_residual\\\": max_vertex_res,\\n  \\\"vertex_min_residual\\\": float(residual.min()),\\n  \\\"num_vertices_with_residual_gt_1\\\": int((residual > 1.0).sum()),\\n  \\\"max_coactivated_neurons\\\": int(co_act.max()),\\n  \\\"vertices_with_coactivation_ge_2\\\": int((co_act >= 2).sum()),\\n  \\\"smoke_covers_worst_case\\\": bool(smoke_err >= max_vertex_res - 1e-12),\\n  \\\"smoke_miss_factor\\\": max_vertex_res / max(smoke_err, 1e-12)\\n}))\\n\", \"expected_signal\": \"vertex-max residual vs smoke-max residual comparison\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run vertex enumeration probes for c1 and c2. Both can be launched together. Probe: build all 4096 vertices, compute residual, call run(), compare to float64 reference.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790233238,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 994,
+    "prompt_tokens": 26532,
+    "total_tokens": 27526,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 39,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 540,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 39
+    }
+  }
+}

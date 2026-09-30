@@ -1,0 +1,98 @@
+[
+  {
+    "created_at": "2026-09-24T06:56:24Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:56:46Z",
+        "data": {
+          "output": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_error": 1.0,
+          "target": [
+            6.598899990320206,
+            8.408386647701263,
+            8.367730170488358,
+            7.147134065628052
+          ],
+          "tolerance": 1e-05
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Kernel output on the contract workload is [0,0,0,0] while exact fsum targets are [6.599, 8.408, 8.368, 7.147]; relative error = 1.0 >> 1e-5. Shape/dtype/finiteness/input-unmodified checks all pass, so the sole failure is the numeric error, consistent with the Kahan correction accumulator losing O(1) addends once it holds ~2^30.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The correction variable is a plain float32 accumulator; once it holds \u00b12^30 (ulp 128), small lost terms (~1) may round away, so low-magnitude addends never reach the final sum, violating the 1e-5 relative tolerance against the exact target (~8 per row).",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "run(X) satisfies the fixed workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, target being the exact real sum of the stored make_inputs() values."
+      }
+    ],
+    "scope_rationale": "Contract requires final row sums within 1e-5 relative error of the exact real-number sum of the stored make_inputs() values; if the Kahan correction loses O(1) addends the final sums miss that tolerance on this fixed workload.",
+    "statement": "The kernel's Kahan correction accumulation loses the O(1) low-magnitude addends when the correction holds a \u00b12^30 value, so final row sums deviate from the exact target by more than 1e-5 relative error on the contract workload.",
+    "status": "confirmed",
+    "updated_at": "2026-09-24T06:56:56Z"
+  },
+  {
+    "created_at": "2026-09-24T06:56:24Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:56:46Z",
+        "data": {
+          "fsum_target": [
+            6.598899990320206,
+            8.408386647701263,
+            8.367730170488358,
+            7.147134065628052
+          ],
+          "recorded_reference": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Independent recomputation with math.fsum on the actual make_inputs() rows gives targets ~[6.60, 8.41, 8.37, 7.15], not the recorded initial-probe reference of [0,0,0,0]; the recorded probe's reference/output were inconsistent with the input generator.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      },
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:57:03Z",
+        "data": {},
+        "id": "c2.e2",
+        "kind": "agent_analysis",
+        "summary": "The recorded 0.0 reference is consistent with the generator: at magnitude 2^80 the float64 ulp is ~2^28, so sequential float64 accumulation of the \u00b12^30 and O(1) terms rounds away to 0 exactly. The recorded probe's flaw is its inadequate reference method, not inconsistency with the input; the contract's exact target is the fsum value \u2248[6.60, 8.41, 8.37, 7.15] (t9). Either way, the recorded probe's \"passed: true\" is not authoritative and the kernel fails the contract metric.",
+        "supports": "rebutted",
+        "tool_event_id": null
+      }
+    ],
+    "id": "c2",
+    "raised_by": "solo",
+    "rationale": "The float64 sequential sum of the constructed rows (\u00b12^80 cancel, \u00b12^30 cancel, 8 lows sum \u22488) cannot be exactly zero, so the recorded result appears inconsistent with the input generator.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The workload is the stored float32 array from make_inputs() in kernel.py; target is the exact real-number sum of those stored values."
+      }
+    ],
+    "scope_rationale": "The contract fixes the workload to the actual stored array from make_inputs(); the exact target must be recomputed independently to judge correctness rather than trusting the recorded probe's 0.0 reference.",
+    "statement": "The recorded initial-probe reference of exactly [0,0,0,0] is inconsistent with make_inputs' construction, so the actual reference must be recomputed independently.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T06:57:09Z"
+  }
+]

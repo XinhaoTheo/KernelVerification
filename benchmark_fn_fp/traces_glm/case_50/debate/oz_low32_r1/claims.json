@@ -1,0 +1,88 @@
+[
+  {
+    "created_at": "2026-09-24T00:58:17Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T00:59:04Z",
+        "data": {
+          "alpha_fp32_kernel": 1.125000238418579,
+          "alpha_fp64": 1.125000242654227,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "074641770771e5c1fc48d9d519ff0efc8ed7ffec4ca92573fa6391566835b04d"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "2e903c7fb1457efa0e66ee8ef0d677a9be64302f357be2e499a35168268cc4dc"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "a322ea00b8741075859bf534de6c2d79f7cea41245aec72cbe9a1219e146c5b2"
+            }
+          ],
+          "bitmatch_gpu_vs_emu": true,
+          "duration_s": 7.05006,
+          "exit_code": 0,
+          "expected_signal": "relative L2 error of kernel output vs fp64 reference on fixed workload, decisive vs 0.01 tolerance",
+          "json_parse_error": null,
+          "json_result": {
+            "alpha_fp32_kernel": 1.125000238418579,
+            "alpha_fp64": 1.125000242654227,
+            "bitmatch_gpu_vs_emu": true,
+            "output_finite": true,
+            "passes_tolerance": true,
+            "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+            "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+            "residual_norm_fp64": 6.621097760007478e-05,
+            "shape": [
+              32
+            ],
+            "tolerance": 0.01
+          },
+          "passes_tolerance": true,
+          "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+          "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+          "residual_norm_fp64": 6.621097760007478e-05,
+          "stderr": "",
+          "stdout": "{\"rel_l2_gpu_vs_fp64ref\": 0.0015436494833812023, \"rel_l2_fp32emu_vs_fp64ref\": 0.0015436494833812023, \"bitmatch_gpu_vs_emu\": true, \"alpha_fp64\": 1.125000242654227, \"alpha_fp32_kernel\": 1.125000238418579, \"residual_norm_fp64\": 6.621097760007478e-05, \"tolerance\": 0.01, \"passes_tolerance\": true, \"output_finite\": true, \"shape\": [32]}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.01
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Decisive probe on the fixed make_inputs() workload: kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), a margin of ~6.5x below the limit. Output is finite, shape (32,). The fp32 CPU emulation of the kernel arithmetic matches the GPU output bit-for-bit, confirming the GPU arithmetic behaves as IEEE round-to-nearest as assumed. Cancellation is present (residual norm 6.6e-5 vs O(1) operands) but the resulting direction error stays well within tolerance, so c1's predicted failure does not occur on this fixed workload.",
+        "supports": "rebutted",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
+      }
+    ],
+    "scope_rationale": "The contract fixes the input domain to exactly the make_inputs() vectors (b nearly parallel to u with ~1e-5 orthogonal noise) and requires relative L2 error <= 0.01 versus a float64 reference; cancellation in b - alpha*u on this exact workload is therefore directly decisive for the stated tolerance.",
+    "statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T00:59:04Z"
+  }
+]

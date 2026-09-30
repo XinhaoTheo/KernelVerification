@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-75c6330e4de946db9ebc2b60354d3687",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the actual kernel on GPU against a float64 reference on the exact seeded workload, and also compute a CPU sequential-fp32 simulation as a cross-check.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-be2d6822399e9ab8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, numpy as np, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kern\\\", \\\"/root/numerical_cases/case_h/kernel.py\\\")\\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\\n\\nvalues, = kern.make_inputs(\\\"cuda\\\")\\nout = kern.run(values)\\n\\nref = values.double().sum(dim=1).cpu()\\noutc = out.float().cpu()\\nE = float((outc - ref).norm() / max(ref.norm(), 0.008))\\n\\n# CPU sequential fp32 simulation of exact column order\\nvals_np = values.cpu().numpy()\\nsim = np.zeros(64, dtype=np.float32)\\nfor j in range(128):\\n    sim = (sim + vals_np[:, j]).astype(np.float32)\\nE_sim = float(np.linalg.norm(sim - ref.numpy()) / max(np.linalg.norm(ref.numpy()), 0.008))\\n\\nper_row_err = (outc - ref).numpy()\\nprint(json.dumps({\\n    \\\"E_gpu\\\": E, \\\"E_cpu_seq_fp32\\\": E_sim, \\\"tol\\\": 0.1,\\n    \\\"ref_norm\\\": float(ref.norm()),\\n    \\\"max_abs_err_gpu\\\": float(np.abs(per_row_err).max()),\\n    \\\"mean_abs_err_gpu\\\": float(np.abs(per_row_err).mean()),\\n    \\\"finite\\\": bool(torch.isfinite(out).all()),\\n    \\\"E_passes_gpu\\\": E <= 0.1,\\n    \\\"E_passes_sim\\\": E_sim <= 0.1,\\n    \\\"gpu_matches_sim\\\": bool(np.array_equal(outc.numpy(), sim)),\\n    \\\"per_row_err_head\\\": per_row_err[:8].tolist(),\\n}))\", \"expected_signal\": \"E = ||out - float64 ref||_2 / max(||ref||_2,0.008) on the fixed seeded workload; claim predicts E > 0.1\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run a probe for c1: execute kernel on GPU, compare to float64 reference.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790199800,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 464,
+    "prompt_tokens": 24632,
+    "total_tokens": 25096,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 18,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 18
+    }
+  }
+}

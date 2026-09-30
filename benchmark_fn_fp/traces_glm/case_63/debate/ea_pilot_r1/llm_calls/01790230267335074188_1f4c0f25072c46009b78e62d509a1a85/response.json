@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-fb90c05ab699482bb0eca482733ffa66",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The only open claim is c1; I'll run the kernel on the fixed seeded inputs and compare against a float64 centered-moment oracle (not the initial_probe's float32 raw-moment reference).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-81f31953b6e087c2",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json\\nimport numpy as np\\nimport torch\\n\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/evidence_cases/case_e02/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nx, y, q = k.make_inputs()\\nout = k.run(x, y, q)\\n\\n# float64 contract oracle: centered ridge, explicit normal equations\\nX = x.cpu().numpy().astype(np.float64)\\nY = y.cpu().numpy().astype(np.float64)\\nQ = q.cpu().numpy().astype(np.float64)\\nmu_x = X.mean(axis=0); mu_y = Y.mean()\\nXc = X - mu_x; Yc = Y - mu_y\\nA = Xc.T @ Xc / 32 + np.eye(2) / 1024\\nrhs = Xc.T @ Yc / 32\\nbeta = np.linalg.solve(A, rhs)\\npred = mu_y + (Q - mu_x) @ beta\\n\\no = out.cpu().numpy().astype(np.float64)\\ndiff = np.linalg.norm(o - pred)\\ndenom = max(np.linalg.norm(pred), 0.1)\\nrel = diff / denom\\n\\n# also: fp32 raw-moment diagnostics\\ns00 = np.float32(0)\\nfor i in range(32):\\n    x0 = np.float32(x.cpu().numpy()[i,0]); x1 = np.float32(x.cpu().numpy()[i,1])\\n    s00 += x0*x0\\nm0 = np.float32(x.cpu().numpy()[:,0].mean())\\ncov00_fp32 = np.float64(s00/32 - m0*m0)\\ncov00_exact = np.float64(Xc[:,0].var())\\n\\nprint(json.dumps({\\n    \\\"output\\\": o.tolist(),\\n    \\\"pred_f64\\\": pred.tolist(),\\n    \\\"beta_f64\\\": beta.tolist(),\\n    \\\"relative_error\\\": rel,\\n    \\\"tolerance\\\": 0.05,\\n    \\\"passed\\\": bool(rel <= 0.05),\\n    \\\"pred_norm\\\": float(np.linalg.norm(pred)),\\n    \\\"cov00_fp32\\\": cov00_fp32,\\n    \\\"cov00_exact\\\": cov00_exact,\\n    \\\"cov00_rel_err\\\": abs(cov00_fp32-cov00_exact)/cov00_exact\\n}))\", \"expected_signal\": \"relative error of run() output vs float64 centered ridge prediction, compared to 0.05 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run a claim probe for c1: run kernel on GPU, compute float64 centered reference, compare.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790230267,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 591,
+    "prompt_tokens": 23802,
+    "total_tokens": 24393,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 21,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 21
+    }
+  }
+}

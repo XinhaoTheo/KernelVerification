@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-f8f6fcf178ff4995a0bf6ebe82923b6b",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the decisive probe for claim c1: compute the exact worst-case ReLU residual over the box (LP over each neuron independently, plus kernel-vs-reference on the adversarial rows).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-808bc39781fc2540",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import numpy as np, torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/evidence_cases/case_e12/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nsmoke, W, b, c = k.make_inputs_numpy()\\nWd, bd, cd = [torch.from_numpy(v).double() for v in (W, b, c)]\\n# per-neuron max of relu(dot(W_j,x)-b_j) over x in [-1,1]^12 is attained at x = sign(W_j) (all entries +-1): dot = |W_j| sum\\nrelu_max = (Wd.abs().sum(1) - bd).clamp(min=0)\\nresidual_max = float((cd * relu_max).sum())\\nprint(\\\"per-neuron relu max:\\\", relu_max.tolist(), \\\"|W| sums:\\\", Wd.abs().sum(1).tolist(), \\\"b:\\\", bd.tolist())\\nprint(\\\"worst-case dropped residual:\\\", residual_max)\\n\\n# adversarial inputs: x = sign(W_j) for each row j, plus corners of the box\\nadv = [np.sign(W[j]).astype(np.float32) for j in range(6)]\\nrng = np.random.default_rng(0)\\nfor _ in range(2000):\\n    adv.append(rng.choice([-1.0,1.0], size=12).astype(np.float32))\\nX = torch.from_numpy(np.stack(adv)).cuda()\\nXf, Wt, Bt, Ct = [torch.from_numpy(v).cuda() for v in (X.cpu().numpy().astype(np.float32), W, b, c)]\\nout = k.run(Xf, Wt, Bt, Ct)\\nXd, Wd2, Bd2, Cd2 = [v.double() for v in (Xf, Wt, Bt, Ct)]\\nref = 0.25*Xd[:,0] + 0.5*Xd[:,1] + torch.relu(Xd @ Wd2.T - Bd2) @ Cd2\\nerr = (out.double() - ref).abs()\\nbest_row = Xf[err.argmax()].cpu().numpy()\\nres = {\\n  \\\"metric\\\": \\\"max absolute error vs float64 full target (linear base + ReLU residual)\\\",\\n  \\\"n_adversarial_rows\\\": X.shape[0],\\n  \\\"max_absolute_error\\\": float(err.max()),\\n  \\\"tolerance\\\": 1.0,\\n  \\\"worst_row\\\": best_row.tolist(),\\n  \\\"analytic_worst_residual_bound\\\": residual_max,\\n  \\\"violation_found\\\": bool(err.max() > 1.0),\\n  \\\"output_finite_shape_dtype_ok\\\": bool(out.dtype==torch.float32 and out.shape==(X.shape[0],) and torch.isfinite(out).all()),\\n}\\nprint(json.dumps(res, indent=2))\\n\", \"expected_signal\": \"max_absolute_error > 1.0\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run probe for c1: compute worst-case residual over box, run kernel on adversarial input.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790233215,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 692,
+    "prompt_tokens": 10924,
+    "total_tokens": 11616,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 20,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4608,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 20
+    }
+  }
+}

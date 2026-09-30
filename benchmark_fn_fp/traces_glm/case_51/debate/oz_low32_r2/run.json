@@ -1,0 +1,1911 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_p",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _projection_kernel(U, B, Output, N: tl.constexpr):\n    numerator = tl.full((), 0.0, tl.float32)\n    denominator = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        numerator = numerator + u * b\n        denominator = denominator + u * u\n    coefficient = tl.div_rn(numerator, denominator)\n    norm_squared = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        residual = b - u * coefficient\n        norm_squared = norm_squared + residual * residual\n    norm = tl.sqrt(norm_squared)\n    j = tl.arange(0, N)\n    u = tl.load(U + j).to(tl.float32)\n    b = tl.load(B + j).to(tl.float32)\n    residual = b - u * coefficient\n    tl.store(Output + j, tl.div_rn(residual, norm))\n\n\ndef run(u, b):\n    output = torch.empty((32,), device=u.device, dtype=torch.float32)\n    _projection_kernel[(1,)](u, b, output, N=32, num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(830228))\n    u = rng.normal(size=32).astype(np.float32)\n    b = (1.125 * u.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n    return u, b\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "passed": null,
+    "problem_text": "Compute a normalized orthogonal projection for a fixed public workload.\n\nOnly the two float32 vectors u and b returned by make_inputs() are in scope.\nEach has shape (32,). The mathematical reference on these actual stored inputs is\n  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]\n  residual[j] = b[j] - alpha*u[j]\n  reference = residual / ||residual||_2.\nUse at least float64 accuracy for the reference. Algebraically equivalent\nrecentring is allowed to avoid numerical cancellation in the reference itself.\nThe residual on this workload is nonzero.\n\nThe output must be a finite vector of shape (32,), and\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.\n\nDecide whether this kernel satisfies that contract for the fixed generated\nworkload. Arbitrary alternative vectors are outside the scope. The kernel uses\nfloat32 arithmetic, sequential accumulations and separately rounded products\nand sums; its launch disables FP multiply/add fusion.\n",
+    "rounds": null,
+    "session_dir": "/root/numerical_cases/case_p",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T01:05:55Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:06:47Z",
+          "data": {
+            "alpha32": 1.1249995231628418,
+            "alpha64": 1.1249999827261048,
+            "alpha_channel_exceeds_tol": true,
+            "alpha_channel_rel_l2_error": 0.058881815171470286,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "fe15b63ba806a97e219a014de779ed960f8851a2ae14dae9f8e6e481ecacca37"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "00936161dd85abbc81c5fff375c5e8d4b77f350b3a9547f1f2c117f0bc397d94"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "f8a8c37b18951c876160c8f93224d61b0fa0a4987d794e34f1a04c5f04c6e808"
+              }
+            ],
+            "delta_alpha": 4.5956326300000683e-07,
+            "delta_alpha_u_rms": 4.973481061801919e-07,
+            "duration_s": 0.261642,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of float64-pipeline-with-fp32-alpha vs float64 reference, compared to 0.01 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "alpha32": 1.1249995231628418,
+              "alpha64": 1.1249999827261048,
+              "alpha_channel_exceeds_tol": true,
+              "alpha_channel_rel_l2_error": 0.058881815171470286,
+              "delta_alpha": 4.5956326300000683e-07,
+              "delta_alpha_u_rms": 4.973481061801919e-07,
+              "median_abs_residual": 7.039293071636754e-06,
+              "rel_delta_alpha": 4.085006844945821e-07,
+              "tolerance": 0.01
+            },
+            "median_abs_residual": 7.039293071636754e-06,
+            "rel_delta_alpha": 4.085006844945821e-07,
+            "stderr": "",
+            "stdout": "{\"alpha64\": 1.1249999827261048, \"alpha32\": 1.1249995231628418, \"delta_alpha\": 4.5956326300000683e-07, \"rel_delta_alpha\": 4.085006844945821e-07, \"alpha_channel_rel_l2_error\": 0.058881815171470286, \"tolerance\": 0.01, \"alpha_channel_exceeds_tol\": true, \"median_abs_residual\": 7.039293071636754e-06, \"delta_alpha_u_rms\": 4.973481061801919e-07}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.01
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the fixed seeded workload, the emulated sequential fp32 accumulation gives alpha32=1.124999523 vs float64 alpha=1.124999983 (delta 4.6e-7). The systematic error (delta_alpha)*u_j (RMS 4.97e-7) is ~7% of the median residual magnitude 7.04e-6. Isolating this channel alone (float64 residual using fp32 alpha, normalized) yields relative L2 error 0.0589 vs the float64 reference \u2014 nearly 6x the 0.01 tolerance. This confirms the alpha-error channel dominates the tiny residual and would alone violate the contract bound.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "fp32 alpha deviates from the float64 alpha by ~1e-7 relative; this injects a systematic error (\u0394\u03b1)\u00b7u_j of magnitude up to ~1e-6 into each component of a residual that is only ~1e-5, i.e., a relative perturbation of several percent, plausibly exceeding the 1% relative L2 budget after normalization.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract requires ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs workload, with b = 1.125*u + 1e-5*noise (kernel.py make_inputs_numpy), so the residual signal is ~1e-5 while alpha*u is ~1."
+        }
+      ],
+      "scope_rationale": "problem.txt restricts scope to exactly the vectors returned by make_inputs() (kernel.py make_inputs_numpy, seed 830228, b = 1.125*u + 1e-5*noise) and requires the output to be within 1% relative L2 of a float64 reference; a workload-induced alpha/residual error exceeding that bound is a direct violation of the stated tolerance on the one in-scope input.",
+      "statement": "On the fixed seeded workload (u, b from make_inputs_numpy), the fp32-computed coefficient alpha differs from the float64 reference alpha enough that the systematic residual error (alpha_true - alpha_fp32)*u[j] dominates the ~1e-5 true residual, causing the normalized output to exceed the 1% relative L2 bound versus the float64 reference.",
+      "status": "confirmed",
+      "updated_at": "2026-09-24T01:06:47Z"
+    },
+    {
+      "created_at": "2026-09-24T01:05:55Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:07:00Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t15_probe.py",
+                "sha256": "c754e50d0988210c4a6864dadd7cd6ee914ce7bb7c23a47c2c0b127ebfeb960f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t15_stdout.txt",
+                "sha256": "f1198412719ab73d945bdbf4ec6f85aee6987f3801dafca7232fadb7a376b773"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t15_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t15_json_result.json",
+                "sha256": "aa4dfdc03c8808c921afcf77ad78dd8fa7cbcc7422e2dba815482e8ca23d0b0b"
+              }
+            ],
+            "cancellation_channel_rel_l2_error": 0.004094861719832044,
+            "cancellation_exceeds_tol": false,
+            "duration_s": 5.661312,
+            "exit_code": 0,
+            "expected_signal": "actual kernel output relative L2 error vs float64 reference, and isolated fp32 residual-cancellation error, compared to 0.01",
+            "json_parse_error": null,
+            "json_result": {
+              "cancellation_channel_rel_l2_error": 0.004094861719832044,
+              "cancellation_exceeds_tol": false,
+              "kernel_exceeds_tol": true,
+              "kernel_output_finite": true,
+              "kernel_output_shape": [
+                32
+              ],
+              "kernel_rel_l2_error": 0.06045526452776961,
+              "median_abs_residual_true": 7.039293071636754e-06,
+              "tolerance": 0.01
+            },
+            "kernel_exceeds_tol": true,
+            "kernel_output_finite": true,
+            "kernel_rel_l2_error": 0.06045526452776961,
+            "median_abs_residual_true": 7.039293071636754e-06,
+            "stderr": "",
+            "stdout": "{\"kernel_output_finite\": true, \"kernel_output_shape\": [32], \"kernel_rel_l2_error\": 0.06045526452776961, \"cancellation_channel_rel_l2_error\": 0.004094861719832044, \"tolerance\": 0.01, \"kernel_exceeds_tol\": true, \"cancellation_exceeds_tol\": false, \"median_abs_residual_true\": 7.039293071636754e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.01
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "The fixed workload kernel output is finite (shape (32,)) but its relative L2 error vs the float64 reference is 0.0605 \u2014 6x the 0.01 tolerance \u2014 consistent with the alpha-error channel (c1). However, the isolated per-component cancellation channel (fp32 residual b[j] - fp32(u[j]*alpha64) with fp64 alpha, then normalized) yields only 0.0041 relative L2 error, well below the 0.01 bound. Cancellation therefore does NOT by itself degrade the stored normalized vector beyond tolerance; the contract violation comes from the fp32 alpha error, not the subtraction cancellation. c2 is rebutted.",
+          "supports": "rebutted",
+          "tool_event_id": "t15"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "The residual components are ~1e-5; fp32 b[j] - u[j]*coefficient rounds operands of ~1 to a ~1e-7 grid, losing ~5 significant digits of the residual. Elementwise relative residual error can reach several percent of ||residual||, and normalization preserves relative error since output = residual/norm.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "problem.txt admits only this workload and requires output within 1% relative L2 of the float64 reference; it states the residual is nonzero on this workload, so a wrong direction due to cancellation would be an in-scope failure."
+        }
+      ],
+      "scope_rationale": "The contract's only in-scope input is the fixed seeded workload where b \u2248 1.125*u + 1e-5*noise, so per-component cancellation in residual = b - alpha*u is inherent to the required input; the stated 1% relative L2 tolerance on this exact input is the requirement this claim could violate.",
+      "statement": "Catastrophic cancellation in the fp32 computation of residual[j] = b[j] - u[j]*coefficient (operands ~O(1), result ~O(1e-5)) degrades individual residual components enough that the stored normalized vector deviates from the float64 reference direction by more than 1% relative L2 on the fixed workload.",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T01:07:00Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Contract scope is fixed: only the float32 (32,) vectors u and b from make_inputs() (PCG64 seed 830228, u ~ N(0,1), b = 1.125*u_f64 + 1e-5*noise) are in scope; arbitrary vectors are out of scope.",
+      "Reference (float64 or better, algebraically equivalent recentering allowed): alpha = <u,b>/<u,u>; residual = b - alpha*u; reference = residual / ||residual||_2.",
+      "Output must be a finite float vector of shape (32,) with relative error ||output-ref||_2 / max(||ref||_2, 1e-12) <= 0.01.",
+      "Residual is guaranteed nonzero on this workload; the problem explicitly acknowledges float32 arithmetic, sequential accumulation, and disabled FP fusion in the kernel."
+    ],
+    "kernel_model": [
+      "Single Triton program (grid (1,), num_warps=1) computes scalar dot products numerator = <u,b> and denominator = <u,u> via sequential tl.static_range fp32 accumulation with separately rounded products/sums (enable_fp_fusion=False), then coefficient = div_rn(num, denom).",
+      "Second static_range loop accumulates norm_squared of residual = b - u*coefficient in fp32; norm = sqrt(norm_squared); final loop stores residual/norm elementwise in fp32 into a (32,) float32 output.",
+      "run() allocates the output on u.device; make_inputs mirrors the problem statement exactly (seed 830228, b = 1.125*u + 1e-5*noise as float32).",
+      "All arithmetic is float32 including alpha; no float64 promotion anywhere in the kernel.",
+      "Kernel's per-component residual uses coefficient computed once in fp32 and reuses it in both the norm loop and the store loop, so the alpha-error channel is fully correlated between numerator and normalization.",
+      "The stored output is fp32 residual/norm; the final store re-loads u,b and recomputes residual, but with the same coefficient, so stored values are bit-consistent with the norm computation."
+    ],
+    "open_questions": [
+      "What is the actual fp32-computed alpha vs the float64 alpha on this workload, and does the resulting residual error direction differ from the reference by more than 1% relative L2?",
+      "Does the final output remain finite (norm > 0 in fp32) on this workload?",
+      "How large is the cancellation effect in practice: are residual components ~1e-5 with ~5 digits retained, or does the systematic alpha error dominate?",
+      "Exact float64 vs fp32 alpha values on the fixed workload (seed 830228), and the sign/magnitude of (alpha64 - alpha32) relative to 1e-5 residual scale.",
+      "Empirical relative L2 error of the kernel output vs a float64 reference built from the stored float32 inputs \u2014 is it above or below 0.01?",
+      "Decisive experiment needed: run the kernel on make_inputs(), build float64 reference (recentered to avoid its own cancellation), and compare; source reasoning alone cannot settle c1/c2."
+    ],
+    "risk_map": [
+      "Catastrophic cancellation in residual = b - alpha*u: b \u2248 1.125*u + 1e-5*noise, so the true residual is ~1e-5 magnitude while b and alpha*u are ~1 in magnitude. In fp32, b - u*alpha each ~O(1) subtracting to O(1e-5) can lose ~5 significant digits, potentially inflating relative error of the normalized output beyond the 1% budget.",
+      "fp32 alpha error: alpha = <u,b>/<u,u> \u2248 1.125; any deviation eps in fp32 alpha injects an error (alpha_true - alpha_fp32)*u_j into every residual, which is systematic across components and could dominate the tiny 1e-5 residual signal. This is the main comparison point for Skeptic.",
+      "Sequential fp32 accumulation of numerator/denominator over 32 terms has O(sqrt(32)*eps) rounding noise, feeding the same alpha-error channel.",
+      "div_rn residuals by norm: if norm underflows or the residual computation snaps to near-zero for many components, the normalized vector direction could differ substantially from reference.",
+      "Whether the effective residual error translates to >1% relative output error requires runtime numeric evidence, not source reasoning alone.",
+      "For probing: separate the two error channels by computing (a) reference output from float64 alpha, (b) output from float64 arithmetic using the fp32-computed alpha, and (c) the actual kernel output; the gap between (a) and (b) isolates claim c1 (alpha error), the gap between (b) and (c) isolates claim c2 (per-component fp32 cancellation).",
+      "Reference construction caution: the float64 reference must use the actual stored float32 u and b values (numpy arrays from make_inputs_numpy), not the pre-cast float64 b; the problem explicitly permits recentered float64 computation to avoid cancellation in the reference itself.",
+      "fp32 rounding grid at magnitude ~1 is ~6e-8 (2^-24), so each residual component ~1e-5 carries at best ~1.7e-3 relative error from the subtraction alone; the alpha channel could add up to ~10x that. Both are near the 1% bound, so empirical values, not bounds, decide."
+    ],
+    "scope_notes": [
+      "In-scope: only the fixed seeded workload; a benign pass/fail on this input is contract-relevant evidence.",
+      "Tolerance is generous (1% relative L2), which partially compensates for fp32 arithmetic; the problem text acknowledges fp32 sequential accumulation, so implementation precision per se is not a contract violation \u2014 only exceeding the 1% bound matters.",
+      "No test harness code is present in the artifact (test_code empty); verification must construct its own float64 reference from make_inputs_numpy().",
+      "The 0.01 relative-L2 tolerance applies to the normalized (unit-norm) output, so ||ref||_2 = 1 up to reference rounding; the budget is effectively 0.01 absolute L2 on the output vector.",
+      "Verification harness must reconstruct inputs from make_inputs_numpy() exactly (seed 830228) \u2014 artifact contains no test code."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Contract scope is fixed: only the float32 (32,) vectors u and b from make_inputs() (PCG64 seed 830228, u ~ N(0,1), b = 1.125*u_f64 + 1e-5*noise) are in scope; arbitrary vectors are out of scope.",
+        "Reference (float64 or better, algebraically equivalent recentering allowed): alpha = <u,b>/<u,u>; residual = b - alpha*u; reference = residual / ||residual||_2.",
+        "Output must be a finite float vector of shape (32,) with relative error ||output-ref||_2 / max(||ref||_2, 1e-12) <= 0.01.",
+        "Residual is guaranteed nonzero on this workload; the problem explicitly acknowledges float32 arithmetic, sequential accumulation, and disabled FP fusion in the kernel."
+      ],
+      "created_at": "2026-09-24T01:05:40Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Single Triton program (grid (1,), num_warps=1) computes scalar dot products numerator = <u,b> and denominator = <u,u> via sequential tl.static_range fp32 accumulation with separately rounded products/sums (enable_fp_fusion=False), then coefficient = div_rn(num, denom).",
+        "Second static_range loop accumulates norm_squared of residual = b - u*coefficient in fp32; norm = sqrt(norm_squared); final loop stores residual/norm elementwise in fp32 into a (32,) float32 output.",
+        "run() allocates the output on u.device; make_inputs mirrors the problem statement exactly (seed 830228, b = 1.125*u + 1e-5*noise as float32).",
+        "All arithmetic is float32 including alpha; no float64 promotion anywhere in the kernel."
+      ],
+      "open_questions": [
+        "What is the actual fp32-computed alpha vs the float64 alpha on this workload, and does the resulting residual error direction differ from the reference by more than 1% relative L2?",
+        "Does the final output remain finite (norm > 0 in fp32) on this workload?",
+        "How large is the cancellation effect in practice: are residual components ~1e-5 with ~5 digits retained, or does the systematic alpha error dominate?"
+      ],
+      "risk_map": [
+        "Catastrophic cancellation in residual = b - alpha*u: b \u2248 1.125*u + 1e-5*noise, so the true residual is ~1e-5 magnitude while b and alpha*u are ~1 in magnitude. In fp32, b - u*alpha each ~O(1) subtracting to O(1e-5) can lose ~5 significant digits, potentially inflating relative error of the normalized output beyond the 1% budget.",
+        "fp32 alpha error: alpha = <u,b>/<u,u> \u2248 1.125; any deviation eps in fp32 alpha injects an error (alpha_true - alpha_fp32)*u_j into every residual, which is systematic across components and could dominate the tiny 1e-5 residual signal. This is the main comparison point for Skeptic.",
+        "Sequential fp32 accumulation of numerator/denominator over 32 terms has O(sqrt(32)*eps) rounding noise, feeding the same alpha-error channel.",
+        "div_rn residuals by norm: if norm underflows or the residual computation snaps to near-zero for many components, the normalized vector direction could differ substantially from reference.",
+        "Whether the effective residual error translates to >1% relative output error requires runtime numeric evidence, not source reasoning alone."
+      ],
+      "scope_notes": [
+        "In-scope: only the fixed seeded workload; a benign pass/fail on this input is contract-relevant evidence.",
+        "Tolerance is generous (1% relative L2), which partially compensates for fp32 arithmetic; the problem text acknowledges fp32 sequential accumulation, so implementation precision per se is not a contract violation \u2014 only exceeding the 1% bound matters.",
+        "No test harness code is present in the artifact (test_code empty); verification must construct its own float64 reference from make_inputs_numpy()."
+      ],
+      "summary": "Described case_p: fp32 Triton kernel computing a normalized orthogonal projection residual for a fixed seeded (32,) workload where b = 1.125*u + 1e-5*noise, making residual cancellation in fp32 the central correctness risk.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [],
+      "created_at": "2026-09-24T01:06:06Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Kernel's per-component residual uses coefficient computed once in fp32 and reuses it in both the norm loop and the store loop, so the alpha-error channel is fully correlated between numerator and normalization.",
+        "The stored output is fp32 residual/norm; the final store re-loads u,b and recomputes residual, but with the same coefficient, so stored values are bit-consistent with the norm computation."
+      ],
+      "open_questions": [
+        "Exact float64 vs fp32 alpha values on the fixed workload (seed 830228), and the sign/magnitude of (alpha64 - alpha32) relative to 1e-5 residual scale.",
+        "Empirical relative L2 error of the kernel output vs a float64 reference built from the stored float32 inputs \u2014 is it above or below 0.01?",
+        "Decisive experiment needed: run the kernel on make_inputs(), build float64 reference (recentered to avoid its own cancellation), and compare; source reasoning alone cannot settle c1/c2."
+      ],
+      "risk_map": [
+        "For probing: separate the two error channels by computing (a) reference output from float64 alpha, (b) output from float64 arithmetic using the fp32-computed alpha, and (c) the actual kernel output; the gap between (a) and (b) isolates claim c1 (alpha error), the gap between (b) and (c) isolates claim c2 (per-component fp32 cancellation).",
+        "Reference construction caution: the float64 reference must use the actual stored float32 u and b values (numpy arrays from make_inputs_numpy), not the pre-cast float64 b; the problem explicitly permits recentered float64 computation to avoid cancellation in the reference itself.",
+        "fp32 rounding grid at magnitude ~1 is ~6e-8 (2^-24), so each residual component ~1e-5 carries at best ~1.7e-3 relative error from the subtraction alone; the alpha channel could add up to ~10x that. Both are near the 1% bound, so empirical values, not bounds, decide."
+      ],
+      "scope_notes": [
+        "The 0.01 relative-L2 tolerance applies to the normalized (unit-norm) output, so ||ref||_2 = 1 up to reference rounding; the budget is effectively 0.01 absolute L2 on the output vector.",
+        "Verification harness must reconstruct inputs from make_inputs_numpy() exactly (seed 830228) \u2014 artifact contains no test code."
+      ],
+      "summary": "Refined case_p description: no new artifact context needed; added probe-design guidance separating the alpha-error channel (c1) from per-component cancellation (c2), and clarified that empirical runtime values decide both claims since both error channels are near the 1% tolerance.",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_p",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_p"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_p"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_p"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_p",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 13.09124862,
+      "role": "describer",
+      "round": 2,
+      "text": "I have full context: the kernel, problem text, and metadata. I'll record the structured description model now, highlighting the key risk \u2014 b is constructed as 1.125\u00b7u plus a tiny (1e-5) perturbation, so the residual is a severe-cancellation case where float32 computation of b \u2212 \u03b1\u00b7u could lose nearly all significant digits.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Contract scope is fixed: only the float32 (32,) vectors u and b from make_inputs() (PCG64 seed 830228, u ~ N(0,1), b = 1.125*u_f64 + 1e-5*noise) are in scope; arbitrary vectors are out of scope.",
+              "Reference (float64 or better, algebraically equivalent recentering allowed): alpha = <u,b>/<u,u>; residual = b - alpha*u; reference = residual / ||residual||_2.",
+              "Output must be a finite float vector of shape (32,) with relative error ||output-ref||_2 / max(||ref||_2, 1e-12) <= 0.01.",
+              "Residual is guaranteed nonzero on this workload; the problem explicitly acknowledges float32 arithmetic, sequential accumulation, and disabled FP fusion in the kernel."
+            ],
+            "kernel_model": [
+              "Single Triton program (grid (1,), num_warps=1) computes scalar dot products numerator = <u,b> and denominator = <u,u> via sequential tl.static_range fp32 accumulation with separately rounded products/sums (enable_fp_fusion=False), then coefficient = div_rn(num, denom).",
+              "Second static_range loop accumulates norm_squared of residual = b - u*coefficient in fp32; norm = sqrt(norm_squared); final loop stores residual/norm elementwise in fp32 into a (32,) float32 output.",
+              "run() allocates the output on u.device; make_inputs mirrors the problem statement exactly (seed 830228, b = 1.125*u + 1e-5*noise as float32).",
+              "All arithmetic is float32 including alpha; no float64 promotion anywhere in the kernel."
+            ],
+            "open_questions": [
+              "What is the actual fp32-computed alpha vs the float64 alpha on this workload, and does the resulting residual error direction differ from the reference by more than 1% relative L2?",
+              "Does the final output remain finite (norm > 0 in fp32) on this workload?",
+              "How large is the cancellation effect in practice: are residual components ~1e-5 with ~5 digits retained, or does the systematic alpha error dominate?"
+            ],
+            "risk_map": [
+              "Catastrophic cancellation in residual = b - alpha*u: b \u2248 1.125*u + 1e-5*noise, so the true residual is ~1e-5 magnitude while b and alpha*u are ~1 in magnitude. In fp32, b - u*alpha each ~O(1) subtracting to O(1e-5) can lose ~5 significant digits, potentially inflating relative error of the normalized output beyond the 1% budget.",
+              "fp32 alpha error: alpha = <u,b>/<u,u> \u2248 1.125; any deviation eps in fp32 alpha injects an error (alpha_true - alpha_fp32)*u_j into every residual, which is systematic across components and could dominate the tiny 1e-5 residual signal. This is the main comparison point for Skeptic.",
+              "Sequential fp32 accumulation of numerator/denominator over 32 terms has O(sqrt(32)*eps) rounding noise, feeding the same alpha-error channel.",
+              "div_rn residuals by norm: if norm underflows or the residual computation snaps to near-zero for many components, the normalized vector direction could differ substantially from reference.",
+              "Whether the effective residual error translates to >1% relative output error requires runtime numeric evidence, not source reasoning alone."
+            ],
+            "scope_notes": [
+              "In-scope: only the fixed seeded workload; a benign pass/fail on this input is contract-relevant evidence.",
+              "Tolerance is generous (1% relative L2), which partially compensates for fp32 arithmetic; the problem text acknowledges fp32 sequential accumulation, so implementation precision per se is not a contract violation \u2014 only exceeding the 1% bound matters.",
+              "No test harness code is present in the artifact (test_code empty); verification must construct its own float64 reference from make_inputs_numpy()."
+            ],
+            "summary": "Described case_p: fp32 Triton kernel computing a normalized orthogonal projection residual for a fixed seeded (32,) workload where b = 1.125*u + 1e-5*noise, making residual cancellation in fp32 the central correctness risk."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.091,
+        "input_tokens": 4777,
+        "output_tokens": 994
+      }
+    },
+    {
+      "duration_s": 8.765565018000002,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The central risk is clear: fp32 cancellation in b \u2212 \u03b1\u00b7u where the true residual is ~1e-5 while operands are ~1. I'll record the two highest-value testable claims, both in scope on the fixed seeded workload.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "fp32 alpha deviates from the float64 alpha by ~1e-7 relative; this injects a systematic error (\u0394\u03b1)\u00b7u_j of magnitude up to ~1e-6 into each component of a residual that is only ~1e-5, i.e., a relative perturbation up to several percent, plausibly exceeding the 1% relative L2 budget after normalization.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract requires ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs workload, with b = 1.125*u + 1e-5*noise (kernel.py make_inputs_numpy), so the residual signal is ~1e-5 while alpha\u00b7u is ~1."
+              }
+            ],
+            "statement": "On the fixed seeded workload (u, b from make_inputs_numpy), the fp32-computed coefficient alpha differs from the float64 reference alpha enough that the systematic residual error (alpha_true - alpha_fp32)*u[j] dominates the ~1e-5 true residual, causing the normalized output to exceed the 1% relative L2 bound versus the float64 reference."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The residual components are ~1e-5; fp32 b[j] - u[j]*coefficient rounds operands of ~1 to ~1e-7 grid, losing ~5 significant digits of the residual. Elementwise relative residual error can reach several percent of ||residual||, and normalization preserves relative error since output = residual/norm.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "problem.txt admits only this workload and requires output within 1% relative L2 of the float64 reference; it also states the residual is nonzero, so near-total cancellation would still be an in-scope failure mode if the direction is wrong."
+              }
+            ],
+            "statement": "Catastrophic cancellation in the fp32 computation of residual[j] = b[j] - u[j]*coefficient (operands ~O(1), result ~O(1e-5)) degrades individual residual components enough that the stored normalized vector deviates from the float64 reference direction by more than 1% relative L2 on the fixed workload."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.766,
+        "input_tokens": 12344,
+        "output_tokens": 581
+      }
+    },
+    {
+      "duration_s": 6.50305389,
+      "role": "skeptic",
+      "round": 4,
+      "text": "My two earlier claims were rejected for missing `scope_rationale` \u2014 I'll re-send them with that field filled in.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "fp32 alpha deviates from the float64 alpha by ~1e-7 relative; this injects a systematic error (\u0394\u03b1)\u00b7u_j of magnitude up to ~1e-6 into each component of a residual that is only ~1e-5, i.e., a relative perturbation of several percent, plausibly exceeding the 1% relative L2 budget after normalization.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract requires ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs workload, with b = 1.125*u + 1e-5*noise (kernel.py make_inputs_numpy), so the residual signal is ~1e-5 while alpha*u is ~1."
+              }
+            ],
+            "scope_rationale": "problem.txt restricts scope to exactly the vectors returned by make_inputs() (kernel.py make_inputs_numpy, seed 830228, b = 1.125*u + 1e-5*noise) and requires the output to be within 1% relative L2 of a float64 reference; a workload-induced alpha/residual error exceeding that bound is a direct violation of the stated tolerance on the one in-scope input.",
+            "statement": "On the fixed seeded workload (u, b from make_inputs_numpy), the fp32-computed coefficient alpha differs from the float64 reference alpha enough that the systematic residual error (alpha_true - alpha_fp32)*u[j] dominates the ~1e-5 true residual, causing the normalized output to exceed the 1% relative L2 bound versus the float64 reference."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The residual components are ~1e-5; fp32 b[j] - u[j]*coefficient rounds operands of ~1 to a ~1e-7 grid, losing ~5 significant digits of the residual. Elementwise relative residual error can reach several percent of ||residual||, and normalization preserves relative error since output = residual/norm.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "problem.txt admits only this workload and requires output within 1% relative L2 of the float64 reference; it states the residual is nonzero on this workload, so a wrong direction due to cancellation would be an in-scope failure."
+              }
+            ],
+            "scope_rationale": "The contract's only in-scope input is the fixed seeded workload where b \u2248 1.125*u + 1e-5*noise, so per-component cancellation in residual = b - alpha*u is inherent to the required input; the stated 1% relative L2 tolerance on this exact input is the requirement this claim could violate.",
+            "statement": "Catastrophic cancellation in the fp32 computation of residual[j] = b[j] - u[j]*coefficient (operands ~O(1), result ~O(1e-5)) degrades individual residual components enough that the stored normalized vector deviates from the float64 reference direction by more than 1% relative L2 on the fixed workload."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.503,
+        "input_tokens": 13936,
+        "output_tokens": 724
+      }
+    },
+    {
+      "duration_s": 10.919790975000002,
+      "role": "describer",
+      "round": 5,
+      "text": "The description model for case_p is already complete and accurate; both skeptic claims (fp32 alpha error and cancellation) map directly onto the recorded risk_map. I'll record a small refinement to help the Experimenter design decisive probes \u2014 particularly that the reference must be computed in float64 on the stored float32 inputs, and that the alpha-error vs cancellation channels can be separated numerically.",
+      "tool_calls": [
+        {
+          "args": {
+            "kernel_model": [
+              "Kernel's per-component residual uses coefficient computed once in fp32 and reuses it in both the norm loop and the store loop, so the alpha-error channel is fully correlated between numerator and normalization.",
+              "The stored output is fp32 residual/norm; the final store re-loads u,b and recomputes residual, but with the same coefficient, so stored values are bit-consistent with the norm computation."
+            ],
+            "open_questions": [
+              "Exact float64 vs fp32 alpha values on the fixed workload (seed 830228), and the sign/magnitude of (alpha64 - alpha32) relative to 1e-5 residual scale.",
+              "Empirical relative L2 error of the kernel output vs a float64 reference built from the stored float32 inputs \u2014 is it above or below 0.01?",
+              "Decisive experiment needed: run the kernel on make_inputs(), build float64 reference (recentered to avoid its own cancellation), and compare; source reasoning alone cannot settle c1/c2."
+            ],
+            "risk_map": [
+              "For probing: separate the two error channels by computing (a) reference output from float64 alpha, (b) output from float64 arithmetic using the fp32-computed alpha, and (c) the actual kernel output; the gap between (a) and (b) isolates claim c1 (alpha error), the gap between (b) and (c) isolates claim c2 (per-component fp32 cancellation).",
+              "Reference construction caution: the float64 reference must use the actual stored float32 u and b values (numpy arrays from make_inputs_numpy), not the pre-cast float64 b; the problem explicitly permits recentered float64 computation to avoid cancellation in the reference itself.",
+              "fp32 rounding grid at magnitude ~1 is ~6e-8 (2^-24), so each residual component ~1e-5 carries at best ~1.7e-3 relative error from the subtraction alone; the alpha channel could add up to ~10x that. Both are near the 1% bound, so empirical values, not bounds, decide."
+            ],
+            "scope_notes": [
+              "The 0.01 relative-L2 tolerance applies to the normalized (unit-norm) output, so ||ref||_2 = 1 up to reference rounding; the budget is effectively 0.01 absolute L2 on the output vector.",
+              "Verification harness must reconstruct inputs from make_inputs_numpy() exactly (seed 830228) \u2014 artifact contains no test code."
+            ],
+            "summary": "Refined case_p description: no new artifact context needed; added probe-design guidance separating the alpha-error channel (c1) from per-component cancellation (c2), and clarified that empirical runtime values decide both claims since both error channels are near the 1% tolerance."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.92,
+        "input_tokens": 15552,
+        "output_tokens": 734
+      }
+    },
+    {
+      "duration_s": 4.707052671,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The two central in-scope claims (fp32 alpha error and per-component cancellation) are already recorded and cover the dominant risk surfaces for this fixed-workload kernel. No experiment evidence exists yet to raise material new claims, so I'll record that review.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The only in-scope input is the fixed seeded workload, and the two dominant error channels (fp32 alpha error, c1; per-component fp32 cancellation, c2) are already recorded with scope evidence. The remaining risk items (accumulation rounding, norm underflow) feed the same alpha/residual channels already covered, and the contract explicitly acknowledges fp32 sequential arithmetic, so no additional distinct testable claim is warranted before runtime evidence arrives.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.707,
+        "input_tokens": 21916,
+        "output_tokens": 196
+      }
+    },
+    {
+      "duration_s": 15.426915009999995,
+      "role": "experimenter",
+      "round": 7,
+      "text": "Both open claims (c1: fp32 alpha error channel; c2: per-component fp32 cancellation) need runtime evidence on the fixed seeded workload. I'll launch two independent probes in one batch: c1 isolates the alpha-error channel by comparing a float64 pipeline forced to use the fp32-computed alpha against the full-float64 reference; c2 runs the actual Triton kernel and also isolates the per-component cancellation channel (fp32 residual using fp64 alpha).",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import numpy as np, json\n\nrng = np.random.Generator(np.random.PCG64(830228))\nu = rng.normal(size=32).astype(np.float32)\nb = (1.125 * u.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n\nu64 = u.astype(np.float64); b64 = b.astype(np.float64)\nalpha64 = np.dot(u64, b64) / np.dot(u64, u64)\n\n# emulate kernel's sequential fp32 accumulation (separately rounded products/sums)\nnum = np.float32(0.0); den = np.float32(0.0)\nfor j in range(32):\n    num = np.float32(num + np.float32(np.float32(u[j]) * np.float32(b[j])))\n    den = np.float32(den + np.float32(np.float32(u[j]) * np.float32(u[j])))\nalpha32 = np.float32(np.divide(num, den, dtype=np.float32))\n\nd_alpha = float(alpha64) - float(alpha32)\n# reference: float64 residual (no cancellation issue in fp64 here, but recenter via fp32-quantized exact subtraction is fine)\nres64 = b64 - alpha64 * u64\nref = res64 / np.linalg.norm(res64)\n\n# isolate alpha channel: float64 residual using fp32 alpha\nres_a = b64 - float(alpha32) * u64\nout_a = res_a / np.linalg.norm(res_a)\nerr_a = np.linalg.norm(out_a - ref) / max(np.linalg.norm(ref), 1e-12)\n\nprint(json.dumps({\n    \"alpha64\": float(alpha64), \"alpha32\": float(alpha32),\n    \"delta_alpha\": d_alpha, \"rel_delta_alpha\": d_alpha / alpha64,\n    \"alpha_channel_rel_l2_error\": float(err_a),\n    \"tolerance\": 0.01,\n    \"alpha_channel_exceeds_tol\": bool(err_a > 0.01),\n    \"median_abs_residual\": float(np.median(np.abs(res64))),\n    \"delta_alpha_u_rms\": float(np.sqrt(np.mean((d_alpha * u64) ** 2))),\n}))",
+            "expected_signal": "relative L2 error of float64-pipeline-with-fp32-alpha vs float64 reference, compared to 0.01 tolerance"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import numpy as np, json, torch\n\nrng = np.random.Generator(np.random.PCG64(830228))\nu_np = rng.normal(size=32).astype(np.float32)\nb_np = (1.125 * u_np.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n\n# actual kernel run on GPU\nu = torch.from_numpy(u_np).to(\"cuda\")\nb = torch.from_numpy(b_np).to(\"cuda\")\nimport triton\nfrom triton_kernel_case_p import _projection_kernel  # placeholder; define below\n\n# Instead, exec the artifact kernel source directly\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"case_p_kernel\", \"/root/numerical_cases/case_p/kernel.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nout = mod.run(u, b).cpu().numpy()\n\nu64 = u_np.astype(np.float64); b64 = b_np.astype(np.float64)\nalpha64 = np.dot(u64, b64) / np.dot(u64, u64)\nres64 = b64 - alpha64 * u64\nref = res64 / np.linalg.norm(res64)\n\n# isolate cancellation channel: fp32 residual computation using fp64 alpha\nalpha64f = np.float64(alpha64)\nres32 = np.zeros(32, dtype=np.float32)\nfor j in range(32):\n    coef32 = np.float32(alpha64)  # quantize alpha to fp32 for the multiply\n    res32[j] = np.float32(np.float32(b_np[j]) - np.float32(np.float32(u_np[j]) * coef32))\nres32_64 = res32.astype(np.float64)\nout_c = res32_64 / np.linalg.norm(res32_64)\n\nkernel_err = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12)\ncancel_err = np.linalg.norm(out_c - ref) / max(np.linalg.norm(ref), 1e-12)\n\nprint(json.dumps({\n    \"kernel_output_finite\": bool(np.all(np.isfinite(out))),\n    \"kernel_output_shape\": list(out.shape),\n    \"kernel_rel_l2_error\": float(kernel_err),\n    \"cancellation_channel_rel_l2_error\": float(cancel_err),\n    \"tolerance\": 0.01,\n    \"kernel_exceeds_tol\": bool(kernel_err > 0.01),\n    \"cancellation_exceeds_tol\": bool(cancel_err > 0.01),\n    \"median_abs_residual_true\": float(np.median(np.abs(res64))),\n}))",
+            "expected_signal": "actual kernel output relative L2 error vs float64 reference, and isolated fp32 residual-cancellation error, compared to 0.01"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.427,
+        "input_tokens": 22926,
+        "output_tokens": 1353
+      }
+    },
+    {
+      "duration_s": 15.350122904000003,
+      "role": "experimenter",
+      "round": 8,
+      "text": "The c1 probe confirms the alpha-error channel: fp32 alpha (1.124999523) vs float64 alpha (1.1250000) alone produces 5.9% relative L2 error, far exceeding the 1% bound. The c2 probe failed due to a bad placeholder import before reaching the kernel; I'll finalize c1 and relaunch c2 with the import fixed.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "alpha32": 1.1249995231628418,
+              "alpha64": 1.1249999827261048,
+              "alpha_channel_exceeds_tol": true,
+              "alpha_channel_rel_l2_error": 0.058881815171470286,
+              "delta_alpha": 4.5956326300000683e-07,
+              "delta_alpha_u_rms": 4.973481061801919e-07,
+              "median_abs_residual": 7.039293071636754e-06,
+              "rel_delta_alpha": 4.085006844945821e-07,
+              "tolerance": 0.01
+            },
+            "event_id": "t12",
+            "status": "confirmed",
+            "summary": "On the fixed seeded workload, the emulated sequential fp32 accumulation gives alpha32=1.124999523 vs float64 alpha=1.124999983 (delta 4.6e-7). The systematic error (delta_alpha)*u_j (RMS 4.97e-7) is ~7% of the median residual magnitude 7.04e-6. Isolating this channel alone (float64 residual using fp32 alpha, normalized) yields relative L2 error 0.0589 vs the float64 reference \u2014 nearly 6x the 0.01 tolerance. This confirms the alpha-error channel dominates the tiny residual and would alone violate the contract bound.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import numpy as np, json, importlib.util\n\nrng = np.random.Generator(np.random.PCG64(830228))\nu_np = rng.normal(size=32).astype(np.float32)\nb_np = (1.125 * u_np.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n\nimport torch\nu = torch.from_numpy(u_np).to(\"cuda\")\nb = torch.from_numpy(b_np).to(\"cuda\")\nspec = importlib.util.spec_from_file_location(\"case_p_kernel\", \"/root/numerical_cases/case_p/kernel.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nout = mod.run(u, b).cpu().numpy()\n\nu64 = u_np.astype(np.float64); b64 = b_np.astype(np.float64)\nalpha64 = np.dot(u64, b64) / np.dot(u64, u64)\nres64 = b64 - alpha64 * u64\nref = res64 / np.linalg.norm(res64)\n\n# isolate cancellation channel: fp32 residual computation using fp64 alpha quantized to fp32\ncoef32 = np.float32(alpha64)\nres32 = (b_np - (u_np * coef32).astype(np.float32)).astype(np.float32)\nout_c = res32.astype(np.float64) / np.linalg.norm(res32.astype(np.float64))\n\nkernel_err = float(np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12))\ncancel_err = float(np.linalg.norm(out_c - ref) / max(np.linalg.norm(ref), 1e-12))\nprint(json.dumps({\n    \"kernel_output_finite\": bool(np.all(np.isfinite(out))),\n    \"kernel_output_shape\": list(out.shape),\n    \"kernel_rel_l2_error\": kernel_err,\n    \"cancellation_channel_rel_l2_error\": cancel_err,\n    \"tolerance\": 0.01,\n    \"kernel_exceeds_tol\": bool(kernel_err > 0.01),\n    \"cancellation_exceeds_tol\": bool(cancel_err > 0.01),\n    \"median_abs_residual_true\": float(np.median(np.abs(res64))),\n}))",
+            "expected_signal": "actual kernel output relative L2 error vs float64 reference, and isolated fp32 residual-cancellation error, compared to 0.01"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.35,
+        "input_tokens": 27558,
+        "output_tokens": 1075
+      }
+    },
+    {
+      "duration_s": 7.115075805000004,
+      "role": "experimenter",
+      "round": 9,
+      "text": "The c2 probe succeeded: the isolated fp32 cancellation channel yields only 0.0041 relative L2 error (below the 0.01 tolerance), while the full kernel error 0.0605 is dominated by the alpha channel already confirmed under c1. So c2 is rebutted.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "cancellation_channel_rel_l2_error": 0.004094861719832044,
+              "cancellation_exceeds_tol": false,
+              "kernel_exceeds_tol": true,
+              "kernel_output_finite": true,
+              "kernel_rel_l2_error": 0.06045526452776961,
+              "median_abs_residual_true": 7.039293071636754e-06,
+              "tolerance": 0.01
+            },
+            "event_id": "t15",
+            "status": "rebutted",
+            "summary": "The fixed workload kernel output is finite (shape (32,)) but its relative L2 error vs the float64 reference is 0.0605 \u2014 6x the 0.01 tolerance \u2014 consistent with the alpha-error channel (c1). However, the isolated per-component cancellation channel (fp32 residual b[j] - fp32(u[j]*alpha64) with fp64 alpha, then normalized) yields only 0.0041 relative L2 error, well below the 0.01 bound. Cancellation therefore does NOT by itself degrade the stored normalized vector beyond tolerance; the contract violation comes from the fp32 alpha error, not the subtraction cancellation. c2 is rebutted.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.115,
+        "input_tokens": 33616,
+        "output_tokens": 415
+      }
+    },
+    {
+      "duration_s": 5.625228582000005,
+      "role": "skeptic",
+      "round": 10,
+      "text": "The evidence is complete and decisive: c1 is confirmed in scope (actual kernel output exceeds the 1% tolerance by ~6\u00d7, driven by the fp32 alpha error), c2 is rebutted. No new claims are warranted.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the only in-scope input is the fixed seeded workload, and runtime probes have settled both claims. The actual kernel output on that workload has relative L2 error 0.0605 vs the float64 reference, exceeding the contract's 0.01 bound by ~6x, fully attributable to the fp32 alpha-error channel (c1, confirmed with scope evidence from problem.txt). The cancellation channel (c2) was isolated and measured at only 0.0041, below tolerance, and is rebutted. No further material, testable, in-scope claim remains uncovered.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.625,
+        "input_tokens": 36683,
+        "output_tokens": 232
+      }
+    },
+    {
+      "duration_s": 8.515058996000008,
+      "role": "judge",
+      "round": 11,
+      "text": "The evidence is decisive: on the sole in-scope workload, the actual kernel output deviates 6.06% from the float64 reference \u2014 six times the contract's 1% bound \u2014 driven by the confirmed fp32 alpha-error channel (c1). The cancellation channel (c2) was isolated and rebutted. Skeptic signed off with no new claims. I'll record a reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The contract (problem.txt, the operative artifact since test_code is empty) admits only the fixed seeded workload from make_inputs() and requires ||output-ref||_2 / max(||ref||_2,1e-12) <= 0.01 with a float64 reference. Runtime probes on exactly that workload (t15) show the actual kernel output is finite, shape (32,), but has relative L2 error 0.0605 \u2014 ~6x the 0.01 tolerance. Channel isolation (t12) confirms the cause: the fp32-sequential-accumulation alpha (1.12499952) deviates from the float64 alpha (1.12499998) by 4.6e-7, injecting a systematic (\u0394\u03b1)\u00b7u error of RMS 4.97e-7 into a residual of only ~7e-6, which alone yields 5.9% relative L2 error. The alternative cancellation channel (c2) was isolated and measured at only 0.0041, below tolerance, and is rebutted \u2014 so the violation is not a metric artifact. This is a genuine failure of the explicitly required accuracy bound on the one in-scope input, not a permitted implementation-precision deviation: the contract acknowledges fp32 arithmetic but still mandates the 1% bound, which the kernel exceeds.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.515,
+        "input_tokens": 33806,
+        "output_tokens": 443
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-24T01:07:05Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the only in-scope input is the fixed seeded workload, and runtime probes have settled both claims. The actual kernel output on that workload has relative L2 error 0.0605 vs the float64 reference, exceeding the contract's 0.01 bound by ~6x, fully attributable to the fp32 alpha-error channel (c1, confirmed with scope evidence from problem.txt). The cancellation channel (c2) was isolated and measured at only 0.0041, below tolerance, and is rebutted. No further material, testable, in-scope claim remains uncovered.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 16,
+    "tool_event_id": "t17",
+    "turn": 10
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_p"
+      },
+      "created_at": "2026-09-24T01:05:26Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_p",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _projection_kernel(U, B, Output, N: tl.constexpr):\n    numerator = tl.full((), 0.0, tl.float32)\n    denominator = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        numerator = numerator + u * b\n        denominator = denominator + u * u\n    coefficient = tl.div_rn(numerator, denominator)\n    norm_squared = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        residual = b - u * coefficient\n        norm_squared = norm_squared + residual * residual\n    norm = tl.sqrt(norm_squared)\n    j = tl.arange(0, N)\n    u = tl.load(U + j).to(tl.float32)\n    b = tl.load(B + j).to(tl.float32)\n    residual = b - u * coefficient\n    tl.store(Output + j, tl.div_rn(residual, norm))\n\n\ndef run(u, b):\n    output = torch.empty((32,), device=u.device, dtype=torch.float32)\n    _projection_kernel[(1,)](u, b, output, N=32, num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(830228))\n    u = rng.normal(size=32).astype(np.float32)\n    b = (1.125 * u.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n    return u, b\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "passed": null,
+        "problem_text": "Compute a normalized orthogonal projection for a fixed public workload.\n\nOnly the two float32 vectors u and b returned by make_inputs() are in scope.\nEach has shape (32,). The mathematical reference on these actual stored inputs is\n  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]\n  residual[j] = b[j] - alpha*u[j]\n  reference = residual / ||residual||_2.\nUse at least float64 accuracy for the reference. Algebraically equivalent\nrecentring is allowed to avoid numerical cancellation in the reference itself.\nThe residual on this workload is nonzero.\n\nThe output must be a finite vector of shape (32,), and\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.\n\nDecide whether this kernel satisfies that contract for the fixed generated\nworkload. Arbitrary alternative vectors are outside the scope. The kernel uses\nfloat32 arithmetic, sequential accumulations and separately rounded products\nand sums; its launch disables FP multiply/add fusion.\n",
+        "rounds": null,
+        "session_dir": "/root/numerical_cases/case_p",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_p"
+      },
+      "created_at": "2026-09-24T01:05:26Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute a normalized orthogonal projection for a fixed public workload.\n\nOnly the two float32 vectors u and b returned by make_inputs() are in scope.\nEach has shape (32,). The mathematical reference on these actual stored inputs is\n  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]\n  residual[j] = b[j] - alpha*u[j]\n  reference = residual / ||residual||_2.\nUse at least float64 accuracy for the reference. Algebraically equivalent\nrecentring is allowed to avoid numerical cancellation in the reference itself.\nThe residual on this workload is nonzero.\n\nThe output must be a finite vector of shape (32,), and\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.\n\nDecide whether this kernel satisfies that contract for the fixed generated\nworkload. Arbitrary alternative vectors are outside the scope. The kernel uses\nfloat32 arithmetic, sequential accumulations and separately rounded products\nand sums; its launch disables FP multiply/add fusion.\n",
+        "entry": "case_p",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_p"
+      },
+      "created_at": "2026-09-24T01:05:26Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_p",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1519
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 67
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 952
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_p",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T01:05:26Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_p\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_p",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 67,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Contract scope is fixed: only the float32 (32,) vectors u and b from make_inputs() (PCG64 seed 830228, u ~ N(0,1), b = 1.125*u_f64 + 1e-5*noise) are in scope; arbitrary vectors are out of scope.",
+          "Reference (float64 or better, algebraically equivalent recentering allowed): alpha = <u,b>/<u,u>; residual = b - alpha*u; reference = residual / ||residual||_2.",
+          "Output must be a finite float vector of shape (32,) with relative error ||output-ref||_2 / max(||ref||_2, 1e-12) <= 0.01.",
+          "Residual is guaranteed nonzero on this workload; the problem explicitly acknowledges float32 arithmetic, sequential accumulation, and disabled FP fusion in the kernel."
+        ],
+        "kernel_model": [
+          "Single Triton program (grid (1,), num_warps=1) computes scalar dot products numerator = <u,b> and denominator = <u,u> via sequential tl.static_range fp32 accumulation with separately rounded products/sums (enable_fp_fusion=False), then coefficient = div_rn(num, denom).",
+          "Second static_range loop accumulates norm_squared of residual = b - u*coefficient in fp32; norm = sqrt(norm_squared); final loop stores residual/norm elementwise in fp32 into a (32,) float32 output.",
+          "run() allocates the output on u.device; make_inputs mirrors the problem statement exactly (seed 830228, b = 1.125*u + 1e-5*noise as float32).",
+          "All arithmetic is float32 including alpha; no float64 promotion anywhere in the kernel."
+        ],
+        "open_questions": [
+          "What is the actual fp32-computed alpha vs the float64 alpha on this workload, and does the resulting residual error direction differ from the reference by more than 1% relative L2?",
+          "Does the final output remain finite (norm > 0 in fp32) on this workload?",
+          "How large is the cancellation effect in practice: are residual components ~1e-5 with ~5 digits retained, or does the systematic alpha error dominate?"
+        ],
+        "risk_map": [
+          "Catastrophic cancellation in residual = b - alpha*u: b \u2248 1.125*u + 1e-5*noise, so the true residual is ~1e-5 magnitude while b and alpha*u are ~1 in magnitude. In fp32, b - u*alpha each ~O(1) subtracting to O(1e-5) can lose ~5 significant digits, potentially inflating relative error of the normalized output beyond the 1% budget.",
+          "fp32 alpha error: alpha = <u,b>/<u,u> \u2248 1.125; any deviation eps in fp32 alpha injects an error (alpha_true - alpha_fp32)*u_j into every residual, which is systematic across components and could dominate the tiny 1e-5 residual signal. This is the main comparison point for Skeptic.",
+          "Sequential fp32 accumulation of numerator/denominator over 32 terms has O(sqrt(32)*eps) rounding noise, feeding the same alpha-error channel.",
+          "div_rn residuals by norm: if norm underflows or the residual computation snaps to near-zero for many components, the normalized vector direction could differ substantially from reference.",
+          "Whether the effective residual error translates to >1% relative output error requires runtime numeric evidence, not source reasoning alone."
+        ],
+        "scope_notes": [
+          "In-scope: only the fixed seeded workload; a benign pass/fail on this input is contract-relevant evidence.",
+          "Tolerance is generous (1% relative L2), which partially compensates for fp32 arithmetic; the problem text acknowledges fp32 sequential accumulation, so implementation precision per se is not a contract violation \u2014 only exceeding the 1% bound matters.",
+          "No test harness code is present in the artifact (test_code empty); verification must construct its own float64 reference from make_inputs_numpy()."
+        ],
+        "summary": "Described case_p: fp32 Triton kernel computing a normalized orthogonal projection residual for a fixed seeded (32,) workload where b = 1.125*u + 1e-5*noise, making residual cancellation in fp32 the central correctness risk."
+      },
+      "created_at": "2026-09-24T01:05:40Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Contract scope is fixed: only the float32 (32,) vectors u and b from make_inputs() (PCG64 seed 830228, u ~ N(0,1), b = 1.125*u_f64 + 1e-5*noise) are in scope; arbitrary vectors are out of scope.",
+            "Reference (float64 or better, algebraically equivalent recentering allowed): alpha = <u,b>/<u,u>; residual = b - alpha*u; reference = residual / ||residual||_2.",
+            "Output must be a finite float vector of shape (32,) with relative error ||output-ref||_2 / max(||ref||_2, 1e-12) <= 0.01.",
+            "Residual is guaranteed nonzero on this workload; the problem explicitly acknowledges float32 arithmetic, sequential accumulation, and disabled FP fusion in the kernel."
+          ],
+          "kernel_model": [
+            "Single Triton program (grid (1,), num_warps=1) computes scalar dot products numerator = <u,b> and denominator = <u,u> via sequential tl.static_range fp32 accumulation with separately rounded products/sums (enable_fp_fusion=False), then coefficient = div_rn(num, denom).",
+            "Second static_range loop accumulates norm_squared of residual = b - u*coefficient in fp32; norm = sqrt(norm_squared); final loop stores residual/norm elementwise in fp32 into a (32,) float32 output.",
+            "run() allocates the output on u.device; make_inputs mirrors the problem statement exactly (seed 830228, b = 1.125*u + 1e-5*noise as float32).",
+            "All arithmetic is float32 including alpha; no float64 promotion anywhere in the kernel."
+          ],
+          "open_questions": [
+            "What is the actual fp32-computed alpha vs the float64 alpha on this workload, and does the resulting residual error direction differ from the reference by more than 1% relative L2?",
+            "Does the final output remain finite (norm > 0 in fp32) on this workload?",
+            "How large is the cancellation effect in practice: are residual components ~1e-5 with ~5 digits retained, or does the systematic alpha error dominate?"
+          ],
+          "risk_map": [
+            "Catastrophic cancellation in residual = b - alpha*u: b \u2248 1.125*u + 1e-5*noise, so the true residual is ~1e-5 magnitude while b and alpha*u are ~1 in magnitude. In fp32, b - u*alpha each ~O(1) subtracting to O(1e-5) can lose ~5 significant digits, potentially inflating relative error of the normalized output beyond the 1% budget.",
+            "fp32 alpha error: alpha = <u,b>/<u,u> \u2248 1.125; any deviation eps in fp32 alpha injects an error (alpha_true - alpha_fp32)*u_j into every residual, which is systematic across components and could dominate the tiny 1e-5 residual signal. This is the main comparison point for Skeptic.",
+            "Sequential fp32 accumulation of numerator/denominator over 32 terms has O(sqrt(32)*eps) rounding noise, feeding the same alpha-error channel.",
+            "div_rn residuals by norm: if norm underflows or the residual computation snaps to near-zero for many components, the normalized vector direction could differ substantially from reference.",
+            "Whether the effective residual error translates to >1% relative output error requires runtime numeric evidence, not source reasoning alone."
+          ],
+          "scope_notes": [
+            "In-scope: only the fixed seeded workload; a benign pass/fail on this input is contract-relevant evidence.",
+            "Tolerance is generous (1% relative L2), which partially compensates for fp32 arithmetic; the problem text acknowledges fp32 sequential accumulation, so implementation precision per se is not a contract violation \u2014 only exceeding the 1% bound matters.",
+            "No test harness code is present in the artifact (test_code empty); verification must construct its own float64 reference from make_inputs_numpy()."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Contract scope is fixed: only the float32 (32,) vectors u and b from make_inputs() (PCG64 seed 830228, u ~ N(0,1), b = 1.125*u_f64 + 1e-5*noise) are in scope; arbitrary vectors are out of scope.",
+            "Reference (float64 or better, algebraically equivalent recentering allowed): alpha = <u,b>/<u,u>; residual = b - alpha*u; reference = residual / ||residual||_2.",
+            "Output must be a finite float vector of shape (32,) with relative error ||output-ref||_2 / max(||ref||_2, 1e-12) <= 0.01.",
+            "Residual is guaranteed nonzero on this workload; the problem explicitly acknowledges float32 arithmetic, sequential accumulation, and disabled FP fusion in the kernel."
+          ],
+          "created_at": "2026-09-24T01:05:40Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Single Triton program (grid (1,), num_warps=1) computes scalar dot products numerator = <u,b> and denominator = <u,u> via sequential tl.static_range fp32 accumulation with separately rounded products/sums (enable_fp_fusion=False), then coefficient = div_rn(num, denom).",
+            "Second static_range loop accumulates norm_squared of residual = b - u*coefficient in fp32; norm = sqrt(norm_squared); final loop stores residual/norm elementwise in fp32 into a (32,) float32 output.",
+            "run() allocates the output on u.device; make_inputs mirrors the problem statement exactly (seed 830228, b = 1.125*u + 1e-5*noise as float32).",
+            "All arithmetic is float32 including alpha; no float64 promotion anywhere in the kernel."
+          ],
+          "open_questions": [
+            "What is the actual fp32-computed alpha vs the float64 alpha on this workload, and does the resulting residual error direction differ from the reference by more than 1% relative L2?",
+            "Does the final output remain finite (norm > 0 in fp32) on this workload?",
+            "How large is the cancellation effect in practice: are residual components ~1e-5 with ~5 digits retained, or does the systematic alpha error dominate?"
+          ],
+          "risk_map": [
+            "Catastrophic cancellation in residual = b - alpha*u: b \u2248 1.125*u + 1e-5*noise, so the true residual is ~1e-5 magnitude while b and alpha*u are ~1 in magnitude. In fp32, b - u*alpha each ~O(1) subtracting to O(1e-5) can lose ~5 significant digits, potentially inflating relative error of the normalized output beyond the 1% budget.",
+            "fp32 alpha error: alpha = <u,b>/<u,u> \u2248 1.125; any deviation eps in fp32 alpha injects an error (alpha_true - alpha_fp32)*u_j into every residual, which is systematic across components and could dominate the tiny 1e-5 residual signal. This is the main comparison point for Skeptic.",
+            "Sequential fp32 accumulation of numerator/denominator over 32 terms has O(sqrt(32)*eps) rounding noise, feeding the same alpha-error channel.",
+            "div_rn residuals by norm: if norm underflows or the residual computation snaps to near-zero for many components, the normalized vector direction could differ substantially from reference.",
+            "Whether the effective residual error translates to >1% relative output error requires runtime numeric evidence, not source reasoning alone."
+          ],
+          "scope_notes": [
+            "In-scope: only the fixed seeded workload; a benign pass/fail on this input is contract-relevant evidence.",
+            "Tolerance is generous (1% relative L2), which partially compensates for fp32 arithmetic; the problem text acknowledges fp32 sequential accumulation, so implementation precision per se is not a contract violation \u2014 only exceeding the 1% bound matters.",
+            "No test harness code is present in the artifact (test_code empty); verification must construct its own float64 reference from make_inputs_numpy()."
+          ],
+          "summary": "Described case_p: fp32 Triton kernel computing a normalized orthogonal projection residual for a fixed seeded (32,) workload where b = 1.125*u + 1e-5*noise, making residual cancellation in fp32 the central correctness risk.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "fp32 alpha deviates from the float64 alpha by ~1e-7 relative; this injects a systematic error (\u0394\u03b1)\u00b7u_j of magnitude up to ~1e-6 into each component of a residual that is only ~1e-5, i.e., a relative perturbation up to several percent, plausibly exceeding the 1% relative L2 budget after normalization.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs workload, with b = 1.125*u + 1e-5*noise (kernel.py make_inputs_numpy), so the residual signal is ~1e-5 while alpha\u00b7u is ~1."
+          }
+        ],
+        "statement": "On the fixed seeded workload (u, b from make_inputs_numpy), the fp32-computed coefficient alpha differs from the float64 reference alpha enough that the systematic residual error (alpha_true - alpha_fp32)*u[j] dominates the ~1e-5 true residual, causing the normalized output to exceed the 1% relative L2 bound versus the float64 reference."
+      },
+      "created_at": "2026-09-24T01:05:49Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The residual components are ~1e-5; fp32 b[j] - u[j]*coefficient rounds operands of ~1 to ~1e-7 grid, losing ~5 significant digits of the residual. Elementwise relative residual error can reach several percent of ||residual||, and normalization preserves relative error since output = residual/norm.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "problem.txt admits only this workload and requires output within 1% relative L2 of the float64 reference; it also states the residual is nonzero, so near-total cancellation would still be an in-scope failure mode if the direction is wrong."
+          }
+        ],
+        "statement": "Catastrophic cancellation in the fp32 computation of residual[j] = b[j] - u[j]*coefficient (operands ~O(1), result ~O(1e-5)) degrades individual residual components enough that the stored normalized vector deviates from the float64 reference direction by more than 1% relative L2 on the fixed workload."
+      },
+      "created_at": "2026-09-24T01:05:49Z",
+      "id": "t7",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t7",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "fp32 alpha deviates from the float64 alpha by ~1e-7 relative; this injects a systematic error (\u0394\u03b1)\u00b7u_j of magnitude up to ~1e-6 into each component of a residual that is only ~1e-5, i.e., a relative perturbation of several percent, plausibly exceeding the 1% relative L2 budget after normalization.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs workload, with b = 1.125*u + 1e-5*noise (kernel.py make_inputs_numpy), so the residual signal is ~1e-5 while alpha*u is ~1."
+          }
+        ],
+        "scope_rationale": "problem.txt restricts scope to exactly the vectors returned by make_inputs() (kernel.py make_inputs_numpy, seed 830228, b = 1.125*u + 1e-5*noise) and requires the output to be within 1% relative L2 of a float64 reference; a workload-induced alpha/residual error exceeding that bound is a direct violation of the stated tolerance on the one in-scope input.",
+        "statement": "On the fixed seeded workload (u, b from make_inputs_numpy), the fp32-computed coefficient alpha differs from the float64 reference alpha enough that the systematic residual error (alpha_true - alpha_fp32)*u[j] dominates the ~1e-5 true residual, causing the normalized output to exceed the 1% relative L2 bound versus the float64 reference."
+      },
+      "created_at": "2026-09-24T01:05:55Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-24T01:05:55Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "fp32 alpha deviates from the float64 alpha by ~1e-7 relative; this injects a systematic error (\u0394\u03b1)\u00b7u_j of magnitude up to ~1e-6 into each component of a residual that is only ~1e-5, i.e., a relative perturbation of several percent, plausibly exceeding the 1% relative L2 budget after normalization.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs workload, with b = 1.125*u + 1e-5*noise (kernel.py make_inputs_numpy), so the residual signal is ~1e-5 while alpha*u is ~1."
+          }
+        ],
+        "scope_rationale": "problem.txt restricts scope to exactly the vectors returned by make_inputs() (kernel.py make_inputs_numpy, seed 830228, b = 1.125*u + 1e-5*noise) and requires the output to be within 1% relative L2 of a float64 reference; a workload-induced alpha/residual error exceeding that bound is a direct violation of the stated tolerance on the one in-scope input.",
+        "statement": "On the fixed seeded workload (u, b from make_inputs_numpy), the fp32-computed coefficient alpha differs from the float64 reference alpha enough that the systematic residual error (alpha_true - alpha_fp32)*u[j] dominates the ~1e-5 true residual, causing the normalized output to exceed the 1% relative L2 bound versus the float64 reference.",
+        "status": "open",
+        "updated_at": "2026-09-24T01:05:55Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The residual components are ~1e-5; fp32 b[j] - u[j]*coefficient rounds operands of ~1 to a ~1e-7 grid, losing ~5 significant digits of the residual. Elementwise relative residual error can reach several percent of ||residual||, and normalization preserves relative error since output = residual/norm.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "problem.txt admits only this workload and requires output within 1% relative L2 of the float64 reference; it states the residual is nonzero on this workload, so a wrong direction due to cancellation would be an in-scope failure."
+          }
+        ],
+        "scope_rationale": "The contract's only in-scope input is the fixed seeded workload where b \u2248 1.125*u + 1e-5*noise, so per-component cancellation in residual = b - alpha*u is inherent to the required input; the stated 1% relative L2 tolerance on this exact input is the requirement this claim could violate.",
+        "statement": "Catastrophic cancellation in the fp32 computation of residual[j] = b[j] - u[j]*coefficient (operands ~O(1), result ~O(1e-5)) degrades individual residual components enough that the stored normalized vector deviates from the float64 reference direction by more than 1% relative L2 on the fixed workload."
+      },
+      "created_at": "2026-09-24T01:05:55Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-24T01:05:55Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "The residual components are ~1e-5; fp32 b[j] - u[j]*coefficient rounds operands of ~1 to a ~1e-7 grid, losing ~5 significant digits of the residual. Elementwise relative residual error can reach several percent of ||residual||, and normalization preserves relative error since output = residual/norm.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "problem.txt admits only this workload and requires output within 1% relative L2 of the float64 reference; it states the residual is nonzero on this workload, so a wrong direction due to cancellation would be an in-scope failure."
+          }
+        ],
+        "scope_rationale": "The contract's only in-scope input is the fixed seeded workload where b \u2248 1.125*u + 1e-5*noise, so per-component cancellation in residual = b - alpha*u is inherent to the required input; the stated 1% relative L2 tolerance on this exact input is the requirement this claim could violate.",
+        "statement": "Catastrophic cancellation in the fp32 computation of residual[j] = b[j] - u[j]*coefficient (operands ~O(1), result ~O(1e-5)) degrades individual residual components enough that the stored normalized vector deviates from the float64 reference direction by more than 1% relative L2 on the fixed workload.",
+        "status": "open",
+        "updated_at": "2026-09-24T01:05:55Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "kernel_model": [
+          "Kernel's per-component residual uses coefficient computed once in fp32 and reuses it in both the norm loop and the store loop, so the alpha-error channel is fully correlated between numerator and normalization.",
+          "The stored output is fp32 residual/norm; the final store re-loads u,b and recomputes residual, but with the same coefficient, so stored values are bit-consistent with the norm computation."
+        ],
+        "open_questions": [
+          "Exact float64 vs fp32 alpha values on the fixed workload (seed 830228), and the sign/magnitude of (alpha64 - alpha32) relative to 1e-5 residual scale.",
+          "Empirical relative L2 error of the kernel output vs a float64 reference built from the stored float32 inputs \u2014 is it above or below 0.01?",
+          "Decisive experiment needed: run the kernel on make_inputs(), build float64 reference (recentered to avoid its own cancellation), and compare; source reasoning alone cannot settle c1/c2."
+        ],
+        "risk_map": [
+          "For probing: separate the two error channels by computing (a) reference output from float64 alpha, (b) output from float64 arithmetic using the fp32-computed alpha, and (c) the actual kernel output; the gap between (a) and (b) isolates claim c1 (alpha error), the gap between (b) and (c) isolates claim c2 (per-component fp32 cancellation).",
+          "Reference construction caution: the float64 reference must use the actual stored float32 u and b values (numpy arrays from make_inputs_numpy), not the pre-cast float64 b; the problem explicitly permits recentered float64 computation to avoid cancellation in the reference itself.",
+          "fp32 rounding grid at magnitude ~1 is ~6e-8 (2^-24), so each residual component ~1e-5 carries at best ~1.7e-3 relative error from the subtraction alone; the alpha channel could add up to ~10x that. Both are near the 1% bound, so empirical values, not bounds, decide."
+        ],
+        "scope_notes": [
+          "The 0.01 relative-L2 tolerance applies to the normalized (unit-norm) output, so ||ref||_2 = 1 up to reference rounding; the budget is effectively 0.01 absolute L2 on the output vector.",
+          "Verification harness must reconstruct inputs from make_inputs_numpy() exactly (seed 830228) \u2014 artifact contains no test code."
+        ],
+        "summary": "Refined case_p description: no new artifact context needed; added probe-design guidance separating the alpha-error channel (c1) from per-component cancellation (c2), and clarified that empirical runtime values decide both claims since both error channels are near the 1% tolerance."
+      },
+      "created_at": "2026-09-24T01:06:06Z",
+      "id": "t10",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Contract scope is fixed: only the float32 (32,) vectors u and b from make_inputs() (PCG64 seed 830228, u ~ N(0,1), b = 1.125*u_f64 + 1e-5*noise) are in scope; arbitrary vectors are out of scope.",
+            "Reference (float64 or better, algebraically equivalent recentering allowed): alpha = <u,b>/<u,u>; residual = b - alpha*u; reference = residual / ||residual||_2.",
+            "Output must be a finite float vector of shape (32,) with relative error ||output-ref||_2 / max(||ref||_2, 1e-12) <= 0.01.",
+            "Residual is guaranteed nonzero on this workload; the problem explicitly acknowledges float32 arithmetic, sequential accumulation, and disabled FP fusion in the kernel."
+          ],
+          "kernel_model": [
+            "Single Triton program (grid (1,), num_warps=1) computes scalar dot products numerator = <u,b> and denominator = <u,u> via sequential tl.static_range fp32 accumulation with separately rounded products/sums (enable_fp_fusion=False), then coefficient = div_rn(num, denom).",
+            "Second static_range loop accumulates norm_squared of residual = b - u*coefficient in fp32; norm = sqrt(norm_squared); final loop stores residual/norm elementwise in fp32 into a (32,) float32 output.",
+            "run() allocates the output on u.device; make_inputs mirrors the problem statement exactly (seed 830228, b = 1.125*u + 1e-5*noise as float32).",
+            "All arithmetic is float32 including alpha; no float64 promotion anywhere in the kernel.",
+            "Kernel's per-component residual uses coefficient computed once in fp32 and reuses it in both the norm loop and the store loop, so the alpha-error channel is fully correlated between numerator and normalization.",
+            "The stored output is fp32 residual/norm; the final store re-loads u,b and recomputes residual, but with the same coefficient, so stored values are bit-consistent with the norm computation."
+          ],
+          "open_questions": [
+            "What is the actual fp32-computed alpha vs the float64 alpha on this workload, and does the resulting residual error direction differ from the reference by more than 1% relative L2?",
+            "Does the final output remain finite (norm > 0 in fp32) on this workload?",
+            "How large is the cancellation effect in practice: are residual components ~1e-5 with ~5 digits retained, or does the systematic alpha error dominate?",
+            "Exact float64 vs fp32 alpha values on the fixed workload (seed 830228), and the sign/magnitude of (alpha64 - alpha32) relative to 1e-5 residual scale.",
+            "Empirical relative L2 error of the kernel output vs a float64 reference built from the stored float32 inputs \u2014 is it above or below 0.01?",
+            "Decisive experiment needed: run the kernel on make_inputs(), build float64 reference (recentered to avoid its own cancellation), and compare; source reasoning alone cannot settle c1/c2."
+          ],
+          "risk_map": [
+            "Catastrophic cancellation in residual = b - alpha*u: b \u2248 1.125*u + 1e-5*noise, so the true residual is ~1e-5 magnitude while b and alpha*u are ~1 in magnitude. In fp32, b - u*alpha each ~O(1) subtracting to O(1e-5) can lose ~5 significant digits, potentially inflating relative error of the normalized output beyond the 1% budget.",
+            "fp32 alpha error: alpha = <u,b>/<u,u> \u2248 1.125; any deviation eps in fp32 alpha injects an error (alpha_true - alpha_fp32)*u_j into every residual, which is systematic across components and could dominate the tiny 1e-5 residual signal. This is the main comparison point for Skeptic.",
+            "Sequential fp32 accumulation of numerator/denominator over 32 terms has O(sqrt(32)*eps) rounding noise, feeding the same alpha-error channel.",
+            "div_rn residuals by norm: if norm underflows or the residual computation snaps to near-zero for many components, the normalized vector direction could differ substantially from reference.",
+            "Whether the effective residual error translates to >1% relative output error requires runtime numeric evidence, not source reasoning alone.",
+            "For probing: separate the two error channels by computing (a) reference output from float64 alpha, (b) output from float64 arithmetic using the fp32-computed alpha, and (c) the actual kernel output; the gap between (a) and (b) isolates claim c1 (alpha error), the gap between (b) and (c) isolates claim c2 (per-component fp32 cancellation).",
+            "Reference construction caution: the float64 reference must use the actual stored float32 u and b values (numpy arrays from make_inputs_numpy), not the pre-cast float64 b; the problem explicitly permits recentered float64 computation to avoid cancellation in the reference itself.",
+            "fp32 rounding grid at magnitude ~1 is ~6e-8 (2^-24), so each residual component ~1e-5 carries at best ~1.7e-3 relative error from the subtraction alone; the alpha channel could add up to ~10x that. Both are near the 1% bound, so empirical values, not bounds, decide."
+          ],
+          "scope_notes": [
+            "In-scope: only the fixed seeded workload; a benign pass/fail on this input is contract-relevant evidence.",
+            "Tolerance is generous (1% relative L2), which partially compensates for fp32 arithmetic; the problem text acknowledges fp32 sequential accumulation, so implementation precision per se is not a contract violation \u2014 only exceeding the 1% bound matters.",
+            "No test harness code is present in the artifact (test_code empty); verification must construct its own float64 reference from make_inputs_numpy().",
+            "The 0.01 relative-L2 tolerance applies to the normalized (unit-norm) output, so ||ref||_2 = 1 up to reference rounding; the budget is effectively 0.01 absolute L2 on the output vector.",
+            "Verification harness must reconstruct inputs from make_inputs_numpy() exactly (seed 830228) \u2014 artifact contains no test code."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [],
+          "created_at": "2026-09-24T01:06:06Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Kernel's per-component residual uses coefficient computed once in fp32 and reuses it in both the norm loop and the store loop, so the alpha-error channel is fully correlated between numerator and normalization.",
+            "The stored output is fp32 residual/norm; the final store re-loads u,b and recomputes residual, but with the same coefficient, so stored values are bit-consistent with the norm computation."
+          ],
+          "open_questions": [
+            "Exact float64 vs fp32 alpha values on the fixed workload (seed 830228), and the sign/magnitude of (alpha64 - alpha32) relative to 1e-5 residual scale.",
+            "Empirical relative L2 error of the kernel output vs a float64 reference built from the stored float32 inputs \u2014 is it above or below 0.01?",
+            "Decisive experiment needed: run the kernel on make_inputs(), build float64 reference (recentered to avoid its own cancellation), and compare; source reasoning alone cannot settle c1/c2."
+          ],
+          "risk_map": [
+            "For probing: separate the two error channels by computing (a) reference output from float64 alpha, (b) output from float64 arithmetic using the fp32-computed alpha, and (c) the actual kernel output; the gap between (a) and (b) isolates claim c1 (alpha error), the gap between (b) and (c) isolates claim c2 (per-component fp32 cancellation).",
+            "Reference construction caution: the float64 reference must use the actual stored float32 u and b values (numpy arrays from make_inputs_numpy), not the pre-cast float64 b; the problem explicitly permits recentered float64 computation to avoid cancellation in the reference itself.",
+            "fp32 rounding grid at magnitude ~1 is ~6e-8 (2^-24), so each residual component ~1e-5 carries at best ~1.7e-3 relative error from the subtraction alone; the alpha channel could add up to ~10x that. Both are near the 1% bound, so empirical values, not bounds, decide."
+          ],
+          "scope_notes": [
+            "The 0.01 relative-L2 tolerance applies to the normalized (unit-norm) output, so ||ref||_2 = 1 up to reference rounding; the budget is effectively 0.01 absolute L2 on the output vector.",
+            "Verification harness must reconstruct inputs from make_inputs_numpy() exactly (seed 830228) \u2014 artifact contains no test code."
+          ],
+          "summary": "Refined case_p description: no new artifact context needed; added probe-design guidance separating the alpha-error channel (c1) from per-component cancellation (c2), and clarified that empirical runtime values decide both claims since both error channels are near the 1% tolerance.",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "The only in-scope input is the fixed seeded workload, and the two dominant error channels (fp32 alpha error, c1; per-component fp32 cancellation, c2) are already recorded with scope evidence. The remaining risk items (accumulation rounding, norm underflow) feed the same alpha/residual channels already covered, and the contract explicitly acknowledges fp32 sequential arithmetic, so no additional distinct testable claim is warranted before runtime evidence arrives.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T01:06:11Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-09-24T01:06:11Z",
+        "decision": "no_new_claims",
+        "reason": "The only in-scope input is the fixed seeded workload, and the two dominant error channels (fp32 alpha error, c1; per-component fp32 cancellation, c2) are already recorded with scope evidence. The remaining risk items (accumulation rounding, norm underflow) feed the same alpha/residual channels already covered, and the contract explicitly acknowledges fp32 sequential arithmetic, so no additional distinct testable claim is warranted before runtime evidence arrives.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 10,
+        "tool_event_id": "t11",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import numpy as np, json\n\nrng = np.random.Generator(np.random.PCG64(830228))\nu = rng.normal(size=32).astype(np.float32)\nb = (1.125 * u.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n\nu64 = u.astype(np.float64); b64 = b.astype(np.float64)\nalpha64 = np.dot(u64, b64) / np.dot(u64, u64)\n\n# emulate kernel's sequential fp32 accumulation (separately rounded products/sums)\nnum = np.float32(0.0); den = np.float32(0.0)\nfor j in range(32):\n    num = np.float32(num + np.float32(np.float32(u[j]) * np.float32(b[j])))\n    den = np.float32(den + np.float32(np.float32(u[j]) * np.float32(u[j])))\nalpha32 = np.float32(np.divide(num, den, dtype=np.float32))\n\nd_alpha = float(alpha64) - float(alpha32)\n# reference: float64 residual (no cancellation issue in fp64 here, but recenter via fp32-quantized exact subtraction is fine)\nres64 = b64 - alpha64 * u64\nref = res64 / np.linalg.norm(res64)\n\n# isolate alpha channel: float64 residual using fp32 alpha\nres_a = b64 - float(alpha32) * u64\nout_a = res_a / np.linalg.norm(res_a)\nerr_a = np.linalg.norm(out_a - ref) / max(np.linalg.norm(ref), 1e-12)\n\nprint(json.dumps({\n    \"alpha64\": float(alpha64), \"alpha32\": float(alpha32),\n    \"delta_alpha\": d_alpha, \"rel_delta_alpha\": d_alpha / alpha64,\n    \"alpha_channel_rel_l2_error\": float(err_a),\n    \"tolerance\": 0.01,\n    \"alpha_channel_exceeds_tol\": bool(err_a > 0.01),\n    \"median_abs_residual\": float(np.median(np.abs(res64))),\n    \"delta_alpha_u_rms\": float(np.sqrt(np.mean((d_alpha * u64) ** 2))),\n}))",
+        "expected_signal": "relative L2 error of float64-pipeline-with-fp32-alpha vs float64 reference, compared to 0.01 tolerance"
+      },
+      "created_at": "2026-09-24T01:06:27Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "fe15b63ba806a97e219a014de779ed960f8851a2ae14dae9f8e6e481ecacca37"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "00936161dd85abbc81c5fff375c5e8d4b77f350b3a9547f1f2c117f0bc397d94"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "f8a8c37b18951c876160c8f93224d61b0fa0a4987d794e34f1a04c5f04c6e808"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On the fixed seeded workload (u, b from make_inputs_numpy), the fp32-computed coefficient alpha differs from the float64 reference alpha enough that the systematic residual error (alpha_true - alpha_fp32)*u[j] dominates the ~1e-5 true residual, causing the normalized output to exceed the 1% relative L2 bound versus the float64 reference.",
+        "cwd": "/root/numerical_cases/case_p",
+        "duration_s": 0.261642,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "fe15b63ba806a97e219a014de779ed960f8851a2ae14dae9f8e6e481ecacca37"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "00936161dd85abbc81c5fff375c5e8d4b77f350b3a9547f1f2c117f0bc397d94"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "f8a8c37b18951c876160c8f93224d61b0fa0a4987d794e34f1a04c5f04c6e808"
+              }
+            ],
+            "duration_s": 0.261642,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of float64-pipeline-with-fp32-alpha vs float64 reference, compared to 0.01 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "alpha32": 1.1249995231628418,
+              "alpha64": 1.1249999827261048,
+              "alpha_channel_exceeds_tol": true,
+              "alpha_channel_rel_l2_error": 0.058881815171470286,
+              "delta_alpha": 4.5956326300000683e-07,
+              "delta_alpha_u_rms": 4.973481061801919e-07,
+              "median_abs_residual": 7.039293071636754e-06,
+              "rel_delta_alpha": 4.085006844945821e-07,
+              "tolerance": 0.01
+            },
+            "stderr": "",
+            "stdout": "{\"alpha64\": 1.1249999827261048, \"alpha32\": 1.1249995231628418, \"delta_alpha\": 4.5956326300000683e-07, \"rel_delta_alpha\": 4.085006844945821e-07, \"alpha_channel_rel_l2_error\": 0.058881815171470286, \"tolerance\": 0.01, \"alpha_channel_exceeds_tol\": true, \"median_abs_residual\": 7.039293071636754e-06, \"delta_alpha_u_rms\": 4.973481061801919e-07}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "relative L2 error of float64-pipeline-with-fp32-alpha vs float64 reference, compared to 0.01 tolerance",
+        "json_parse_error": null,
+        "json_result": {
+          "alpha32": 1.1249995231628418,
+          "alpha64": 1.1249999827261048,
+          "alpha_channel_exceeds_tol": true,
+          "alpha_channel_rel_l2_error": 0.058881815171470286,
+          "delta_alpha": 4.5956326300000683e-07,
+          "delta_alpha_u_rms": 4.973481061801919e-07,
+          "median_abs_residual": 7.039293071636754e-06,
+          "rel_delta_alpha": 4.085006844945821e-07,
+          "tolerance": 0.01
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"alpha64\": 1.1249999827261048, \"alpha32\": 1.1249995231628418, \"delta_alpha\": 4.5956326300000683e-07, \"rel_delta_alpha\": 4.085006844945821e-07, \"alpha_channel_rel_l2_error\": 0.058881815171470286, \"tolerance\": 0.01, \"alpha_channel_exceeds_tol\": true, \"median_abs_residual\": 7.039293071636754e-06, \"delta_alpha_u_rms\": 4.973481061801919e-07}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import numpy as np, json, torch\n\nrng = np.random.Generator(np.random.PCG64(830228))\nu_np = rng.normal(size=32).astype(np.float32)\nb_np = (1.125 * u_np.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n\n# actual kernel run on GPU\nu = torch.from_numpy(u_np).to(\"cuda\")\nb = torch.from_numpy(b_np).to(\"cuda\")\nimport triton\nfrom triton_kernel_case_p import _projection_kernel  # placeholder; define below\n\n# Instead, exec the artifact kernel source directly\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"case_p_kernel\", \"/root/numerical_cases/case_p/kernel.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nout = mod.run(u, b).cpu().numpy()\n\nu64 = u_np.astype(np.float64); b64 = b_np.astype(np.float64)\nalpha64 = np.dot(u64, b64) / np.dot(u64, u64)\nres64 = b64 - alpha64 * u64\nref = res64 / np.linalg.norm(res64)\n\n# isolate cancellation channel: fp32 residual computation using fp64 alpha\nalpha64f = np.float64(alpha64)\nres32 = np.zeros(32, dtype=np.float32)\nfor j in range(32):\n    coef32 = np.float32(alpha64)  # quantize alpha to fp32 for the multiply\n    res32[j] = np.float32(np.float32(b_np[j]) - np.float32(np.float32(u_np[j]) * coef32))\nres32_64 = res32.astype(np.float64)\nout_c = res32_64 / np.linalg.norm(res32_64)\n\nkernel_err = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12)\ncancel_err = np.linalg.norm(out_c - ref) / max(np.linalg.norm(ref), 1e-12)\n\nprint(json.dumps({\n    \"kernel_output_finite\": bool(np.all(np.isfinite(out))),\n    \"kernel_output_shape\": list(out.shape),\n    \"kernel_rel_l2_error\": float(kernel_err),\n    \"cancellation_channel_rel_l2_error\": float(cancel_err),\n    \"tolerance\": 0.01,\n    \"kernel_exceeds_tol\": bool(kernel_err > 0.01),\n    \"cancellation_exceeds_tol\": bool(cancel_err > 0.01),\n    \"median_abs_residual_true\": float(np.median(np.abs(res64))),\n}))",
+        "expected_signal": "actual kernel output relative L2 error vs float64 reference, and isolated fp32 residual-cancellation error, compared to 0.01"
+      },
+      "created_at": "2026-09-24T01:06:31Z",
+      "id": "t13",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t13_probe.py",
+            "sha256": "12840858efdb0ce941ba1565373d1ace278ac3aef2585293249bfbce8345018b"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t13_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t13_stderr.txt",
+            "sha256": "7406370e74050b9f73f11311e49fa7b57e2ad377f1cf4828708da0fd274918fc"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "Catastrophic cancellation in the fp32 computation of residual[j] = b[j] - u[j]*coefficient (operands ~O(1), result ~O(1e-5)) degrades individual residual components enough that the stored normalized vector deviates from the float64 reference direction by more than 1% relative L2 on the fixed workload.",
+        "cwd": "/root/numerical_cases/case_p",
+        "duration_s": 4.729736,
+        "event_id": "t13",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "12840858efdb0ce941ba1565373d1ace278ac3aef2585293249bfbce8345018b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "7406370e74050b9f73f11311e49fa7b57e2ad377f1cf4828708da0fd274918fc"
+              }
+            ],
+            "duration_s": 4.729736,
+            "exit_code": 1,
+            "expected_signal": "actual kernel output relative L2 error vs float64 reference, and isolated fp32 residual-cancellation error, compared to 0.01",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/oz_low32_r2/numerical_challenges/case_p/debate/probes/t13_probe.py\", line 11, in <module>\n    from triton_kernel_case_p import _projection_kernel  # placeholder; define below\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nModuleNotFoundError: No module named 'triton_kernel_case_p'\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t13"
+        },
+        "exit_code": 1,
+        "expected_signal": "actual kernel output relative L2 error vs float64 reference, and isolated fp32 residual-cancellation error, compared to 0.01",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/oz_low32_r2/numerical_challenges/case_p/debate/probes/t13_probe.py\", line 11, in <module>\n    from triton_kernel_case_p import _projection_kernel  # placeholder; define below\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nModuleNotFoundError: No module named 'triton_kernel_case_p'\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "alpha32": 1.1249995231628418,
+          "alpha64": 1.1249999827261048,
+          "alpha_channel_exceeds_tol": true,
+          "alpha_channel_rel_l2_error": 0.058881815171470286,
+          "delta_alpha": 4.5956326300000683e-07,
+          "delta_alpha_u_rms": 4.973481061801919e-07,
+          "median_abs_residual": 7.039293071636754e-06,
+          "rel_delta_alpha": 4.085006844945821e-07,
+          "tolerance": 0.01
+        },
+        "event_id": "t12",
+        "status": "confirmed",
+        "summary": "On the fixed seeded workload, the emulated sequential fp32 accumulation gives alpha32=1.124999523 vs float64 alpha=1.124999983 (delta 4.6e-7). The systematic error (delta_alpha)*u_j (RMS 4.97e-7) is ~7% of the median residual magnitude 7.04e-6. Isolating this channel alone (float64 residual using fp32 alpha, normalized) yields relative L2 error 0.0589 vs the float64 reference \u2014 nearly 6x the 0.01 tolerance. This confirms the alpha-error channel dominates the tiny residual and would alone violate the contract bound.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-24T01:06:47Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T01:05:55Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T01:06:47Z",
+              "data": {
+                "alpha32": 1.1249995231628418,
+                "alpha64": 1.1249999827261048,
+                "alpha_channel_exceeds_tol": true,
+                "alpha_channel_rel_l2_error": 0.058881815171470286,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "fe15b63ba806a97e219a014de779ed960f8851a2ae14dae9f8e6e481ecacca37"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "00936161dd85abbc81c5fff375c5e8d4b77f350b3a9547f1f2c117f0bc397d94"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "f8a8c37b18951c876160c8f93224d61b0fa0a4987d794e34f1a04c5f04c6e808"
+                  }
+                ],
+                "delta_alpha": 4.5956326300000683e-07,
+                "delta_alpha_u_rms": 4.973481061801919e-07,
+                "duration_s": 0.261642,
+                "exit_code": 0,
+                "expected_signal": "relative L2 error of float64-pipeline-with-fp32-alpha vs float64 reference, compared to 0.01 tolerance",
+                "json_parse_error": null,
+                "json_result": {
+                  "alpha32": 1.1249995231628418,
+                  "alpha64": 1.1249999827261048,
+                  "alpha_channel_exceeds_tol": true,
+                  "alpha_channel_rel_l2_error": 0.058881815171470286,
+                  "delta_alpha": 4.5956326300000683e-07,
+                  "delta_alpha_u_rms": 4.973481061801919e-07,
+                  "median_abs_residual": 7.039293071636754e-06,
+                  "rel_delta_alpha": 4.085006844945821e-07,
+                  "tolerance": 0.01
+                },
+                "median_abs_residual": 7.039293071636754e-06,
+                "rel_delta_alpha": 4.085006844945821e-07,
+                "stderr": "",
+                "stdout": "{\"alpha64\": 1.1249999827261048, \"alpha32\": 1.1249995231628418, \"delta_alpha\": 4.5956326300000683e-07, \"rel_delta_alpha\": 4.085006844945821e-07, \"alpha_channel_rel_l2_error\": 0.058881815171470286, \"tolerance\": 0.01, \"alpha_channel_exceeds_tol\": true, \"median_abs_residual\": 7.039293071636754e-06, \"delta_alpha_u_rms\": 4.973481061801919e-07}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.01
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the fixed seeded workload, the emulated sequential fp32 accumulation gives alpha32=1.124999523 vs float64 alpha=1.124999983 (delta 4.6e-7). The systematic error (delta_alpha)*u_j (RMS 4.97e-7) is ~7% of the median residual magnitude 7.04e-6. Isolating this channel alone (float64 residual using fp32 alpha, normalized) yields relative L2 error 0.0589 vs the float64 reference \u2014 nearly 6x the 0.01 tolerance. This confirms the alpha-error channel dominates the tiny residual and would alone violate the contract bound.",
+              "supports": "confirmed",
+              "tool_event_id": "t12"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "fp32 alpha deviates from the float64 alpha by ~1e-7 relative; this injects a systematic error (\u0394\u03b1)\u00b7u_j of magnitude up to ~1e-6 into each component of a residual that is only ~1e-5, i.e., a relative perturbation of several percent, plausibly exceeding the 1% relative L2 budget after normalization.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract requires ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs workload, with b = 1.125*u + 1e-5*noise (kernel.py make_inputs_numpy), so the residual signal is ~1e-5 while alpha*u is ~1."
+            }
+          ],
+          "scope_rationale": "problem.txt restricts scope to exactly the vectors returned by make_inputs() (kernel.py make_inputs_numpy, seed 830228, b = 1.125*u + 1e-5*noise) and requires the output to be within 1% relative L2 of a float64 reference; a workload-induced alpha/residual error exceeding that bound is a direct violation of the stated tolerance on the one in-scope input.",
+          "statement": "On the fixed seeded workload (u, b from make_inputs_numpy), the fp32-computed coefficient alpha differs from the float64 reference alpha enough that the systematic residual error (alpha_true - alpha_fp32)*u[j] dominates the ~1e-5 true residual, causing the normalized output to exceed the 1% relative L2 bound versus the float64 reference.",
+          "status": "confirmed",
+          "updated_at": "2026-09-24T01:06:47Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:06:47Z",
+          "data": {
+            "alpha32": 1.1249995231628418,
+            "alpha64": 1.1249999827261048,
+            "alpha_channel_exceeds_tol": true,
+            "alpha_channel_rel_l2_error": 0.058881815171470286,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "fe15b63ba806a97e219a014de779ed960f8851a2ae14dae9f8e6e481ecacca37"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "00936161dd85abbc81c5fff375c5e8d4b77f350b3a9547f1f2c117f0bc397d94"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "f8a8c37b18951c876160c8f93224d61b0fa0a4987d794e34f1a04c5f04c6e808"
+              }
+            ],
+            "delta_alpha": 4.5956326300000683e-07,
+            "delta_alpha_u_rms": 4.973481061801919e-07,
+            "duration_s": 0.261642,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of float64-pipeline-with-fp32-alpha vs float64 reference, compared to 0.01 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "alpha32": 1.1249995231628418,
+              "alpha64": 1.1249999827261048,
+              "alpha_channel_exceeds_tol": true,
+              "alpha_channel_rel_l2_error": 0.058881815171470286,
+              "delta_alpha": 4.5956326300000683e-07,
+              "delta_alpha_u_rms": 4.973481061801919e-07,
+              "median_abs_residual": 7.039293071636754e-06,
+              "rel_delta_alpha": 4.085006844945821e-07,
+              "tolerance": 0.01
+            },
+            "median_abs_residual": 7.039293071636754e-06,
+            "rel_delta_alpha": 4.085006844945821e-07,
+            "stderr": "",
+            "stdout": "{\"alpha64\": 1.1249999827261048, \"alpha32\": 1.1249995231628418, \"delta_alpha\": 4.5956326300000683e-07, \"rel_delta_alpha\": 4.085006844945821e-07, \"alpha_channel_rel_l2_error\": 0.058881815171470286, \"tolerance\": 0.01, \"alpha_channel_exceeds_tol\": true, \"median_abs_residual\": 7.039293071636754e-06, \"delta_alpha_u_rms\": 4.973481061801919e-07}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.01
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the fixed seeded workload, the emulated sequential fp32 accumulation gives alpha32=1.124999523 vs float64 alpha=1.124999983 (delta 4.6e-7). The systematic error (delta_alpha)*u_j (RMS 4.97e-7) is ~7% of the median residual magnitude 7.04e-6. Isolating this channel alone (float64 residual using fp32 alpha, normalized) yields relative L2 error 0.0589 vs the float64 reference \u2014 nearly 6x the 0.01 tolerance. This confirms the alpha-error channel dominates the tiny residual and would alone violate the contract bound.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import numpy as np, json, importlib.util\n\nrng = np.random.Generator(np.random.PCG64(830228))\nu_np = rng.normal(size=32).astype(np.float32)\nb_np = (1.125 * u_np.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n\nimport torch\nu = torch.from_numpy(u_np).to(\"cuda\")\nb = torch.from_numpy(b_np).to(\"cuda\")\nspec = importlib.util.spec_from_file_location(\"case_p_kernel\", \"/root/numerical_cases/case_p/kernel.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nout = mod.run(u, b).cpu().numpy()\n\nu64 = u_np.astype(np.float64); b64 = b_np.astype(np.float64)\nalpha64 = np.dot(u64, b64) / np.dot(u64, u64)\nres64 = b64 - alpha64 * u64\nref = res64 / np.linalg.norm(res64)\n\n# isolate cancellation channel: fp32 residual computation using fp64 alpha quantized to fp32\ncoef32 = np.float32(alpha64)\nres32 = (b_np - (u_np * coef32).astype(np.float32)).astype(np.float32)\nout_c = res32.astype(np.float64) / np.linalg.norm(res32.astype(np.float64))\n\nkernel_err = float(np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12))\ncancel_err = float(np.linalg.norm(out_c - ref) / max(np.linalg.norm(ref), 1e-12))\nprint(json.dumps({\n    \"kernel_output_finite\": bool(np.all(np.isfinite(out))),\n    \"kernel_output_shape\": list(out.shape),\n    \"kernel_rel_l2_error\": kernel_err,\n    \"cancellation_channel_rel_l2_error\": cancel_err,\n    \"tolerance\": 0.01,\n    \"kernel_exceeds_tol\": bool(kernel_err > 0.01),\n    \"cancellation_exceeds_tol\": bool(cancel_err > 0.01),\n    \"median_abs_residual_true\": float(np.median(np.abs(res64))),\n}))",
+        "expected_signal": "actual kernel output relative L2 error vs float64 reference, and isolated fp32 residual-cancellation error, compared to 0.01"
+      },
+      "created_at": "2026-09-24T01:06:52Z",
+      "id": "t15",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t15_probe.py",
+            "sha256": "c754e50d0988210c4a6864dadd7cd6ee914ce7bb7c23a47c2c0b127ebfeb960f"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t15_stdout.txt",
+            "sha256": "f1198412719ab73d945bdbf4ec6f85aee6987f3801dafca7232fadb7a376b773"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t15_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t15_json_result.json",
+            "sha256": "aa4dfdc03c8808c921afcf77ad78dd8fa7cbcc7422e2dba815482e8ca23d0b0b"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "Catastrophic cancellation in the fp32 computation of residual[j] = b[j] - u[j]*coefficient (operands ~O(1), result ~O(1e-5)) degrades individual residual components enough that the stored normalized vector deviates from the float64 reference direction by more than 1% relative L2 on the fixed workload.",
+        "cwd": "/root/numerical_cases/case_p",
+        "duration_s": 5.661312,
+        "event_id": "t15",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t15_probe.py",
+                "sha256": "c754e50d0988210c4a6864dadd7cd6ee914ce7bb7c23a47c2c0b127ebfeb960f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t15_stdout.txt",
+                "sha256": "f1198412719ab73d945bdbf4ec6f85aee6987f3801dafca7232fadb7a376b773"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t15_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t15_json_result.json",
+                "sha256": "aa4dfdc03c8808c921afcf77ad78dd8fa7cbcc7422e2dba815482e8ca23d0b0b"
+              }
+            ],
+            "duration_s": 5.661312,
+            "exit_code": 0,
+            "expected_signal": "actual kernel output relative L2 error vs float64 reference, and isolated fp32 residual-cancellation error, compared to 0.01",
+            "json_parse_error": null,
+            "json_result": {
+              "cancellation_channel_rel_l2_error": 0.004094861719832044,
+              "cancellation_exceeds_tol": false,
+              "kernel_exceeds_tol": true,
+              "kernel_output_finite": true,
+              "kernel_output_shape": [
+                32
+              ],
+              "kernel_rel_l2_error": 0.06045526452776961,
+              "median_abs_residual_true": 7.039293071636754e-06,
+              "tolerance": 0.01
+            },
+            "stderr": "",
+            "stdout": "{\"kernel_output_finite\": true, \"kernel_output_shape\": [32], \"kernel_rel_l2_error\": 0.06045526452776961, \"cancellation_channel_rel_l2_error\": 0.004094861719832044, \"tolerance\": 0.01, \"kernel_exceeds_tol\": true, \"cancellation_exceeds_tol\": false, \"median_abs_residual_true\": 7.039293071636754e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t15"
+        },
+        "exit_code": 0,
+        "expected_signal": "actual kernel output relative L2 error vs float64 reference, and isolated fp32 residual-cancellation error, compared to 0.01",
+        "json_parse_error": null,
+        "json_result": {
+          "cancellation_channel_rel_l2_error": 0.004094861719832044,
+          "cancellation_exceeds_tol": false,
+          "kernel_exceeds_tol": true,
+          "kernel_output_finite": true,
+          "kernel_output_shape": [
+            32
+          ],
+          "kernel_rel_l2_error": 0.06045526452776961,
+          "median_abs_residual_true": 7.039293071636754e-06,
+          "tolerance": 0.01
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"kernel_output_finite\": true, \"kernel_output_shape\": [32], \"kernel_rel_l2_error\": 0.06045526452776961, \"cancellation_channel_rel_l2_error\": 0.004094861719832044, \"tolerance\": 0.01, \"kernel_exceeds_tol\": true, \"cancellation_exceeds_tol\": false, \"median_abs_residual_true\": 7.039293071636754e-06}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "cancellation_channel_rel_l2_error": 0.004094861719832044,
+          "cancellation_exceeds_tol": false,
+          "kernel_exceeds_tol": true,
+          "kernel_output_finite": true,
+          "kernel_rel_l2_error": 0.06045526452776961,
+          "median_abs_residual_true": 7.039293071636754e-06,
+          "tolerance": 0.01
+        },
+        "event_id": "t15",
+        "status": "rebutted",
+        "summary": "The fixed workload kernel output is finite (shape (32,)) but its relative L2 error vs the float64 reference is 0.0605 \u2014 6x the 0.01 tolerance \u2014 consistent with the alpha-error channel (c1). However, the isolated per-component cancellation channel (fp32 residual b[j] - fp32(u[j]*alpha64) with fp64 alpha, then normalized) yields only 0.0041 relative L2 error, well below the 0.01 bound. Cancellation therefore does NOT by itself degrade the stored normalized vector beyond tolerance; the contract violation comes from the fp32 alpha error, not the subtraction cancellation. c2 is rebutted.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-24T01:07:00Z",
+      "id": "t16",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T01:05:55Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T01:07:00Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t15_probe.py",
+                    "sha256": "c754e50d0988210c4a6864dadd7cd6ee914ce7bb7c23a47c2c0b127ebfeb960f"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t15_stdout.txt",
+                    "sha256": "f1198412719ab73d945bdbf4ec6f85aee6987f3801dafca7232fadb7a376b773"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t15_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t15_json_result.json",
+                    "sha256": "aa4dfdc03c8808c921afcf77ad78dd8fa7cbcc7422e2dba815482e8ca23d0b0b"
+                  }
+                ],
+                "cancellation_channel_rel_l2_error": 0.004094861719832044,
+                "cancellation_exceeds_tol": false,
+                "duration_s": 5.661312,
+                "exit_code": 0,
+                "expected_signal": "actual kernel output relative L2 error vs float64 reference, and isolated fp32 residual-cancellation error, compared to 0.01",
+                "json_parse_error": null,
+                "json_result": {
+                  "cancellation_channel_rel_l2_error": 0.004094861719832044,
+                  "cancellation_exceeds_tol": false,
+                  "kernel_exceeds_tol": true,
+                  "kernel_output_finite": true,
+                  "kernel_output_shape": [
+                    32
+                  ],
+                  "kernel_rel_l2_error": 0.06045526452776961,
+                  "median_abs_residual_true": 7.039293071636754e-06,
+                  "tolerance": 0.01
+                },
+                "kernel_exceeds_tol": true,
+                "kernel_output_finite": true,
+                "kernel_rel_l2_error": 0.06045526452776961,
+                "median_abs_residual_true": 7.039293071636754e-06,
+                "stderr": "",
+                "stdout": "{\"kernel_output_finite\": true, \"kernel_output_shape\": [32], \"kernel_rel_l2_error\": 0.06045526452776961, \"cancellation_channel_rel_l2_error\": 0.004094861719832044, \"tolerance\": 0.01, \"kernel_exceeds_tol\": true, \"cancellation_exceeds_tol\": false, \"median_abs_residual_true\": 7.039293071636754e-06}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.01
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "The fixed workload kernel output is finite (shape (32,)) but its relative L2 error vs the float64 reference is 0.0605 \u2014 6x the 0.01 tolerance \u2014 consistent with the alpha-error channel (c1). However, the isolated per-component cancellation channel (fp32 residual b[j] - fp32(u[j]*alpha64) with fp64 alpha, then normalized) yields only 0.0041 relative L2 error, well below the 0.01 bound. Cancellation therefore does NOT by itself degrade the stored normalized vector beyond tolerance; the contract violation comes from the fp32 alpha error, not the subtraction cancellation. c2 is rebutted.",
+              "supports": "rebutted",
+              "tool_event_id": "t15"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "The residual components are ~1e-5; fp32 b[j] - u[j]*coefficient rounds operands of ~1 to a ~1e-7 grid, losing ~5 significant digits of the residual. Elementwise relative residual error can reach several percent of ||residual||, and normalization preserves relative error since output = residual/norm.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "problem.txt admits only this workload and requires output within 1% relative L2 of the float64 reference; it states the residual is nonzero on this workload, so a wrong direction due to cancellation would be an in-scope failure."
+            }
+          ],
+          "scope_rationale": "The contract's only in-scope input is the fixed seeded workload where b \u2248 1.125*u + 1e-5*noise, so per-component cancellation in residual = b - alpha*u is inherent to the required input; the stated 1% relative L2 tolerance on this exact input is the requirement this claim could violate.",
+          "statement": "Catastrophic cancellation in the fp32 computation of residual[j] = b[j] - u[j]*coefficient (operands ~O(1), result ~O(1e-5)) degrades individual residual components enough that the stored normalized vector deviates from the float64 reference direction by more than 1% relative L2 on the fixed workload.",
+          "status": "rebutted",
+          "updated_at": "2026-09-24T01:07:00Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:07:00Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t15_probe.py",
+                "sha256": "c754e50d0988210c4a6864dadd7cd6ee914ce7bb7c23a47c2c0b127ebfeb960f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t15_stdout.txt",
+                "sha256": "f1198412719ab73d945bdbf4ec6f85aee6987f3801dafca7232fadb7a376b773"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t15_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t15_json_result.json",
+                "sha256": "aa4dfdc03c8808c921afcf77ad78dd8fa7cbcc7422e2dba815482e8ca23d0b0b"
+              }
+            ],
+            "cancellation_channel_rel_l2_error": 0.004094861719832044,
+            "cancellation_exceeds_tol": false,
+            "duration_s": 5.661312,
+            "exit_code": 0,
+            "expected_signal": "actual kernel output relative L2 error vs float64 reference, and isolated fp32 residual-cancellation error, compared to 0.01",
+            "json_parse_error": null,
+            "json_result": {
+              "cancellation_channel_rel_l2_error": 0.004094861719832044,
+              "cancellation_exceeds_tol": false,
+              "kernel_exceeds_tol": true,
+              "kernel_output_finite": true,
+              "kernel_output_shape": [
+                32
+              ],
+              "kernel_rel_l2_error": 0.06045526452776961,
+              "median_abs_residual_true": 7.039293071636754e-06,
+              "tolerance": 0.01
+            },
+            "kernel_exceeds_tol": true,
+            "kernel_output_finite": true,
+            "kernel_rel_l2_error": 0.06045526452776961,
+            "median_abs_residual_true": 7.039293071636754e-06,
+            "stderr": "",
+            "stdout": "{\"kernel_output_finite\": true, \"kernel_output_shape\": [32], \"kernel_rel_l2_error\": 0.06045526452776961, \"cancellation_channel_rel_l2_error\": 0.004094861719832044, \"tolerance\": 0.01, \"kernel_exceeds_tol\": true, \"cancellation_exceeds_tol\": false, \"median_abs_residual_true\": 7.039293071636754e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.01
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "The fixed workload kernel output is finite (shape (32,)) but its relative L2 error vs the float64 reference is 0.0605 \u2014 6x the 0.01 tolerance \u2014 consistent with the alpha-error channel (c1). However, the isolated per-component cancellation channel (fp32 residual b[j] - fp32(u[j]*alpha64) with fp64 alpha, then normalized) yields only 0.0041 relative L2 error, well below the 0.01 bound. Cancellation therefore does NOT by itself degrade the stored normalized vector beyond tolerance; the contract violation comes from the fp32 alpha error, not the subtraction cancellation. c2 is rebutted.",
+          "supports": "rebutted",
+          "tool_event_id": "t15"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: the only in-scope input is the fixed seeded workload, and runtime probes have settled both claims. The actual kernel output on that workload has relative L2 error 0.0605 vs the float64 reference, exceeding the contract's 0.01 bound by ~6x, fully attributable to the fp32 alpha-error channel (c1, confirmed with scope evidence from problem.txt). The cancellation channel (c2) was isolated and measured at only 0.0041, below tolerance, and is rebutted. No further material, testable, in-scope claim remains uncovered.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T01:07:05Z",
+      "id": "t17",
+      "output": {
+        "created_at": "2026-09-24T01:07:05Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the only in-scope input is the fixed seeded workload, and runtime probes have settled both claims. The actual kernel output on that workload has relative L2 error 0.0605 vs the float64 reference, exceeding the contract's 0.01 bound by ~6x, fully attributable to the fp32 alpha-error channel (c1, confirmed with scope evidence from problem.txt). The cancellation channel (c2) was isolated and measured at only 0.0041, below tolerance, and is rebutted. No further material, testable, in-scope claim remains uncovered.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 16,
+        "tool_event_id": "t17",
+        "turn": 10
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract (problem.txt, the operative artifact since test_code is empty) admits only the fixed seeded workload from make_inputs() and requires ||output-ref||_2 / max(||ref||_2,1e-12) <= 0.01 with a float64 reference. Runtime probes on exactly that workload (t15) show the actual kernel output is finite, shape (32,), but has relative L2 error 0.0605 \u2014 ~6x the 0.01 tolerance. Channel isolation (t12) confirms the cause: the fp32-sequential-accumulation alpha (1.12499952) deviates from the float64 alpha (1.12499998) by 4.6e-7, injecting a systematic (\u0394\u03b1)\u00b7u error of RMS 4.97e-7 into a residual of only ~7e-6, which alone yields 5.9% relative L2 error. The alternative cancellation channel (c2) was isolated and measured at only 0.0041, below tolerance, and is rebutted \u2014 so the violation is not a metric artifact. This is a genuine failure of the explicitly required accuracy bound on the one in-scope input, not a permitted implementation-precision deviation: the contract acknowledges fp32 arithmetic but still mandates the 1% bound, which the kernel exceeds.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-24T01:07:14Z",
+      "id": "t18",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-24T01:07:14Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract (problem.txt, the operative artifact since test_code is empty) admits only the fixed seeded workload from make_inputs() and requires ||output-ref||_2 / max(||ref||_2,1e-12) <= 0.01 with a float64 reference. Runtime probes on exactly that workload (t15) show the actual kernel output is finite, shape (32,), but has relative L2 error 0.0605 \u2014 ~6x the 0.01 tolerance. Channel isolation (t12) confirms the cause: the fp32-sequential-accumulation alpha (1.12499952) deviates from the float64 alpha (1.12499998) by 4.6e-7, injecting a systematic (\u0394\u03b1)\u00b7u error of RMS 4.97e-7 into a residual of only ~7e-6, which alone yields 5.9% relative L2 error. The alternative cancellation channel (c2) was isolated and measured at only 0.0041, below tolerance, and is rebutted \u2014 so the violation is not a metric artifact. This is a genuine failure of the explicitly required accuracy bound on the one in-scope input, not a permitted implementation-precision deviation: the contract acknowledges fp32 arithmetic but still mandates the 1% bound, which the kernel exceeds.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-24T01:07:14Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The contract (problem.txt, the operative artifact since test_code is empty) admits only the fixed seeded workload from make_inputs() and requires ||output-ref||_2 / max(||ref||_2,1e-12) <= 0.01 with a float64 reference. Runtime probes on exactly that workload (t15) show the actual kernel output is finite, shape (32,), but has relative L2 error 0.0605 \u2014 ~6x the 0.01 tolerance. Channel isolation (t12) confirms the cause: the fp32-sequential-accumulation alpha (1.12499952) deviates from the float64 alpha (1.12499998) by 4.6e-7, injecting a systematic (\u0394\u03b1)\u00b7u error of RMS 4.97e-7 into a residual of only ~7e-6, which alone yields 5.9% relative L2 error. The alternative cancellation channel (c2) was isolated and measured at only 0.0041, below tolerance, and is rebutted \u2014 so the violation is not a metric artifact. This is a genuine failure of the explicitly required accuracy bound on the one in-scope input, not a permitted implementation-precision deviation: the contract acknowledges fp32 arithmetic but still mandates the 1% bound, which the kernel exceeds.",
+    "verdict": "reject"
+  }
+}

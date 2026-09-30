@@ -192,7 +192,7 @@ def test_every_eval_runner_writes_a_trace() -> None:
     """
     from pathlib import Path
 
-    eval_dir = Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval"
+    eval_dir = Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval_scripts"
     runners = [
         "baseline2_single_llm.py",
         "run_agentic_modal.py",
@@ -222,7 +222,7 @@ def test_every_modal_runner_sets_max_tokens() -> None:
     """
     from pathlib import Path
 
-    eval_dir = Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval"
+    eval_dir = Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval_scripts"
     for name in ("run_agentic_modal.py",):
         source = (eval_dir / name).read_text()
         assert '"--max-tokens"' in source, (
@@ -232,12 +232,12 @@ def test_every_modal_runner_sets_max_tokens() -> None:
 
 
 def _eval_models():
-    """Import benchmark_fn_fp/eval/models.py without importing modal."""
+    """Import benchmark_fn_fp/eval_scripts/models.py without importing modal."""
     import importlib.util
     import sys
     from pathlib import Path
 
-    path = Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval" / "models.py"
+    path = Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval_scripts" / "models.py"
     spec = importlib.util.spec_from_file_location("_eval_models", path)
     module = importlib.util.module_from_spec(spec)
     # Registered before exec: @dataclass looks its class's module up in
@@ -248,18 +248,13 @@ def _eval_models():
     return module
 
 
-def test_model_profiles_cannot_collide_on_a_trace_directory() -> None:
-    """Two models sharing a trace tree silently overwrite each other.
-
-    Each model writes to its own top-level tree (models.traces_dir_for), so
-    within a tree an arm is just `solo` or `debate`. Two models naming the same
-    tree means a run on one lands on top of the other's traces -- and traces are
-    the only record a scoreboard can be rebuilt from. $88 of Opus runs sit in
-    traces_opus5/.
-    """
+def test_glm_profiles_share_one_tree_and_opus_stays_separate() -> None:
+    """GLM API providers share a family tree; exclusive trials prevent overwrite."""
     models = _eval_models()
     dirs = [p.traces_dir for p in models.PROFILES.values()]
-    assert len(dirs) == len(set(dirs)), f"two models share a trace tree: {dirs}"
+    assert models.PROFILES["z-ai/glm-5.3-flash"].traces_dir == "traces_glm"
+    assert models.PROFILES["accounts/fireworks/models/glm-5p3"].traces_dir == "traces_glm"
+    assert models.PROFILES["claude-opus-5"].traces_dir != "traces_glm"
     assert all(d.startswith("traces_") for d in dirs), (
         "trace trees must be named traces_*; the summarizer and auditor glob for it"
     )
@@ -303,7 +298,7 @@ def test_runner_takes_max_tokens_from_the_profile() -> None:
     """
     from pathlib import Path
 
-    source = (Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval"
+    source = (Path(__file__).resolve().parent.parent / "benchmark_fn_fp" / "eval_scripts"
               / "run_agentic_modal.py").read_text()
     assert "max_tokens: int = 0" in source, (
         "run_agentic_modal hardcodes a max_tokens default again; it must come "

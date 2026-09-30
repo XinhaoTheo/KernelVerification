@@ -1,0 +1,1549 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_i",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _layer_norm_kernel(X, Output, N: tl.constexpr):\n    total = tl.full((), 0.0, tl.float32)\n    squares = tl.full((), 0.0, tl.float32)\n    for i in range(0, N):\n        value = tl.load(X + i).to(tl.float32)\n        total = total + value\n        squares = squares + value * value\n    mean = total / N\n    variance = tl.maximum(squares / N - mean * mean, 0.0)\n    denominator = tl.sqrt(variance + 0.00001)\n    offsets = tl.arange(0, N)\n    values = tl.load(X + offsets).to(tl.float32)\n    tl.store(Output + offsets, (values - mean) / denominator)\n\n\ndef run(x):\n    output = torch.empty((128,), device=x.device, dtype=torch.float32)\n    _layer_norm_kernel[(1,)](x, output, N=128, num_warps=4,\n                            enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(782515))\n    x = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)\n    return (x,)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "passed": null,
+    "problem_text": "Implement LayerNorm without an affine transform for this fixed workload.\n\nThe only input in scope is the float32 vector x returned by make_inputs() in\nkernel.py. Its shape is (128,), and its complete contents and element order are\nspecified by that public deterministic generator.\n\nThe reference uses the original float32 input values, evaluated in float64:\n  mean = sum_i x[i] / 128\n  variance = sum_i (x[i] - mean)**2 / 128\n  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)\nUse population variance, with no degrees-of-freedom correction.\n\nThe output must be one finite vector with shape (128,). Its relative L2 error is\n  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).\nThe numerical contract requires this error to be <= 0.02.\n\nDecide whether this implementation satisfies that contract for this fixed\nworkload. Arbitrary alternative tensors are outside this question's scope.\n",
+    "rounds": null,
+    "session_dir": "/root/numerical_cases/case_i",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T00:15:18Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:16:09Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "ae7d035cf744d10f03a9294e6cfdff781963e0e5c04b8f5321afa3eec85d7293"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "4fa15388f09bbf84a435cb30a209c945df856427b3352a29ce2d1d733a9b340e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "35859d21dd9e364679728bfbf8047606c66eb5d1a18995b23fd3e813457567e5"
+              }
+            ],
+            "duration_s": 4.924843,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of the actual kernel output vs float64 reference on the seeded vector; passes/fails 0.02 tolerance",
+            "float32_single_pass_variance_raw": 0.016357421875,
+            "float64_denominator": 0.12790424781228815,
+            "float64_variance": 0.016349496608427216,
+            "json_parse_error": null,
+            "json_result": {
+              "float32_single_pass_variance_raw": 0.016357421875,
+              "float64_denominator": 0.12790424781228815,
+              "float64_variance": 0.016349496608427216,
+              "kernel_output_max_abs": 2.9560980796813965,
+              "out_finite": true,
+              "passes": true,
+              "rel_l2_error": 0.00024261613799325,
+              "tolerance": 0.02,
+              "variance_rel_error": 0.000484740708695494
+            },
+            "kernel_output_max_abs": 2.9560980796813965,
+            "out_finite": true,
+            "passes": true,
+            "rel_l2_error": 0.00024261613799325,
+            "stderr": "",
+            "stdout": "{\"rel_l2_error\": 0.00024261613799325, \"tolerance\": 0.02, \"passes\": true, \"out_finite\": true, \"float64_variance\": 0.016349496608427216, \"float32_single_pass_variance_raw\": 0.016357421875, \"variance_rel_error\": 0.000484740708695494, \"float64_denominator\": 0.12790424781228815, \"kernel_output_max_abs\": 2.9560980796813965}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.02,
+            "variance_rel_error": 0.000484740708695494
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Actual kernel run on the seeded (128,) input gives relative L2 error 2.43e-4 against the float64 two-pass reference, far below the 0.02 tolerance. The float32 single-pass variance is 0.016357 vs float64 0.016349 (0.05% relative error), so cancellation does not breach the contract on this workload. Claim c1 (error exceeds 0.02) is contradicted.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "With x\u224864\u00b10.125, squares/N\u22484096 while variance\u22480.0156, so ~5 digits of the float32 result cancel; the absolute rounding error in squares/N (~4096*2^-24*N-sum drift, order 1e-2 to 1e-1 relative to variance) can shift the denominator enough to exceed the 0.02 relative L2 bound. Note denominator = sqrt(variance+1e-5)\u22480.125, so a 10% variance error gives ~5% denominator error \u2014 possibly over tolerance; needs numeric evidence.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Reference uses float64 two-pass centered population variance; kernel's float32 single-pass E[x^2]-mean^2 form on the seeded x ~ 64.0 \u00b1 0.125 vector may violate the <= 0.02 relative L2 requirement for this fixed workload."
+        }
+      ],
+      "scope_rationale": "The contract fixes the input to make_inputs' seeded vector and requires relative L2 error <= 0.02 against a float64 two-pass reference; the kernel's float32 single-pass variance on this exact vector is the in-scope computation.",
+      "statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02.",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T00:16:09Z"
+    },
+    {
+      "created_at": "2026-09-24T00:15:18Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:16:09Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "f25f0196de5be6bb8f0502d0445b67c695c8debe56982bea6a5d1acf3f0eca00"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "ae6a8174f772156bc19df58846d7061f15994734c44b8cc989cfba421e0156d6"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "1210fdd96b5ed3b24bcc942b31b01f3241b9e40e9932138e8d020e74b20626b9"
+              }
+            ],
+            "clamped_to_zero_effect": false,
+            "duration_s": 4.923401,
+            "exit_code": 0,
+            "expected_signal": "sign of the float32 single-pass variance on the seeded vector and whether kernel output magnitude explodes (clamp triggered)",
+            "float32_single_pass_variance_raw": 0.016357421875,
+            "float64_variance": 0.016349496608427216,
+            "json_parse_error": null,
+            "json_result": {
+              "clamped_to_zero_effect": false,
+              "float32_single_pass_variance_raw": 0.016357421875,
+              "float64_variance": 0.016349496608427216,
+              "kernel_output_max_abs": 2.9560980796813965,
+              "out_finite": true,
+              "output_to_reference_max_ratio": 0.9997628734413094,
+              "raw_negative": false,
+              "reference_output_max_abs": 2.9567992153040605
+            },
+            "kernel_output_max_abs": 2.9560980796813965,
+            "out_finite": true,
+            "output_to_reference_max_ratio": 0.9997628734413094,
+            "raw_negative": false,
+            "reference_output_max_abs": 2.9567992153040605,
+            "stderr": "",
+            "stdout": "{\"float32_single_pass_variance_raw\": 0.016357421875, \"raw_negative\": false, \"clamped_to_zero_effect\": false, \"float64_variance\": 0.016349496608427216, \"kernel_output_max_abs\": 2.9560980796813965, \"reference_output_max_abs\": 2.9567992153040605, \"output_to_reference_max_ratio\": 0.9997628734413094, \"out_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "The float32 single-pass variance on the seeded vector is +0.016357 (not negative), so tl.maximum does not clamp it to zero. Output max magnitude is 2.956, matching the reference max 2.957 (ratio 0.9998) and output is finite \u2014 no explosion, contract satisfied. Claim c2 is contradicted on this workload.",
+          "supports": "rebutted",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "The clamp exists in the code precisely because cancellation can go negative; if triggered on this fixed input the output magnitudes grow ~40x, far beyond tolerance.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Output must be one finite (128,) vector with relative L2 error <= 0.02 for the seeded workload; a clamped-to-zero variance yields denominator 0.00316 and outputs ~\u00b140, massively violating it."
+        }
+      ],
+      "scope_rationale": "Same fixed workload; the contract's tolerance would be grossly violated if cancellation drives the single-pass variance negative on this input and tl.maximum clamps it to 0.",
+      "statement": "If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seeded vector, tl.maximum clamps it to 0, giving denominator sqrt(1e-5)\u22480.00316 and outputs of magnitude ~20000, breaking finiteness-scale/2% tolerance.",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T00:16:09Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Fixed workload: single float32 vector x of shape (128,) from deterministic make_inputs (PCG64 seed 782515, 64.0 + N(0,0.125)), contents and order fully specified.",
+      "Reference computed in float64 on the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (no ddof correction), reference[i] = (x[i]-mean)/sqrt(variance + 1e-5).",
+      "Output must be one finite float32 vector of shape (128,); relative L2 error metric ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) must be <= 0.02.",
+      "Only this fixed workload is in scope; arbitrary alternative tensors are out of scope."
+    ],
+    "kernel_model": [
+      "Triton kernel with one program (grid (1,)) processes all 128 elements; N=128 is constexpr and matches the fixed shape.",
+      "Stats computed in float32 via a scalar loop: sequential accumulation of total and squares (sum of x and x^2), then mean = total/N and variance = max(squares/N - mean*mean, 0) \u2014 the single-pass E[x^2]-mean^2 form, not the reference's two-pass centered form.",
+      "Second pass reloads the vector via tl.arange(0,N) and stores (values-mean)/sqrt(variance+1e-5) to a float32 output; eps 1e-5 matches the contract.",
+      "run(x) allocates a fresh (128,) float32 output each call and returns it; enable_fp_fusion=False and num_warps=4.",
+      "Input x is assumed contiguous with dtype loadable via tl.load(X+i); a 0-dishonest variant risk is nil since N is fixed to the workload size."
+    ],
+    "open_questions": [],
+    "risk_map": [
+      "Catastrophic-cancellation risk in the single-pass variance: values are ~64 with std ~0.125, so E[x^2] (~4096) minus mean^2 leaves variance ~0.0156 \u2014 a ~5-decimal cancellation in float32; relative error in variance can be large, but whether it breaches the 2% relative L2 threshold depends on how the error propagates through the denominator (denominator is dominated by sqrt(variance+1e-5), so variance error is damped). Needs numeric evidence.",
+      "Sequential scalar-loop accumulation in float32 (128 sequential adds) is non-associative with the reference's float64 sum; rounding drift in total and squares.",
+      "Clamping variance at 0 via tl.maximum: if cancellation drives variance negative it becomes 0, making denominator = sqrt(1e-5) \u2248 0.00316, which would produce huge outputs \u2014 a strong failure signal if triggered.",
+      "enable_fp_fusion=False means no FMA reassociation; deterministic but does not mitigate the E[x^2] cancellation itself.",
+      "Output dtype float32 vs float64 reference: rounding contributes ~1e-7 relative, negligible against 0.02 tolerance."
+    ],
+    "scope_notes": [
+      "Only the seeded (128,) vector is in scope; behavior on other tensors, other N, or other dtypes is out of scope for verdict purposes.\", \"Tolerance is generous (0.02 relative L2 with a 0.001*sqrt(128) floor), so small float32 variance errors may still pass; the question is whether cancellation error stays under it.\", \"No test harness code is present (test_code empty); the verification must compute the reference itself per the problem formula.\"]"
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Fixed workload: single float32 vector x of shape (128,) from deterministic make_inputs (PCG64 seed 782515, 64.0 + N(0,0.125)), contents and order fully specified.",
+        "Reference computed in float64 on the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (no ddof correction), reference[i] = (x[i]-mean)/sqrt(variance + 1e-5).",
+        "Output must be one finite float32 vector of shape (128,); relative L2 error metric ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) must be <= 0.02.",
+        "Only this fixed workload is in scope; arbitrary alternative tensors are out of scope."
+      ],
+      "created_at": "2026-09-24T00:15:09Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel with one program (grid (1,)) processes all 128 elements; N=128 is constexpr and matches the fixed shape.",
+        "Stats computed in float32 via a scalar loop: sequential accumulation of total and squares (sum of x and x^2), then mean = total/N and variance = max(squares/N - mean*mean, 0) \u2014 the single-pass E[x^2]-mean^2 form, not the reference's two-pass centered form.",
+        "Second pass reloads the vector via tl.arange(0,N) and stores (values-mean)/sqrt(variance+1e-5) to a float32 output; eps 1e-5 matches the contract.",
+        "run(x) allocates a fresh (128,) float32 output each call and returns it; enable_fp_fusion=False and num_warps=4.",
+        "Input x is assumed contiguous with dtype loadable via tl.load(X+i); a 0-dishonest variant risk is nil since N is fixed to the workload size."
+      ],
+      "open_questions": [],
+      "risk_map": [
+        "Catastrophic-cancellation risk in the single-pass variance: values are ~64 with std ~0.125, so E[x^2] (~4096) minus mean^2 leaves variance ~0.0156 \u2014 a ~5-decimal cancellation in float32; relative error in variance can be large, but whether it breaches the 2% relative L2 threshold depends on how the error propagates through the denominator (denominator is dominated by sqrt(variance+1e-5), so variance error is damped). Needs numeric evidence.",
+        "Sequential scalar-loop accumulation in float32 (128 sequential adds) is non-associative with the reference's float64 sum; rounding drift in total and squares.",
+        "Clamping variance at 0 via tl.maximum: if cancellation drives variance negative it becomes 0, making denominator = sqrt(1e-5) \u2248 0.00316, which would produce huge outputs \u2014 a strong failure signal if triggered.",
+        "enable_fp_fusion=False means no FMA reassociation; deterministic but does not mitigate the E[x^2] cancellation itself.",
+        "Output dtype float32 vs float64 reference: rounding contributes ~1e-7 relative, negligible against 0.02 tolerance."
+      ],
+      "scope_notes": [
+        "Only the seeded (128,) vector is in scope; behavior on other tensors, other N, or other dtypes is out of scope for verdict purposes.\", \"Tolerance is generous (0.02 relative L2 with a 0.001*sqrt(128) floor), so small float32 variance errors may still pass; the question is whether cancellation error stays under it.\", \"No test harness code is present (test_code empty); the verification must compute the reference itself per the problem formula.\"]"
+      ],
+      "summary": "Initial description of case_i: float32 Triton LayerNorm (no affine) over a fixed (128,) seeded vector; contract is relative L2 error <= 0.02 against a float64 two-pass population-variance reference, while the kernel uses a float32 single-pass (sum, sum-of-squares) variance \u2014 the key numerical risk given x ~ 64.0 \u00b1 0.125.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_i",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_i"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_i"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_i"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_i",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 11.032277871000002,
+      "role": "describer",
+      "round": 2,
+      "text": "I have full context from the loaded artifact. I'll record the description model for this LayerNorm case, highlighting the single-pass sum-of-squares variance as the key risk surface (cancellation with mean\u224864, variance\u22480.0156) relative to the 2% tolerance.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Fixed workload: single float32 vector x of shape (128,) from deterministic make_inputs (PCG64 seed 782515, 64.0 + N(0,0.125)), contents and order fully specified.",
+              "Reference computed in float64 on the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (no ddof correction), reference[i] = (x[i]-mean)/sqrt(variance + 1e-5).",
+              "Output must be one finite float32 vector of shape (128,); relative L2 error metric ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) must be <= 0.02.",
+              "Only this fixed workload is in scope; arbitrary alternative tensors are out of scope."
+            ],
+            "kernel_model": [
+              "Triton kernel with one program (grid (1,)) processes all 128 elements; N=128 is constexpr and matches the fixed shape.",
+              "Stats computed in float32 via a scalar loop: sequential accumulation of total and squares (sum of x and x^2), then mean = total/N and variance = max(squares/N - mean*mean, 0) \u2014 the single-pass E[x^2]-mean^2 form, not the reference's two-pass centered form.",
+              "Second pass reloads the vector via tl.arange(0,N) and stores (values-mean)/sqrt(variance+1e-5) to a float32 output; eps 1e-5 matches the contract.",
+              "run(x) allocates a fresh (128,) float32 output each call and returns it; enable_fp_fusion=False and num_warps=4.",
+              "Input x is assumed contiguous with dtype loadable via tl.load(X+i); a 0-dishonest variant risk is nil since N is fixed to the workload size."
+            ],
+            "risk_map": [
+              "Catastrophic-cancellation risk in the single-pass variance: values are ~64 with std ~0.125, so E[x^2] (~4096) minus mean^2 leaves variance ~0.0156 \u2014 a ~5-decimal cancellation in float32; relative error in variance can be large, but whether it breaches the 2% relative L2 threshold depends on how the error propagates through the denominator (denominator is dominated by sqrt(variance+1e-5), so variance error is damped). Needs numeric evidence.",
+              "Sequential scalar-loop accumulation in float32 (128 sequential adds) is non-associative with the reference's float64 sum; rounding drift in total and squares.",
+              "Clamping variance at 0 via tl.maximum: if cancellation drives variance negative it becomes 0, making denominator = sqrt(1e-5) \u2248 0.00316, which would produce huge outputs \u2014 a strong failure signal if triggered.",
+              "enable_fp_fusion=False means no FMA reassociation; deterministic but does not mitigate the E[x^2] cancellation itself.",
+              "Output dtype float32 vs float64 reference: rounding contributes ~1e-7 relative, negligible against 0.02 tolerance."
+            ],
+            "scope_notes": "Only the seeded (128,) vector is in scope; behavior on other tensors, other N, or other dtypes is out of scope for verdict purposes.\", \"Tolerance is generous (0.02 relative L2 with a 0.001*sqrt(128) floor), so small float32 variance errors may still pass; the question is whether cancellation error stays under it.\", \"No test harness code is present (test_code empty); the verification must compute the reference itself per the problem formula.\"]",
+            "summary": "Initial description of case_i: float32 Triton LayerNorm (no affine) over a fixed (128,) seeded vector; contract is relative L2 error <= 0.02 against a float64 two-pass population-variance reference, while the kernel uses a float32 single-pass (sum, sum-of-squares) variance \u2014 the key numerical risk given x ~ 64.0 \u00b1 0.125."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.032,
+        "input_tokens": 4509,
+        "output_tokens": 922
+      }
+    },
+    {
+      "duration_s": 8.91136169,
+      "role": "skeptic",
+      "round": 3,
+      "text": "I'll record the key numerical risk claims tied to the fixed-workload contract: single-pass float32 variance cancellation against the 2% tolerance, the variance clamp path, and accumulation rounding.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "With x\u224864\u00b10.125, squares/N\u22484096 while variance\u22480.0156, so ~5 digits of the float32 result cancel; the absolute rounding error in squares/N (~4096*2^-24*N-sum drift, order 1e-2 to 1e-1 relative to variance) can shift the denominator enough to exceed the 0.02 relative L2 bound. Note denominator = sqrt(variance+1e-5)\u22480.125, so a 10% variance error gives ~5% denominator error \u2014 possibly over tolerance; needs numeric evidence.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference uses float64 two-pass centered population variance; kernel's float32 single-pass E[x^2]-mean^2 form on the seeded x ~ 64.0 \u00b1 0.125 vector may violate the <= 0.02 relative L2 requirement for this fixed workload."
+              }
+            ],
+            "scope_rationale": "The contract fixes the input to make_inputs' seeded vector and requires relative L2 error <= 0.02 against a float64 two-pass reference; the kernel's float32 single-pass variance on this exact vector is the in-scope computation.",
+            "statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The clamp exists in the code precisely because cancellation can go negative; if triggered on this fixed input the output magnitudes grow ~40x, far beyond tolerance.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Output must be one finite (128,) vector with relative L2 error <= 0.02 for the seeded workload; a clamped-to-zero variance yields denominator 0.00316 and outputs ~\u00b140, massively violating it."
+              }
+            ],
+            "scope_rationale": "Same fixed workload; the contract's tolerance would be grossly violated if cancellation drives the single-pass variance negative on this input and tl.maximum clamps it to 0.",
+            "statement": "If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seeded vector, tl.maximum clamps it to 0, giving denominator sqrt(1e-5)\u22480.00316 and outputs of magnitude ~20000, breaking finiteness-scale/2% tolerance."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.911,
+        "input_tokens": 11705,
+        "output_tokens": 635
+      }
+    },
+    {
+      "duration_s": 7.399202197000001,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'll run one probe that executes the actual kernel on the seeded input and computes the contract metric, plus the raw float32 single-pass variance to decide both c1 and c2 in a single experiment. Both claims concern the same fixed workload, so one run covers both; I'm not launching separate probes because c1 and c2 share the identical computation path.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_i\")\nimport kernel as K\n\nx, = K.make_inputs()\nout = K.run(x)\n\n# float64 reference per problem.txt\nxd = x.to(torch.float64).numpy()\nmean = xd.sum() / 128\nvar = ((xd - mean) ** 2).sum() / 128\nref = (xd - mean) / np.sqrt(var + 1e-5)\n\nerr = np.linalg.norm(out.numpy().astype(np.float64) - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))\n\n# emulate kernel's float32 single-pass stats (sequential accumulation)\nxf = x.numpy().astype(np.float32)\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in xf:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v * v))\nmean_f = np.float32(total / np.float32(128))\nsq_over_n = np.float32(squares / np.float32(128))\nmean_sq = np.float32(mean_f * mean_f)\nraw_var = np.float32(sq_over_n - mean_sq)\nclamped = np.float32(max(raw_var, np.float32(0.0)))\ndenom = np.float32(np.sqrt(np.float32(clamped + np.float32(1e-5))))\n\nprint(json.dumps({\n    \"rel_l2_error\": float(err),\n    \"tolerance\": 0.02,\n    \"passes\": bool(err <= 0.02),\n    \"out_finite\": bool(np.isfinite(out.numpy()).all()),\n    \"float64_variance\": float(var),\n    \"float32_single_pass_variance_raw\": float(raw_var),\n    \"raw_negative\": bool(float(raw_var) < 0),\n    \"clamped_to_zero\": bool(float(clamped) == 0.0),\n    \"kernel_denominator_est\": float(denom),\n    \"float64_denominator\": float(np.sqrt(var + 1e-5)),\n    \"kernel_output_max_abs\": float(np.abs(out.numpy()).max()),\n}))\n",
+            "expected_signal": "relative L2 error of kernel output vs float64 reference on the seeded vector, plus the float32 single-pass variance sign and value"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.399,
+        "input_tokens": 14969,
+        "output_tokens": 595
+      }
+    },
+    {
+      "duration_s": 16.890986856000005,
+      "role": "experimenter",
+      "round": 5,
+      "text": "The first probe failed on a trivial host-transfer bug (CUDA tensor \u2192 numpy without `.cpu()`), so it decides nothing. I'll re-launch fixed probes for both open claims in one batch: c1 (contract relative-L2 error on the seeded workload) and c2 (whether the float32 single-pass variance goes negative and clamps to zero). The runs are independent, so I'm launching both together.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_i\")\nimport kernel as K\n\nx, = K.make_inputs()\nout = K.run(x).cpu()\n\nxd = x.cpu().to(torch.float64).numpy()\nmean = xd.sum() / 128\nvar = ((xd - mean) ** 2).sum() / 128\nref = (xd - mean) / np.sqrt(var + 1e-5)\n\nerr = np.linalg.norm(out.numpy().astype(np.float64) - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))\n\n# emulate kernel's float32 single-pass stats (sequential accumulation)\nxf = x.cpu().numpy().astype(np.float32)\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in xf:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v * v))\nmean_f = np.float32(total / np.float32(128))\nsq_over_n = np.float32(squares / np.float32(128))\nmean_sq = np.float32(mean_f * mean_f)\nraw_var = np.float32(sq_over_n - mean_sq)\n\nprint(json.dumps({\n    \"rel_l2_error\": float(err),\n    \"tolerance\": 0.02,\n    \"passes\": bool(err <= 0.02),\n    \"out_finite\": bool(np.isfinite(out.numpy()).all()),\n    \"float64_variance\": float(var),\n    \"float32_single_pass_variance_raw\": float(raw_var),\n    \"variance_rel_error\": float(abs(float(raw_var) - var) / var),\n    \"float64_denominator\": float(np.sqrt(var + 1e-5)),\n    \"kernel_output_max_abs\": float(np.abs(out.numpy()).max()),\n}))\n",
+            "expected_signal": "relative L2 error of the actual kernel output vs float64 reference on the seeded vector; passes/fails 0.02 tolerance"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_i\")\nimport kernel as K\n\nx, = K.make_inputs()\nout = K.run(x).cpu()\n\n# emulate kernel's float32 single-pass stats (sequential accumulation)\nxf = x.cpu().numpy().astype(np.float32)\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in xf:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v * v))\nmean_f = np.float32(total / np.float32(128))\nsq_over_n = np.float32(squares / np.float32(128))\nmean_sq = np.float32(mean_f * mean_f)\nraw_var = np.float32(sq_over_n - mean_sq)\n\n# recover kernel's effective denominator from output: out[i]*(denom) = x[i]-mean\n# better: compare output scale against expected reference scale\nxd = x.cpu().to(torch.float64).numpy()\nmean = xd.sum() / 128\nvar = ((xd - mean) ** 2).sum() / 128\nref = (xd - mean) / np.sqrt(var + 1e-5)\nscale = np.abs(out.numpy()).max() / np.abs(ref).max()\n\nprint(json.dumps({\n    \"float32_single_pass_variance_raw\": float(raw_var),\n    \"raw_negative\": bool(float(raw_var) < 0.0),\n    \"clamped_to_zero_effect\": bool(float(raw_var) <= 0.0),\n    \"float64_variance\": float(var),\n    \"kernel_output_max_abs\": float(np.abs(out.numpy()).max()),\n    \"reference_output_max_abs\": float(np.abs(ref).max()),\n    \"output_to_reference_max_ratio\": float(scale),\n    \"out_finite\": bool(np.isfinite(out.numpy()).all()),\n}))\n",
+            "expected_signal": "sign of the float32 single-pass variance on the seeded vector and whether kernel output magnitude explodes (clamp triggered)"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 16.891,
+        "input_tokens": 17498,
+        "output_tokens": 1090
+      }
+    },
+    {
+      "duration_s": 8.91161055500001,
+      "role": "experimenter",
+      "round": 6,
+      "text": "Both probes succeeded and clearly rebut both open claims: the kernel output's relative L2 error is ~2.4e-4 (well under 0.02), and the single-pass variance stays positive with no clamp triggered. I'll finalize both evidence entries now.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "float32_single_pass_variance_raw": 0.016357421875,
+              "float64_denominator": 0.12790424781228815,
+              "float64_variance": 0.016349496608427216,
+              "kernel_output_max_abs": 2.9560980796813965,
+              "out_finite": true,
+              "passes": true,
+              "rel_l2_error": 0.00024261613799325,
+              "tolerance": 0.02,
+              "variance_rel_error": 0.000484740708695494
+            },
+            "event_id": "t9",
+            "status": "rebutted",
+            "summary": "Actual kernel run on the seeded (128,) input gives relative L2 error 2.43e-4 against the float64 two-pass reference, far below the 0.02 tolerance. The float32 single-pass variance is 0.016357 vs float64 0.016349 (0.05% relative error), so cancellation does not breach the contract on this workload. Claim c1 (error exceeds 0.02) is contradicted.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "clamped_to_zero_effect": false,
+              "float32_single_pass_variance_raw": 0.016357421875,
+              "float64_variance": 0.016349496608427216,
+              "kernel_output_max_abs": 2.9560980796813965,
+              "out_finite": true,
+              "output_to_reference_max_ratio": 0.9997628734413094,
+              "raw_negative": false,
+              "reference_output_max_abs": 2.9567992153040605
+            },
+            "event_id": "t10",
+            "status": "rebutted",
+            "summary": "The float32 single-pass variance on the seeded vector is +0.016357 (not negative), so tl.maximum does not clamp it to zero. Output max magnitude is 2.956, matching the reference max 2.957 (ratio 0.9998) and output is finite \u2014 no explosion, contract satisfied. Claim c2 is contradicted on this workload.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.912,
+        "input_tokens": 23161,
+        "output_tokens": 579
+      }
+    },
+    {
+      "duration_s": 5.667416270000004,
+      "role": "skeptic",
+      "round": 7,
+      "text": "Both in-scope claims were directly tested on the actual seeded workload and rebutted: relative L2 error is 2.4e-4 (tolerance 0.02), the single-pass variance stays positive, output is finite and matches reference scale. No new material in-scope issues remain.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the only in-scope workload (seeded (128,) vector) was executed directly. Both recorded claims (c1 cancellation exceeding 0.02 tolerance; c2 negative-variance clamp explosion) are rebutted by runtime evidence: rel L2 error 2.43e-4 << 0.02, single-pass variance +0.016357 vs float64 0.016349 (0.05% error), no clamp triggered, output finite with max ratio 0.9998 vs reference. No other attack surfaces exist within the fixed-workload contract.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.667,
+        "input_tokens": 30888,
+        "output_tokens": 231
+      }
+    },
+    {
+      "duration_s": 6.536819761000004,
+      "role": "judge",
+      "round": 8,
+      "text": "All in-scope claims (c1 cancellation error, c2 negative-variance clamp) were rebutted by direct runtime execution on the seeded workload: relative L2 error 2.4e-4 vs 0.02 tolerance, variance positive and accurate, output finite. Skeptic signed off with no new claims. I'll record a trust verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The only in-scope input is the fixed seeded (128,) vector from make_inputs, and probes executed the actual kernel on that exact input. Claim c1 (float32 single-pass variance cancellation pushing relative L2 error above 0.02) is rebutted: measured relative L2 error is 2.43e-4 against the float64 two-pass reference, far under the 0.02 tolerance, and the single-pass variance error is only 0.05%. Claim c2 (negative variance clamped to zero causing huge outputs) is rebutted: the raw variance is +0.016357 (positive), no clamp is triggered, output is finite with max magnitude 2.956 vs reference 2.957. The contract requires only a finite (128,) vector with relative L2 error <= 0.02 on this fixed workload, which the kernel satisfies; the float32 single-pass accumulation differences are within the declared tolerance and thus acceptable per the contract's numeric tolerance clause. Skeptic reviewed the latest evidence and found no new claims; no unresolved material claims remain.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.537,
+        "input_tokens": 31107,
+        "output_tokens": 363
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-24T00:16:14Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the only in-scope workload (seeded (128,) vector) was executed directly. Both recorded claims (c1 cancellation exceeding 0.02 tolerance; c2 negative-variance clamp explosion) are rebutted by runtime evidence: rel L2 error 2.43e-4 << 0.02, single-pass variance +0.016357 vs float64 0.016349 (0.05% error), no clamp triggered, output finite with max ratio 0.9998 vs reference. No other attack surfaces exist within the fixed-workload contract.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 12,
+    "tool_event_id": "t13",
+    "turn": 7
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_i"
+      },
+      "created_at": "2026-09-24T00:14:56Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_i",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _layer_norm_kernel(X, Output, N: tl.constexpr):\n    total = tl.full((), 0.0, tl.float32)\n    squares = tl.full((), 0.0, tl.float32)\n    for i in range(0, N):\n        value = tl.load(X + i).to(tl.float32)\n        total = total + value\n        squares = squares + value * value\n    mean = total / N\n    variance = tl.maximum(squares / N - mean * mean, 0.0)\n    denominator = tl.sqrt(variance + 0.00001)\n    offsets = tl.arange(0, N)\n    values = tl.load(X + offsets).to(tl.float32)\n    tl.store(Output + offsets, (values - mean) / denominator)\n\n\ndef run(x):\n    output = torch.empty((128,), device=x.device, dtype=torch.float32)\n    _layer_norm_kernel[(1,)](x, output, N=128, num_warps=4,\n                            enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(782515))\n    x = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)\n    return (x,)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "passed": null,
+        "problem_text": "Implement LayerNorm without an affine transform for this fixed workload.\n\nThe only input in scope is the float32 vector x returned by make_inputs() in\nkernel.py. Its shape is (128,), and its complete contents and element order are\nspecified by that public deterministic generator.\n\nThe reference uses the original float32 input values, evaluated in float64:\n  mean = sum_i x[i] / 128\n  variance = sum_i (x[i] - mean)**2 / 128\n  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)\nUse population variance, with no degrees-of-freedom correction.\n\nThe output must be one finite vector with shape (128,). Its relative L2 error is\n  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).\nThe numerical contract requires this error to be <= 0.02.\n\nDecide whether this implementation satisfies that contract for this fixed\nworkload. Arbitrary alternative tensors are outside this question's scope.\n",
+        "rounds": null,
+        "session_dir": "/root/numerical_cases/case_i",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_i"
+      },
+      "created_at": "2026-09-24T00:14:56Z",
+      "id": "t2",
+      "output": {
+        "content": "Implement LayerNorm without an affine transform for this fixed workload.\n\nThe only input in scope is the float32 vector x returned by make_inputs() in\nkernel.py. Its shape is (128,), and its complete contents and element order are\nspecified by that public deterministic generator.\n\nThe reference uses the original float32 input values, evaluated in float64:\n  mean = sum_i x[i] / 128\n  variance = sum_i (x[i] - mean)**2 / 128\n  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)\nUse population variance, with no degrees-of-freedom correction.\n\nThe output must be one finite vector with shape (128,). Its relative L2 error is\n  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).\nThe numerical contract requires this error to be <= 0.02.\n\nDecide whether this implementation satisfies that contract for this fixed\nworkload. Arbitrary alternative tensors are outside this question's scope.\n",
+        "entry": "case_i",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_i"
+      },
+      "created_at": "2026-09-24T00:14:56Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_i",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1132
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 67
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 908
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_i",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T00:14:56Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_i\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_i",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 67,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Fixed workload: single float32 vector x of shape (128,) from deterministic make_inputs (PCG64 seed 782515, 64.0 + N(0,0.125)), contents and order fully specified.",
+          "Reference computed in float64 on the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (no ddof correction), reference[i] = (x[i]-mean)/sqrt(variance + 1e-5).",
+          "Output must be one finite float32 vector of shape (128,); relative L2 error metric ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) must be <= 0.02.",
+          "Only this fixed workload is in scope; arbitrary alternative tensors are out of scope."
+        ],
+        "kernel_model": [
+          "Triton kernel with one program (grid (1,)) processes all 128 elements; N=128 is constexpr and matches the fixed shape.",
+          "Stats computed in float32 via a scalar loop: sequential accumulation of total and squares (sum of x and x^2), then mean = total/N and variance = max(squares/N - mean*mean, 0) \u2014 the single-pass E[x^2]-mean^2 form, not the reference's two-pass centered form.",
+          "Second pass reloads the vector via tl.arange(0,N) and stores (values-mean)/sqrt(variance+1e-5) to a float32 output; eps 1e-5 matches the contract.",
+          "run(x) allocates a fresh (128,) float32 output each call and returns it; enable_fp_fusion=False and num_warps=4.",
+          "Input x is assumed contiguous with dtype loadable via tl.load(X+i); a 0-dishonest variant risk is nil since N is fixed to the workload size."
+        ],
+        "risk_map": [
+          "Catastrophic-cancellation risk in the single-pass variance: values are ~64 with std ~0.125, so E[x^2] (~4096) minus mean^2 leaves variance ~0.0156 \u2014 a ~5-decimal cancellation in float32; relative error in variance can be large, but whether it breaches the 2% relative L2 threshold depends on how the error propagates through the denominator (denominator is dominated by sqrt(variance+1e-5), so variance error is damped). Needs numeric evidence.",
+          "Sequential scalar-loop accumulation in float32 (128 sequential adds) is non-associative with the reference's float64 sum; rounding drift in total and squares.",
+          "Clamping variance at 0 via tl.maximum: if cancellation drives variance negative it becomes 0, making denominator = sqrt(1e-5) \u2248 0.00316, which would produce huge outputs \u2014 a strong failure signal if triggered.",
+          "enable_fp_fusion=False means no FMA reassociation; deterministic but does not mitigate the E[x^2] cancellation itself.",
+          "Output dtype float32 vs float64 reference: rounding contributes ~1e-7 relative, negligible against 0.02 tolerance."
+        ],
+        "scope_notes": "Only the seeded (128,) vector is in scope; behavior on other tensors, other N, or other dtypes is out of scope for verdict purposes.\", \"Tolerance is generous (0.02 relative L2 with a 0.001*sqrt(128) floor), so small float32 variance errors may still pass; the question is whether cancellation error stays under it.\", \"No test harness code is present (test_code empty); the verification must compute the reference itself per the problem formula.\"]",
+        "summary": "Initial description of case_i: float32 Triton LayerNorm (no affine) over a fixed (128,) seeded vector; contract is relative L2 error <= 0.02 against a float64 two-pass population-variance reference, while the kernel uses a float32 single-pass (sum, sum-of-squares) variance \u2014 the key numerical risk given x ~ 64.0 \u00b1 0.125."
+      },
+      "created_at": "2026-09-24T00:15:09Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Fixed workload: single float32 vector x of shape (128,) from deterministic make_inputs (PCG64 seed 782515, 64.0 + N(0,0.125)), contents and order fully specified.",
+            "Reference computed in float64 on the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (no ddof correction), reference[i] = (x[i]-mean)/sqrt(variance + 1e-5).",
+            "Output must be one finite float32 vector of shape (128,); relative L2 error metric ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) must be <= 0.02.",
+            "Only this fixed workload is in scope; arbitrary alternative tensors are out of scope."
+          ],
+          "kernel_model": [
+            "Triton kernel with one program (grid (1,)) processes all 128 elements; N=128 is constexpr and matches the fixed shape.",
+            "Stats computed in float32 via a scalar loop: sequential accumulation of total and squares (sum of x and x^2), then mean = total/N and variance = max(squares/N - mean*mean, 0) \u2014 the single-pass E[x^2]-mean^2 form, not the reference's two-pass centered form.",
+            "Second pass reloads the vector via tl.arange(0,N) and stores (values-mean)/sqrt(variance+1e-5) to a float32 output; eps 1e-5 matches the contract.",
+            "run(x) allocates a fresh (128,) float32 output each call and returns it; enable_fp_fusion=False and num_warps=4.",
+            "Input x is assumed contiguous with dtype loadable via tl.load(X+i); a 0-dishonest variant risk is nil since N is fixed to the workload size."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "Catastrophic-cancellation risk in the single-pass variance: values are ~64 with std ~0.125, so E[x^2] (~4096) minus mean^2 leaves variance ~0.0156 \u2014 a ~5-decimal cancellation in float32; relative error in variance can be large, but whether it breaches the 2% relative L2 threshold depends on how the error propagates through the denominator (denominator is dominated by sqrt(variance+1e-5), so variance error is damped). Needs numeric evidence.",
+            "Sequential scalar-loop accumulation in float32 (128 sequential adds) is non-associative with the reference's float64 sum; rounding drift in total and squares.",
+            "Clamping variance at 0 via tl.maximum: if cancellation drives variance negative it becomes 0, making denominator = sqrt(1e-5) \u2248 0.00316, which would produce huge outputs \u2014 a strong failure signal if triggered.",
+            "enable_fp_fusion=False means no FMA reassociation; deterministic but does not mitigate the E[x^2] cancellation itself.",
+            "Output dtype float32 vs float64 reference: rounding contributes ~1e-7 relative, negligible against 0.02 tolerance."
+          ],
+          "scope_notes": [
+            "Only the seeded (128,) vector is in scope; behavior on other tensors, other N, or other dtypes is out of scope for verdict purposes.\", \"Tolerance is generous (0.02 relative L2 with a 0.001*sqrt(128) floor), so small float32 variance errors may still pass; the question is whether cancellation error stays under it.\", \"No test harness code is present (test_code empty); the verification must compute the reference itself per the problem formula.\"]"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Fixed workload: single float32 vector x of shape (128,) from deterministic make_inputs (PCG64 seed 782515, 64.0 + N(0,0.125)), contents and order fully specified.",
+            "Reference computed in float64 on the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (no ddof correction), reference[i] = (x[i]-mean)/sqrt(variance + 1e-5).",
+            "Output must be one finite float32 vector of shape (128,); relative L2 error metric ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) must be <= 0.02.",
+            "Only this fixed workload is in scope; arbitrary alternative tensors are out of scope."
+          ],
+          "created_at": "2026-09-24T00:15:09Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel with one program (grid (1,)) processes all 128 elements; N=128 is constexpr and matches the fixed shape.",
+            "Stats computed in float32 via a scalar loop: sequential accumulation of total and squares (sum of x and x^2), then mean = total/N and variance = max(squares/N - mean*mean, 0) \u2014 the single-pass E[x^2]-mean^2 form, not the reference's two-pass centered form.",
+            "Second pass reloads the vector via tl.arange(0,N) and stores (values-mean)/sqrt(variance+1e-5) to a float32 output; eps 1e-5 matches the contract.",
+            "run(x) allocates a fresh (128,) float32 output each call and returns it; enable_fp_fusion=False and num_warps=4.",
+            "Input x is assumed contiguous with dtype loadable via tl.load(X+i); a 0-dishonest variant risk is nil since N is fixed to the workload size."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "Catastrophic-cancellation risk in the single-pass variance: values are ~64 with std ~0.125, so E[x^2] (~4096) minus mean^2 leaves variance ~0.0156 \u2014 a ~5-decimal cancellation in float32; relative error in variance can be large, but whether it breaches the 2% relative L2 threshold depends on how the error propagates through the denominator (denominator is dominated by sqrt(variance+1e-5), so variance error is damped). Needs numeric evidence.",
+            "Sequential scalar-loop accumulation in float32 (128 sequential adds) is non-associative with the reference's float64 sum; rounding drift in total and squares.",
+            "Clamping variance at 0 via tl.maximum: if cancellation drives variance negative it becomes 0, making denominator = sqrt(1e-5) \u2248 0.00316, which would produce huge outputs \u2014 a strong failure signal if triggered.",
+            "enable_fp_fusion=False means no FMA reassociation; deterministic but does not mitigate the E[x^2] cancellation itself.",
+            "Output dtype float32 vs float64 reference: rounding contributes ~1e-7 relative, negligible against 0.02 tolerance."
+          ],
+          "scope_notes": [
+            "Only the seeded (128,) vector is in scope; behavior on other tensors, other N, or other dtypes is out of scope for verdict purposes.\", \"Tolerance is generous (0.02 relative L2 with a 0.001*sqrt(128) floor), so small float32 variance errors may still pass; the question is whether cancellation error stays under it.\", \"No test harness code is present (test_code empty); the verification must compute the reference itself per the problem formula.\"]"
+          ],
+          "summary": "Initial description of case_i: float32 Triton LayerNorm (no affine) over a fixed (128,) seeded vector; contract is relative L2 error <= 0.02 against a float64 two-pass population-variance reference, while the kernel uses a float32 single-pass (sum, sum-of-squares) variance \u2014 the key numerical risk given x ~ 64.0 \u00b1 0.125.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "With x\u224864\u00b10.125, squares/N\u22484096 while variance\u22480.0156, so ~5 digits of the float32 result cancel; the absolute rounding error in squares/N (~4096*2^-24*N-sum drift, order 1e-2 to 1e-1 relative to variance) can shift the denominator enough to exceed the 0.02 relative L2 bound. Note denominator = sqrt(variance+1e-5)\u22480.125, so a 10% variance error gives ~5% denominator error \u2014 possibly over tolerance; needs numeric evidence.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference uses float64 two-pass centered population variance; kernel's float32 single-pass E[x^2]-mean^2 form on the seeded x ~ 64.0 \u00b1 0.125 vector may violate the <= 0.02 relative L2 requirement for this fixed workload."
+          }
+        ],
+        "scope_rationale": "The contract fixes the input to make_inputs' seeded vector and requires relative L2 error <= 0.02 against a float64 two-pass reference; the kernel's float32 single-pass variance on this exact vector is the in-scope computation.",
+        "statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02."
+      },
+      "created_at": "2026-09-24T00:15:18Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-24T00:15:18Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "With x\u224864\u00b10.125, squares/N\u22484096 while variance\u22480.0156, so ~5 digits of the float32 result cancel; the absolute rounding error in squares/N (~4096*2^-24*N-sum drift, order 1e-2 to 1e-1 relative to variance) can shift the denominator enough to exceed the 0.02 relative L2 bound. Note denominator = sqrt(variance+1e-5)\u22480.125, so a 10% variance error gives ~5% denominator error \u2014 possibly over tolerance; needs numeric evidence.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference uses float64 two-pass centered population variance; kernel's float32 single-pass E[x^2]-mean^2 form on the seeded x ~ 64.0 \u00b1 0.125 vector may violate the <= 0.02 relative L2 requirement for this fixed workload."
+          }
+        ],
+        "scope_rationale": "The contract fixes the input to make_inputs' seeded vector and requires relative L2 error <= 0.02 against a float64 two-pass reference; the kernel's float32 single-pass variance on this exact vector is the in-scope computation.",
+        "statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02.",
+        "status": "open",
+        "updated_at": "2026-09-24T00:15:18Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The clamp exists in the code precisely because cancellation can go negative; if triggered on this fixed input the output magnitudes grow ~40x, far beyond tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must be one finite (128,) vector with relative L2 error <= 0.02 for the seeded workload; a clamped-to-zero variance yields denominator 0.00316 and outputs ~\u00b140, massively violating it."
+          }
+        ],
+        "scope_rationale": "Same fixed workload; the contract's tolerance would be grossly violated if cancellation drives the single-pass variance negative on this input and tl.maximum clamps it to 0.",
+        "statement": "If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seeded vector, tl.maximum clamps it to 0, giving denominator sqrt(1e-5)\u22480.00316 and outputs of magnitude ~20000, breaking finiteness-scale/2% tolerance."
+      },
+      "created_at": "2026-09-24T00:15:18Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-24T00:15:18Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "The clamp exists in the code precisely because cancellation can go negative; if triggered on this fixed input the output magnitudes grow ~40x, far beyond tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must be one finite (128,) vector with relative L2 error <= 0.02 for the seeded workload; a clamped-to-zero variance yields denominator 0.00316 and outputs ~\u00b140, massively violating it."
+          }
+        ],
+        "scope_rationale": "Same fixed workload; the contract's tolerance would be grossly violated if cancellation drives the single-pass variance negative on this input and tl.maximum clamps it to 0.",
+        "statement": "If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seeded vector, tl.maximum clamps it to 0, giving denominator sqrt(1e-5)\u22480.00316 and outputs of magnitude ~20000, breaking finiteness-scale/2% tolerance.",
+        "status": "open",
+        "updated_at": "2026-09-24T00:15:18Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_i\")\nimport kernel as K\n\nx, = K.make_inputs()\nout = K.run(x)\n\n# float64 reference per problem.txt\nxd = x.to(torch.float64).numpy()\nmean = xd.sum() / 128\nvar = ((xd - mean) ** 2).sum() / 128\nref = (xd - mean) / np.sqrt(var + 1e-5)\n\nerr = np.linalg.norm(out.numpy().astype(np.float64) - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))\n\n# emulate kernel's float32 single-pass stats (sequential accumulation)\nxf = x.numpy().astype(np.float32)\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in xf:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v * v))\nmean_f = np.float32(total / np.float32(128))\nsq_over_n = np.float32(squares / np.float32(128))\nmean_sq = np.float32(mean_f * mean_f)\nraw_var = np.float32(sq_over_n - mean_sq)\nclamped = np.float32(max(raw_var, np.float32(0.0)))\ndenom = np.float32(np.sqrt(np.float32(clamped + np.float32(1e-5))))\n\nprint(json.dumps({\n    \"rel_l2_error\": float(err),\n    \"tolerance\": 0.02,\n    \"passes\": bool(err <= 0.02),\n    \"out_finite\": bool(np.isfinite(out.numpy()).all()),\n    \"float64_variance\": float(var),\n    \"float32_single_pass_variance_raw\": float(raw_var),\n    \"raw_negative\": bool(float(raw_var) < 0),\n    \"clamped_to_zero\": bool(float(clamped) == 0.0),\n    \"kernel_denominator_est\": float(denom),\n    \"float64_denominator\": float(np.sqrt(var + 1e-5)),\n    \"kernel_output_max_abs\": float(np.abs(out.numpy()).max()),\n}))\n",
+        "expected_signal": "relative L2 error of kernel output vs float64 reference on the seeded vector, plus the float32 single-pass variance sign and value"
+      },
+      "created_at": "2026-09-24T00:15:33Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "0984fb6005e1b7410c2799be7ad0e9f85cd28aed5383391cf4fb5e9d9de46709"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "05d6fd7d8ce2b5b20b351ddb498d27e85fe802a5d2670ae9883d420df1d5c7ec"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02.",
+        "cwd": "/root/numerical_cases/case_i",
+        "duration_s": 7.371655,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "0984fb6005e1b7410c2799be7ad0e9f85cd28aed5383391cf4fb5e9d9de46709"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "05d6fd7d8ce2b5b20b351ddb498d27e85fe802a5d2670ae9883d420df1d5c7ec"
+              }
+            ],
+            "duration_s": 7.371655,
+            "exit_code": 1,
+            "expected_signal": "relative L2 error of kernel output vs float64 reference on the seeded vector, plus the float32 single-pass variance sign and value",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/extension_low32_r2/numerical_challenges/case_i/debate/probes/t8_probe.py\", line 9, in <module>\n    xd = x.to(torch.float64).numpy()\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: can't convert cuda:0 device type tensor to numpy. Use Tensor.cpu() to copy the tensor to host memory first.\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 1,
+        "expected_signal": "relative L2 error of kernel output vs float64 reference on the seeded vector, plus the float32 single-pass variance sign and value",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/extension_low32_r2/numerical_challenges/case_i/debate/probes/t8_probe.py\", line 9, in <module>\n    xd = x.to(torch.float64).numpy()\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: can't convert cuda:0 device type tensor to numpy. Use Tensor.cpu() to copy the tensor to host memory first.\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_i\")\nimport kernel as K\n\nx, = K.make_inputs()\nout = K.run(x).cpu()\n\nxd = x.cpu().to(torch.float64).numpy()\nmean = xd.sum() / 128\nvar = ((xd - mean) ** 2).sum() / 128\nref = (xd - mean) / np.sqrt(var + 1e-5)\n\nerr = np.linalg.norm(out.numpy().astype(np.float64) - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))\n\n# emulate kernel's float32 single-pass stats (sequential accumulation)\nxf = x.cpu().numpy().astype(np.float32)\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in xf:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v * v))\nmean_f = np.float32(total / np.float32(128))\nsq_over_n = np.float32(squares / np.float32(128))\nmean_sq = np.float32(mean_f * mean_f)\nraw_var = np.float32(sq_over_n - mean_sq)\n\nprint(json.dumps({\n    \"rel_l2_error\": float(err),\n    \"tolerance\": 0.02,\n    \"passes\": bool(err <= 0.02),\n    \"out_finite\": bool(np.isfinite(out.numpy()).all()),\n    \"float64_variance\": float(var),\n    \"float32_single_pass_variance_raw\": float(raw_var),\n    \"variance_rel_error\": float(abs(float(raw_var) - var) / var),\n    \"float64_denominator\": float(np.sqrt(var + 1e-5)),\n    \"kernel_output_max_abs\": float(np.abs(out.numpy()).max()),\n}))\n",
+        "expected_signal": "relative L2 error of the actual kernel output vs float64 reference on the seeded vector; passes/fails 0.02 tolerance"
+      },
+      "created_at": "2026-09-24T00:15:55Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "ae7d035cf744d10f03a9294e6cfdff781963e0e5c04b8f5321afa3eec85d7293"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "4fa15388f09bbf84a435cb30a209c945df856427b3352a29ce2d1d733a9b340e"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "35859d21dd9e364679728bfbf8047606c66eb5d1a18995b23fd3e813457567e5"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02.",
+        "cwd": "/root/numerical_cases/case_i",
+        "duration_s": 4.924843,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "ae7d035cf744d10f03a9294e6cfdff781963e0e5c04b8f5321afa3eec85d7293"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "4fa15388f09bbf84a435cb30a209c945df856427b3352a29ce2d1d733a9b340e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "35859d21dd9e364679728bfbf8047606c66eb5d1a18995b23fd3e813457567e5"
+              }
+            ],
+            "duration_s": 4.924843,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of the actual kernel output vs float64 reference on the seeded vector; passes/fails 0.02 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "float32_single_pass_variance_raw": 0.016357421875,
+              "float64_denominator": 0.12790424781228815,
+              "float64_variance": 0.016349496608427216,
+              "kernel_output_max_abs": 2.9560980796813965,
+              "out_finite": true,
+              "passes": true,
+              "rel_l2_error": 0.00024261613799325,
+              "tolerance": 0.02,
+              "variance_rel_error": 0.000484740708695494
+            },
+            "stderr": "",
+            "stdout": "{\"rel_l2_error\": 0.00024261613799325, \"tolerance\": 0.02, \"passes\": true, \"out_finite\": true, \"float64_variance\": 0.016349496608427216, \"float32_single_pass_variance_raw\": 0.016357421875, \"variance_rel_error\": 0.000484740708695494, \"float64_denominator\": 0.12790424781228815, \"kernel_output_max_abs\": 2.9560980796813965}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "relative L2 error of the actual kernel output vs float64 reference on the seeded vector; passes/fails 0.02 tolerance",
+        "json_parse_error": null,
+        "json_result": {
+          "float32_single_pass_variance_raw": 0.016357421875,
+          "float64_denominator": 0.12790424781228815,
+          "float64_variance": 0.016349496608427216,
+          "kernel_output_max_abs": 2.9560980796813965,
+          "out_finite": true,
+          "passes": true,
+          "rel_l2_error": 0.00024261613799325,
+          "tolerance": 0.02,
+          "variance_rel_error": 0.000484740708695494
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"rel_l2_error\": 0.00024261613799325, \"tolerance\": 0.02, \"passes\": true, \"out_finite\": true, \"float64_variance\": 0.016349496608427216, \"float32_single_pass_variance_raw\": 0.016357421875, \"variance_rel_error\": 0.000484740708695494, \"float64_denominator\": 0.12790424781228815, \"kernel_output_max_abs\": 2.9560980796813965}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_i\")\nimport kernel as K\n\nx, = K.make_inputs()\nout = K.run(x).cpu()\n\n# emulate kernel's float32 single-pass stats (sequential accumulation)\nxf = x.cpu().numpy().astype(np.float32)\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in xf:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v * v))\nmean_f = np.float32(total / np.float32(128))\nsq_over_n = np.float32(squares / np.float32(128))\nmean_sq = np.float32(mean_f * mean_f)\nraw_var = np.float32(sq_over_n - mean_sq)\n\n# recover kernel's effective denominator from output: out[i]*(denom) = x[i]-mean\n# better: compare output scale against expected reference scale\nxd = x.cpu().to(torch.float64).numpy()\nmean = xd.sum() / 128\nvar = ((xd - mean) ** 2).sum() / 128\nref = (xd - mean) / np.sqrt(var + 1e-5)\nscale = np.abs(out.numpy()).max() / np.abs(ref).max()\n\nprint(json.dumps({\n    \"float32_single_pass_variance_raw\": float(raw_var),\n    \"raw_negative\": bool(float(raw_var) < 0.0),\n    \"clamped_to_zero_effect\": bool(float(raw_var) <= 0.0),\n    \"float64_variance\": float(var),\n    \"kernel_output_max_abs\": float(np.abs(out.numpy()).max()),\n    \"reference_output_max_abs\": float(np.abs(ref).max()),\n    \"output_to_reference_max_ratio\": float(scale),\n    \"out_finite\": bool(np.isfinite(out.numpy()).all()),\n}))\n",
+        "expected_signal": "sign of the float32 single-pass variance on the seeded vector and whether kernel output magnitude explodes (clamp triggered)"
+      },
+      "created_at": "2026-09-24T00:16:00Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "f25f0196de5be6bb8f0502d0445b67c695c8debe56982bea6a5d1acf3f0eca00"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "ae6a8174f772156bc19df58846d7061f15994734c44b8cc989cfba421e0156d6"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t10_json_result.json",
+            "sha256": "1210fdd96b5ed3b24bcc942b31b01f3241b9e40e9932138e8d020e74b20626b9"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seeded vector, tl.maximum clamps it to 0, giving denominator sqrt(1e-5)\u22480.00316 and outputs of magnitude ~20000, breaking finiteness-scale/2% tolerance.",
+        "cwd": "/root/numerical_cases/case_i",
+        "duration_s": 4.923401,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "f25f0196de5be6bb8f0502d0445b67c695c8debe56982bea6a5d1acf3f0eca00"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "ae6a8174f772156bc19df58846d7061f15994734c44b8cc989cfba421e0156d6"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "1210fdd96b5ed3b24bcc942b31b01f3241b9e40e9932138e8d020e74b20626b9"
+              }
+            ],
+            "duration_s": 4.923401,
+            "exit_code": 0,
+            "expected_signal": "sign of the float32 single-pass variance on the seeded vector and whether kernel output magnitude explodes (clamp triggered)",
+            "json_parse_error": null,
+            "json_result": {
+              "clamped_to_zero_effect": false,
+              "float32_single_pass_variance_raw": 0.016357421875,
+              "float64_variance": 0.016349496608427216,
+              "kernel_output_max_abs": 2.9560980796813965,
+              "out_finite": true,
+              "output_to_reference_max_ratio": 0.9997628734413094,
+              "raw_negative": false,
+              "reference_output_max_abs": 2.9567992153040605
+            },
+            "stderr": "",
+            "stdout": "{\"float32_single_pass_variance_raw\": 0.016357421875, \"raw_negative\": false, \"clamped_to_zero_effect\": false, \"float64_variance\": 0.016349496608427216, \"kernel_output_max_abs\": 2.9560980796813965, \"reference_output_max_abs\": 2.9567992153040605, \"output_to_reference_max_ratio\": 0.9997628734413094, \"out_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": "sign of the float32 single-pass variance on the seeded vector and whether kernel output magnitude explodes (clamp triggered)",
+        "json_parse_error": null,
+        "json_result": {
+          "clamped_to_zero_effect": false,
+          "float32_single_pass_variance_raw": 0.016357421875,
+          "float64_variance": 0.016349496608427216,
+          "kernel_output_max_abs": 2.9560980796813965,
+          "out_finite": true,
+          "output_to_reference_max_ratio": 0.9997628734413094,
+          "raw_negative": false,
+          "reference_output_max_abs": 2.9567992153040605
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"float32_single_pass_variance_raw\": 0.016357421875, \"raw_negative\": false, \"clamped_to_zero_effect\": false, \"float64_variance\": 0.016349496608427216, \"kernel_output_max_abs\": 2.9560980796813965, \"reference_output_max_abs\": 2.9567992153040605, \"output_to_reference_max_ratio\": 0.9997628734413094, \"out_finite\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "float32_single_pass_variance_raw": 0.016357421875,
+          "float64_denominator": 0.12790424781228815,
+          "float64_variance": 0.016349496608427216,
+          "kernel_output_max_abs": 2.9560980796813965,
+          "out_finite": true,
+          "passes": true,
+          "rel_l2_error": 0.00024261613799325,
+          "tolerance": 0.02,
+          "variance_rel_error": 0.000484740708695494
+        },
+        "event_id": "t9",
+        "status": "rebutted",
+        "summary": "Actual kernel run on the seeded (128,) input gives relative L2 error 2.43e-4 against the float64 two-pass reference, far below the 0.02 tolerance. The float32 single-pass variance is 0.016357 vs float64 0.016349 (0.05% relative error), so cancellation does not breach the contract on this workload. Claim c1 (error exceeds 0.02) is contradicted.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-24T00:16:09Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T00:15:18Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T00:16:09Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "ae7d035cf744d10f03a9294e6cfdff781963e0e5c04b8f5321afa3eec85d7293"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "4fa15388f09bbf84a435cb30a209c945df856427b3352a29ce2d1d733a9b340e"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "35859d21dd9e364679728bfbf8047606c66eb5d1a18995b23fd3e813457567e5"
+                  }
+                ],
+                "duration_s": 4.924843,
+                "exit_code": 0,
+                "expected_signal": "relative L2 error of the actual kernel output vs float64 reference on the seeded vector; passes/fails 0.02 tolerance",
+                "float32_single_pass_variance_raw": 0.016357421875,
+                "float64_denominator": 0.12790424781228815,
+                "float64_variance": 0.016349496608427216,
+                "json_parse_error": null,
+                "json_result": {
+                  "float32_single_pass_variance_raw": 0.016357421875,
+                  "float64_denominator": 0.12790424781228815,
+                  "float64_variance": 0.016349496608427216,
+                  "kernel_output_max_abs": 2.9560980796813965,
+                  "out_finite": true,
+                  "passes": true,
+                  "rel_l2_error": 0.00024261613799325,
+                  "tolerance": 0.02,
+                  "variance_rel_error": 0.000484740708695494
+                },
+                "kernel_output_max_abs": 2.9560980796813965,
+                "out_finite": true,
+                "passes": true,
+                "rel_l2_error": 0.00024261613799325,
+                "stderr": "",
+                "stdout": "{\"rel_l2_error\": 0.00024261613799325, \"tolerance\": 0.02, \"passes\": true, \"out_finite\": true, \"float64_variance\": 0.016349496608427216, \"float32_single_pass_variance_raw\": 0.016357421875, \"variance_rel_error\": 0.000484740708695494, \"float64_denominator\": 0.12790424781228815, \"kernel_output_max_abs\": 2.9560980796813965}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.02,
+                "variance_rel_error": 0.000484740708695494
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Actual kernel run on the seeded (128,) input gives relative L2 error 2.43e-4 against the float64 two-pass reference, far below the 0.02 tolerance. The float32 single-pass variance is 0.016357 vs float64 0.016349 (0.05% relative error), so cancellation does not breach the contract on this workload. Claim c1 (error exceeds 0.02) is contradicted.",
+              "supports": "rebutted",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "With x\u224864\u00b10.125, squares/N\u22484096 while variance\u22480.0156, so ~5 digits of the float32 result cancel; the absolute rounding error in squares/N (~4096*2^-24*N-sum drift, order 1e-2 to 1e-1 relative to variance) can shift the denominator enough to exceed the 0.02 relative L2 bound. Note denominator = sqrt(variance+1e-5)\u22480.125, so a 10% variance error gives ~5% denominator error \u2014 possibly over tolerance; needs numeric evidence.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Reference uses float64 two-pass centered population variance; kernel's float32 single-pass E[x^2]-mean^2 form on the seeded x ~ 64.0 \u00b1 0.125 vector may violate the <= 0.02 relative L2 requirement for this fixed workload."
+            }
+          ],
+          "scope_rationale": "The contract fixes the input to make_inputs' seeded vector and requires relative L2 error <= 0.02 against a float64 two-pass reference; the kernel's float32 single-pass variance on this exact vector is the in-scope computation.",
+          "statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02.",
+          "status": "rebutted",
+          "updated_at": "2026-09-24T00:16:09Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:16:09Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "ae7d035cf744d10f03a9294e6cfdff781963e0e5c04b8f5321afa3eec85d7293"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "4fa15388f09bbf84a435cb30a209c945df856427b3352a29ce2d1d733a9b340e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "35859d21dd9e364679728bfbf8047606c66eb5d1a18995b23fd3e813457567e5"
+              }
+            ],
+            "duration_s": 4.924843,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of the actual kernel output vs float64 reference on the seeded vector; passes/fails 0.02 tolerance",
+            "float32_single_pass_variance_raw": 0.016357421875,
+            "float64_denominator": 0.12790424781228815,
+            "float64_variance": 0.016349496608427216,
+            "json_parse_error": null,
+            "json_result": {
+              "float32_single_pass_variance_raw": 0.016357421875,
+              "float64_denominator": 0.12790424781228815,
+              "float64_variance": 0.016349496608427216,
+              "kernel_output_max_abs": 2.9560980796813965,
+              "out_finite": true,
+              "passes": true,
+              "rel_l2_error": 0.00024261613799325,
+              "tolerance": 0.02,
+              "variance_rel_error": 0.000484740708695494
+            },
+            "kernel_output_max_abs": 2.9560980796813965,
+            "out_finite": true,
+            "passes": true,
+            "rel_l2_error": 0.00024261613799325,
+            "stderr": "",
+            "stdout": "{\"rel_l2_error\": 0.00024261613799325, \"tolerance\": 0.02, \"passes\": true, \"out_finite\": true, \"float64_variance\": 0.016349496608427216, \"float32_single_pass_variance_raw\": 0.016357421875, \"variance_rel_error\": 0.000484740708695494, \"float64_denominator\": 0.12790424781228815, \"kernel_output_max_abs\": 2.9560980796813965}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.02,
+            "variance_rel_error": 0.000484740708695494
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Actual kernel run on the seeded (128,) input gives relative L2 error 2.43e-4 against the float64 two-pass reference, far below the 0.02 tolerance. The float32 single-pass variance is 0.016357 vs float64 0.016349 (0.05% relative error), so cancellation does not breach the contract on this workload. Claim c1 (error exceeds 0.02) is contradicted.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "clamped_to_zero_effect": false,
+          "float32_single_pass_variance_raw": 0.016357421875,
+          "float64_variance": 0.016349496608427216,
+          "kernel_output_max_abs": 2.9560980796813965,
+          "out_finite": true,
+          "output_to_reference_max_ratio": 0.9997628734413094,
+          "raw_negative": false,
+          "reference_output_max_abs": 2.9567992153040605
+        },
+        "event_id": "t10",
+        "status": "rebutted",
+        "summary": "The float32 single-pass variance on the seeded vector is +0.016357 (not negative), so tl.maximum does not clamp it to zero. Output max magnitude is 2.956, matching the reference max 2.957 (ratio 0.9998) and output is finite \u2014 no explosion, contract satisfied. Claim c2 is contradicted on this workload.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-24T00:16:09Z",
+      "id": "t12",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T00:15:18Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T00:16:09Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "f25f0196de5be6bb8f0502d0445b67c695c8debe56982bea6a5d1acf3f0eca00"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "ae6a8174f772156bc19df58846d7061f15994734c44b8cc989cfba421e0156d6"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t10_json_result.json",
+                    "sha256": "1210fdd96b5ed3b24bcc942b31b01f3241b9e40e9932138e8d020e74b20626b9"
+                  }
+                ],
+                "clamped_to_zero_effect": false,
+                "duration_s": 4.923401,
+                "exit_code": 0,
+                "expected_signal": "sign of the float32 single-pass variance on the seeded vector and whether kernel output magnitude explodes (clamp triggered)",
+                "float32_single_pass_variance_raw": 0.016357421875,
+                "float64_variance": 0.016349496608427216,
+                "json_parse_error": null,
+                "json_result": {
+                  "clamped_to_zero_effect": false,
+                  "float32_single_pass_variance_raw": 0.016357421875,
+                  "float64_variance": 0.016349496608427216,
+                  "kernel_output_max_abs": 2.9560980796813965,
+                  "out_finite": true,
+                  "output_to_reference_max_ratio": 0.9997628734413094,
+                  "raw_negative": false,
+                  "reference_output_max_abs": 2.9567992153040605
+                },
+                "kernel_output_max_abs": 2.9560980796813965,
+                "out_finite": true,
+                "output_to_reference_max_ratio": 0.9997628734413094,
+                "raw_negative": false,
+                "reference_output_max_abs": 2.9567992153040605,
+                "stderr": "",
+                "stdout": "{\"float32_single_pass_variance_raw\": 0.016357421875, \"raw_negative\": false, \"clamped_to_zero_effect\": false, \"float64_variance\": 0.016349496608427216, \"kernel_output_max_abs\": 2.9560980796813965, \"reference_output_max_abs\": 2.9567992153040605, \"output_to_reference_max_ratio\": 0.9997628734413094, \"out_finite\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "The float32 single-pass variance on the seeded vector is +0.016357 (not negative), so tl.maximum does not clamp it to zero. Output max magnitude is 2.956, matching the reference max 2.957 (ratio 0.9998) and output is finite \u2014 no explosion, contract satisfied. Claim c2 is contradicted on this workload.",
+              "supports": "rebutted",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "The clamp exists in the code precisely because cancellation can go negative; if triggered on this fixed input the output magnitudes grow ~40x, far beyond tolerance.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Output must be one finite (128,) vector with relative L2 error <= 0.02 for the seeded workload; a clamped-to-zero variance yields denominator 0.00316 and outputs ~\u00b140, massively violating it."
+            }
+          ],
+          "scope_rationale": "Same fixed workload; the contract's tolerance would be grossly violated if cancellation drives the single-pass variance negative on this input and tl.maximum clamps it to 0.",
+          "statement": "If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seeded vector, tl.maximum clamps it to 0, giving denominator sqrt(1e-5)\u22480.00316 and outputs of magnitude ~20000, breaking finiteness-scale/2% tolerance.",
+          "status": "rebutted",
+          "updated_at": "2026-09-24T00:16:09Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:16:09Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "f25f0196de5be6bb8f0502d0445b67c695c8debe56982bea6a5d1acf3f0eca00"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "ae6a8174f772156bc19df58846d7061f15994734c44b8cc989cfba421e0156d6"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "1210fdd96b5ed3b24bcc942b31b01f3241b9e40e9932138e8d020e74b20626b9"
+              }
+            ],
+            "clamped_to_zero_effect": false,
+            "duration_s": 4.923401,
+            "exit_code": 0,
+            "expected_signal": "sign of the float32 single-pass variance on the seeded vector and whether kernel output magnitude explodes (clamp triggered)",
+            "float32_single_pass_variance_raw": 0.016357421875,
+            "float64_variance": 0.016349496608427216,
+            "json_parse_error": null,
+            "json_result": {
+              "clamped_to_zero_effect": false,
+              "float32_single_pass_variance_raw": 0.016357421875,
+              "float64_variance": 0.016349496608427216,
+              "kernel_output_max_abs": 2.9560980796813965,
+              "out_finite": true,
+              "output_to_reference_max_ratio": 0.9997628734413094,
+              "raw_negative": false,
+              "reference_output_max_abs": 2.9567992153040605
+            },
+            "kernel_output_max_abs": 2.9560980796813965,
+            "out_finite": true,
+            "output_to_reference_max_ratio": 0.9997628734413094,
+            "raw_negative": false,
+            "reference_output_max_abs": 2.9567992153040605,
+            "stderr": "",
+            "stdout": "{\"float32_single_pass_variance_raw\": 0.016357421875, \"raw_negative\": false, \"clamped_to_zero_effect\": false, \"float64_variance\": 0.016349496608427216, \"kernel_output_max_abs\": 2.9560980796813965, \"reference_output_max_abs\": 2.9567992153040605, \"output_to_reference_max_ratio\": 0.9997628734413094, \"out_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "The float32 single-pass variance on the seeded vector is +0.016357 (not negative), so tl.maximum does not clamp it to zero. Output max magnitude is 2.956, matching the reference max 2.957 (ratio 0.9998) and output is finite \u2014 no explosion, contract satisfied. Claim c2 is contradicted on this workload.",
+          "supports": "rebutted",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: the only in-scope workload (seeded (128,) vector) was executed directly. Both recorded claims (c1 cancellation exceeding 0.02 tolerance; c2 negative-variance clamp explosion) are rebutted by runtime evidence: rel L2 error 2.43e-4 << 0.02, single-pass variance +0.016357 vs float64 0.016349 (0.05% error), no clamp triggered, output finite with max ratio 0.9998 vs reference. No other attack surfaces exist within the fixed-workload contract.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T00:16:14Z",
+      "id": "t13",
+      "output": {
+        "created_at": "2026-09-24T00:16:14Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the only in-scope workload (seeded (128,) vector) was executed directly. Both recorded claims (c1 cancellation exceeding 0.02 tolerance; c2 negative-variance clamp explosion) are rebutted by runtime evidence: rel L2 error 2.43e-4 << 0.02, single-pass variance +0.016357 vs float64 0.016349 (0.05% error), no clamp triggered, output finite with max ratio 0.9998 vs reference. No other attack surfaces exist within the fixed-workload contract.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 12,
+        "tool_event_id": "t13",
+        "turn": 7
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The only in-scope input is the fixed seeded (128,) vector from make_inputs, and probes executed the actual kernel on that exact input. Claim c1 (float32 single-pass variance cancellation pushing relative L2 error above 0.02) is rebutted: measured relative L2 error is 2.43e-4 against the float64 two-pass reference, far under the 0.02 tolerance, and the single-pass variance error is only 0.05%. Claim c2 (negative variance clamped to zero causing huge outputs) is rebutted: the raw variance is +0.016357 (positive), no clamp is triggered, output is finite with max magnitude 2.956 vs reference 2.957. The contract requires only a finite (128,) vector with relative L2 error <= 0.02 on this fixed workload, which the kernel satisfies; the float32 single-pass accumulation differences are within the declared tolerance and thus acceptable per the contract's numeric tolerance clause. Skeptic reviewed the latest evidence and found no new claims; no unresolved material claims remain.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-24T00:16:21Z",
+      "id": "t14",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-24T00:16:21Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The only in-scope input is the fixed seeded (128,) vector from make_inputs, and probes executed the actual kernel on that exact input. Claim c1 (float32 single-pass variance cancellation pushing relative L2 error above 0.02) is rebutted: measured relative L2 error is 2.43e-4 against the float64 two-pass reference, far under the 0.02 tolerance, and the single-pass variance error is only 0.05%. Claim c2 (negative variance clamped to zero causing huge outputs) is rebutted: the raw variance is +0.016357 (positive), no clamp is triggered, output is finite with max magnitude 2.956 vs reference 2.957. The contract requires only a finite (128,) vector with relative L2 error <= 0.02 on this fixed workload, which the kernel satisfies; the float32 single-pass accumulation differences are within the declared tolerance and thus acceptable per the contract's numeric tolerance clause. Skeptic reviewed the latest evidence and found no new claims; no unresolved material claims remain.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-24T00:16:21Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The only in-scope input is the fixed seeded (128,) vector from make_inputs, and probes executed the actual kernel on that exact input. Claim c1 (float32 single-pass variance cancellation pushing relative L2 error above 0.02) is rebutted: measured relative L2 error is 2.43e-4 against the float64 two-pass reference, far under the 0.02 tolerance, and the single-pass variance error is only 0.05%. Claim c2 (negative variance clamped to zero causing huge outputs) is rebutted: the raw variance is +0.016357 (positive), no clamp is triggered, output is finite with max magnitude 2.956 vs reference 2.957. The contract requires only a finite (128,) vector with relative L2 error <= 0.02 on this fixed workload, which the kernel satisfies; the float32 single-pass accumulation differences are within the declared tolerance and thus acceptable per the contract's numeric tolerance clause. Skeptic reviewed the latest evidence and found no new claims; no unresolved material claims remain.",
+    "verdict": "trust"
+  }
+}

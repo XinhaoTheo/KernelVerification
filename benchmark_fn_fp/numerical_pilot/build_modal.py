@@ -149,7 +149,7 @@ def main():
     random.Random(9062026).shuffle(chosen)
     manifest = {"budgets": BUDGETS, "environment": result["environment"], "cases": {}}
     for i, (r, label) in enumerate(chosen, 1):
-        name = f"case_{i:02d}"
+        name = f"case_{i + 81:02d}"
         cfg = {k:v for k,v in r["config"].items() if k != "pair"}
         folder = ROOT / "eval_cases" / name
         folder.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,207 @@
+[
+  {
+    "created_at": "2026-09-23T02:53:32Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-23T02:54:23Z",
+        "data": {
+          "E_cpu_emulation": 0.2241157849547494,
+          "E_measured_gpu": 0.22411580644590948,
+          "E_over_threshold_ratio": 2.241158064459095,
+          "all_finite": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "300627c1ef41b3a67a25507ce3f1e51bcb37d0691b7fd55c080cc2e4ed9cbf36"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "129b50fc934a0014ed669854cc199613ccde0885e022b46ae21224995ceb6431"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "f9d0eeee09207d22e8254f8efd1f4ec12e630ca7cc855998e530b996439c9366"
+            }
+          ],
+          "branchA_abs_err_norm": 0.8499627969070997,
+          "branchB_abs_err_norm": 0.9616883415856585,
+          "clamp_hits_A_of_8192": 100,
+          "clamp_hits_B_of_8192": 101,
+          "denominator": 7.988006980125256,
+          "duration_s": 6.916455,
+          "err_norm": 1.7902386262463257,
+          "exit_code": 0,
+          "expected_signal": "Measured E = ||out-ref||_2 / max(||ref||_2, 0.008); E > 0.1 confirms c1, E <= 0.1 rebuts it.",
+          "gpu": "Tesla T4",
+          "json_parse_error": null,
+          "json_result": {
+            "E": 0.22411580644590948,
+            "E_cpu_emulation": 0.2241157849547494,
+            "all_finite": true,
+            "branchA_abs_err_norm": 0.8499627969070997,
+            "branchB_abs_err_norm": 0.9616883415856585,
+            "clamp_hits_A": 100,
+            "clamp_hits_B": 101,
+            "den": 7.988006980125256,
+            "gpu": "Tesla T4",
+            "max_abs_err": 0.5755404823381721,
+            "num": 1.7902386262463257,
+            "ref_max": 1.0589215290725207,
+            "ref_min": 0.9260899602768314,
+            "ref_norm": 7.988006980125256,
+            "scale_a_max": 0.5796835763113839,
+            "scale_a_min": 0.3023895195552281,
+            "threshold": 0.1
+          },
+          "max_abs_err": 0.5755404823381721,
+          "ref_max": 1.0589215290725207,
+          "ref_min": 0.9260899602768314,
+          "ref_norm": 7.988006980125256,
+          "scale_a_max": 0.5796835763113839,
+          "scale_a_min": 0.3023895195552281,
+          "stderr": "",
+          "stdout": "{\"E\": 0.22411580644590948, \"threshold\": 0.1, \"num\": 1.7902386262463257, \"den\": 7.988006980125256, \"ref_norm\": 7.988006980125256, \"ref_min\": 0.9260899602768314, \"ref_max\": 1.0589215290725207, \"E_cpu_emulation\": 0.2241157849547494, \"branchA_abs_err_norm\": 0.8499627969070997, \"branchB_abs_err_norm\": 0.9616883415856585, \"max_abs_err\": 0.5755404823381721, \"scale_a_min\": 0.3023895195552281, \"scale_a_max\": 0.5796835763113839, \"clamp_hits_A\": 100, \"clamp_hits_B\": 101, \"all_finite\": true, \"gpu\": \"Tesla T4\"}\n",
+          "threshold": 0.1,
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Measured on Tesla T4 with the exact make_inputs(SEED=921000) workload: E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.2241, i.e. 2.24x the contract threshold of 0.1. ||ref||_2 = 7.988 (per-row ref in [0.926, 1.059]), error norm 1.790, max abs err 0.576 on a ~1.0 signal. An independent NumPy fp64 emulation of the kernel's own quantization (absmax/7, floor(v/s+0.5), clamp +-7) reproduces E = 0.2241158 versus the kernel's 0.2241158, so the error is the INT4 quantization noise itself, not an fp32/accumulation or indexing artifact. Per-branch dequant error norms are 0.850 (A) and 0.962 (B) and add in quadrature rather than cancel, matching the predicted small-signal (0.5 per branch) vs large-row-norm regime. Clamp hits are only 100/8192 (A) and 101/8192 (B), confirming rounding noise, not clipping, dominates. Contract failed on the E<=0.1 half.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "make_inputs deliberately builds rows that are standard normal (row norm ~11.3, max|entry| ~3) but whose projection onto x is forced to only 0.5 +- 0.02 per branch (kernel.py lines 36-39). Quantizing a row at 4 bits with a per-row absmax scale injects noise of magnitude ~0.12 along any fixed unit direction, which is ~24% of the 0.5 signal per branch; B is additionally row-permuted (line 41) so the A and B errors are independent and add in quadrature to ~0.17 against a combined reference of ~1.0 per row. That analytical estimate lands well above 0.1 and must be checked by direct measurement of E on the exact seed.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"Evaluate numerical compliance of run(*make_inputs()) on exactly the workload specified in kernel.py\" with \"Metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64))\" and \"Contract: all outputs must be finite and E <= 0.1.\""
+      },
+      {
+        "source": "kernel.py lines 25-42",
+        "summary": "make_inputs fixes SEED=921000, PERMUTATION, x of shape (128,) unit-normalized, and A,B of shape (64,128) with per-row projection onto x forced to 0.5 +- 0.02."
+      }
+    ],
+    "scope_rationale": "This is precisely the single workload and metric the contract specifies; no generalization or alternate input is involved.",
+    "statement": "On the exact fixed workload run(*make_inputs()) with SEED=921000, the kernel's per-row INT4 (7-level) symmetric quantization of A and B produces a relative L2 error E = ||out - ref||_2 / max(||ref||_2, 0.008) that exceeds the contract threshold of 0.1 (expected E on the order of 0.15-0.20), because the per-element rounding noise (s/sqrt(12) with s = max|row|/7 ~ 0.4, giving sigma ~ 0.12 per branch dot product against a unit-norm x) is comparable to the engineered per-branch signal of only ~0.5, and the two independent branches add in quadrature rather than cancel.",
+    "status": "confirmed",
+    "updated_at": "2026-09-23T02:54:23Z"
+  },
+  {
+    "created_at": "2026-09-23T02:53:32Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-23T02:54:23Z",
+        "data": {
+          "all_finite": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "21b2c555b64659cf5f834e2547e963c796a237dcd2cd5ebf9f8e270e7432fbe5"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "d3c204df458041d1740d472f233dd21f2d00c612d0c740a1d895f9ad2fc799cd"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "41e2aa179628dea6d880ba034a63744a7803b0ec6160369487c742d7a136de9b"
+            }
+          ],
+          "dtype": "torch.float32",
+          "duration_s": 4.68771,
+          "exception": null,
+          "exit_code": 0,
+          "expected_signal": "If run() raises or any output is non-finite, c2 confirmed; clean execution with 64 finite fp32 outputs and no zero row-max rebuts it.",
+          "gpu": "Tesla T4",
+          "json_parse_error": null,
+          "json_result": {
+            "all_finite": true,
+            "dtype": "torch.float32",
+            "exception": null,
+            "gpu": "Tesla T4",
+            "min_rowmax_A": 2.1167266368865967,
+            "min_rowmax_B": 2.127420425415039,
+            "n_inf": 0,
+            "n_nan": 0,
+            "out_max": 1.546172857284546,
+            "out_min": 0.37438690662384033,
+            "ran": true,
+            "shape": [
+              64
+            ],
+            "triton_version": "3.4.0",
+            "zero_rows_A": 0,
+            "zero_rows_B": 0
+          },
+          "min_rowmax_A": 2.1167266368865967,
+          "min_rowmax_B": 2.127420425415039,
+          "n_inf": 0,
+          "n_nan": 0,
+          "out_max": 1.546172857284546,
+          "out_min": 0.37438690662384033,
+          "ran": true,
+          "shape": [
+            64
+          ],
+          "stderr": "",
+          "stdout": "{\"exception\": null, \"ran\": true, \"shape\": [64], \"dtype\": \"torch.float32\", \"n_nan\": 0, \"n_inf\": 0, \"all_finite\": true, \"min_rowmax_A\": 2.1167266368865967, \"min_rowmax_B\": 2.127420425415039, \"zero_rows_A\": 0, \"zero_rows_B\": 0, \"out_min\": 0.37438690662384033, \"out_max\": 1.546172857284546, \"triton_version\": \"3.4.0\", \"gpu\": \"Tesla T4\"}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "triton_version": "3.4.0",
+          "zero_rows_A": 0,
+          "zero_rows_B": 0
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "run(*make_inputs()) executed without exception on Tesla T4 with Triton 3.4.0 (enable_fp_fusion=False accepted as a launch kwarg). Output is a 64-element torch.float32 tensor with 0 NaN, 0 Inf, all values finite and in [0.374, 1.546]. No degenerate rows exist: min row absmax is 2.117 (A) and 2.127 (B), zero rows 0 for both, so the unguarded division by max|row|/7 never divides by zero on this workload. The finiteness/executability half of the contract is satisfied; c2 is rebutted.",
+        "supports": "rebutted",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The contract requires all outputs to be finite, which is a separate condition from E <= 0.1. Division by an unguarded per-row max is a classic NaN source, and enable_fp_fusion is a version-dependent Triton launch option; both are cheap to falsify by simply running the workload and checking torch.isfinite(out).all() and that no exception is raised.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"Contract: all outputs must be finite and E <= 0.1.\" and \"Target implementation: the supplied Triton kernel, on an NVIDIA T4.\""
+      }
+    ],
+    "scope_rationale": "Finiteness of the outputs on this exact workload is explicitly part of the stated contract, and successful execution of run(*make_inputs()) is presupposed by it.",
+    "statement": "run(*make_inputs()) may fail the finiteness half of the contract or fail to execute at all: the scales sa/sb are computed as max|row|/7 with no epsilon and used as divisors (kernel.py lines 12-15), and the launch passes enable_fp_fusion=False as a kernel launch kwarg (line 22), so any degenerate row or unsupported launch option would yield NaN/Inf outputs or an exception rather than a finite 64-element result.",
+    "status": "rebutted",
+    "updated_at": "2026-09-23T02:54:23Z"
+  }
+]

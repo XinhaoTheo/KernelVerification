@@ -1,0 +1,1648 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_u",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _reconstruct(Coefficients, Offset, Output, N: tl.constexpr,\n                 MODES: tl.constexpr, RETAINED: tl.constexpr):\n    n = tl.arange(0, N)\n    output = tl.full((N,), 0.0, tl.float32) + tl.load(Offset)\n    for k in tl.static_range(1, RETAINED + 1):\n        a = tl.load(Coefficients + k - 1)\n        b = tl.load(Coefficients + MODES + k - 1)\n        angle = n.to(tl.float32) * (2.0 * 3.141592653589793 * k / N)\n        output = output + a * tl.cos(angle)\n        output = output + b * tl.sin(angle)\n    tl.store(Output + n, output)\n\n\ndef run(coefficients, offset):\n    output = torch.empty((64,), device=coefficients.device, dtype=torch.float32)\n    _reconstruct[(1,)](coefficients, offset, output, N=64, MODES=16,\n                       RETAINED=6, num_warps=2, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(811164))\n    coefficients = rng.normal(0.0, 0.04, (2, 16)).astype(np.float32)\n    coefficients[:, :6] = rng.normal(0.0, 0.15, (2, 6)).astype(np.float32)\n    coefficients[0, 0] = np.float32(coefficients[0, 0] + np.float32(1.0))\n    offset = np.asarray([0.25], dtype=np.float32)\n    return coefficients, offset\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "passed": null,
+    "problem_text": "Reconstruct a real periodic signal from supplied Fourier coefficients.\n\nThe only inputs in scope are the float32 tensors returned by make_inputs() in\nkernel.py. coefficients has shape (2, 16), and offset has shape (1,). For sample\nn = 0,...,63, the mathematical reference uses ALL sixteen supplied modes:\n  reference[n] = offset[0] + sum_{k=1}^{16} (\n      coefficients[0,k-1] * cos(2*pi*k*n/64)\n    + coefficients[1,k-1] * sin(2*pi*k*n/64)).\nEvaluate this formula in float64 using the actual supplied float32 values.\nThe implementation uses a fixed frequency cutoff as an approximation.\n\nOutput must be a finite float32 vector of shape (64,). The numerical contract is\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.15.\nDecide whether this implementation satisfies that contract for this fixed\npublic workload. Other coefficient tensors are outside scope.\nThe launch disables FP multiply/add fusion.\n",
+    "rounds": null,
+    "session_dir": "/root/numerical_cases/case_u",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T01:08:49Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:09:35Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "d8218088fe1878c9a63946e745eac593d78ed8e5b75e6919119fb4fbe24bdb6c"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "f58ad0865bf1468fb5f5fd79180b29e54cf4113f42791fd7f7c6c71d73da7c7f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "2e5d190d0ae7374bf47972efe5c78dc48fb2bc88902de2b05750dc7e8b3b77ee"
+              }
+            ],
+            "duration_s": 5.395873,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error ratio vs 0.15 tolerance on the fixed seeded workload",
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "finite": true,
+              "metric": "relative L2 error vs float64 all-16-mode reference (fixed seeded workload)",
+              "passes_contract": true,
+              "ratio_total": 0.07170935573821624,
+              "ratio_truncation_only": 0.07170931214373656,
+              "ref_norm": 8.566189857158276,
+              "shape": [
+                64
+              ],
+              "tolerance": 0.15
+            },
+            "ratio_total": 0.07170935573821624,
+            "ratio_truncation_only": 0.07170931214373656,
+            "ref_norm": 8.566189857158276,
+            "shape": [
+              64
+            ],
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 all-16-mode reference (fixed seeded workload)\", \"ratio_total\": 0.07170935573821624, \"ratio_truncation_only\": 0.07170931214373656, \"tolerance\": 0.15, \"passes_contract\": true, \"finite\": true, \"shape\": [64], \"ref_norm\": 8.566189857158276}\n",
+            "timed_out": false,
+            "timeout_s": 120,
+            "tolerance": 0.15
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the fixed seeded workload, kernel output (finite float32, shape (64,)) has relative L2 error 0.0717 vs the float64 all-16-mode reference, below the 0.15 tolerance. Truncation of modes 7..16 alone accounts for 0.0717 of the error; the contract passes. The claimed potential tolerance violation does not occur.",
+          "supports": "rebutted",
+          "tool_event_id": "t12"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "Dropped modes 7..16 have 20 coefficients ~N(0,0.04); their summed L2 energy could be a nontrivial fraction of the reference norm (dominated by the ~1.15 DC coefficient, offset 0.25, and ~0.15-scale retained modes). Whether the ratio exceeds 0.15 on this seeded workload is directly computable in float64 from make_inputs_numpy().",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Reference uses ALL sixteen modes; contract is ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15 on the fixed public workload from make_inputs()."
+        }
+      ],
+      "scope_rationale": "The contract requires the 64-sample output to match the float64 reference summing all 16 modes within relative L2 0.15 on the fixed make_inputs() workload; dropping modes 7..16 directly tests that stated criterion.",
+      "statement": "The kernel retains only modes k=1..6 and drops modes 7..16, so the relative L2 error ||output - reference||_2 / ||reference||_2 on the fixed seeded workload may exceed the 0.15 contract tolerance.",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T01:09:35Z"
+    },
+    {
+      "created_at": "2026-09-24T01:08:49Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:09:35Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "b1b2da74b493a79a153e365a76874f6c41e07afd13172d953bda1b1a87096f74"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "e822c4de4c797001a4d7f115921d021c051a63918ce6f0e2d631a0e118d839ab"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "ce6762fcb39d0a34a50538f9267bdf40f66979db7938fb04da8fd8683df5d1e8"
+              }
+            ],
+            "duration_s": 4.366555,
+            "exit_code": 0,
+            "expected_signal": "fp32 angle/accumulation error magnitude (orders of magnitude below 0.15 or not)",
+            "json_parse_error": null,
+            "json_result": {
+              "fp32_error_below_tolerance": true,
+              "max_abs_err_retained": 4.838400478046623e-07,
+              "metric": "relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)",
+              "ratio_retained_modes_fp32_vs_fp64": 2.017038206548106e-07,
+              "ratio_vs_full_reference": 0.07170935573821624,
+              "tolerance": 0.15
+            },
+            "max_abs_err_retained": 4.838400478046623e-07,
+            "ratio_retained_modes_fp32_vs_fp64": 2.017038206548106e-07,
+            "ratio_vs_full_reference": 0.07170935573821624,
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)\", \"ratio_retained_modes_fp32_vs_fp64\": 2.017038206548106e-07, \"max_abs_err_retained\": 4.838400478046623e-07, \"ratio_vs_full_reference\": 0.07170935573821624, \"tolerance\": 0.15, \"fp32_error_below_tolerance\": true}\n",
+            "timed_out": false,
+            "timeout_s": 120,
+            "tolerance": 0.15
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Isolating the fp32 angle/accumulation effect by comparing kernel output to an fp64 retained-modes (k=1..6) reference gives relative L2 2.02e-7 and max abs error 4.8e-7 \u2014 orders of magnitude below the 0.15 tolerance, confirming the concern of non-negligible fp32 error does not materialize.",
+          "supports": "rebutted",
+          "tool_event_id": "t13"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "2*pi is not exactly representable in fp32 and n up to 63 multiplies the fp32 rounding of 2*pi*k/64; expected angle error ~1e-4 rad, giving sin/cos error far below the 0.15 tolerance \u2014 likely negligible, but worth confirming with a runtime probe.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Output must satisfy relative L2 <= 0.15 versus the float64 reference evaluated with actual supplied float32 values; the launch disables FP fusion."
+        }
+      ],
+      "scope_rationale": "The numeric contract (relative L2 <= 0.15 vs float64 reference on supplied float32 values, FP fusion disabled) makes any float32 angle/accumulation error part of the same acceptance criterion on the fixed workload.",
+      "statement": "The float32 angle computation angle = n * (2*pi*k/64) combined with float32 accumulation may introduce non-negligible error on this fixed workload, though it is expected to be orders of magnitude below the 0.15 tolerance.",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T01:09:35Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coef[0,k-1]*cos(2*pi*k*n/64) + coef[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 on the supplied float32 inputs.",
+      "Output must be a finite float32 vector of shape (64,); relative L2 error ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15.",
+      "Only the fixed workload from make_inputs() (seeded PCG64 seed 811164, coefficients shape (2,16), offset 0.25) is in scope; other coefficient tensors are out of scope.",
+      "The launch disables FP multiply/add fusion; no performance requirement is stated."
+    ],
+    "kernel_model": [
+      "Triton kernel _reconstruct computes only modes k=1..6 (RETAINED=6), skipping modes 7..16 entirely; this is the stated fixed frequency-cutoff approximation.",
+      "Scalar loads a=coef[0,k-1], b=coef[1,k-1] via raw pointer arithmetic with MODES=16 stride; offset is added to all 64 samples.",
+      "Per-sample angle computed in float32: n * (2*pi*k/64); cos/sin accumulated in float32 with enable_fp_fusion=False.",
+      "run() allocates a fixed 64-element float32 output and launches a single program; shape/device are hardcoded to the fixed workload.",
+      "Input generation: coefficients ~N(0,0.04) with first 6 modes overwritten ~N(0,0.15) and coef[0,0] shifted by +1.0; offset fixed at 0.25."
+    ],
+    "open_questions": [
+      "Does the relative L2 truncation error from dropped modes 7..16 on the seeded workload exceed 0.15 (claim c1)? Computable deterministically in float64 from make_inputs_numpy().",
+      "Is the fp32 angle/accumulation error negligible relative to tolerance (claim c2)? Expected ~1e-4 vs 0.15, but unconfirmed."
+    ],
+    "risk_map": [
+      "Truncation error: dropped modes 7..16 have 20 coefficients ~N(0,0.04); their L2 energy could push relative error toward or past the 0.15 threshold, while the denominator is dominated by coef[0,0]~1.15, offset 0.25, and ~0.15-scale retained modes \u2014 Skeptic/Experimenter should compute the exact seeded ratio (claim c1).",
+      "Float32 angle precision: n*(2*pi*k/64) in fp32 gives angle error ~1e-4 rad \u2014 likely orders below tolerance, secondary surface (claim c2).",
+      "Scalar loads assume contiguous coefficients layout of shape (2,16); no shape validation, but out-of-scope inputs are excluded by the contract.",
+      "enable_fp_fusion=False affects bitwise reproducibility only, not the loose 0.15 tolerance."
+    ],
+    "scope_notes": [
+      "Fixed public workload only (PCG64 seed 811164); no other inputs, no performance requirement; output finiteness and shape (64,) required.",
+      "Relative L2 tolerance 0.15 vs a float64 reference on the actual float32 inputs is the sole numeric acceptance criterion."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coef[0,k-1]*cos(2*pi*k*n/64) + coef[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 on the supplied float32 inputs.",
+        "Output must be a finite float32 vector of shape (64,); relative L2 error ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15.",
+        "Only the fixed workload from make_inputs() (seeded PCG64 seed 811164, coefficients shape (2,16), offset 0.25) is in scope; other coefficient tensors are out of scope.",
+        "The launch disables FP multiply/add fusion; no performance requirement is stated."
+      ],
+      "created_at": "2026-09-24T01:08:59Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel _reconstruct computes only modes k=1..6 (RETAINED=6), skipping modes 7..16 entirely; this is the stated fixed frequency-cutoff approximation.",
+        "Scalar loads a=coef[0,k-1], b=coef[1,k-1] via raw pointer arithmetic with MODES=16 stride; offset is added to all 64 samples.",
+        "Per-sample angle computed in float32: n * (2*pi*k/64); cos/sin accumulated in float32 with enable_fp_fusion=False.",
+        "run() allocates a fixed 64-element float32 output and launches a single program; shape/device are hardcoded to the fixed workload.",
+        "Input generation: coefficients ~N(0,0.04) with first 6 modes overwritten ~N(0,0.15) and coef[0,0] shifted by +1.0; offset fixed at 0.25."
+      ],
+      "open_questions": [
+        "Does the relative L2 truncation error from dropped modes 7..16 on the seeded workload exceed 0.15 (claim c1)? Computable deterministically in float64 from make_inputs_numpy().",
+        "Is the fp32 angle/accumulation error negligible relative to tolerance (claim c2)? Expected ~1e-4 vs 0.15, but unconfirmed."
+      ],
+      "risk_map": [
+        "Truncation error: dropped modes 7..16 have 20 coefficients ~N(0,0.04); their L2 energy could push relative error toward or past the 0.15 threshold, while the denominator is dominated by coef[0,0]~1.15, offset 0.25, and ~0.15-scale retained modes \u2014 Skeptic/Experimenter should compute the exact seeded ratio (claim c1).",
+        "Float32 angle precision: n*(2*pi*k/64) in fp32 gives angle error ~1e-4 rad \u2014 likely orders below tolerance, secondary surface (claim c2).",
+        "Scalar loads assume contiguous coefficients layout of shape (2,16); no shape validation, but out-of-scope inputs are excluded by the contract.",
+        "enable_fp_fusion=False affects bitwise reproducibility only, not the loose 0.15 tolerance."
+      ],
+      "scope_notes": [
+        "Fixed public workload only (PCG64 seed 811164); no other inputs, no performance requirement; output finiteness and shape (64,) required.",
+        "Relative L2 tolerance 0.15 vs a float64 reference on the actual float32 inputs is the sole numeric acceptance criterion."
+      ],
+      "summary": "Fourier reconstruction kernel (case_u): the contract reference sums all 16 modes in float64 while the kernel retains only modes k=1..6 (fixed cutoff). The open question is whether the truncation error on the fixed seeded workload stays within the 15% relative L2 tolerance. Resending the description update that previously failed with malformed arguments.",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_u",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_u"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_u"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_u"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_u",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 8.02026714599998,
+      "role": "describer",
+      "round": 2,
+      "text": "",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coef[0,k-1]*cos(2*pi*k*n/64) + coef[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 on the supplied float32 inputs.",
+              "Output must be finite float32 shape (64,); relative L2 error <= 0.15 vs max(||reference||,1e-12).",
+              "Only the fixed workload from make_inputs() (seeded PCG64, coefficients shape (2,16), offset 0.25) is in scope; other coefficient tensors are out of scope.",
+              "Kernel launch explicitly disables FP fusion; contract tolerance is loose (0.15 relative)."
+            ],
+            "kernel_model": [
+              "Triton kernel _reconstruct computes only modes k=1..6 (RETAINED=6), skipping modes 7..16 entirely; this is the stated fixed frequency-cutoff approximation.",
+              "Loads scalar coefficient a=coef[0,k-1], b=coef[1,k-1] via raw pointer arithmetic with MODES=16 stride; offset added to all 64 samples.",
+              "Per-sample angle computed in float32: n * (2*pi*k/64); cos/sin accumulated in float32 with enable_fp_fusion=False.",
+              "run() allocates a fixed 64-element float32 output and launches a single program; output shape/device fixed regardless of inputs beyond the fixed workload."
+            ],
+            "risk_map</arg_key>[\"Truncation error: dropped modes 7..16 have coefficients ~N(0,0.04) each; their RMS contribution could push relative error toward or past the 0.15 threshold \u2014 the dominant signal (coef[0,0] ~ 1.15) controls the denominator, so Skeptic should compute the actual error ratio for this seeded workload.\", \"Float32 angle/2*pi precision: angle = n*(2*pi*k/64) in fp32 can accumulate error, but with 0.15 tolerance this is likely negligible; still a secondary surface.\", \"Scalar loads assume contiguous coefficients layout and shape (2,16); out-of-scope inputs not validated (shape/device assumptions unguarded).\", \"enable_fp_fusion=False matters only for exact bitwise reproducibility, not for the loose tolerance.\"]</arg_value><arg_key>scope_notes": "Fixed public workload only (seed 811164); no other inputs, no performance requirement, output finiteness and shape (64,) required.\", \"Relative L2 tolerance 0.15 is the sole numeric acceptance criterion; float64 reference on float32 inputs.\"]",
+            "summary": "Fourier reconstruction kernel (case_u): reference sums all 16 modes; kernel retains only 6 (k=1..6). Question is whether truncation error on the fixed seeded workload stays within 15% relative L2."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.02,
+        "input_tokens": 4731,
+        "output_tokens": 611
+      }
+    },
+    {
+      "duration_s": 7.662943862999981,
+      "role": "skeptic",
+      "round": 3,
+      "text": "I'll record the key testable hypotheses: the truncation error from dropping modes 7\u201316 relative to the 0.15 tolerance, and a secondary fp32 angle-precision concern.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Dropped modes 7..16 each have coefficients ~N(0,0.04) with 20 coefficients; their summed L2 energy could be comparable to the retained-signal norm. Whether the ratio exceeds 0.15 on this seeded workload (denominator dominated by offset 0.25 and the ~1.15 DC coefficient and retained ~0.15-scale modes) is exactly the contract question and is directly computable in float64 from make_inputs_numpy().",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference uses ALL sixteen modes; contract is ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15 on the fixed public workload from make_inputs()."
+              }
+            ],
+            "statement": "The kernel retains only modes k=1..6 and drops modes 7..16, so the relative L2 error ||output - reference||_2 / ||reference||_2 on the fixed seeded workload may exceed the 0.15 contract tolerance."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "2*pi is not exactly representable and n up to 63 multiplies the fp32 rounding of 2*pi*k/64, giving angle error up to ~63*eps*2pi*k ~ 1e-4 rad for k<=6, so sin/cos error ~1e-4 \u2014 orders below the 0.15 tolerance, and retained coefficient magnitudes ~0.15.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Output must satisfy relative L2 <= 0.15 versus the float64 reference evaluated with actual supplied float32 values; the launch disables FP fusion."
+              }
+            ],
+            "statement": "The float32 angle computation angle = n * (2*pi*k/64) introduces per-sample phase error that, combined with float32 accumulation, could contribute non-negligible error, though likely far below the 0.15 tolerance on this fixed workload."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.663,
+        "input_tokens": 8250,
+        "output_tokens": 513
+      }
+    },
+    {
+      "duration_s": 6.924235687999982,
+      "role": "skeptic",
+      "round": 4,
+      "text": "The two claims failed to record due to a missing scope_rationale field \u2014 re-sending them now with that field included.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Dropped modes 7..16 have 20 coefficients ~N(0,0.04); their summed L2 energy could be a nontrivial fraction of the reference norm (dominated by the ~1.15 DC coefficient, offset 0.25, and ~0.15-scale retained modes). Whether the ratio exceeds 0.15 on this seeded workload is directly computable in float64 from make_inputs_numpy().",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference uses ALL sixteen modes; contract is ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15 on the fixed public workload from make_inputs()."
+              }
+            ],
+            "scope_rationale": "The contract requires the 64-sample output to match the float64 reference summing all 16 modes within relative L2 0.15 on the fixed make_inputs() workload; dropping modes 7..16 directly tests that stated criterion.",
+            "statement": "The kernel retains only modes k=1..6 and drops modes 7..16, so the relative L2 error ||output - reference||_2 / ||reference||_2 on the fixed seeded workload may exceed the 0.15 contract tolerance."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "2*pi is not exactly representable in fp32 and n up to 63 multiplies the fp32 rounding of 2*pi*k/64; expected angle error ~1e-4 rad, giving sin/cos error far below the 0.15 tolerance \u2014 likely negligible, but worth confirming with a runtime probe.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Output must satisfy relative L2 <= 0.15 versus the float64 reference evaluated with actual supplied float32 values; the launch disables FP fusion."
+              }
+            ],
+            "scope_rationale": "The numeric contract (relative L2 <= 0.15 vs float64 reference on supplied float32 values, FP fusion disabled) makes any float32 angle/accumulation error part of the same acceptance criterion on the fixed workload.",
+            "statement": "The float32 angle computation angle = n * (2*pi*k/64) combined with float32 accumulation may introduce non-negligible error on this fixed workload, though it is expected to be orders of magnitude below the 0.15 tolerance."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.924,
+        "input_tokens": 9667,
+        "output_tokens": 563
+      }
+    },
+    {
+      "duration_s": 9.436161586999987,
+      "role": "describer",
+      "round": 5,
+      "text": "My earlier description update failed due to malformed arguments \u2014 re-sending it now as a properly structured call.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coef[0,k-1]*cos(2*pi*k*n/64) + coef[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 on the supplied float32 inputs.",
+              "Output must be a finite float32 vector of shape (64,); relative L2 error ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15.",
+              "Only the fixed workload from make_inputs() (seeded PCG64 seed 811164, coefficients shape (2,16), offset 0.25) is in scope; other coefficient tensors are out of scope.",
+              "The launch disables FP multiply/add fusion; no performance requirement is stated."
+            ],
+            "kernel_model": [
+              "Triton kernel _reconstruct computes only modes k=1..6 (RETAINED=6), skipping modes 7..16 entirely; this is the stated fixed frequency-cutoff approximation.",
+              "Scalar loads a=coef[0,k-1], b=coef[1,k-1] via raw pointer arithmetic with MODES=16 stride; offset is added to all 64 samples.",
+              "Per-sample angle computed in float32: n * (2*pi*k/64); cos/sin accumulated in float32 with enable_fp_fusion=False.",
+              "run() allocates a fixed 64-element float32 output and launches a single program; shape/device are hardcoded to the fixed workload.",
+              "Input generation: coefficients ~N(0,0.04) with first 6 modes overwritten ~N(0,0.15) and coef[0,0] shifted by +1.0; offset fixed at 0.25."
+            ],
+            "open_questions": [
+              "Does the relative L2 truncation error from dropped modes 7..16 on the seeded workload exceed 0.15 (claim c1)? Computable deterministically in float64 from make_inputs_numpy().",
+              "Is the fp32 angle/accumulation error negligible relative to tolerance (claim c2)? Expected ~1e-4 vs 0.15, but unconfirmed."
+            ],
+            "risk_map": [
+              "Truncation error: dropped modes 7..16 have 20 coefficients ~N(0,0.04); their L2 energy could push relative error toward or past the 0.15 threshold, while the denominator is dominated by coef[0,0]~1.15, offset 0.25, and ~0.15-scale retained modes \u2014 Skeptic/Experimenter should compute the exact seeded ratio (claim c1).",
+              "Float32 angle precision: n*(2*pi*k/64) in fp32 gives angle error ~1e-4 rad \u2014 likely orders below tolerance, secondary surface (claim c2).",
+              "Scalar loads assume contiguous coefficients layout of shape (2,16); no shape validation, but out-of-scope inputs are excluded by the contract.",
+              "enable_fp_fusion=False affects bitwise reproducibility only, not the loose 0.15 tolerance."
+            ],
+            "scope_notes": [
+              "Fixed public workload only (PCG64 seed 811164); no other inputs, no performance requirement; output finiteness and shape (64,) required.",
+              "Relative L2 tolerance 0.15 vs a float64 reference on the actual float32 inputs is the sole numeric acceptance criterion."
+            ],
+            "summary": "Fourier reconstruction kernel (case_u): the contract reference sums all 16 modes in float64 while the kernel retains only modes k=1..6 (fixed cutoff). The open question is whether the truncation error on the fixed seeded workload stays within the 15% relative L2 tolerance. Resending the description update that previously failed with malformed arguments."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.436,
+        "input_tokens": 10619,
+        "output_tokens": 840
+      }
+    },
+    {
+      "duration_s": 4.379832440000001,
+      "role": "skeptic",
+      "round": 6,
+      "text": "Both core in-scope hypotheses (truncation of modes 7\u201316 vs the 0.15 relative-L2 tolerance, and fp32 angle precision) are already recorded as c1 and c2. The source is short and the contract is fixed-workload-only; I see no further testable in-scope attack surfaces.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Reviewed kernel source and contract; the fixed-workload relative-L2 tolerance is the sole acceptance criterion, and both directly testable in-scope hypotheses (truncation of modes 7..16 vs the 0.15 tolerance, and fp32 angle/accumulation precision) are already captured as claims c1 and c2. Other inputs are explicitly out of scope, so no new high-quality in-scope claims exist.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.38,
+        "input_tokens": 17377,
+        "output_tokens": 203
+      }
+    },
+    {
+      "duration_s": 14.425926900999997,
+      "role": "experimenter",
+      "round": 7,
+      "text": "I'll launch two independent probes: c1 runs the kernel on the fixed workload and computes the relative L2 error vs the float64 all-16-mode reference; c2 isolates the float32 angle/accumulation error by comparing the retained-mode computation in fp32 vs fp64. Both use the fixed seeded inputs, so neither depends on the other's outcome.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, numpy as np, torch\nimport sys\nsys.path.insert(0, '/root/numerical_cases/case_u')\nfrom kernel import make_inputs, run, make_inputs_numpy\n\ncoef, offset = make_inputs()\nout = run(coef, offset).cpu().numpy()\n\nc64 = make_inputs_numpy()[0].astype(np.float64)\noff64 = float(make_inputs_numpy()[1][0])\nn = np.arange(64, dtype=np.float64)\nref = off64 * np.ones(64)\nfor k in range(1, 17):\n    ref += c64[0, k-1] * np.cos(2*np.pi*k*n/64) + c64[1, k-1] * np.sin(2*np.pi*k*n/64)\n\nerr = np.linalg.norm(out.astype(np.float64) - ref)\nratio = err / max(np.linalg.norm(ref), 1e-12)\n# pure truncation error (retained modes in fp64)\ntrunc = np.zeros(64)\nfor k in range(7, 17):\n    trunc += c64[0, k-1] * np.cos(2*np.pi*k*n/64) + c64[1, k-1] * np.sin(2*np.pi*k*n/64)\ntrunc_ratio = np.linalg.norm(trunc) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n    \"metric\": \"relative L2 error vs float64 all-16-mode reference (fixed seeded workload)\",\n    \"ratio_total\": float(ratio),\n    \"ratio_truncation_only\": float(trunc_ratio),\n    \"tolerance\": 0.15,\n    \"passes_contract\": bool(ratio <= 0.15),\n    \"finite\": bool(np.all(np.isfinite(out))),\n    \"shape\": list(out.shape),\n    \"ref_norm\": float(np.linalg.norm(ref)),\n}))\n",
+            "expected_signal": "relative L2 error ratio vs 0.15 tolerance on the fixed seeded workload",
+            "timeout_s": 120
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import json, numpy as np, torch\nimport sys\nsys.path.insert(0, '/root/numerical_cases/case_u')\nfrom kernel import make_inputs, run, make_inputs_numpy\n\ncoef, offset = make_inputs()\nout = run(coef, offset).cpu().numpy()\n\nc64 = make_inputs_numpy()[0].astype(np.float64)\noff64 = float(make_inputs_numpy()[1][0])\nn64 = np.arange(64, dtype=np.float64)\n\n# fp64 reference for RETAINED modes only (k=1..6) -- isolates fp32 angle/accum error\nref_ret = off64 * np.ones(64)\nfor k in range(1, 7):\n    ref_ret += c64[0, k-1] * np.cos(2*np.pi*k*n64/64) + c64[1, k-1] * np.sin(2*np.pi*k*n64/64)\n\nerr = np.linalg.norm(out.astype(np.float64) - ref_ret)\nref_full_norm = np.linalg.norm([off64]) # not needed; use ref_ret norm\nratio_ret = err / max(np.linalg.norm(ref_ret), 1e-12)\nmax_abs = float(np.max(np.abs(out - ref_ret)))\n\n# fp64 all-mode reference ratio for context\nref_all = off64 * np.ones(64)\nfor k in range(1, 17):\n    ref_all += c64[0, k-1] * np.cos(2*np.pi*k*n64/64) + c64[1, k-1] * np.sin(2*np.pi*k*n64/64)\nratio_all = np.linalg.norm(out - ref_all) / max(np.linalg.norm(ref_all), 1e-12)\n\nprint(json.dumps({\n    \"metric\": \"relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)\",\n    \"ratio_retained_modes_fp32_vs_fp64\": float(ratio_ret),\n    \"max_abs_err_retained\": max_abs,\n    \"ratio_vs_full_reference\": float(ratio_all),\n    \"tolerance\": 0.15,\n    \"fp32_error_below_tolerance\": bool(ratio_ret < 1e-3),\n}))\n",
+            "expected_signal": "fp32 angle/accumulation error magnitude (orders of magnitude below 0.15 or not)",
+            "timeout_s": 120
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 14.426,
+        "input_tokens": 18390,
+        "output_tokens": 1114
+      }
+    },
+    {
+      "duration_s": 7.662048217000006,
+      "role": "experimenter",
+      "round": 8,
+      "text": "Both probes have returned. The kernel's relative L2 error vs the full 16-mode float64 reference is 0.0717, well under the 0.15 tolerance, and the fp32 angle/accumulation error is ~2e-7, orders of magnitude below tolerance. Finalizing both claims now.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "finite": true,
+              "ratio_total": 0.07170935573821624,
+              "ratio_truncation_only": 0.07170931214373656,
+              "ref_norm": 8.566189857158276,
+              "shape": [
+                64
+              ],
+              "tolerance": 0.15
+            },
+            "event_id": "t12",
+            "status": "rebutted",
+            "summary": "On the fixed seeded workload, kernel output (finite float32, shape (64,)) has relative L2 error 0.0717 vs the float64 all-16-mode reference, below the 0.15 tolerance. Truncation of modes 7..16 alone accounts for 0.0717 of the error; the contract passes. The claimed potential tolerance violation does not occur.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "max_abs_err_retained": 4.838400478046623e-07,
+              "ratio_retained_modes_fp32_vs_fp64": 2.017038206548106e-07,
+              "ratio_vs_full_reference": 0.07170935573821624,
+              "tolerance": 0.15
+            },
+            "event_id": "t13",
+            "status": "rebutted",
+            "summary": "Isolating the fp32 angle/accumulation effect by comparing kernel output to an fp64 retained-modes (k=1..6) reference gives relative L2 2.02e-7 and max abs error 4.8e-7 \u2014 orders of magnitude below the 0.15 tolerance, confirming the concern of non-negligible fp32 error does not materialize.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.662,
+        "input_tokens": 22863,
+        "output_tokens": 566
+      }
+    },
+    {
+      "duration_s": 5.415090011000018,
+      "role": "skeptic",
+      "round": 9,
+      "text": "Both in-scope claims are resolved by direct runtime evidence on the fixed seeded workload: the truncation ratio is 0.0717 and fp32 angle error is ~2e-7, both far below the 0.15 tolerance, and output is finite with shape (64,). No new material in-scope problems are exposed, so I'm confirming no new claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: both in-scope claims (c1 truncation of modes 7..16 vs the 0.15 relative-L2 tolerance; c2 fp32 angle/accumulation precision) are rebutted by direct runtime probes on the fixed seeded workload \u2014 relative L2 error 0.0717 < 0.15, with truncation alone accounting for essentially all of it, and fp32 error ~2e-7. Output is finite float32 of shape (64,). The contract covers only this fixed workload, so no further testable in-scope attack surfaces remain.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.415,
+        "input_tokens": 28426,
+        "output_tokens": 229
+      }
+    },
+    {
+      "duration_s": 5.574772109000037,
+      "role": "judge",
+      "round": 10,
+      "text": "Evidence is decisive: the sole contract criterion (relative L2 \u2264 0.15 vs the float64 all-16-mode reference on the fixed seeded workload) is satisfied with ratio 0.0717, output is finite float32 of shape (64,), and the fp32 precision concern is negligible (~2e-7). Both in-scope claims are rebutted and the Skeptic signed off with no new claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The contract (problem.txt, the only artifact contract, fixed workload from make_inputs()) requires a finite float32 (64,) output within relative L2 0.15 of the float64 all-16-mode reference. Runtime probe t12 on the exact seeded workload shows ratio 0.0717 < 0.15, output finite with correct shape; the truncation of modes 7..16 (the kernel's declared fixed frequency-cutoff approximation) accounts for essentially all of that 0.0717 error, which the contract's tolerance explicitly accommodates. Probe t13 shows the float32 angle/accumulation error is ~2e-7 relative, negligible. Both in-scope claims c1 and c2 are rebutted by direct runtime evidence; the Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Other coefficient tensors are explicitly out of scope.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.575,
+        "input_tokens": 28657,
+        "output_tokens": 329
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-24T01:09:41Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: both in-scope claims (c1 truncation of modes 7..16 vs the 0.15 relative-L2 tolerance; c2 fp32 angle/accumulation precision) are rebutted by direct runtime probes on the fixed seeded workload \u2014 relative L2 error 0.0717 < 0.15, with truncation alone accounting for essentially all of it, and fp32 error ~2e-7. Output is finite float32 of shape (64,). The contract covers only this fixed workload, so no further testable in-scope attack surfaces remain.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 15,
+    "tool_event_id": "t16",
+    "turn": 9
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_u"
+      },
+      "created_at": "2026-09-24T01:08:27Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_u",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _reconstruct(Coefficients, Offset, Output, N: tl.constexpr,\n                 MODES: tl.constexpr, RETAINED: tl.constexpr):\n    n = tl.arange(0, N)\n    output = tl.full((N,), 0.0, tl.float32) + tl.load(Offset)\n    for k in tl.static_range(1, RETAINED + 1):\n        a = tl.load(Coefficients + k - 1)\n        b = tl.load(Coefficients + MODES + k - 1)\n        angle = n.to(tl.float32) * (2.0 * 3.141592653589793 * k / N)\n        output = output + a * tl.cos(angle)\n        output = output + b * tl.sin(angle)\n    tl.store(Output + n, output)\n\n\ndef run(coefficients, offset):\n    output = torch.empty((64,), device=coefficients.device, dtype=torch.float32)\n    _reconstruct[(1,)](coefficients, offset, output, N=64, MODES=16,\n                       RETAINED=6, num_warps=2, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(811164))\n    coefficients = rng.normal(0.0, 0.04, (2, 16)).astype(np.float32)\n    coefficients[:, :6] = rng.normal(0.0, 0.15, (2, 6)).astype(np.float32)\n    coefficients[0, 0] = np.float32(coefficients[0, 0] + np.float32(1.0))\n    offset = np.asarray([0.25], dtype=np.float32)\n    return coefficients, offset\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "passed": null,
+        "problem_text": "Reconstruct a real periodic signal from supplied Fourier coefficients.\n\nThe only inputs in scope are the float32 tensors returned by make_inputs() in\nkernel.py. coefficients has shape (2, 16), and offset has shape (1,). For sample\nn = 0,...,63, the mathematical reference uses ALL sixteen supplied modes:\n  reference[n] = offset[0] + sum_{k=1}^{16} (\n      coefficients[0,k-1] * cos(2*pi*k*n/64)\n    + coefficients[1,k-1] * sin(2*pi*k*n/64)).\nEvaluate this formula in float64 using the actual supplied float32 values.\nThe implementation uses a fixed frequency cutoff as an approximation.\n\nOutput must be a finite float32 vector of shape (64,). The numerical contract is\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.15.\nDecide whether this implementation satisfies that contract for this fixed\npublic workload. Other coefficient tensors are outside scope.\nThe launch disables FP multiply/add fusion.\n",
+        "rounds": null,
+        "session_dir": "/root/numerical_cases/case_u",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_u"
+      },
+      "created_at": "2026-09-24T01:08:27Z",
+      "id": "t2",
+      "output": {
+        "content": "Reconstruct a real periodic signal from supplied Fourier coefficients.\n\nThe only inputs in scope are the float32 tensors returned by make_inputs() in\nkernel.py. coefficients has shape (2, 16), and offset has shape (1,). For sample\nn = 0,...,63, the mathematical reference uses ALL sixteen supplied modes:\n  reference[n] = offset[0] + sum_{k=1}^{16} (\n      coefficients[0,k-1] * cos(2*pi*k*n/64)\n    + coefficients[1,k-1] * sin(2*pi*k*n/64)).\nEvaluate this formula in float64 using the actual supplied float32 values.\nThe implementation uses a fixed frequency cutoff as an approximation.\n\nOutput must be a finite float32 vector of shape (64,). The numerical contract is\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.15.\nDecide whether this implementation satisfies that contract for this fixed\npublic workload. Other coefficient tensors are outside scope.\nThe launch disables FP multiply/add fusion.\n",
+        "entry": "case_u",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_u"
+      },
+      "created_at": "2026-09-24T01:08:27Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_u",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1406
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 67
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 914
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_u",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T01:08:27Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_u\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_u",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 67,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coef[0,k-1]*cos(2*pi*k*n/64) + coef[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 on the supplied float32 inputs.",
+          "Output must be finite float32 shape (64,); relative L2 error <= 0.15 vs max(||reference||,1e-12).",
+          "Only the fixed workload from make_inputs() (seeded PCG64, coefficients shape (2,16), offset 0.25) is in scope; other coefficient tensors are out of scope.",
+          "Kernel launch explicitly disables FP fusion; contract tolerance is loose (0.15 relative)."
+        ],
+        "kernel_model": [
+          "Triton kernel _reconstruct computes only modes k=1..6 (RETAINED=6), skipping modes 7..16 entirely; this is the stated fixed frequency-cutoff approximation.",
+          "Loads scalar coefficient a=coef[0,k-1], b=coef[1,k-1] via raw pointer arithmetic with MODES=16 stride; offset added to all 64 samples.",
+          "Per-sample angle computed in float32: n * (2*pi*k/64); cos/sin accumulated in float32 with enable_fp_fusion=False.",
+          "run() allocates a fixed 64-element float32 output and launches a single program; output shape/device fixed regardless of inputs beyond the fixed workload."
+        ],
+        "risk_map</arg_key>[\"Truncation error: dropped modes 7..16 have coefficients ~N(0,0.04) each; their RMS contribution could push relative error toward or past the 0.15 threshold \u2014 the dominant signal (coef[0,0] ~ 1.15) controls the denominator, so Skeptic should compute the actual error ratio for this seeded workload.\", \"Float32 angle/2*pi precision: angle = n*(2*pi*k/64) in fp32 can accumulate error, but with 0.15 tolerance this is likely negligible; still a secondary surface.\", \"Scalar loads assume contiguous coefficients layout and shape (2,16); out-of-scope inputs not validated (shape/device assumptions unguarded).\", \"enable_fp_fusion=False matters only for exact bitwise reproducibility, not for the loose tolerance.\"]</arg_value><arg_key>scope_notes": "Fixed public workload only (seed 811164); no other inputs, no performance requirement, output finiteness and shape (64,) required.\", \"Relative L2 tolerance 0.15 is the sole numeric acceptance criterion; float64 reference on float32 inputs.\"]",
+        "summary": "Fourier reconstruction kernel (case_u): reference sums all 16 modes; kernel retains only 6 (k=1..6). Question is whether truncation error on the fixed seeded workload stays within 15% relative L2."
+      },
+      "created_at": "2026-09-24T01:08:35Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"Truncation error: dropped modes 7..16 have coefficients ~N(0,0.04) each; their RMS contribution could push relative error toward or past the 0.15 threshold \u2014 the dominant signal (coef[0,0] ~ 1.15) controls the denominator, so Skeptic should compute the actual error ratio for this seeded workload.\", \"Float32 angle/2*pi precision: angle = n*(2*pi*k/64) in fp32 can accumulate error, but with 0.15 tolerance this is likely negligible; still a secondary surface.\", \"Scalar loads assume contiguous coefficients layout and shape (2,16); out-of-scope inputs not validated (shape/device assumptions unguarded).\", \"enable_fp_fusion=False matters only for exact bitwise reproducibility, not for the loose tolerance.\"]</arg_value><arg_key>scope_notes",
+          "recoverable": true,
+          "type": "ToolRegistryError"
+        },
+        "error_type": "ToolRegistryError",
+        "event_id": "t5",
+        "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"Truncation error: dropped modes 7..16 have coefficients ~N(0,0.04) each; their RMS contribution could push relative error toward or past the 0.15 threshold \u2014 the dominant signal (coef[0,0] ~ 1.15) controls the denominator, so Skeptic should compute the actual error ratio for this seeded workload.\", \"Float32 angle/2*pi precision: angle = n*(2*pi*k/64) in fp32 can accumulate error, but with 0.15 tolerance this is likely negligible; still a secondary surface.\", \"Scalar loads assume contiguous coefficients layout and shape (2,16); out-of-scope inputs not validated (shape/device assumptions unguarded).\", \"enable_fp_fusion=False matters only for exact bitwise reproducibility, not for the loose tolerance.\"]</arg_value><arg_key>scope_notes",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "Dropped modes 7..16 each have coefficients ~N(0,0.04) with 20 coefficients; their summed L2 energy could be comparable to the retained-signal norm. Whether the ratio exceeds 0.15 on this seeded workload (denominator dominated by offset 0.25 and the ~1.15 DC coefficient and retained ~0.15-scale modes) is exactly the contract question and is directly computable in float64 from make_inputs_numpy().",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference uses ALL sixteen modes; contract is ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15 on the fixed public workload from make_inputs()."
+          }
+        ],
+        "statement": "The kernel retains only modes k=1..6 and drops modes 7..16, so the relative L2 error ||output - reference||_2 / ||reference||_2 on the fixed seeded workload may exceed the 0.15 contract tolerance."
+      },
+      "created_at": "2026-09-24T01:08:42Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "2*pi is not exactly representable and n up to 63 multiplies the fp32 rounding of 2*pi*k/64, giving angle error up to ~63*eps*2pi*k ~ 1e-4 rad for k<=6, so sin/cos error ~1e-4 \u2014 orders below the 0.15 tolerance, and retained coefficient magnitudes ~0.15.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must satisfy relative L2 <= 0.15 versus the float64 reference evaluated with actual supplied float32 values; the launch disables FP fusion."
+          }
+        ],
+        "statement": "The float32 angle computation angle = n * (2*pi*k/64) introduces per-sample phase error that, combined with float32 accumulation, could contribute non-negligible error, though likely far below the 0.15 tolerance on this fixed workload."
+      },
+      "created_at": "2026-09-24T01:08:42Z",
+      "id": "t7",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t7",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Dropped modes 7..16 have 20 coefficients ~N(0,0.04); their summed L2 energy could be a nontrivial fraction of the reference norm (dominated by the ~1.15 DC coefficient, offset 0.25, and ~0.15-scale retained modes). Whether the ratio exceeds 0.15 on this seeded workload is directly computable in float64 from make_inputs_numpy().",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference uses ALL sixteen modes; contract is ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15 on the fixed public workload from make_inputs()."
+          }
+        ],
+        "scope_rationale": "The contract requires the 64-sample output to match the float64 reference summing all 16 modes within relative L2 0.15 on the fixed make_inputs() workload; dropping modes 7..16 directly tests that stated criterion.",
+        "statement": "The kernel retains only modes k=1..6 and drops modes 7..16, so the relative L2 error ||output - reference||_2 / ||reference||_2 on the fixed seeded workload may exceed the 0.15 contract tolerance."
+      },
+      "created_at": "2026-09-24T01:08:49Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-24T01:08:49Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "Dropped modes 7..16 have 20 coefficients ~N(0,0.04); their summed L2 energy could be a nontrivial fraction of the reference norm (dominated by the ~1.15 DC coefficient, offset 0.25, and ~0.15-scale retained modes). Whether the ratio exceeds 0.15 on this seeded workload is directly computable in float64 from make_inputs_numpy().",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference uses ALL sixteen modes; contract is ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15 on the fixed public workload from make_inputs()."
+          }
+        ],
+        "scope_rationale": "The contract requires the 64-sample output to match the float64 reference summing all 16 modes within relative L2 0.15 on the fixed make_inputs() workload; dropping modes 7..16 directly tests that stated criterion.",
+        "statement": "The kernel retains only modes k=1..6 and drops modes 7..16, so the relative L2 error ||output - reference||_2 / ||reference||_2 on the fixed seeded workload may exceed the 0.15 contract tolerance.",
+        "status": "open",
+        "updated_at": "2026-09-24T01:08:49Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "2*pi is not exactly representable in fp32 and n up to 63 multiplies the fp32 rounding of 2*pi*k/64; expected angle error ~1e-4 rad, giving sin/cos error far below the 0.15 tolerance \u2014 likely negligible, but worth confirming with a runtime probe.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must satisfy relative L2 <= 0.15 versus the float64 reference evaluated with actual supplied float32 values; the launch disables FP fusion."
+          }
+        ],
+        "scope_rationale": "The numeric contract (relative L2 <= 0.15 vs float64 reference on supplied float32 values, FP fusion disabled) makes any float32 angle/accumulation error part of the same acceptance criterion on the fixed workload.",
+        "statement": "The float32 angle computation angle = n * (2*pi*k/64) combined with float32 accumulation may introduce non-negligible error on this fixed workload, though it is expected to be orders of magnitude below the 0.15 tolerance."
+      },
+      "created_at": "2026-09-24T01:08:49Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-24T01:08:49Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "2*pi is not exactly representable in fp32 and n up to 63 multiplies the fp32 rounding of 2*pi*k/64; expected angle error ~1e-4 rad, giving sin/cos error far below the 0.15 tolerance \u2014 likely negligible, but worth confirming with a runtime probe.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must satisfy relative L2 <= 0.15 versus the float64 reference evaluated with actual supplied float32 values; the launch disables FP fusion."
+          }
+        ],
+        "scope_rationale": "The numeric contract (relative L2 <= 0.15 vs float64 reference on supplied float32 values, FP fusion disabled) makes any float32 angle/accumulation error part of the same acceptance criterion on the fixed workload.",
+        "statement": "The float32 angle computation angle = n * (2*pi*k/64) combined with float32 accumulation may introduce non-negligible error on this fixed workload, though it is expected to be orders of magnitude below the 0.15 tolerance.",
+        "status": "open",
+        "updated_at": "2026-09-24T01:08:49Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coef[0,k-1]*cos(2*pi*k*n/64) + coef[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 on the supplied float32 inputs.",
+          "Output must be a finite float32 vector of shape (64,); relative L2 error ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15.",
+          "Only the fixed workload from make_inputs() (seeded PCG64 seed 811164, coefficients shape (2,16), offset 0.25) is in scope; other coefficient tensors are out of scope.",
+          "The launch disables FP multiply/add fusion; no performance requirement is stated."
+        ],
+        "kernel_model": [
+          "Triton kernel _reconstruct computes only modes k=1..6 (RETAINED=6), skipping modes 7..16 entirely; this is the stated fixed frequency-cutoff approximation.",
+          "Scalar loads a=coef[0,k-1], b=coef[1,k-1] via raw pointer arithmetic with MODES=16 stride; offset is added to all 64 samples.",
+          "Per-sample angle computed in float32: n * (2*pi*k/64); cos/sin accumulated in float32 with enable_fp_fusion=False.",
+          "run() allocates a fixed 64-element float32 output and launches a single program; shape/device are hardcoded to the fixed workload.",
+          "Input generation: coefficients ~N(0,0.04) with first 6 modes overwritten ~N(0,0.15) and coef[0,0] shifted by +1.0; offset fixed at 0.25."
+        ],
+        "open_questions": [
+          "Does the relative L2 truncation error from dropped modes 7..16 on the seeded workload exceed 0.15 (claim c1)? Computable deterministically in float64 from make_inputs_numpy().",
+          "Is the fp32 angle/accumulation error negligible relative to tolerance (claim c2)? Expected ~1e-4 vs 0.15, but unconfirmed."
+        ],
+        "risk_map": [
+          "Truncation error: dropped modes 7..16 have 20 coefficients ~N(0,0.04); their L2 energy could push relative error toward or past the 0.15 threshold, while the denominator is dominated by coef[0,0]~1.15, offset 0.25, and ~0.15-scale retained modes \u2014 Skeptic/Experimenter should compute the exact seeded ratio (claim c1).",
+          "Float32 angle precision: n*(2*pi*k/64) in fp32 gives angle error ~1e-4 rad \u2014 likely orders below tolerance, secondary surface (claim c2).",
+          "Scalar loads assume contiguous coefficients layout of shape (2,16); no shape validation, but out-of-scope inputs are excluded by the contract.",
+          "enable_fp_fusion=False affects bitwise reproducibility only, not the loose 0.15 tolerance."
+        ],
+        "scope_notes": [
+          "Fixed public workload only (PCG64 seed 811164); no other inputs, no performance requirement; output finiteness and shape (64,) required.",
+          "Relative L2 tolerance 0.15 vs a float64 reference on the actual float32 inputs is the sole numeric acceptance criterion."
+        ],
+        "summary": "Fourier reconstruction kernel (case_u): the contract reference sums all 16 modes in float64 while the kernel retains only modes k=1..6 (fixed cutoff). The open question is whether the truncation error on the fixed seeded workload stays within the 15% relative L2 tolerance. Resending the description update that previously failed with malformed arguments."
+      },
+      "created_at": "2026-09-24T01:08:59Z",
+      "id": "t10",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coef[0,k-1]*cos(2*pi*k*n/64) + coef[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 on the supplied float32 inputs.",
+            "Output must be a finite float32 vector of shape (64,); relative L2 error ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15.",
+            "Only the fixed workload from make_inputs() (seeded PCG64 seed 811164, coefficients shape (2,16), offset 0.25) is in scope; other coefficient tensors are out of scope.",
+            "The launch disables FP multiply/add fusion; no performance requirement is stated."
+          ],
+          "kernel_model": [
+            "Triton kernel _reconstruct computes only modes k=1..6 (RETAINED=6), skipping modes 7..16 entirely; this is the stated fixed frequency-cutoff approximation.",
+            "Scalar loads a=coef[0,k-1], b=coef[1,k-1] via raw pointer arithmetic with MODES=16 stride; offset is added to all 64 samples.",
+            "Per-sample angle computed in float32: n * (2*pi*k/64); cos/sin accumulated in float32 with enable_fp_fusion=False.",
+            "run() allocates a fixed 64-element float32 output and launches a single program; shape/device are hardcoded to the fixed workload.",
+            "Input generation: coefficients ~N(0,0.04) with first 6 modes overwritten ~N(0,0.15) and coef[0,0] shifted by +1.0; offset fixed at 0.25."
+          ],
+          "open_questions": [
+            "Does the relative L2 truncation error from dropped modes 7..16 on the seeded workload exceed 0.15 (claim c1)? Computable deterministically in float64 from make_inputs_numpy().",
+            "Is the fp32 angle/accumulation error negligible relative to tolerance (claim c2)? Expected ~1e-4 vs 0.15, but unconfirmed."
+          ],
+          "risk_map": [
+            "Truncation error: dropped modes 7..16 have 20 coefficients ~N(0,0.04); their L2 energy could push relative error toward or past the 0.15 threshold, while the denominator is dominated by coef[0,0]~1.15, offset 0.25, and ~0.15-scale retained modes \u2014 Skeptic/Experimenter should compute the exact seeded ratio (claim c1).",
+            "Float32 angle precision: n*(2*pi*k/64) in fp32 gives angle error ~1e-4 rad \u2014 likely orders below tolerance, secondary surface (claim c2).",
+            "Scalar loads assume contiguous coefficients layout of shape (2,16); no shape validation, but out-of-scope inputs are excluded by the contract.",
+            "enable_fp_fusion=False affects bitwise reproducibility only, not the loose 0.15 tolerance."
+          ],
+          "scope_notes": [
+            "Fixed public workload only (PCG64 seed 811164); no other inputs, no performance requirement; output finiteness and shape (64,) required.",
+            "Relative L2 tolerance 0.15 vs a float64 reference on the actual float32 inputs is the sole numeric acceptance criterion."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coef[0,k-1]*cos(2*pi*k*n/64) + coef[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 on the supplied float32 inputs.",
+            "Output must be a finite float32 vector of shape (64,); relative L2 error ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15.",
+            "Only the fixed workload from make_inputs() (seeded PCG64 seed 811164, coefficients shape (2,16), offset 0.25) is in scope; other coefficient tensors are out of scope.",
+            "The launch disables FP multiply/add fusion; no performance requirement is stated."
+          ],
+          "created_at": "2026-09-24T01:08:59Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel _reconstruct computes only modes k=1..6 (RETAINED=6), skipping modes 7..16 entirely; this is the stated fixed frequency-cutoff approximation.",
+            "Scalar loads a=coef[0,k-1], b=coef[1,k-1] via raw pointer arithmetic with MODES=16 stride; offset is added to all 64 samples.",
+            "Per-sample angle computed in float32: n * (2*pi*k/64); cos/sin accumulated in float32 with enable_fp_fusion=False.",
+            "run() allocates a fixed 64-element float32 output and launches a single program; shape/device are hardcoded to the fixed workload.",
+            "Input generation: coefficients ~N(0,0.04) with first 6 modes overwritten ~N(0,0.15) and coef[0,0] shifted by +1.0; offset fixed at 0.25."
+          ],
+          "open_questions": [
+            "Does the relative L2 truncation error from dropped modes 7..16 on the seeded workload exceed 0.15 (claim c1)? Computable deterministically in float64 from make_inputs_numpy().",
+            "Is the fp32 angle/accumulation error negligible relative to tolerance (claim c2)? Expected ~1e-4 vs 0.15, but unconfirmed."
+          ],
+          "risk_map": [
+            "Truncation error: dropped modes 7..16 have 20 coefficients ~N(0,0.04); their L2 energy could push relative error toward or past the 0.15 threshold, while the denominator is dominated by coef[0,0]~1.15, offset 0.25, and ~0.15-scale retained modes \u2014 Skeptic/Experimenter should compute the exact seeded ratio (claim c1).",
+            "Float32 angle precision: n*(2*pi*k/64) in fp32 gives angle error ~1e-4 rad \u2014 likely orders below tolerance, secondary surface (claim c2).",
+            "Scalar loads assume contiguous coefficients layout of shape (2,16); no shape validation, but out-of-scope inputs are excluded by the contract.",
+            "enable_fp_fusion=False affects bitwise reproducibility only, not the loose 0.15 tolerance."
+          ],
+          "scope_notes": [
+            "Fixed public workload only (PCG64 seed 811164); no other inputs, no performance requirement; output finiteness and shape (64,) required.",
+            "Relative L2 tolerance 0.15 vs a float64 reference on the actual float32 inputs is the sole numeric acceptance criterion."
+          ],
+          "summary": "Fourier reconstruction kernel (case_u): the contract reference sums all 16 modes in float64 while the kernel retains only modes k=1..6 (fixed cutoff). The open question is whether the truncation error on the fixed seeded workload stays within the 15% relative L2 tolerance. Resending the description update that previously failed with malformed arguments.",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "Reviewed kernel source and contract; the fixed-workload relative-L2 tolerance is the sole acceptance criterion, and both directly testable in-scope hypotheses (truncation of modes 7..16 vs the 0.15 tolerance, and fp32 angle/accumulation precision) are already captured as claims c1 and c2. Other inputs are explicitly out of scope, so no new high-quality in-scope claims exist.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T01:09:03Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-09-24T01:09:03Z",
+        "decision": "no_new_claims",
+        "reason": "Reviewed kernel source and contract; the fixed-workload relative-L2 tolerance is the sole acceptance criterion, and both directly testable in-scope hypotheses (truncation of modes 7..16 vs the 0.15 tolerance, and fp32 angle/accumulation precision) are already captured as claims c1 and c2. Other inputs are explicitly out of scope, so no new high-quality in-scope claims exist.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 10,
+        "tool_event_id": "t11",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, numpy as np, torch\nimport sys\nsys.path.insert(0, '/root/numerical_cases/case_u')\nfrom kernel import make_inputs, run, make_inputs_numpy\n\ncoef, offset = make_inputs()\nout = run(coef, offset).cpu().numpy()\n\nc64 = make_inputs_numpy()[0].astype(np.float64)\noff64 = float(make_inputs_numpy()[1][0])\nn = np.arange(64, dtype=np.float64)\nref = off64 * np.ones(64)\nfor k in range(1, 17):\n    ref += c64[0, k-1] * np.cos(2*np.pi*k*n/64) + c64[1, k-1] * np.sin(2*np.pi*k*n/64)\n\nerr = np.linalg.norm(out.astype(np.float64) - ref)\nratio = err / max(np.linalg.norm(ref), 1e-12)\n# pure truncation error (retained modes in fp64)\ntrunc = np.zeros(64)\nfor k in range(7, 17):\n    trunc += c64[0, k-1] * np.cos(2*np.pi*k*n/64) + c64[1, k-1] * np.sin(2*np.pi*k*n/64)\ntrunc_ratio = np.linalg.norm(trunc) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n    \"metric\": \"relative L2 error vs float64 all-16-mode reference (fixed seeded workload)\",\n    \"ratio_total\": float(ratio),\n    \"ratio_truncation_only\": float(trunc_ratio),\n    \"tolerance\": 0.15,\n    \"passes_contract\": bool(ratio <= 0.15),\n    \"finite\": bool(np.all(np.isfinite(out))),\n    \"shape\": list(out.shape),\n    \"ref_norm\": float(np.linalg.norm(ref)),\n}))\n",
+        "expected_signal": "relative L2 error ratio vs 0.15 tolerance on the fixed seeded workload",
+        "timeout_s": 120
+      },
+      "created_at": "2026-09-24T01:09:23Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "d8218088fe1878c9a63946e745eac593d78ed8e5b75e6919119fb4fbe24bdb6c"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "f58ad0865bf1468fb5f5fd79180b29e54cf4113f42791fd7f7c6c71d73da7c7f"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "2e5d190d0ae7374bf47972efe5c78dc48fb2bc88902de2b05750dc7e8b3b77ee"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel retains only modes k=1..6 and drops modes 7..16, so the relative L2 error ||output - reference||_2 / ||reference||_2 on the fixed seeded workload may exceed the 0.15 contract tolerance.",
+        "cwd": "/root/numerical_cases/case_u",
+        "duration_s": 5.395873,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "d8218088fe1878c9a63946e745eac593d78ed8e5b75e6919119fb4fbe24bdb6c"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "f58ad0865bf1468fb5f5fd79180b29e54cf4113f42791fd7f7c6c71d73da7c7f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "2e5d190d0ae7374bf47972efe5c78dc48fb2bc88902de2b05750dc7e8b3b77ee"
+              }
+            ],
+            "duration_s": 5.395873,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error ratio vs 0.15 tolerance on the fixed seeded workload",
+            "json_parse_error": null,
+            "json_result": {
+              "finite": true,
+              "metric": "relative L2 error vs float64 all-16-mode reference (fixed seeded workload)",
+              "passes_contract": true,
+              "ratio_total": 0.07170935573821624,
+              "ratio_truncation_only": 0.07170931214373656,
+              "ref_norm": 8.566189857158276,
+              "shape": [
+                64
+              ],
+              "tolerance": 0.15
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 all-16-mode reference (fixed seeded workload)\", \"ratio_total\": 0.07170935573821624, \"ratio_truncation_only\": 0.07170931214373656, \"tolerance\": 0.15, \"passes_contract\": true, \"finite\": true, \"shape\": [64], \"ref_norm\": 8.566189857158276}\n",
+            "timed_out": false,
+            "timeout_s": 120
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "relative L2 error ratio vs 0.15 tolerance on the fixed seeded workload",
+        "json_parse_error": null,
+        "json_result": {
+          "finite": true,
+          "metric": "relative L2 error vs float64 all-16-mode reference (fixed seeded workload)",
+          "passes_contract": true,
+          "ratio_total": 0.07170935573821624,
+          "ratio_truncation_only": 0.07170931214373656,
+          "ref_norm": 8.566189857158276,
+          "shape": [
+            64
+          ],
+          "tolerance": 0.15
+        },
+        "sandbox": {
+          "cpu_limit_s": 150,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"relative L2 error vs float64 all-16-mode reference (fixed seeded workload)\", \"ratio_total\": 0.07170935573821624, \"ratio_truncation_only\": 0.07170931214373656, \"tolerance\": 0.15, \"passes_contract\": true, \"finite\": true, \"shape\": [64], \"ref_norm\": 8.566189857158276}\n",
+        "timed_out": false,
+        "timeout_s": 120,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import json, numpy as np, torch\nimport sys\nsys.path.insert(0, '/root/numerical_cases/case_u')\nfrom kernel import make_inputs, run, make_inputs_numpy\n\ncoef, offset = make_inputs()\nout = run(coef, offset).cpu().numpy()\n\nc64 = make_inputs_numpy()[0].astype(np.float64)\noff64 = float(make_inputs_numpy()[1][0])\nn64 = np.arange(64, dtype=np.float64)\n\n# fp64 reference for RETAINED modes only (k=1..6) -- isolates fp32 angle/accum error\nref_ret = off64 * np.ones(64)\nfor k in range(1, 7):\n    ref_ret += c64[0, k-1] * np.cos(2*np.pi*k*n64/64) + c64[1, k-1] * np.sin(2*np.pi*k*n64/64)\n\nerr = np.linalg.norm(out.astype(np.float64) - ref_ret)\nref_full_norm = np.linalg.norm([off64]) # not needed; use ref_ret norm\nratio_ret = err / max(np.linalg.norm(ref_ret), 1e-12)\nmax_abs = float(np.max(np.abs(out - ref_ret)))\n\n# fp64 all-mode reference ratio for context\nref_all = off64 * np.ones(64)\nfor k in range(1, 17):\n    ref_all += c64[0, k-1] * np.cos(2*np.pi*k*n64/64) + c64[1, k-1] * np.sin(2*np.pi*k*n64/64)\nratio_all = np.linalg.norm(out - ref_all) / max(np.linalg.norm(ref_all), 1e-12)\n\nprint(json.dumps({\n    \"metric\": \"relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)\",\n    \"ratio_retained_modes_fp32_vs_fp64\": float(ratio_ret),\n    \"max_abs_err_retained\": max_abs,\n    \"ratio_vs_full_reference\": float(ratio_all),\n    \"tolerance\": 0.15,\n    \"fp32_error_below_tolerance\": bool(ratio_ret < 1e-3),\n}))\n",
+        "expected_signal": "fp32 angle/accumulation error magnitude (orders of magnitude below 0.15 or not)",
+        "timeout_s": 120
+      },
+      "created_at": "2026-09-24T01:09:27Z",
+      "id": "t13",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t13_probe.py",
+            "sha256": "b1b2da74b493a79a153e365a76874f6c41e07afd13172d953bda1b1a87096f74"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t13_stdout.txt",
+            "sha256": "e822c4de4c797001a4d7f115921d021c051a63918ce6f0e2d631a0e118d839ab"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t13_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t13_json_result.json",
+            "sha256": "ce6762fcb39d0a34a50538f9267bdf40f66979db7938fb04da8fd8683df5d1e8"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "The float32 angle computation angle = n * (2*pi*k/64) combined with float32 accumulation may introduce non-negligible error on this fixed workload, though it is expected to be orders of magnitude below the 0.15 tolerance.",
+        "cwd": "/root/numerical_cases/case_u",
+        "duration_s": 4.366555,
+        "event_id": "t13",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "b1b2da74b493a79a153e365a76874f6c41e07afd13172d953bda1b1a87096f74"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "e822c4de4c797001a4d7f115921d021c051a63918ce6f0e2d631a0e118d839ab"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "ce6762fcb39d0a34a50538f9267bdf40f66979db7938fb04da8fd8683df5d1e8"
+              }
+            ],
+            "duration_s": 4.366555,
+            "exit_code": 0,
+            "expected_signal": "fp32 angle/accumulation error magnitude (orders of magnitude below 0.15 or not)",
+            "json_parse_error": null,
+            "json_result": {
+              "fp32_error_below_tolerance": true,
+              "max_abs_err_retained": 4.838400478046623e-07,
+              "metric": "relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)",
+              "ratio_retained_modes_fp32_vs_fp64": 2.017038206548106e-07,
+              "ratio_vs_full_reference": 0.07170935573821624,
+              "tolerance": 0.15
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)\", \"ratio_retained_modes_fp32_vs_fp64\": 2.017038206548106e-07, \"max_abs_err_retained\": 4.838400478046623e-07, \"ratio_vs_full_reference\": 0.07170935573821624, \"tolerance\": 0.15, \"fp32_error_below_tolerance\": true}\n",
+            "timed_out": false,
+            "timeout_s": 120
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t13"
+        },
+        "exit_code": 0,
+        "expected_signal": "fp32 angle/accumulation error magnitude (orders of magnitude below 0.15 or not)",
+        "json_parse_error": null,
+        "json_result": {
+          "fp32_error_below_tolerance": true,
+          "max_abs_err_retained": 4.838400478046623e-07,
+          "metric": "relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)",
+          "ratio_retained_modes_fp32_vs_fp64": 2.017038206548106e-07,
+          "ratio_vs_full_reference": 0.07170935573821624,
+          "tolerance": 0.15
+        },
+        "sandbox": {
+          "cpu_limit_s": 150,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)\", \"ratio_retained_modes_fp32_vs_fp64\": 2.017038206548106e-07, \"max_abs_err_retained\": 4.838400478046623e-07, \"ratio_vs_full_reference\": 0.07170935573821624, \"tolerance\": 0.15, \"fp32_error_below_tolerance\": true}\n",
+        "timed_out": false,
+        "timeout_s": 120,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "finite": true,
+          "ratio_total": 0.07170935573821624,
+          "ratio_truncation_only": 0.07170931214373656,
+          "ref_norm": 8.566189857158276,
+          "shape": [
+            64
+          ],
+          "tolerance": 0.15
+        },
+        "event_id": "t12",
+        "status": "rebutted",
+        "summary": "On the fixed seeded workload, kernel output (finite float32, shape (64,)) has relative L2 error 0.0717 vs the float64 all-16-mode reference, below the 0.15 tolerance. Truncation of modes 7..16 alone accounts for 0.0717 of the error; the contract passes. The claimed potential tolerance violation does not occur.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-24T01:09:35Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T01:08:49Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T01:09:35Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "d8218088fe1878c9a63946e745eac593d78ed8e5b75e6919119fb4fbe24bdb6c"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "f58ad0865bf1468fb5f5fd79180b29e54cf4113f42791fd7f7c6c71d73da7c7f"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "2e5d190d0ae7374bf47972efe5c78dc48fb2bc88902de2b05750dc7e8b3b77ee"
+                  }
+                ],
+                "duration_s": 5.395873,
+                "exit_code": 0,
+                "expected_signal": "relative L2 error ratio vs 0.15 tolerance on the fixed seeded workload",
+                "finite": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "finite": true,
+                  "metric": "relative L2 error vs float64 all-16-mode reference (fixed seeded workload)",
+                  "passes_contract": true,
+                  "ratio_total": 0.07170935573821624,
+                  "ratio_truncation_only": 0.07170931214373656,
+                  "ref_norm": 8.566189857158276,
+                  "shape": [
+                    64
+                  ],
+                  "tolerance": 0.15
+                },
+                "ratio_total": 0.07170935573821624,
+                "ratio_truncation_only": 0.07170931214373656,
+                "ref_norm": 8.566189857158276,
+                "shape": [
+                  64
+                ],
+                "stderr": "",
+                "stdout": "{\"metric\": \"relative L2 error vs float64 all-16-mode reference (fixed seeded workload)\", \"ratio_total\": 0.07170935573821624, \"ratio_truncation_only\": 0.07170931214373656, \"tolerance\": 0.15, \"passes_contract\": true, \"finite\": true, \"shape\": [64], \"ref_norm\": 8.566189857158276}\n",
+                "timed_out": false,
+                "timeout_s": 120,
+                "tolerance": 0.15
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the fixed seeded workload, kernel output (finite float32, shape (64,)) has relative L2 error 0.0717 vs the float64 all-16-mode reference, below the 0.15 tolerance. Truncation of modes 7..16 alone accounts for 0.0717 of the error; the contract passes. The claimed potential tolerance violation does not occur.",
+              "supports": "rebutted",
+              "tool_event_id": "t12"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "Dropped modes 7..16 have 20 coefficients ~N(0,0.04); their summed L2 energy could be a nontrivial fraction of the reference norm (dominated by the ~1.15 DC coefficient, offset 0.25, and ~0.15-scale retained modes). Whether the ratio exceeds 0.15 on this seeded workload is directly computable in float64 from make_inputs_numpy().",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Reference uses ALL sixteen modes; contract is ||output-reference||_2/max(||reference||_2,1e-12) <= 0.15 on the fixed public workload from make_inputs()."
+            }
+          ],
+          "scope_rationale": "The contract requires the 64-sample output to match the float64 reference summing all 16 modes within relative L2 0.15 on the fixed make_inputs() workload; dropping modes 7..16 directly tests that stated criterion.",
+          "statement": "The kernel retains only modes k=1..6 and drops modes 7..16, so the relative L2 error ||output - reference||_2 / ||reference||_2 on the fixed seeded workload may exceed the 0.15 contract tolerance.",
+          "status": "rebutted",
+          "updated_at": "2026-09-24T01:09:35Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:09:35Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "d8218088fe1878c9a63946e745eac593d78ed8e5b75e6919119fb4fbe24bdb6c"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "f58ad0865bf1468fb5f5fd79180b29e54cf4113f42791fd7f7c6c71d73da7c7f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "2e5d190d0ae7374bf47972efe5c78dc48fb2bc88902de2b05750dc7e8b3b77ee"
+              }
+            ],
+            "duration_s": 5.395873,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error ratio vs 0.15 tolerance on the fixed seeded workload",
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "finite": true,
+              "metric": "relative L2 error vs float64 all-16-mode reference (fixed seeded workload)",
+              "passes_contract": true,
+              "ratio_total": 0.07170935573821624,
+              "ratio_truncation_only": 0.07170931214373656,
+              "ref_norm": 8.566189857158276,
+              "shape": [
+                64
+              ],
+              "tolerance": 0.15
+            },
+            "ratio_total": 0.07170935573821624,
+            "ratio_truncation_only": 0.07170931214373656,
+            "ref_norm": 8.566189857158276,
+            "shape": [
+              64
+            ],
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 all-16-mode reference (fixed seeded workload)\", \"ratio_total\": 0.07170935573821624, \"ratio_truncation_only\": 0.07170931214373656, \"tolerance\": 0.15, \"passes_contract\": true, \"finite\": true, \"shape\": [64], \"ref_norm\": 8.566189857158276}\n",
+            "timed_out": false,
+            "timeout_s": 120,
+            "tolerance": 0.15
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the fixed seeded workload, kernel output (finite float32, shape (64,)) has relative L2 error 0.0717 vs the float64 all-16-mode reference, below the 0.15 tolerance. Truncation of modes 7..16 alone accounts for 0.0717 of the error; the contract passes. The claimed potential tolerance violation does not occur.",
+          "supports": "rebutted",
+          "tool_event_id": "t12"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_err_retained": 4.838400478046623e-07,
+          "ratio_retained_modes_fp32_vs_fp64": 2.017038206548106e-07,
+          "ratio_vs_full_reference": 0.07170935573821624,
+          "tolerance": 0.15
+        },
+        "event_id": "t13",
+        "status": "rebutted",
+        "summary": "Isolating the fp32 angle/accumulation effect by comparing kernel output to an fp64 retained-modes (k=1..6) reference gives relative L2 2.02e-7 and max abs error 4.8e-7 \u2014 orders of magnitude below the 0.15 tolerance, confirming the concern of non-negligible fp32 error does not materialize.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-24T01:09:35Z",
+      "id": "t15",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T01:08:49Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T01:09:35Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t13_probe.py",
+                    "sha256": "b1b2da74b493a79a153e365a76874f6c41e07afd13172d953bda1b1a87096f74"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t13_stdout.txt",
+                    "sha256": "e822c4de4c797001a4d7f115921d021c051a63918ce6f0e2d631a0e118d839ab"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t13_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t13_json_result.json",
+                    "sha256": "ce6762fcb39d0a34a50538f9267bdf40f66979db7938fb04da8fd8683df5d1e8"
+                  }
+                ],
+                "duration_s": 4.366555,
+                "exit_code": 0,
+                "expected_signal": "fp32 angle/accumulation error magnitude (orders of magnitude below 0.15 or not)",
+                "json_parse_error": null,
+                "json_result": {
+                  "fp32_error_below_tolerance": true,
+                  "max_abs_err_retained": 4.838400478046623e-07,
+                  "metric": "relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)",
+                  "ratio_retained_modes_fp32_vs_fp64": 2.017038206548106e-07,
+                  "ratio_vs_full_reference": 0.07170935573821624,
+                  "tolerance": 0.15
+                },
+                "max_abs_err_retained": 4.838400478046623e-07,
+                "ratio_retained_modes_fp32_vs_fp64": 2.017038206548106e-07,
+                "ratio_vs_full_reference": 0.07170935573821624,
+                "stderr": "",
+                "stdout": "{\"metric\": \"relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)\", \"ratio_retained_modes_fp32_vs_fp64\": 2.017038206548106e-07, \"max_abs_err_retained\": 4.838400478046623e-07, \"ratio_vs_full_reference\": 0.07170935573821624, \"tolerance\": 0.15, \"fp32_error_below_tolerance\": true}\n",
+                "timed_out": false,
+                "timeout_s": 120,
+                "tolerance": 0.15
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Isolating the fp32 angle/accumulation effect by comparing kernel output to an fp64 retained-modes (k=1..6) reference gives relative L2 2.02e-7 and max abs error 4.8e-7 \u2014 orders of magnitude below the 0.15 tolerance, confirming the concern of non-negligible fp32 error does not materialize.",
+              "supports": "rebutted",
+              "tool_event_id": "t13"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "2*pi is not exactly representable in fp32 and n up to 63 multiplies the fp32 rounding of 2*pi*k/64; expected angle error ~1e-4 rad, giving sin/cos error far below the 0.15 tolerance \u2014 likely negligible, but worth confirming with a runtime probe.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Output must satisfy relative L2 <= 0.15 versus the float64 reference evaluated with actual supplied float32 values; the launch disables FP fusion."
+            }
+          ],
+          "scope_rationale": "The numeric contract (relative L2 <= 0.15 vs float64 reference on supplied float32 values, FP fusion disabled) makes any float32 angle/accumulation error part of the same acceptance criterion on the fixed workload.",
+          "statement": "The float32 angle computation angle = n * (2*pi*k/64) combined with float32 accumulation may introduce non-negligible error on this fixed workload, though it is expected to be orders of magnitude below the 0.15 tolerance.",
+          "status": "rebutted",
+          "updated_at": "2026-09-24T01:09:35Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:09:35Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "b1b2da74b493a79a153e365a76874f6c41e07afd13172d953bda1b1a87096f74"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "e822c4de4c797001a4d7f115921d021c051a63918ce6f0e2d631a0e118d839ab"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "ce6762fcb39d0a34a50538f9267bdf40f66979db7938fb04da8fd8683df5d1e8"
+              }
+            ],
+            "duration_s": 4.366555,
+            "exit_code": 0,
+            "expected_signal": "fp32 angle/accumulation error magnitude (orders of magnitude below 0.15 or not)",
+            "json_parse_error": null,
+            "json_result": {
+              "fp32_error_below_tolerance": true,
+              "max_abs_err_retained": 4.838400478046623e-07,
+              "metric": "relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)",
+              "ratio_retained_modes_fp32_vs_fp64": 2.017038206548106e-07,
+              "ratio_vs_full_reference": 0.07170935573821624,
+              "tolerance": 0.15
+            },
+            "max_abs_err_retained": 4.838400478046623e-07,
+            "ratio_retained_modes_fp32_vs_fp64": 2.017038206548106e-07,
+            "ratio_vs_full_reference": 0.07170935573821624,
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 of kernel output vs fp64 retained-modes-only reference (isolates fp32 angle/accumulation error)\", \"ratio_retained_modes_fp32_vs_fp64\": 2.017038206548106e-07, \"max_abs_err_retained\": 4.838400478046623e-07, \"ratio_vs_full_reference\": 0.07170935573821624, \"tolerance\": 0.15, \"fp32_error_below_tolerance\": true}\n",
+            "timed_out": false,
+            "timeout_s": 120,
+            "tolerance": 0.15
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Isolating the fp32 angle/accumulation effect by comparing kernel output to an fp64 retained-modes (k=1..6) reference gives relative L2 2.02e-7 and max abs error 4.8e-7 \u2014 orders of magnitude below the 0.15 tolerance, confirming the concern of non-negligible fp32 error does not materialize.",
+          "supports": "rebutted",
+          "tool_event_id": "t13"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: both in-scope claims (c1 truncation of modes 7..16 vs the 0.15 relative-L2 tolerance; c2 fp32 angle/accumulation precision) are rebutted by direct runtime probes on the fixed seeded workload \u2014 relative L2 error 0.0717 < 0.15, with truncation alone accounting for essentially all of it, and fp32 error ~2e-7. Output is finite float32 of shape (64,). The contract covers only this fixed workload, so no further testable in-scope attack surfaces remain.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T01:09:41Z",
+      "id": "t16",
+      "output": {
+        "created_at": "2026-09-24T01:09:41Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: both in-scope claims (c1 truncation of modes 7..16 vs the 0.15 relative-L2 tolerance; c2 fp32 angle/accumulation precision) are rebutted by direct runtime probes on the fixed seeded workload \u2014 relative L2 error 0.0717 < 0.15, with truncation alone accounting for essentially all of it, and fp32 error ~2e-7. Output is finite float32 of shape (64,). The contract covers only this fixed workload, so no further testable in-scope attack surfaces remain.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 15,
+        "tool_event_id": "t16",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt, the only artifact contract, fixed workload from make_inputs()) requires a finite float32 (64,) output within relative L2 0.15 of the float64 all-16-mode reference. Runtime probe t12 on the exact seeded workload shows ratio 0.0717 < 0.15, output finite with correct shape; the truncation of modes 7..16 (the kernel's declared fixed frequency-cutoff approximation) accounts for essentially all of that 0.0717 error, which the contract's tolerance explicitly accommodates. Probe t13 shows the float32 angle/accumulation error is ~2e-7 relative, negligible. Both in-scope claims c1 and c2 are rebutted by direct runtime evidence; the Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Other coefficient tensors are explicitly out of scope.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-24T01:09:46Z",
+      "id": "t17",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-24T01:09:46Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt, the only artifact contract, fixed workload from make_inputs()) requires a finite float32 (64,) output within relative L2 0.15 of the float64 all-16-mode reference. Runtime probe t12 on the exact seeded workload shows ratio 0.0717 < 0.15, output finite with correct shape; the truncation of modes 7..16 (the kernel's declared fixed frequency-cutoff approximation) accounts for essentially all of that 0.0717 error, which the contract's tolerance explicitly accommodates. Probe t13 shows the float32 angle/accumulation error is ~2e-7 relative, negligible. Both in-scope claims c1 and c2 are rebutted by direct runtime evidence; the Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Other coefficient tensors are explicitly out of scope.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-24T01:09:46Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The contract (problem.txt, the only artifact contract, fixed workload from make_inputs()) requires a finite float32 (64,) output within relative L2 0.15 of the float64 all-16-mode reference. Runtime probe t12 on the exact seeded workload shows ratio 0.0717 < 0.15, output finite with correct shape; the truncation of modes 7..16 (the kernel's declared fixed frequency-cutoff approximation) accounts for essentially all of that 0.0717 error, which the contract's tolerance explicitly accommodates. Probe t13 shows the float32 angle/accumulation error is ~2e-7 relative, negligible. Both in-scope claims c1 and c2 are rebutted by direct runtime evidence; the Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Other coefficient tensors are explicitly out of scope.",
+    "verdict": "trust"
+  }
+}

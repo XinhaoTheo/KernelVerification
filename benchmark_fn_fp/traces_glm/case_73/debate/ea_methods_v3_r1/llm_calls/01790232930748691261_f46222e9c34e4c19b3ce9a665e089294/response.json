@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-17826ee6b3d84108911b249971341873",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two probes in one batch: c1 tests the aligned-vertex residual (exhaustive 4096-vertex enumeration in float64 with exact seeded parameters), and c2 reports the exact box maximum plus near-vertex (1–2 flipped signs) values to decide whether the decision is borderline. They're independent computations.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bb4127087a800e9f",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import numpy as np, itertools, json\\nSEED=194003\\nrng=np.random.Generator(np.random.PCG64(SEED))\\ncenter=rng.choice(np.asarray([-1,1]),size=12)\\nfp=rng.uniform(0.05,0.4)\\nflips=np.where(rng.uniform(size=(6,12))<fp,-1,1)\\nmag=rng.choice(np.asarray([0.5,1.0]),size=(6,12))\\nW=(center[None,:]*flips*mag).astype(np.float32)\\nb=(0.75*np.abs(W).sum(axis=1)).astype(np.float32)\\nc=np.full(6,0.25,dtype=np.float32)\\nWd=W.astype(np.float64); bd=b.astype(np.float64); cd=c.astype(np.float64)\\nbest=-1; best_x=None\\nsigns=np.array(list(itertools.product([-1.0,1.0],repeat=12)))\\nfor x in signs:\\n    r=float(np.sum(cd*np.maximum(Wd@x-bd,0.0)))\\n    if r>best: best=r; best_x=x\\n# aligned with W rows\\naligned_r=[]\\nfor j in range(6):\\n    x=np.sign(W[j]).astype(np.float64)\\n    aligned_r.append(float(np.sum(cd*np.maximum(Wd@x-bd,0.0))))\\nprint(json.dumps({\\\"seed\\\":SEED,\\\"vertex_enumeration_max_residual\\\":best,\\n \\\"best_vertex\\\":best_x.tolist(),\\\"aligned_with_W_rows_residuals\\\":aligned_r,\\n \\\"tolerance\\\":1.0,\\\"exceeds_tolerance\\\":bool(best>1.0),\\n \\\"S_j_abs_row_sums\\\":np.abs(W).sum(axis=1).tolist(),\\n \\\"b\\\":b.tolist()}))\", \"expected_signal\": \"max residual over all 4096 vertices exceeds 1.0 (confirming c1) or stays <= 1.0 (rebutting c1)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-ac4e625a6704b5ad",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import numpy as np, itertools, json\\nSEED=194003\\nrng=np.random.Generator(np.random.PCG64(SEED))\\ncenter=rng.choice(np.asarray([-1,1]),size=12)\\nfp=rng.uniform(0.05,0.4)\\nflips=np.where(rng.uniform(size=(6,12))<fp,-1,1)\\nmag=rng.choice(np.asarray([0.5,1.0]),size=(6,12))\\nW=(center[None,:]*flips*mag).astype(np.float32)\\nb=(0.75*np.abs(W).sum(axis=1)).astype(np.float32)\\nc=np.full(6,0.25,dtype=np.float32)\\nWd=W.astype(np.float64); bd=b.astype(np.float64); cd=c.astype(np.float64)\\ndef res(x): return float(np.sum(cd*np.maximum(Wd@np.asarray(x,np.float64)-bd,0.0)))\\nsigns=np.array(list(itertools.product([-1.0,1.0],repeat=12)),dtype=np.float64)\\nvals=np.array([res(x) for x in signs])\\nimax=int(np.argmax(vals)); vmax=vals[imax]; vx=signs[imax]\\n# near-vertex: flip 1 or 2 signs of the best vertex\\nnear={}\\nfor k in (1,2):\\n    ms=[]\\n    for comb in itertools.combinations(range(12),k):\\n        y=vx.copy()\\n        for i in comb: y[i]=-y[i]\\n        ms.append(res(y))\\n    near[f\\\"flip_{k}_min_max\\\"]=[float(min(ms)),float(max(ms))]\\nprint(json.dumps({\\\"seed\\\":SEED,\\\"box_vertex_max_residual\\\":float(vmax),\\n \\\"best_vertex\\\":vx.tolist(),\\\"num_vertices_over_1.0\\\":int((vals>1.0).sum()),\\n \\\"num_vertices_over_0.9\\\":int((vals>0.9).sum()),\\n \\\"near_vertex_residual_ranges\\\":near,\\\"tolerance\\\":1.0,\\n \\\"is_borderline_0.9_1.1\\\":bool(0.9<=vmax<=1.1),\\n \\\"max_exceeds_1.0\\\":bool(vmax>1.0)}))\", \"expected_signal\": \"exact float64 box max residual value relative to 1.0, deciding borderline status (c2)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "The two claims can be decided by one exhaustive vertex enumeration in float64, plus near-vertex flips. I could run one probe per claim. Launch both together.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790232931,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1041,
+    "prompt_tokens": 18414,
+    "total_tokens": 19455,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 33,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 33
+    }
+  }
+}

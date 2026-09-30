@@ -1,0 +1,87 @@
+[
+  {
+    "created_at": "2026-09-23T21:34:51Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-23T21:35:26Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "d6355a16d777ed0564a35a19cbd19a018721d062fad88bfe7d218cd5ef9c5848"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "62fde0ba74397d3ba2642c04854fa34bbb6be5b3c428c0a8b7f5468044a01a1e"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "4a6f4989656f04a0247141938a0cfbcd597810c46ca8dbc294669447f203d41b"
+            }
+          ],
+          "duration_s": 5.041473,
+          "exit_code": 0,
+          "expected_signal": "kernel relative L2 error vs float64 unquantized reference exceeds or stays within 0.02 on fixed seed-918233 workload",
+          "finite": true,
+          "json_parse_error": null,
+          "json_result": {
+            "finite": true,
+            "kernel_rel_l2": 0.008098160619151844,
+            "max_abs_logit": 3.0728919506073,
+            "metric": "relative L2 error vs unquantized float64 reference (contract)",
+            "passes_contract": true,
+            "quantized_fp64_rel_l2": 0.008098152077977377,
+            "shape": [
+              16
+            ],
+            "tolerance": 0.02
+          },
+          "kernel_rel_l2": 0.008098160619151844,
+          "max_abs_logit": 3.0728919506073,
+          "passes_contract": true,
+          "quantized_fp64_rel_l2": 0.008098152077977377,
+          "shape": [
+            16
+          ],
+          "stderr": "",
+          "stdout": "{\"metric\": \"relative L2 error vs unquantized float64 reference (contract)\", \"kernel_rel_l2\": 0.008098160619151844, \"tolerance\": 0.02, \"quantized_fp64_rel_l2\": 0.008098152077977377, \"finite\": true, \"shape\": [16], \"max_abs_logit\": 3.0728919506073, \"passes_contract\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.02
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On the fixed seed-918233 workload, the kernel's relative L2 error vs the unquantized float64 reference is 0.0081 (tolerance 0.02); output is finite, shape (16,). The fp64-quantization-only simulation gives essentially the same error (0.00810), so the deviation is dominated by the 15-level logit quantization but stays comfortably within the 0.02 contract budget. Claim that error exceeds 0.02 is rebutted.",
+        "supports": "rebutted",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The kernel rounds each logit to a multiple of scale=max|logits|/7 (worst-case perturbation scale/2), which can shift softmax weights multiplicatively by up to exp(\u00b1max|logits|/14). With N(0,1.2) logits over 128 rows, this redistribution of probabilities times the values (mean ~1, std ~1) could plausibly exceed a 2% relative L2 error, unlike plain float32 rounding which would be negligible.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract requires the reference to use the original logits 'without quantization' (p[i]=exp(logits[i]-max)/sum exp) evaluated in float64, with output relative L2 error <= 0.02 on exactly the fixed make_inputs() workload."
+      }
+    ],
+    "scope_rationale": "The contract pins the exact workload (make_inputs with seed 918233), the unquantized float64 reference formula, and the 0.02 relative L2 threshold; the quantized-softmax deviation on those very inputs is the decisive in-scope correctness question.",
+    "statement": "For the fixed seed-918233 workload, replacing logits with a 15-level uniform quantization (codes in [-7,7], step = max|logits|/7) before softmax shifts the output away from the contract's unquantized float64 reference by more than 0.02 relative L2 error.",
+    "status": "rebutted",
+    "updated_at": "2026-09-23T21:35:26Z"
+  }
+]

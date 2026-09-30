@@ -1,0 +1,113 @@
+[
+  {
+    "created_at": "2026-09-24T06:10:46Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:11:33Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "d7dc58b33cc3191f1e1f68401d4c87988987be05374d10a08129bbf45ad824bc"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "eeedfe4e5636afec3afeb7b56f220f468f033c4fb9840ab6dd38221c557d9455"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "9aeafdd49f8afb75d6af7694f4b0f8a1061685e5c8fa1d95ce44e84fff018d36"
+            }
+          ],
+          "beta_f64": [
+            0.7097992046560915,
+            -0.9074404433080981
+          ],
+          "cov00_exact": 0.0057311659465995035,
+          "cov00_fp32": 0.005859375,
+          "cov00_rel_err": 0.022370500975733794,
+          "duration_s": 6.757413,
+          "exit_code": 0,
+          "expected_signal": "relative error of run() output vs float64 centered ridge prediction, compared to 0.05 tolerance",
+          "json_parse_error": null,
+          "json_result": {
+            "beta_f64": [
+              0.7097992046560915,
+              -0.9074404433080981
+            ],
+            "cov00_exact": 0.0057311659465995035,
+            "cov00_fp32": 0.005859375,
+            "cov00_rel_err": 0.022370500975733794,
+            "output": [
+              -0.13965053856372833,
+              0.028182610869407654,
+              0.13553990423679352,
+              -0.032625481486320496
+            ],
+            "passed": false,
+            "pred_f64": [
+              -0.11580082185643768,
+              0.03600776652492417,
+              0.10418083799488609,
+              -0.04689557792391956
+            ],
+            "pred_norm": 0.16661101952414487,
+            "relative_error": 0.255847958607997,
+            "tolerance": 0.05
+          },
+          "output": [
+            -0.13965053856372833,
+            0.028182610869407654,
+            0.13553990423679352,
+            -0.032625481486320496
+          ],
+          "pred_f64": [
+            -0.11580082185643768,
+            0.03600776652492417,
+            0.10418083799488609,
+            -0.04689557792391956
+          ],
+          "pred_norm": 0.16661101952414487,
+          "relative_error": 0.255847958607997,
+          "stderr": "",
+          "stdout": "{\"output\": [-0.13965053856372833, 0.028182610869407654, 0.13553990423679352, -0.032625481486320496], \"pred_f64\": [-0.11580082185643768, 0.03600776652492417, 0.10418083799488609, -0.04689557792391956], \"beta_f64\": [0.7097992046560915, -0.9074404433080981], \"relative_error\": 0.255847958607997, \"tolerance\": 0.05, \"passed\": false, \"pred_norm\": 0.16661101952414487, \"cov00_fp32\": 0.005859375, \"cov00_exact\": 0.0057311659465995035, \"cov00_rel_err\": 0.022370500975733794}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.05
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On the exact make_inputs() (seed 130653) contract workload, run() output vs a float64 centered ridge oracle has relative error 0.2558 (25.6%), far exceeding the 5% tolerance (pred norm 0.1666 > 0.1 floor). Diagnostic: the fp32 raw-moment covariance E[x0^2]-m0^2 computes to 0.005859375 vs exact 0.00573117 (2.24% error), showing cancellation/summation noise in the fp32 raw-moment scheme that propagates through the 2x2 solve into the predictions. This confirms the kernel fails the contract acceptance criterion on the fixed in-scope workload.",
+        "supports": "confirmed",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "Features have means ~32/-24 with std 0.0625, so E[x^2] (~1024/576) minus m^2 (~variance 0.0039) cancels ~6-7 significant digits in fp32; the computed covariance entries are dominated by fp32 rounding noise, which propagates into beta and the 4 predictions and can exceed the 5% relative tolerance. The initial_probe's 0.0 error is against a float32 reference using the identical raw-moment scheme, so it cannot rule this out.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'All target arithmetic ... is evaluated in float64 or more accurately' and acceptance is ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 on the exact make_inputs() (seed 130653) workload \u2014 the same inputs where the kernel's fp32 raw-moment cancellation occurs."
+      }
+    ],
+    "scope_rationale": "The contract fixes the workload to make_inputs() (seed 130653) X (32,2)/y (32,)/Q (4,2), defines the target prediction in float64-or-better arithmetic, and accepts only if ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05. The kernel computes all moments and the 2x2 ridge solve in float32 from raw uncentered moments with means ~32/-24 and variance ~0.0039, so this precision failure occurs exactly on the contract's own fixed inputs.",
+    "statement": "For the contractually fixed make_inputs() workload (seed 130653), the kernel's float32 raw-moment computation of covariances (a, b, c) and cross-terms (u, v) suffers catastrophic cancellation (E[x^2]-m^2 with |m|~32, ~-24 versus variance ~0.0039), so the run() output deviates from the float64 ridge-regression prediction by more than the allowed 5% relative error (denominator floor 0.1).",
+    "status": "confirmed",
+    "updated_at": "2026-09-24T06:11:33Z"
+  }
+]

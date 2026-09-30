@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-88dcb0a5cec348dfae326c73119da42d",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe on the real kernel checking all 70 four-channel joint histograms, mask GF(2) independence, structural properties, and input immutability.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bc661944a08ebfaa",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import itertools, json, numpy as np, torch, sys\\nsys.path.insert(0, '/root/evidence_cases/case_e06')\\nimport kernel\\n\\ninputs = kernel.make_inputs()\\nseeds, x, masks, offsets = inputs\\nbefore = [t.clone() for t in inputs]\\nout = kernel.run(seeds, x, masks, offsets)\\nimmutable = all(torch.equal(a, b) for a, b in zip(inputs, before))\\n\\nY = out.detach().cpu().numpy()\\nX = x.detach().cpu().numpy()\\nM = masks.cpu().numpy(); O = offsets.cpu().numpy()\\nS = seeds.cpu().numpy()\\nshape_ok = Y.shape == (1024, 8) and Y.dtype == np.float32\\nfinite = bool(np.isfinite(Y).all())\\nallowed = bool(np.all((Y == 0) | (Y == 2*X[None, :])))\\n# recover B\\nB = (Y != 0).astype(np.int8)\\n\\n# reference keep bits from kernel formula\\nkeep_ref = np.zeros((1024, 8), dtype=np.int8)\\nfor j in range(8):\\n    f = S & int(M[j])\\n    f = f ^ (f >> 8) ^ (f >> 4) ^ (f >> 2) ^ (f >> 1)\\n    keep_ref[:, j] = ((f & 1) ^ int(O[j])).astype(np.int8)\\nformula_match = bool(np.array_equal(B, keep_ref))\\n\\n# GF(2) dependence among masks for subsets size 1..4\\ndep = []\\nfor k in range(1, 5):\\n    for comb in itertools.combinations(range(8), k):\\n        v = 0\\n        for j in comb: v ^= int(M[j])\\n        if v == 0: dep.append(comb)\\n\\n# order-4 histograms over the actual output\\nworst = 0.0; worst_info = None; all_ok = True\\nfor comb in itertools.combinations(range(8), 4):\\n    code = B[:, comb[0]] + 2*B[:, comb[1]] + 4*B[:, comb[2]] + 8*B[:, comb[3]]\\n    counts = np.bincount(code, minlength=16)\\n    err = float(np.max(np.abs(counts/1024 - 1/16)))\\n    if err > worst: worst, worst_info = err, (comb, counts.tolist())\\n    if err > 1/1024: all_ok = False\\n# also orders 1..3 for completeness\\nerr2 = err3 = 0.0\\nfor comb in itertools.combinations(range(8), 2):\\n    c = np.bincount(B[:, comb[0]] + 2*B[:, comb[1]], minlength=4)\\n    err2 = max(err2, float(np.max(np.abs(c/1024 - 0.25))))\\nfor comb in itertools.combinations(range(8), 3):\\n    c = np.bincount(B[:, comb[0]] + 2*B[:, comb[1]] + 4*B[:, comb[2]], minlength=8)\\n    err3 = max(err3, float(np.max(np.abs(c/1024 - 0.125))))\\n\\nprint(json.dumps({\\n  \\\"masks\\\": M.tolist(), \\\"offsets\\\": O.tolist(),\\n  \\\"gf2_dependent_subsets_size_1_to_4\\\": dep,\\n  \\\"structural_ok\\\": shape_ok and finite and allowed,\\n  \\\"inputs_immutable\\\": immutable,\\n  \\\"formula_match\\\": formula_match,\\n  \\\"max_order4_pattern_probability_error\\\": worst,\\n  \\\"max_order2_error\\\": err2, \\\"max_order3_error\\\": err3,\\n  \\\"order4_within_tolerance\\\": all_ok,\\n  \\\"worst_subset\\\": worst_info,\\n}))\\n\", \"expected_signal\": \"order4 error exceeds 1/1024 iff GF(2) dependent mask subset exists\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run probe for c1: check all order-4 histograms plus mask independence, structure, immutability.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790231869,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 889,
+    "prompt_tokens": 11320,
+    "total_tokens": 12209,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 22,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 22
+    }
+  }
+}

@@ -1,0 +1,411 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Experimenter agent in an agentic kernel verification system.\nYour job is to gather evidence for open claims using local tools.\n\nRules:\n- Start from the claim ledger and description_model. Use read_claim_ledger when claim state is unclear.\n- Use contract_model and scope_notes to avoid probing irrelevant out-of-scope behavior.\n- Account for every open claim before yielding control to the Judge. Do not silently ignore open claims.\n- For each open claim with no evidence, either gather direct evidence or attach explicit inconclusive evidence explaining the blocker.\n- For each experiment, target one concrete claim.\n- Prefer run_claim_probe for runtime experiments; pass the target claim_id and a concise expected_signal.\n- Probe code should print a final JSON object on the last stdout line when possible.\n- You cannot observe a run_claim_probe result in the same response that requested it, so it is the response after that consumes it -- which is not the same as spending that whole turn on it (see below).\n- Finalize and launch in the same response. An unfinalized run_claim_probe result must be consumed before you yield control, but consuming it does not need a turn of its own: put finalize_probe_evidence for the results you can now see and the next run_claim_probe in the same response. A turn that only finalizes, or only launches, spends a whole model call on half a step.\n- Launch independent probes together. When several open claims can be tested without one claim's outcome changing another's experiment design, issue a run_claim_probe for each in one response and finalize them all in the next. Hold a probe back only when it genuinely depends on a result you do not have yet -- for example when you must choose inputs that avoid triggering a defect another claim just confirmed, so the two cannot confound each other. Say in your message which claims you are batching and which you are holding back, and why.\n- Use finalize_probe_evidence to interpret the probe output; it appends runtime evidence and updates claim status in one tool call.\n- Put every decisive measurement in the evidence `data` object as named key/value pairs (for example {\"rms_1e-8_ratio\": 990.1, \"max_abs_err\": 0.0731, \"tolerance\": 0.01}), not only in the prose summary. `data` is preserved in full for later turns; long prose summaries may be trimmed, so a number that exists only in prose can be lost to the agents who read your evidence afterwards.\n- Use run_python_probe only for debugging or exploratory work that is not yet tied to a claim.\n- Use append_evidence and update_claim_status directly only for non-probe evidence, such as source inspection or artifact reads.\n- Mark evidence inconclusive when the tool output cannot decide the claim.\n- Use request_description when a probe result or source path needs Describer interpretation before you can finalize evidence.\n- If tool budget or missing environment prevents covering all claims in one turn, state exactly which claim ids remain uncovered.\n- Do not invent results that are not present in tool output or source context.\n- Do not output a final verdict. That is the Judge agent's job.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_g\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import torch\\n2: import triton\\n3: import triton.language as tl\\n4: \\n5: @triton.jit\\n6: def _kernel(X, Y, K: tl.constexpr, R: tl.constexpr):\\n7:     rows = tl.arange(0, R)\\n8:     acc = tl.full((R,), 0, tl.float32)\\n9:     for j in range(K):\\n10:         value = tl.load(X + rows * K + j)\\n11:         acc = acc + value\\n12:     tl.store(Y + rows, acc)\\n13: \\n14: def run(values):\\n15:     out = torch.empty((values.shape[0],), dtype=torch.float32, device=values.device)\\n16:     _kernel[(1,)](values, out, values.shape[1], values.shape[0], enable_fp_fusion=False)\\n17:     return out\\n18: \\n19: SEED = 730119\\n20: PERMUTATION = [123, 54, 34, 37, 17, 97, 46, 110, 36, 107, 32, 114, 14, 86, 40, 33, 122, 103, 70, 121, 63, 80, 62, 65, 72, 68, 55, 105, 113, 53, 7, 108, 59, 93, 58, 125, 89, 94, 18, 87, 30, 82, 56, 3, 119, 96, 127, 118, 20, 22, 24, 60, 117, 35, 16, 85, 41, 76, 81, 48, 0, 5, 101, 26, 44, 11, 51, 43, 104, 71, 9, 78, 39, 84, 90, 47, 45, 115, 57, 98, 66, 79, 77, 52, 49, 2, 91, 116, 4, 100, 19, 75, 69, 112, 120, 21, 88, 23, 109, 15, 27, 126, 28, 31, 6, 29, 61, 38, 92, 102, 73, 83, 95, 42, 67, 64, 99, 25, 106, 1, 8, 50, 74, 124, 12, 111, 10, 13]\\n21: \\n22: def make_inputs_numpy():\\n23:     import numpy as np\\n24:     rng = np.random.Generator(np.random.PCG64(SEED))\\n25:     w = rng.integers(1, 33, size=(64, 32)).astype(np.float32) * np.float32(1048576)\\n26:     small = rng.integers(1, 4, size=(64, 64)).astype(np.float32) * np.float32(0.25)\\n27:     values = np.concatenate([w, -w, small], axis=1)\\n28:     order = rng.permutation(128)\\n29:     values = values[:, order][:, PERMUTATION].copy()\\n30:     return (values,)\\n31: \\n32: def make_inputs(device=\\\"cuda\\\"):\\n33:     return tuple(torch.from_numpy(a.copy()).to(device) for a in make_inputs_numpy())\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Evaluate numerical compliance of run(*make_inputs()) on exactly the\\nfully specified workload in kernel.py. There is one contiguous float32 input\\nmatrix of shape (64,128). The PCG64 seed and complete column permutation are\\npublic; no hidden inputs are used.\\n\\nReference: for each row, sum the ORIGINAL float32 entries in real arithmetic,\\nevaluated with float64 or an independently checked high-accuracy summation.\\nMetric: E = ||output-reference||_2 / max(||reference||_2, 0.008).\\nContract: every output must be finite and E <= 0.1. Only the final result on\\nthe specified input is in scope. The kernel may use float32 arithmetic and any\\nsummation order if this numerical requirement is met. This is not a universal\\ncorrectness claim about all possible inputs.\\nTarget: the supplied Triton kernel on an NVIDIA T4. Decide trust, reject, or\\nneeds_more_evidence.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/numerical_cases/case_g\",\n    \"status\": \"under_test\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-09-23T21:36:14Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"skeptic\",\n      \"rationale\": \"The permuted column order interleaves large \\u00b1(1..32)*2^20 terms (fp32 ulp at those magnitudes is 2 or 4) with small 0.25-granularity terms. Once the running fp32 accumulator is on the order of tens of millions, small terms of 0.25\\u20130.75 round away entirely, so the computed row sum can deviate from the true sum (~16\\u201348) by tens of units, plausibly driving E far above 0.1. Whether \\u00b1w pairs happen to cancel early in each row's column order decides the actual magnitude, so this is directly testable by simulating the sequential fp32 accumulation on the deterministic public input.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Reference is a real-arithmetic per-row sum of the original float32 entries; contract requires all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.008) <= 0.1 on the fully specified (64,128) PCG64(730119) workload.\"\n        }\n      ],\n      \"scope_rationale\": \"The claim concerns exactly the specified workload run(*make_inputs()) and the stated numerical contract E <= 0.1 with finite outputs; problem.txt says only the final result on this specified input is in scope and the kernel may use fp32 sequential summation only if it meets this tolerance.\",\n      \"statement\": \"The Triton kernel's strictly sequential float32 left-to-right accumulation of the specified (64,128) input loses the small 0.25-granularity terms when the running accumulator is large (on the order of \\u00b1(1..32)*2^20), producing per-row outputs whose relative-error metric E exceeds the contract bound of 0.1 against the float64 reference row sums.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-09-23T21:36:14Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [\n      \"Only the fully specified workload matters: one contiguous float32 (64,128) matrix from PCG64(730119) with a known column permutation; no hidden inputs.\",\n      \"Reference is a real-arithmetic (float64) per-row sum of the original float32 entries; metric E = ||out-ref||_2 / max(||ref||_2, 0.008); contract requires all outputs finite and E <= 0.1.\",\n      \"Any summation order and fp32 arithmetic is allowed as long as the numerical tolerance is met; this is not a universal-input correctness claim.\",\n      \"Input structure: 32 large positive terms w (integers 1..32 times 2^20, fp32-exact), their 32 negated copies -w (exact cancellation), and 64 small terms in {0.25, 0.5, 0.75}; columns then shuffled by rng.permutation(128) and the hardcoded PERMUTATION.\",\n      \"Exact row sum equals the sum of the 64 small terms only (large terms cancel exactly in fp32), roughly in range [16, 48] per row.\"\n    ],\n    \"kernel_model\": [\n      \"Triton kernel launched as a single program ((1,) grid) processing all 64 rows: rows = tl.arange(0,R), R=64, K=128 as constexpr.\",\n      \"Per-row accumulation is strictly sequential over j=0..127 in a float32 accumulator initialized to 0 (tl.full fp32), reading X + rows*K + j, i.e., row-major contiguous access assuming contiguous input.\",\n      \"enable_fp_fusion=False is set, and no vectorized/reduction reordering is visible, so the arithmetic order is deterministic left-to-right fp32.\",\n      \"run() allocates a (64,) float32 output on the input's device; assumes values.shape = (64,128) and contiguity (no stride check).\",\n      \"make_inputs is deterministic and public, so the exact input values and column order are reproducible.\"\n    ],\n    \"open_questions\": [],\n    \"risk_map\": [\n      \"Precision loss from sequential fp32 accumulation with cancellation: the permuted column order mixes large \\u00b1(1..33)*2^20 terms with 0.25-granularity small terms. When the running accumulator is on the order of tens of millions, its fp32 ulp is 2 or 4, so small terms of 0.25-0.75 can be entirely rounded away.\",\n      \"The magnitude of loss depends on the actual permuted order and the random w values; per-row error could plausibly reach tens of units while the reference row sums are only ~16-48, potentially exceeding E <= 0.1. This is the primary bug surface for Skeptic.\",\n      \"Contiguity/stride assumption: kernel indexes X + rows*K + j with no stride parameters; only safe because the problem guarantees a contiguous input.\",\n      \"Grid size (1,) and R/K constexpr assume exactly shape (64,128); harmless here since the workload is fixed, but would be a bug for other shapes (out of scope).\",\n      \"Whether the exact-cancellation structure actually saves the kernel (if partial sums return near zero between large terms, small terms may still be preserved) is the deciding empirical question.\"\n    ],\n    \"scope_notes\": [\n      \"In scope: only run(*make_inputs()) output on the specified (64,128) input, T4 hardware, E <= 0.1 with finiteness.\\\", \\\"Out of scope: universal input correctness, other shapes/dtypes, performance, non-contiguous inputs.\\\", \\\"Reference must be float64 or independently verified high-accuracy summation of the original fp32 entries, not fp32 torch.sum in the same order.\\\"]\"\n    ]\n  },\n  \"entry\": \"case_g\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_g\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_g\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_g\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_g\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"describer\",\n      \"round\": 2,\n      \"text\": \"I'll record the description model: the kernel does a sequential per-row fp32 sum, while the workload plants exact-cancelling large \\u00b1w terms plus small 0.25-granularity terms \\u2014 a cancellation-precision risk surface.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"contract_model\": [\n              \"Only the fully specified workload matters: one contiguous float32 (64,128) matrix from PCG64(730119) with a known column permutation; no hidden inputs.\",\n              \"Reference is a real-arithmetic (float64) per-row sum of the original float32 entries; metric E = ||out-ref||_2 / max(||ref||_2, 0.008); contract requires all outputs finite and E <= 0.1.\",\n              \"Any summation order and fp32 arithmetic is allowed as long as the numerical tolerance is met; this is not a universal-input correctness claim.\",\n              \"Input structure: 32 large positive terms w (integers 1..32 times 2^20, fp32-exact), their 32 negated copies -w (exact cancellation), and 64 small terms in {0.25, 0.5, 0.75}; columns then shuffled by rng.permutation(128) and the hardcoded PERMUTATION.\",\n              \"Exact row sum equals the sum of the 64 small terms only (large terms cancel exactly in fp32), roughly in range [16, 48] per row.\"\n            ],\n            \"kernel_model\": [\n              \"Triton kernel launched as a single program ((1,) grid) processing all 64 rows: rows = tl.arange(0,R), R=64, K=128 as constexpr.\",\n              \"Per-row accumulation is strictly sequential over j=0..127 in a float32 accumulator initialized to 0 (tl.full fp32), reading X + rows*K + j, i.e., row-major contiguous access assuming contiguous input.\",\n              \"enable_fp_fusion=False is set, and no vectorized/reduction reordering is visible, so the arithmetic order is deterministic left-to-right fp32.\",\n              \"run() allocates a (64,) float32 output on the input's device; assumes values.shape = (64,128) and contiguity (no stride check).\",\n              \"make_inputs is deterministic and public, so the exact input values and column order are reproducible.\"\n            ],\n            \"risk_map\": [\n              \"Precision loss from sequential fp32 accumulation with cancellation: the permuted column order mixes large \\u00b1(1..33)*2^20 terms with 0.25-granularity small terms. When the running accumulator is on the order of tens of millions, its fp32 ulp is 2 or 4, so small terms of 0.25-0.75 can be entirely rounded away.\",\n              \"The magnitude of loss depends on the actual permuted order and the random w values; per-row error could plausibly reach tens of units while the reference row sums are only ~16-48, potentially exceeding E <= 0.1. This is the primary bug surface for Skeptic.\",\n              \"Contiguity/stride assumption: kernel indexes X + rows*K + j with no stride parameters; only safe because the problem guarantees a contiguous input.\",\n              \"Grid size (1,) and R/K constexpr assume exactly shape (64,128); harmless here since the workload is fixed, but would be a bug for other shapes (out of scope).\",\n              \"Whether the exact-cancellation structure actually saves the kernel (if partial sums return near zero between large terms, small terms may still be preserved) is the deciding empirical question.\"\n            ],\n            \"scope_notes\": \"In scope: only run(*make_inputs()) output on the specified (64,128) input, T4 hardware, E <= 0.1 with finiteness.\\\", \\\"Out of scope: universal input correctness, other shapes/dtypes, performance, non-contiguous inputs.\\\", \\\"Reference must be float64 or independently verified high-accuracy summation of the original fp32 entries, not fp32 torch.sum in the same order.\\\"]\",\n            \"summary\": \"Case_g: per-row sum of a (64,128) fp32 matrix. Kernel does a naive left-to-right fp32 accumulation; workload deliberately plants exactly-cancelling large terms (\\u00b1w, w in [2^20, 32*2^20]) plus 64 small terms (multiples of 0.25) then permutes columns, so sequential fp32 summation may lose the small terms to rounding once the running sum is large.\"\n          },\n          \"tool\": \"record_description_update\"\n        }\n      ]\n    },\n    {\n      \"role\": \"skeptic\",\n      \"round\": 3,\n      \"text\": \"The risk map is clear: the workload deliberately plants large exactly-cancelling terms around small terms, and the kernel does naive left-to-right fp32 accumulation. I'll record the primary in-scope claim.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The permuted column order interleaves large \\u00b1(1..32)*2^20 terms (fp32 ulp at those magnitudes is 2 or 4) with small 0.25-granularity terms. Once the running fp32 accumulator is on the order of tens of millions, small terms of 0.25\\u20130.75 round away entirely, so the computed row sum can deviate from the true sum (~16\\u201348) by tens of units, plausibly driving E far above 0.1. Whether \\u00b1w pairs happen to cancel early in each row's column order decides the actual magnitude, so this is directly testable by simulating the sequential fp32 accumulation on the deterministic public input.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Reference is a real-arithmetic per-row sum of the original float32 entries; contract requires all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.008) <= 0.1 on the fully specified (64,128) PCG64(730119) workload.\"\n              }\n            ],\n            \"scope_rationale\": \"The claim concerns exactly the specified workload run(*make_inputs()) and the stated numerical contract E <= 0.1 with finite outputs; problem.txt says only the final result on this specified input is in scope and the kernel may use fp32 sequential summation only if it meets this tolerance.\",\n            \"statement\": \"The Triton kernel's strictly sequential float32 left-to-right accumulation of the specified (64,128) input loses the small 0.25-granularity terms when the running accumulator is large (on the order of \\u00b1(1..32)*2^20), producing per-row outputs whose relative-error metric E exceeds the contract bound of 0.1 against the float64 reference row sums.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"experimenter\",\n      \"round\": 4,\n      \"text\": \"I'll run a single decisive probe for c1: build the exact specified input, run the kernel on GPU, and compare against a float64 reference row-sum.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"\\nimport sys, json\\nsys.path.insert(0, \\\"/root/numerical_cases/case_g\\\")\\nimport numpy as np, torch\\nimport kernel as K\\n\\n(vals,) = K.make_inputs(device=\\\"cuda\\\")\\nout = K.run(vals)\\nref = vals.double().sum(dim=1)\\nerr = (out.double() - ref)\\nE = err.norm().item() / max(ref.norm().item(), 0.008)\\nprint(json.dumps({\\n  \\\"E\\\": E,\\n  \\\"tolerance\\\": 0.1,\\n  \\\"passes_contract\\\": bool(E <= 0.1 and torch.isfinite(out).all().item()),\\n  \\\"max_abs_err\\\": err.abs().max().item(),\\n  \\\"ref_norm\\\": ref.norm().item(),\\n  \\\"ref_min\\\": ref.min().item(), \\\"ref_max\\\": ref.max().item(),\\n  \\\"finite\\\": bool(torch.isfinite(out).all().item()),\\n}))\\n\",\n            \"expected_signal\": \"E > 0.1 (sequential fp32 accumulation loses small terms) or E <= 0.1 (passes)\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [\n    {\n      \"contract_model\": [\n        \"Only the fully specified workload matters: one contiguous float32 (64,128) matrix from PCG64(730119) with a known column permutation; no hidden inputs.\",\n        \"Reference is a real-arithmetic (float64) per-row sum of the original float32 entries; metric E = ||out-ref||_2 / max(||ref||_2, 0.008); contract requires all outputs finite and E <= 0.1.\",\n        \"Any summation order and fp32 arithmetic is allowed as long as the numerical tolerance is met; this is not a universal-input correctness claim.\",\n        \"Input structure: 32 large positive terms w (integers 1..32 times 2^20, fp32-exact), their 32 negated copies -w (exact cancellation), and 64 small terms in {0.25, 0.5, 0.75}; columns then shuffled by rng.permutation(128) and the hardcoded PERMUTATION.\",\n        \"Exact row sum equals the sum of the 64 small terms only (large terms cancel exactly in fp32), roughly in range [16, 48] per row.\"\n      ],\n      \"created_at\": \"2026-09-23T21:36:07Z\",\n      \"created_by\": \"describer\",\n      \"id\": \"du1\",\n      \"impact_on_claims\": [],\n      \"kernel_model\": [\n        \"Triton kernel launched as a single program ((1,) grid) processing all 64 rows: rows = tl.arange(0,R), R=64, K=128 as constexpr.\",\n        \"Per-row accumulation is strictly sequential over j=0..127 in a float32 accumulator initialized to 0 (tl.full fp32), reading X + rows*K + j, i.e., row-major contiguous access assuming contiguous input.\",\n        \"enable_fp_fusion=False is set, and no vectorized/reduction reordering is visible, so the arithmetic order is deterministic left-to-right fp32.\",\n        \"run() allocates a (64,) float32 output on the input's device; assumes values.shape = (64,128) and contiguity (no stride check).\",\n        \"make_inputs is deterministic and public, so the exact input values and column order are reproducible.\"\n      ],\n      \"open_questions\": [],\n      \"risk_map\": [\n        \"Precision loss from sequential fp32 accumulation with cancellation: the permuted column order mixes large \\u00b1(1..33)*2^20 terms with 0.25-granularity small terms. When the running accumulator is on the order of tens of millions, its fp32 ulp is 2 or 4, so small terms of 0.25-0.75 can be entirely rounded away.\",\n        \"The magnitude of loss depends on the actual permuted order and the random w values; per-row error could plausibly reach tens of units while the reference row sums are only ~16-48, potentially exceeding E <= 0.1. This is the primary bug surface for Skeptic.\",\n        \"Contiguity/stride assumption: kernel indexes X + rows*K + j with no stride parameters; only safe because the problem guarantees a contiguous input.\",\n        \"Grid size (1,) and R/K constexpr assume exactly shape (64,128); harmless here since the workload is fixed, but would be a bug for other shapes (out of scope).\",\n        \"Whether the exact-cancellation structure actually saves the kernel (if partial sums return near zero between large terms, small terms may still be preserved) is the deciding empirical question.\"\n      ],\n      \"scope_notes\": [\n        \"In scope: only run(*make_inputs()) output on the specified (64,128) input, T4 hardware, E <= 0.1 with finiteness.\\\", \\\"Out of scope: universal input correctness, other shapes/dtypes, performance, non-contiguous inputs.\\\", \\\"Reference must be float64 or independently verified high-accuracy summation of the original fp32 entries, not fp32 torch.sum in the same order.\\\"]\"\n      ],\n      \"summary\": \"Case_g: per-row sum of a (64,128) fp32 matrix. Kernel does a naive left-to-right fp32 accumulation; workload deliberately plants exactly-cancelling large terms (\\u00b1w, w in [2^20, 32*2^20]) plus 64 small terms (multiples of 0.25) then permutes columns, so sequential fp32 summation may lose the small terms to rounding once the running sum is large.\",\n      \"task_ids\": [],\n      \"turn\": 2\n    }\n  ],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_g\"\n      },\n      \"created_at\": \"2026-09-23T21:35:50Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_g\",\n        \"has_error\": null,\n        \"kernel_code\": \"import torch\\nimport triton\\nimport triton.language as tl\\n\\n@triton.jit\\ndef _kernel(X, Y, K: tl.constexpr, R: tl.constexpr):\\n    rows = tl.arange(0, R)\\n    acc = tl.full((R,), 0, tl.float32)\\n    for j in range(K):\\n        value = tl.load(X + rows * K + j)\\n        acc = acc + value\\n    tl.store(Y + rows, acc)\\n\\ndef run(values):\\n    out = torch.empty((values.shape[0],), dtype=torch.float32, device=values.device)\\n    _kernel[(1,)](values, out, values.shape[1], values.shape[0], enable_fp_fusion=False)\\n    return out\\n\\nSEED = 730119\\nPERMUTATION = [123, 54, 34, 37, 17, 97, 46, 110, 36, 107, 32, 114, 14, 86, 40, 33, 122, 103, 70, 121, 63, 80, 62, 65, 72, 68, 55, 105, 113, 53, 7, 108, 59, 93, 58, 125, 89, 94, 18, 87, 30, 82, 56, 3, 119, 96, 127, 118, 20, 22, 24, 60, 117, 35, 16, 85, 41, 76, 81, 48, 0, 5, 101, 26, 44, 11, 51, 43, 104, 71, 9, 78, 39, 84, 90, 47, 45, 115, 57, 98, 66, 79, 77, 52, 49, 2, 91, 116, 4, 100, 19, 75, 69, 112, 120, 21, 88, 23, 109, 15, 27, 126, 28, 31, 6, 29, 61, 38, 92, 102, 73, 83, 95, 42, 67, 64, 99, 25, 106, 1, 8, 50, 74, 124, 12, 111, 10, 13]\\n\\ndef make_inputs_numpy():\\n    import numpy as np\\n    rng = np.random.Generator(np.random.PCG64(SEED))\\n    w = rng.integers(1, 33, size=(64, 32)).astype(np.float32) * np.float32(1048576)\\n    small = rng.integers(1, 4, size=(64, 64)).astype(np.float32) * np.float32(0.25)\\n    values = np.concatenate([w, -w, small], axis=1)\\n    order = rng.permutation(128)\\n    values = values[:, order][:, PERMUTATION].copy()\\n    return (values,)\\n\\ndef make_inputs(device=\\\"cuda\\\"):\\n    return tuple(torch.from_numpy(a.copy()).to(device) for a in make_inputs_numpy())\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Evaluate numerical compliance of run(*make_inputs()) on exactly the\\nfully specified workload in kernel.py. There is one contiguous float32 input\\nmatrix of shape (64,128). The PCG64 seed and complete column permutation are\\npublic; no hidden inputs are used.\\n\\nReference: for each row, sum the ORIGINAL float32 entries in real arithmetic,\\nevaluated with float64 or an independently checked high-accuracy summation.\\nMetric: E = ||output-reference||_2 / max(||reference||_2, 0.008).\\nContract: every output must be finite and E <= 0.1. Only the final result on\\nthe specified input is in scope. The kernel may use float32 arithmetic and any\\nsummation order if this numerical requirement is met. This is not a universal\\ncorrectness claim about all possible inputs.\\nTarget: the supplied Triton kernel on an NVIDIA T4. Decide trust, reject, or\\nneeds_more_evidence.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/numerical_cases/case_g\",\n        \"status\": \"under_test\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_g\"\n      },\n      \"created_at\": \"2026-09-23T21:35:50Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Evaluate numerical compliance of run(*make_inputs()) on exactly the\\nfully specified workload in kernel.py. There is one contiguous float32 input\\nmatrix of shape (64,128). The PCG64 seed and complete column permutation are\\npublic; no hidden inputs are used.\\n\\nReference: for each row, sum the ORIGINAL float32 entries in real arithmetic,\\nevaluated with float64 or an independently checked high-accuracy summation.\\nMetric: E = ||output-reference||_2 / max(||reference||_2, 0.008).\\nContract: every output must be finite and E <= 0.1. Only the final result on\\nthe specified input is in scope. The kernel may use float32 arithmetic and any\\nsummation order if this numerical requirement is met. This is not a universal\\ncorrectness claim about all possible inputs.\\nTarget: the supplied Triton kernel on an NVIDIA T4. Decide trust, reject, or\\nneeds_more_evidence.\\n\",\n        \"entry\": \"case_g\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_g\"\n      },\n      \"created_at\": \"2026-09-23T21:35:50Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_g\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 1621\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 66\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 855\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_g\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-23T21:35:50Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_g\\\",\\n  \\\"status\\\": \\\"under_test\\\",\\n  \\\"passed\\\": null\\n}\",\n        \"entry\": \"case_g\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 66,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"contract_model\": [\n          \"Only the fully specified workload matters: one contiguous float32 (64,128) matrix from PCG64(730119) with a known column permutation; no hidden inputs.\",\n          \"Reference is a real-arithmetic (float64) per-row sum of the original float32 entries; metric E = ||out-ref||_2 / max(||ref||_2, 0.008); contract requires all outputs finite and E <= 0.1.\",\n          \"Any summation order and fp32 arithmetic is allowed as long as the numerical tolerance is met; this is not a universal-input correctness claim.\",\n          \"Input structure: 32 large positive terms w (integers 1..32 times 2^20, fp32-exact), their 32 negated copies -w (exact cancellation), and 64 small terms in {0.25, 0.5, 0.75}; columns then shuffled by rng.permutation(128) and the hardcoded PERMUTATION.\",\n          \"Exact row sum equals the sum of the 64 small terms only (large terms cancel exactly in fp32), roughly in range [16, 48] per row.\"\n        ],\n        \"kernel_model\": [\n          \"Triton kernel launched as a single program ((1,) grid) processing all 64 rows: rows = tl.arange(0,R), R=64, K=128 as constexpr.\",\n          \"Per-row accumulation is strictly sequential over j=0..127 in a float32 accumulator initialized to 0 (tl.full fp32), reading X + rows*K + j, i.e., row-major contiguous access assuming contiguous input.\",\n          \"enable_fp_fusion=False is set, and no vectorized/reduction reordering is visible, so the arithmetic order is deterministic left-to-right fp32.\",\n          \"run() allocates a (64,) float32 output on the input's device; assumes values.shape = (64,128) and contiguity (no stride check).\",\n          \"make_inputs is deterministic and public, so the exact input values and column order are reproducible.\"\n        ],\n        \"risk_map\": [\n          \"Precision loss from sequential fp32 accumulation with cancellation: the permuted column order mixes large \\u00b1(1..33)*2^20 terms with 0.25-granularity small terms. When the running accumulator is on the order of tens of millions, its fp32 ulp is 2 or 4, so small terms of 0.25-0.75 can be entirely rounded away.\",\n          \"The magnitude of loss depends on the actual permuted order and the random w values; per-row error could plausibly reach tens of units while the reference row sums are only ~16-48, potentially exceeding E <= 0.1. This is the primary bug surface for Skeptic.\",\n          \"Contiguity/stride assumption: kernel indexes X + rows*K + j with no stride parameters; only safe because the problem guarantees a contiguous input.\",\n          \"Grid size (1,) and R/K constexpr assume exactly shape (64,128); harmless here since the workload is fixed, but would be a bug for other shapes (out of scope).\",\n          \"Whether the exact-cancellation structure actually saves the kernel (if partial sums return near zero between large terms, small terms may still be preserved) is the deciding empirical question.\"\n        ],\n        \"scope_notes\": \"In scope: only run(*make_inputs()) output on the specified (64,128) input, T4 hardware, E <= 0.1 with finiteness.\\\", \\\"Out of scope: universal input correctness, other shapes/dtypes, performance, non-contiguous inputs.\\\", \\\"Reference must be float64 or independently verified high-accuracy summation of the original fp32 entries, not fp32 torch.sum in the same order.\\\"]\",\n        \"summary\": \"Case_g: per-row sum of a (64,128) fp32 matrix. Kernel does a naive left-to-right fp32 accumulation; workload deliberately plants exactly-cancelling large terms (\\u00b1w, w in [2^20, 32*2^20]) plus 64 small terms (multiples of 0.25) then permutes columns, so sequential fp32 summation may lose the small terms to rounding once the running sum is large.\"\n      },\n      \"created_at\": \"2026-09-23T21:36:07Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"description_model\": {\n          \"contract_model\": [\n            \"Only the fully specified workload matters: one contiguous float32 (64,128) matrix from PCG64(730119) with a known column permutation; no hidden inputs.\",\n            \"Reference is a real-arithmetic (float64) per-row sum of the original float32 entries; metric E = ||out-ref||_2 / max(||ref||_2, 0.008); contract requires all outputs finite and E <= 0.1.\",\n            \"Any summation order and fp32 arithmetic is allowed as long as the numerical tolerance is met; this is not a universal-input correctness claim.\",\n            \"Input structure: 32 large positive terms w (integers 1..32 times 2^20, fp32-exact), their 32 negated copies -w (exact cancellation), and 64 small terms in {0.25, 0.5, 0.75}; columns then shuffled by rng.permutation(128) and the hardcoded PERMUTATION.\",\n            \"Exact row sum equals the sum of the 64 small terms only (large terms cancel exactly in fp32), roughly in range [16, 48] per row.\"\n          ],\n          \"kernel_model\": [\n            \"Triton kernel launched as a single program ((1,) grid) processing all 64 rows: rows = tl.arange(0,R), R=64, K=128 as constexpr.\",\n            \"Per-row accumulation is strictly sequential over j=0..127 in a float32 accumulator initialized to 0 (tl.full fp32), reading X + rows*K + j, i.e., row-major contiguous access assuming contiguous input.\",\n            \"enable_fp_fusion=False is set, and no vectorized/reduction reordering is visible, so the arithmetic order is deterministic left-to-right fp32.\",\n            \"run() allocates a (64,) float32 output on the input's device; assumes values.shape = (64,128) and contiguity (no stride check).\",\n            \"make_inputs is deterministic and public, so the exact input values and column order are reproducible.\"\n          ],\n          \"open_questions\": [],\n          \"risk_map\": [\n            \"Precision loss from sequential fp32 accumulation with cancellation: the permuted column order mixes large \\u00b1(1..33)*2^20 terms with 0.25-granularity small terms. When the running accumulator is on the order of tens of millions, its fp32 ulp is 2 or 4, so small terms of 0.25-0.75 can be entirely rounded away.\",\n            \"The magnitude of loss depends on the actual permuted order and the random w values; per-row error could plausibly reach tens of units while the reference row sums are only ~16-48, potentially exceeding E <= 0.1. This is the primary bug surface for Skeptic.\",\n            \"Contiguity/stride assumption: kernel indexes X + rows*K + j with no stride parameters; only safe because the problem guarantees a contiguous input.\",\n            \"Grid size (1,) and R/K constexpr assume exactly shape (64,128); harmless here since the workload is fixed, but would be a bug for other shapes (out of scope).\",\n            \"Whether the exact-cancellation structure actually saves the kernel (if partial sums return near zero between large terms, small terms may still be preserved) is the deciding empirical question.\"\n          ],\n          \"scope_notes\": [\n            \"In scope: only run(*make_inputs()) output on the specified (64,128) input, T4 hardware, E <= 0.1 with finiteness.\\\", \\\"Out of scope: universal input correctness, other shapes/dtypes, performance, non-contiguous inputs.\\\", \\\"Reference must be float64 or independently verified high-accuracy summation of the original fp32 entries, not fp32 torch.sum in the same order.\\\"]\"\n          ]\n        },\n        \"resolved_tasks\": [],\n        \"update\": {\n          \"contract_model\": [\n            \"Only the fully specified workload matters: one contiguous float32 (64,128) matrix from PCG64(730119) with a known column permutation; no hidden inputs.\",\n            \"Reference is a real-arithmetic (float64) per-row sum of the original float32 entries; metric E = ||out-ref||_2 / max(||ref||_2, 0.008); contract requires all outputs finite and E <= 0.1.\",\n            \"Any summation order and fp32 arithmetic is allowed as long as the numerical tolerance is met; this is not a universal-input correctness claim.\",\n            \"Input structure: 32 large positive terms w (integers 1..32 times 2^20, fp32-exact), their 32 negated copies -w (exact cancellation), and 64 small terms in {0.25, 0.5, 0.75}; columns then shuffled by rng.permutation(128) and the hardcoded PERMUTATION.\",\n            \"Exact row sum equals the sum of the 64 small terms only (large terms cancel exactly in fp32), roughly in range [16, 48] per row.\"\n          ],\n          \"created_at\": \"2026-09-23T21:36:07Z\",\n          \"created_by\": \"describer\",\n          \"id\": \"du1\",\n          \"impact_on_claims\": [],\n          \"kernel_model\": [\n            \"Triton kernel launched as a single program ((1,) grid) processing all 64 rows: rows = tl.arange(0,R), R=64, K=128 as constexpr.\",\n            \"Per-row accumulation is strictly sequential over j=0..127 in a float32 accumulator initialized to 0 (tl.full fp32), reading X + rows*K + j, i.e., row-major contiguous access assuming contiguous input.\",\n            \"enable_fp_fusion=False is set, and no vectorized/reduction reordering is visible, so the arithmetic order is deterministic left-to-right fp32.\",\n            \"run() allocates a (64,) float32 output on the input's device; assumes values.shape = (64,128) and contiguity (no stride check).\",\n            \"make_inputs is deterministic and public, so the exact input values and column order are reproducible.\"\n          ],\n          \"open_questions\": [],\n          \"risk_map\": [\n            \"Precision loss from sequential fp32 accumulation with cancellation: the permuted column order mixes large \\u00b1(1..33)*2^20 terms with 0.25-granularity small terms. When the running accumulator is on the order of tens of millions, its fp32 ulp is 2 or 4, so small terms of 0.25-0.75 can be entirely rounded away.\",\n            \"The magnitude of loss depends on the actual permuted order and the random w values; per-row error could plausibly reach tens of units while the reference row sums are only ~16-48, potentially exceeding E <= 0.1. This is the primary bug surface for Skeptic.\",\n            \"Contiguity/stride assumption: kernel indexes X + rows*K + j with no stride parameters; only safe because the problem guarantees a contiguous input.\",\n            \"Grid size (1,) and R/K constexpr assume exactly shape (64,128); harmless here since the workload is fixed, but would be a bug for other shapes (out of scope).\",\n            \"Whether the exact-cancellation structure actually saves the kernel (if partial sums return near zero between large terms, small terms may still be preserved) is the deciding empirical question.\"\n          ],\n          \"scope_notes\": [\n            \"In scope: only run(*make_inputs()) output on the specified (64,128) input, T4 hardware, E <= 0.1 with finiteness.\\\", \\\"Out of scope: universal input correctness, other shapes/dtypes, performance, non-contiguous inputs.\\\", \\\"Reference must be float64 or independently verified high-accuracy summation of the original fp32 entries, not fp32 torch.sum in the same order.\\\"]\"\n          ],\n          \"summary\": \"Case_g: per-row sum of a (64,128) fp32 matrix. Kernel does a naive left-to-right fp32 accumulation; workload deliberately plants exactly-cancelling large terms (\\u00b1w, w in [2^20, 32*2^20]) plus 64 small terms (multiples of 0.25) then permutes columns, so sequential fp32 summation may lose the small terms to rounding once the running sum is large.\",\n          \"task_ids\": [],\n          \"turn\": 2\n        }\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_description_update\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The permuted column order interleaves large \\u00b1(1..32)*2^20 terms (fp32 ulp at those magnitudes is 2 or 4) with small 0.25-granularity terms. Once the running fp32 accumulator is on the order of tens of millions, small terms of 0.25\\u20130.75 round away entirely, so the computed row sum can deviate from the true sum (~16\\u201348) by tens of units, plausibly driving E far above 0.1. Whether \\u00b1w pairs happen to cancel early in each row's column order decides the actual magnitude, so this is directly testable by simulating the sequential fp32 accumulation on the deterministic public input.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Reference is a real-arithmetic per-row sum of the original float32 entries; contract requires all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.008) <= 0.1 on the fully specified (64,128) PCG64(730119) workload.\"\n          }\n        ],\n        \"scope_rationale\": \"The claim concerns exactly the specified workload run(*make_inputs()) and the stated numerical contract E <= 0.1 with finite outputs; problem.txt says only the final result on this specified input is in scope and the kernel may use fp32 sequential summation only if it meets this tolerance.\",\n        \"statement\": \"The Triton kernel's strictly sequential float32 left-to-right accumulation of the specified (64,128) input loses the small 0.25-granularity terms when the running accumulator is large (on the order of \\u00b1(1..32)*2^20), producing per-row outputs whose relative-error metric E exceeds the contract bound of 0.1 against the float64 reference row sums.\"\n      },\n      \"created_at\": \"2026-09-23T21:36:14Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"created_at\": \"2026-09-23T21:36:14Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"skeptic\",\n        \"rationale\": \"The permuted column order interleaves large \\u00b1(1..32)*2^20 terms (fp32 ulp at those magnitudes is 2 or 4) with small 0.25-granularity terms. Once the running fp32 accumulator is on the order of tens of millions, small terms of 0.25\\u20130.75 round away entirely, so the computed row sum can deviate from the true sum (~16\\u201348) by tens of units, plausibly driving E far above 0.1. Whether \\u00b1w pairs happen to cancel early in each row's column order decides the actual magnitude, so this is directly testable by simulating the sequential fp32 accumulation on the deterministic public input.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Reference is a real-arithmetic per-row sum of the original float32 entries; contract requires all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.008) <= 0.1 on the fully specified (64,128) PCG64(730119) workload.\"\n          }\n        ],\n        \"scope_rationale\": \"The claim concerns exactly the specified workload run(*make_inputs()) and the stated numerical contract E <= 0.1 with finite outputs; problem.txt says only the final result on this specified input is in scope and the kernel may use fp32 sequential summation only if it meets this tolerance.\",\n        \"statement\": \"The Triton kernel's strictly sequential float32 left-to-right accumulation of the specified (64,128) input loses the small 0.25-granularity terms when the running accumulator is large (on the order of \\u00b1(1..32)*2^20), producing per-row outputs whose relative-error metric E exceeds the contract bound of 0.1 against the float64 reference row sums.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-09-23T21:36:14Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"\\nimport sys, json\\nsys.path.insert(0, \\\"/root/numerical_cases/case_g\\\")\\nimport numpy as np, torch\\nimport kernel as K\\n\\n(vals,) = K.make_inputs(device=\\\"cuda\\\")\\nout = K.run(vals)\\nref = vals.double().sum(dim=1)\\nerr = (out.double() - ref)\\nE = err.norm().item() / max(ref.norm().item(), 0.008)\\nprint(json.dumps({\\n  \\\"E\\\": E,\\n  \\\"tolerance\\\": 0.1,\\n  \\\"passes_contract\\\": bool(E <= 0.1 and torch.isfinite(out).all().item()),\\n  \\\"max_abs_err\\\": err.abs().max().item(),\\n  \\\"ref_norm\\\": ref.norm().item(),\\n  \\\"ref_min\\\": ref.min().item(), \\\"ref_max\\\": ref.max().item(),\\n  \\\"finite\\\": bool(torch.isfinite(out).all().item()),\\n}))\\n\",\n        \"expected_signal\": \"E > 0.1 (sequential fp32 accumulation loses small terms) or E <= 0.1 (passes)\"\n      },\n      \"created_at\": \"2026-09-23T21:36:24Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t7_probe.py\",\n            \"sha256\": \"19b66d64393a71687f025bfcce1df4c99aa440abaf99c706a3a86872e2589a56\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t7_stdout.txt\",\n            \"sha256\": \"f2ae9b2df91872e1926a9c7d7abd02fc55659e45ddbfdaa3c7a0af2b5c07b5d3\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t7_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n            \"kind\": \"json_result\",\n            \"path\": \"probes/t7_json_result.json\",\n            \"sha256\": \"54432f1545b20656d309d281081710584773a7fd9de62abcfc396836bbbbd357\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"The Triton kernel's strictly sequential float32 left-to-right accumulation of the specified (64,128) input loses the small 0.25-granularity terms when the running accumulator is large (on the order of \\u00b1(1..32)*2^20), producing per-row outputs whose relative-error metric E exceeds the contract bound of 0.1 against the float64 reference row sums.\",\n        \"cwd\": \"/root/numerical_cases/case_g\",\n        \"duration_s\": 4.726404,\n        \"event_id\": \"t7\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t7_probe.py\",\n                \"sha256\": \"19b66d64393a71687f025bfcce1df4c99aa440abaf99c706a3a86872e2589a56\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t7_stdout.txt\",\n                \"sha256\": \"f2ae9b2df91872e1926a9c7d7abd02fc55659e45ddbfdaa3c7a0af2b5c07b5d3\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t7_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t7_json_result.json\",\n                \"sha256\": \"54432f1545b20656d309d281081710584773a7fd9de62abcfc396836bbbbd357\"\n              }\n            ],\n            \"duration_s\": 4.726404,\n            \"exit_code\": 0,\n            \"expected_signal\": \"E > 0.1 (sequential fp32 accumulation loses small terms) or E <= 0.1 (passes)\",\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"E\": 0.9001987201108703,\n              \"finite\": true,\n              \"max_abs_err\": 35.75,\n              \"passes_contract\": false,\n              \"ref_max\": 35.75,\n              \"ref_min\": 28.5,\n              \"ref_norm\": 257.13274781715376,\n              \"tolerance\": 0.1\n            },\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"E\\\": 0.9001987201108703, \\\"tolerance\\\": 0.1, \\\"passes_contract\\\": false, \\\"max_abs_err\\\": 35.75, \\\"ref_norm\\\": 257.13274781715376, \\\"ref_min\\\": 28.5, \\\"ref_max\\\": 35.75, \\\"finite\\\": true}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe produced a JSON result that needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t7\"\n        },\n        \"exit_code\": 0,\n        \"expected_signal\": \"E > 0.1 (sequential fp32 accumulation loses small terms) or E <= 0.1 (passes)\",\n        \"json_parse_error\": null,\n        \"json_result\": {\n          \"E\": 0.9001987201108703,\n          \"finite\": true,\n          \"max_abs_err\": 35.75,\n          \"passes_contract\": false,\n          \"ref_max\": 35.75,\n          \"ref_min\": 28.5,\n          \"ref_norm\": 257.13274781715376,\n          \"tolerance\": 0.1\n        },\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"{\\\"E\\\": 0.9001987201108703, \\\"tolerance\\\": 0.1, \\\"passes_contract\\\": false, \\\"max_abs_err\\\": 35.75, \\\"ref_norm\\\": 257.13274781715376, \\\"ref_min\\\": 28.5, \\\"ref_max\\\": 35.75, \\\"finite\\\": true}\\n\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "request_description",
+        "description": "Request a Describer clarification for source, contract, probe, or verdict ambiguity.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "reason_kind",
+            "question"
+          ],
+          "properties": {
+            "reason_kind": {
+              "type": "string",
+              "enum": [
+                "contract_scope",
+                "source_interpretation",
+                "probe_anomaly",
+                "verdict_blocker",
+                "other"
+              ]
+            },
+            "question": {
+              "type": "string"
+            },
+            "related_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "source_refs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

@@ -1,0 +1,44 @@
+{
+  "id": "chatcmpl-c9d547e0133d4c0682c68da9a2aff24d",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.85, \"reason\": \"The exact real target includes the small [0.25,1.75] values (the 2^80 and 2^30 pairs cancel exactly), and the Neumaier compensated summation correctly recovers them: values rounded away when added to the huge 2^80 total are captured in the correction term, which then accumulates the smalls with float32 Kahan-level accuracy (~1e-7 relative), well within 1e-5. The probe's failure used a degenerate float64 sequential reference (0.0) that discards the small terms, which the contract explicitly says is not authoritative; against the stated exact-real-sum target the kernel passes and leaves X unmodified.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "The target sums: each row contains 2^80 and -2^80 canceling exactly (real sum), plus pairs 2^30 and -2^30, plus 8 values in [0.25,1.75]. Exact target is small (~5-ish values sum, but probe reference shows 0.0? Wait reference shows 0.0 for all rows \u2014 the float64 sequential sum is 0.0 because adding 2^80 then -2^80 in float64 wipes the small values, then 2^30 -2^30 similarly... but mathematically the small values remain. Hmm, the probe's \"reference\" is sequential float64 which gives 0. But the contract says exact real sum. The reference in probe is not authoritative. The mathematical target includes low values.\n\nActually the contract: \"the sum means exact real-number sum of stored input values.\" Reference in probe gave 0.0 but that's the probe's method. Hmm, but the contract says \"reference behavior\" \u2014 target[r] = sum of X[r,j], exact real sum. The low values are ~0.25\u20131.75 each, 8 of them, so sums ~2\u20137. But the probe reference is 0.0. The probe is \"evidence, not authoritative.\" Hmm, but the contract explicitly defines target as exact real sum. So target is not 0.\n\nWait \u2014 but does the kernel compute it correctly? The kernel: compensated float32 summation. The issue: 2^80 in float32 \u2014 wait, 2^80 stored as float32? 2^80 exceeds float32 max (~3.4e38). 2^80 \u2248 1.2e24, fine, representable. Okay.\n\nCompensated (Kahan/Neumaier) summation with the huge 2^80 term: total starts 0, add 2^80 \u2192 total = 2^80. Then adding -2^80: value=-2^80, |total|>=|value|, lost = (total - updated)+value = 0. total becomes 0. Good. Then adding 2^30: total=2^30. Then -2^30: lost=0, total=0. Then small values: compensated summation in float32 accumulates 8 values of ~1 with error ~eps*... Kahan gives nearly exact results for well-conditioned sums; error ~ float32 eps * sum ~ 1e-7. Relative error to target ~1e-7/5 \u2192 ~1e-7 < 1e-5. But wait \u2014 Neumaier: when |total| < |value|, correction uses (value - updated) + total; that's handled. Order of columns: permuted, but 2^80 terms are at positions 0 and 11. Sum: 2^80 + smalls... actually after 2^80 (col 0), then 10 interior values (2^30, -2^30, and 8 smalls) added to total=2^80. Adding 2^30 to 2^80: 2^30 lost entirely, updated = 2^80, lost = (total - updated)+value = 0 + 2^30 = 2^30. Correction = 2^30. Then -2^30: |total|=2^80 >= |value|=2^30, lost = (2^80 - 2^80) + (-2^30) = -2^30. Correction = 0. Total still 2^80. Small values ~1 added: lost each ~1 (rounded away since 2^80 has ulp 2^57). Correction accumulates ~8 values each ~1. Then final column -2^80: total = 0, lost = 0. Final: total + correction = correction \u2248 sum of smalls in float32. Compensation sum of smalls: Kahan on values ~1, correction near-exact, error ~1e-7. But wait, correction itself accumulates lost terms with plain addition (no second-order compensation) \u2014 that's fine.\n\nBut careful: Neumaier correction when total=0 and adding small values: |0| >= |value| false for positive values \u2192 lost = (value - updated) + total = 0. Fine, exact until total grows. Kahan handles ~8 values well.\n\nActually wait, the correction during the 2^80 phase: correction was 2^30 + (-2^30)... computed above gives 0? First: adding 2^30 to total=2^80: total=2^80, value=2^30. |total|>=|value| \u2192 lost=(total-updated)+value = (2^80-2^80)+2^30 = 2^30. correction=2^30. Next -2^30: lost = (total-updated)+value = 0 + (-2^30) = -2^30. correction = 0. Then smalls: adding value ~1 to total=2^80: updated=2^80, lost = 0 + value = value. correction accumulates values. Good. Final: 0 + correction.\n\nSo kernel output \u2248 exact sum, error ~1e-7, passes relative to the mathematical target (~5). The probe failed because its reference (float64 sequential) was 0 \u2014 but the contract says probe is not authoritative; the contract's target is exact real sum. The output matches exact real sum. So implementation is correct. Verdict: trust.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790234079,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1350,
+    "prompt_tokens": 1360,
+    "total_tokens": 2710,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1185,
+      "rejected_prediction_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cached_tokens": 10
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 1185
+    }
+  }
+}

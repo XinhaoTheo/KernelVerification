@@ -1,4 +1,4 @@
-"""Rebuild benchmark_fn_fp/eval_cases/ as an answer-free, opaquely-named copy.
+"""Rebuild benchmark_fn_fp/triton_eval_cases/ as an answer-free, opaquely-named copy.
 
 Two separate leaks have to be closed for a case to be fair:
 
@@ -13,9 +13,9 @@ Two separate leaks have to be closed for a case to be fair:
    turn. Directories here are therefore `case_NN`, assigned in a shuffled order
    so the numbering does not group FN before FP either.
 
-The name mapping lives in benchmark_fn_fp/case_map.json, OUTSIDE eval_cases, so
+The name mapping lives in benchmark_fn_fp/case_map.json, OUTSIDE triton_eval_cases, so
 the scorer can resolve a verdict back to its answer key while nothing under
-eval_cases reveals it.
+triton_eval_cases reveals it.
 
 Usage (from repo root):
     python benchmark_fn_fp/generation/generators/build_eval_cases.py
@@ -31,7 +31,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 SOURCE_DIR = REPO / "benchmark_fn_fp" / "triton"
-EVAL_DIR = REPO / "benchmark_fn_fp" / "eval_cases"
+EVAL_DIR = REPO / "benchmark_fn_fp" / "triton_eval_cases"
 MAP_PATH = REPO / "benchmark_fn_fp" / "case_map.json"
 
 # Fixed so a rebuild produces the same assignment; a case keeps its id across
@@ -71,6 +71,15 @@ def _strip_name_header(text: str, case_name: str) -> tuple[str, str | None]:
     return text, f"{case_name}: case name appears outside the leading docstring; edit the source"
 
 
+def _next_case_number(registry: dict) -> int:
+    """Never reuse a retired ID or collide with another dataset's IDs."""
+    assigned = set(registry.get("cases", {})) | set(registry.get("case_details", {}))
+    assigned.update(registry.get("retired_ids", []))
+    highest = max((int(match.group(1)) for name in assigned
+                   if (match := re.fullmatch(r"case_(\d+)", name))), default=0)
+    return max(highest + 1, registry.get("next_case_number", 1))
+
+
 def main() -> int:
     cases = sorted(
         d.name for d in SOURCE_DIR.iterdir()
@@ -83,9 +92,10 @@ def main() -> int:
     # Ids already handed out are kept: results from earlier runs are stored under
     # case ids, so re-shuffling on every rebuild would silently misalign them with
     # the cases they scored. Only genuinely new cases get new ids.
-    existing: dict[str, str] = {}
-    if MAP_PATH.exists():
-        existing = json.loads(MAP_PATH.read_text()).get("cases", {})
+    registry = json.loads(MAP_PATH.read_text()) if MAP_PATH.exists() else {}
+    existing: dict[str, str] = registry.get("cases", {})
+    details = registry.get("case_details", {})
+    unified = bool(details)
     mapping = {cid: name for cid, name in existing.items() if name in set(cases)}
     dropped = {cid: name for cid, name in existing.items() if name not in set(cases)}
     for cid, name in dropped.items():
@@ -93,11 +103,30 @@ def main() -> int:
 
     fresh = [n for n in cases if n not in set(mapping.values())]
     random.Random(SHUFFLE_SEED).shuffle(fresh)
-    next_id = max((int(c.split("_")[1]) for c in mapping), default=0) + 1
+    next_id = _next_case_number(registry)
     for name in fresh:
-        mapping[f"case_{next_id:02d}"] = name
+        case_id = f"case_{next_id:02d}"
+        source_meta = json.loads((SOURCE_DIR / name / "meta.json").read_text())
+        source_name = source_meta.get("name", name)
+        target_name = case_id if unified else name
+        if name != target_name:
+            destination = SOURCE_DIR / target_name
+            if destination.exists():
+                raise FileExistsError(f"Refusing to overwrite source case: {destination}")
+            (SOURCE_DIR / name).rename(destination)
+        mapping[case_id] = target_name
+        if unified:
+            details[case_id] = {"dataset": "benchmark_fn_fp", "previous_id": case_id,
+                "source_name": source_name, "category": "original_fn_fp",
+                "public_dir": f"triton_eval_cases/{case_id}", "answer_dir": f"triton/{case_id}",
+                "mechanism": source_meta.get("mechanism") or source_meta.get("kernel_family")}
         next_id += 1
-    mapping = dict(sorted(mapping.items()))
+    mapping = dict(sorted(mapping.items(), key=lambda item: int(item[0].split("_")[1])))
+    source_names = {}
+    for case_id, name in mapping.items():
+        source_meta = json.loads((SOURCE_DIR / name / "meta.json").read_text())
+        source_names[case_id] = (details.get(case_id, {}).get("source_name")
+                                 or source_meta.get("name") or name)
 
     if EVAL_DIR.exists():
         shutil.rmtree(EVAL_DIR)
@@ -113,7 +142,7 @@ def main() -> int:
             if not src.exists():
                 failures.append(f"{name}: missing {filename}")
                 continue
-            text, note = _strip_name_header(src.read_text(), name)
+            text, note = _strip_name_header(src.read_text(), source_names[case_id])
             if note:
                 failures.append(note)
             (out / filename).write_text(text)
@@ -123,12 +152,18 @@ def main() -> int:
         )
         problems[case_id] = (out / "problem.txt").read_text() if (out / "problem.txt").exists() else ""
 
-    MAP_PATH.write_text(json.dumps({
-        "note": "Maps opaque eval_cases ids to their answer-key directory under benchmark_fn_fp/triton/. "
+    registry.update({
+        "note": "Maps opaque triton_eval_cases ids to their answer-key directory under benchmark_fn_fp/triton/. "
                 "Read only by the scorer; never shown to a verifier.",
         "shuffle_seed": SHUFFLE_SEED,
         "cases": mapping,
-    }, indent=2) + "\n")
+        "next_case_number": next_id,
+        "retired_ids": sorted(set(registry.get("retired_ids", [])) | set(dropped),
+                              key=lambda name: int(name.split("_")[1])),
+    })
+    if unified:
+        registry["case_details"] = details
+    MAP_PATH.write_text(json.dumps(registry, indent=2) + "\n")
 
     # --- leak checks -------------------------------------------------------
     for path in sorted(EVAL_DIR.rglob("*")):
@@ -137,7 +172,7 @@ def main() -> int:
         text = path.read_text(errors="replace")
         for match in BANNED.finditer(text):
             failures.append(f"{path.relative_to(REPO)}: banned word {match.group(0)!r}")
-        for real_name in cases:
+        for real_name in set(source_names.values()) - set(mapping):
             if real_name in text:
                 failures.append(f"{path.relative_to(REPO)}: leaks real case name {real_name!r}")
         if re.search(r"\b(fn|fp)\d", path.name, re.IGNORECASE):

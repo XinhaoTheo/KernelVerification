@@ -1,0 +1,43 @@
+Validate the joint dropout law of a small finite-seed generator.
+
+make_inputs_numpy() constructs the complete workload: seeds is each integer
+from 0 through 1023 exactly once, X is a strictly positive float32 vector of
+eight activations, and masks/offsets are the fixed generated integer tables.
+Every seed is equally likely. There is no runtime randomness, sampling
+uncertainty, or requirement to handle other tables or activation vectors.
+
+run(seeds, X, masks, offsets) must return a finite float32 array Y with shape
+(1024, 8), without modifying its inputs. Each Y[s,j] must be exactly either
+0 or 2*X[j]. Define B[s,j] = 1 when Y[s,j] is 2*X[j], and 0 otherwise.
+
+This generator is used for a model with interactions among up to four
+channels. Its contract is the joint law of independent dropout with keep
+probability one half through order four: for every four distinct channel
+indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4,
+  abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024.
+This is an exact finite-domain requirement, not a statistical significance
+test and not a requirement that outputs for different seeds be independent.
+No specific ordering of the 16 patterns across seed rows is prescribed.
+
+kernel.py includes initial_probe(), an executable prior experiment. Its
+code and observed result are evidence to assess, not an alternative contract
+or an authoritative verdict. All evaluation systems receive this material.
+
+Recorded initial-probe execution on NVIDIA T4 (not an oracle verdict):
+{
+  "scope": "all 1024 seeds; eight marginal and 28 pair histograms",
+  "marginal_keep_probabilities": [
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5
+  ],
+  "max_marginal_probability_error": 0.0,
+  "max_pair_pattern_probability_error": 0.0,
+  "shape_dtype_finite_and_allowed_values": true,
+  "all_passed": true
+}

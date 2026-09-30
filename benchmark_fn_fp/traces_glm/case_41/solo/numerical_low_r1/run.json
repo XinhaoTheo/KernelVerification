@@ -1,0 +1,738 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "__pycache__/kernel.cpython-313.pyc",
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_f",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _recurrence_kernel(Matrix, Initial, Drive, Output, N: tl.constexpr, STEPS: tl.constexpr):\n    i = tl.arange(0, N)\n    j = tl.arange(0, N)\n    matrix = tl.load(Matrix + i[:, None] * N + j[None, :])\n    state = tl.load(Initial + i).to(tl.float32)\n    for step in range(STEPS):\n        forcing = tl.load(Drive + step * N + i)\n        next_state = tl.sum(matrix * state[None, :], axis=1) + forcing\n        state = next_state.to(tl.float16).to(tl.float32)\n    tl.store(Output + i, state)\n\n\ndef run(matrix, initial, drive):\n    output = torch.empty((16,), device=matrix.device, dtype=torch.float32)\n    _recurrence_kernel[(1,)](matrix, initial, drive, output, N=16, STEPS=64,\n                            num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    orthogonal = np.array([[1.0]], dtype=np.float64)\n    while len(orthogonal) < 16:\n        orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])\n    orthogonal /= 4.0\n    matrix_rng = np.random.Generator(np.random.PCG64(20260923))\n    diagonal = matrix_rng.choice(np.array([0.875, 0.90625, 0.9375, 0.96875]), size=16)\n    upper = np.diag(diagonal)\n    upper += np.diag(np.full(15, 0.1875), 1)\n    upper += np.diag(matrix_rng.choice([-0.03125, 0.03125], size=14), 2)\n    left = np.sum(orthogonal[:, :, None] * upper[None, :, :], axis=1)\n    matrix = np.sum(left[:, :, None] * orthogonal.T[None, :, :], axis=1).astype(np.float32)\n    rng = np.random.Generator(np.random.PCG64(202002))\n    initial = rng.normal(0.0, 0.1, 16).astype(np.float32)\n    drive = rng.normal(0.0, 0.1, (64, 16)).astype(np.float32)\n    return matrix, initial, drive\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "passed": null,
+    "problem_text": "Evaluate a recurrent linear state update on the fixed workload in kernel.py.\n\nThe only inputs in scope are the float32 tensors returned by make_inputs():\nmatrix has shape (16,16), initial has shape (16,), and drive has shape (64,16).\nThe full input generator and its seeds are public. The desired output is the\nfinal state of this recurrence, evaluated in float64 on those float32 inputs:\n  reference_state = initial\n  for t in range(64):\n      reference_state = matrix @ reference_state + drive[t]\n\nThe implementation may approximate intermediate states. Its final output must\nbe a finite vector of shape (16,), with relative L2 error\n  ||output - reference_state||_2 / max(||reference_state||_2, 0.001*sqrt(16))\nat most 0.002. The target execution device is an NVIDIA T4.\n\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\nspecified workload. Alternative inputs are outside this question's scope.\n",
+    "rounds": null,
+    "session_dir": "/root/numerical_cases/case_f",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-23T21:35:29Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-23T21:35:45Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "d933765de2b30315027ebca501f6b37de8aab4857fb649df2dd1706bd06680ff"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "20e950944bf80ffde47153e1fb253533e7f7ceb69bb68b76203665f371cea145"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "2d14cb8339a83195f4624f137171f08d960d18e10a6b8cf93b499cac0a5648b4"
+              }
+            ],
+            "den": 162.41431887628192,
+            "duration_s": 4.515833,
+            "exit_code": 0,
+            "expected_signal": "rel_err exceeds 0.002",
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "bound": 0.002,
+              "den": 162.41431887628192,
+              "finite": true,
+              "metric": "relative L2 error vs float64 reference",
+              "num": 0.7971033936944146,
+              "passes": false,
+              "rel_err": 0.0049078394023965525,
+              "shape": [
+                16
+              ]
+            },
+            "num": 0.7971033936944146,
+            "rel_err": 0.0049078394023965525,
+            "shape": [
+              16
+            ],
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"num\": 0.7971033936944146, \"den\": 162.41431887628192, \"rel_err\": 0.0049078394023965525, \"bound\": 0.002, \"finite\": true, \"shape\": [16], \"passes\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.002
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the fixed make_inputs() workload, run() output (finite, shape (16,)) has relative L2 error 0.004908 vs the float64 reference, exceeding the contract's 0.002 bound \u2014 consistent with fp16 intermediate quantization accumulating over 64 steps.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Each of 64 steps quantizes the state to fp16 (~1e-3 relative rounding), and errors compound through the recurrence; the resulting relative L2 error may exceed the contract's 0.002 bound.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Final output must have relative L2 error at most 0.002 vs float64 reference for the fixed make_inputs workload."
+        }
+      ],
+      "scope_rationale": "Contract requires relative L2 error <= 0.002 on the fixed make_inputs() workload.",
+      "statement": "The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload.",
+      "status": "confirmed",
+      "updated_at": "2026-09-23T21:35:45Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_f",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_f"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_f"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_f"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_f",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 4.804025467000002,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel rounds each intermediate state to float16 (line 16) over 64 recurrence steps. That could accumulate error beyond the 0.002 relative L2 tolerance. I'll record a claim and run the actual workload.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Each of 64 steps quantizes the state to fp16 (~1e-3 relative rounding), and errors compound through the recurrence; the resulting relative L2 error may exceed the contract's 0.002 bound.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Final output must have relative L2 error at most 0.002 vs float64 reference for the fixed make_inputs workload."
+              }
+            ],
+            "scope_rationale": "Contract requires relative L2 error <= 0.002 on the fixed make_inputs() workload.",
+            "statement": "The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.804,
+        "input_tokens": 7658,
+        "output_tokens": 286
+      }
+    },
+    {
+      "duration_s": 6.519336594999999,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run the actual workload on GPU and compare against the float64 reference to test the fp16-quantization claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, '/root/numerical_cases/case_f')\nfrom kernel import run, make_inputs, make_inputs_numpy\n\nmatrix, initial, drive = make_inputs()\nout = run(matrix, initial, drive)\ntorch.cuda.synchronize()\n\nm64 = matrix.cpu().numpy().astype(np.float64)\ns64 = initial.cpu().numpy().astype(np.float64)\nd64 = drive.cpu().numpy().astype(np.float64)\nfor t in range(64):\n    s64 = m64 @ s64 + d64[t]\n\no = out.cpu().numpy().astype(np.float64)\nnum = np.linalg.norm(o - s64)\nden = max(np.linalg.norm(s64), 0.001*np.sqrt(16))\nprint(json.dumps({\n    \"metric\": \"relative L2 error vs float64 reference\",\n    \"num\": float(num), \"den\": float(den),\n    \"rel_err\": float(num/den),\n    \"bound\": 0.002,\n    \"finite\": bool(np.all(np.isfinite(o))),\n    \"shape\": list(o.shape),\n    \"passes\": bool(num/den <= 0.002)\n}))\n",
+            "expected_signal": "rel_err exceeds 0.002"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.519,
+        "input_tokens": 8673,
+        "output_tokens": 306
+      }
+    },
+    {
+      "duration_s": 4.695045809999996,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe ran on the actual GPU workload and measured rel_err \u2248 0.00491, exceeding the 0.002 bound. I'll finalize this evidence and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "den": 162.41431887628192,
+              "finite": true,
+              "num": 0.7971033936944146,
+              "rel_err": 0.0049078394023965525,
+              "shape": [
+                16
+              ],
+              "tolerance": 0.002
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "On the fixed make_inputs() workload, run() output (finite, shape (16,)) has relative L2 error 0.004908 vs the float64 reference, exceeding the contract's 0.002 bound \u2014 consistent with fp16 intermediate quantization accumulating over 64 steps.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.695,
+        "input_tokens": 10870,
+        "output_tokens": 242
+      }
+    },
+    {
+      "duration_s": 4.648790866999988,
+      "role": "solo",
+      "round": 5,
+      "text": "The single in-scope claim c1 is confirmed with decisive runtime evidence (t6): rel_err \u2248 0.0049 > 0.002. I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.98,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t6 ran run(*make_inputs()) on the actual GPU workload and compared to the float64 reference defined in problem.txt. Output was finite with shape (16,), but relative L2 error = 0.004908 (num 0.7971, den 162.414), exceeding the contract's bound of 0.002. This is caused by the kernel's per-step float16 quantization of the intermediate state (kernel.py line 16) over 64 recurrence steps, accumulating error beyond what the contract tolerates on this fixed workload. Claim c1 is in_scope and confirmed; the kernel violates the numerical contract.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.649,
+        "input_tokens": 14136,
+        "output_tokens": 229
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_f"
+      },
+      "created_at": "2026-09-23T21:35:24Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "__pycache__/kernel.cpython-313.pyc",
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_f",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _recurrence_kernel(Matrix, Initial, Drive, Output, N: tl.constexpr, STEPS: tl.constexpr):\n    i = tl.arange(0, N)\n    j = tl.arange(0, N)\n    matrix = tl.load(Matrix + i[:, None] * N + j[None, :])\n    state = tl.load(Initial + i).to(tl.float32)\n    for step in range(STEPS):\n        forcing = tl.load(Drive + step * N + i)\n        next_state = tl.sum(matrix * state[None, :], axis=1) + forcing\n        state = next_state.to(tl.float16).to(tl.float32)\n    tl.store(Output + i, state)\n\n\ndef run(matrix, initial, drive):\n    output = torch.empty((16,), device=matrix.device, dtype=torch.float32)\n    _recurrence_kernel[(1,)](matrix, initial, drive, output, N=16, STEPS=64,\n                            num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    orthogonal = np.array([[1.0]], dtype=np.float64)\n    while len(orthogonal) < 16:\n        orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])\n    orthogonal /= 4.0\n    matrix_rng = np.random.Generator(np.random.PCG64(20260923))\n    diagonal = matrix_rng.choice(np.array([0.875, 0.90625, 0.9375, 0.96875]), size=16)\n    upper = np.diag(diagonal)\n    upper += np.diag(np.full(15, 0.1875), 1)\n    upper += np.diag(matrix_rng.choice([-0.03125, 0.03125], size=14), 2)\n    left = np.sum(orthogonal[:, :, None] * upper[None, :, :], axis=1)\n    matrix = np.sum(left[:, :, None] * orthogonal.T[None, :, :], axis=1).astype(np.float32)\n    rng = np.random.Generator(np.random.PCG64(202002))\n    initial = rng.normal(0.0, 0.1, 16).astype(np.float32)\n    drive = rng.normal(0.0, 0.1, (64, 16)).astype(np.float32)\n    return matrix, initial, drive\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "passed": null,
+        "problem_text": "Evaluate a recurrent linear state update on the fixed workload in kernel.py.\n\nThe only inputs in scope are the float32 tensors returned by make_inputs():\nmatrix has shape (16,16), initial has shape (16,), and drive has shape (64,16).\nThe full input generator and its seeds are public. The desired output is the\nfinal state of this recurrence, evaluated in float64 on those float32 inputs:\n  reference_state = initial\n  for t in range(64):\n      reference_state = matrix @ reference_state + drive[t]\n\nThe implementation may approximate intermediate states. Its final output must\nbe a finite vector of shape (16,), with relative L2 error\n  ||output - reference_state||_2 / max(||reference_state||_2, 0.001*sqrt(16))\nat most 0.002. The target execution device is an NVIDIA T4.\n\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\nspecified workload. Alternative inputs are outside this question's scope.\n",
+        "rounds": null,
+        "session_dir": "/root/numerical_cases/case_f",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_f"
+      },
+      "created_at": "2026-09-23T21:35:24Z",
+      "id": "t2",
+      "output": {
+        "content": "Evaluate a recurrent linear state update on the fixed workload in kernel.py.\n\nThe only inputs in scope are the float32 tensors returned by make_inputs():\nmatrix has shape (16,16), initial has shape (16,), and drive has shape (64,16).\nThe full input generator and its seeds are public. The desired output is the\nfinal state of this recurrence, evaluated in float64 on those float32 inputs:\n  reference_state = initial\n  for t in range(64):\n      reference_state = matrix @ reference_state + drive[t]\n\nThe implementation may approximate intermediate states. Its final output must\nbe a finite vector of shape (16,), with relative L2 error\n  ||output - reference_state||_2 / max(||reference_state||_2, 0.001*sqrt(16))\nat most 0.002. The target execution device is an NVIDIA T4.\n\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\nspecified workload. Alternative inputs are outside this question's scope.\n",
+        "entry": "case_f",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_f"
+      },
+      "created_at": "2026-09-23T21:35:24Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_f",
+        "files": [
+          {
+            "kind": "other",
+            "path": "__pycache__/kernel.cpython-313.pyc",
+            "size_bytes": 4581
+          },
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1855
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 67
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 926
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_f",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-23T21:35:24Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_f\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_f",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 67,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Each of 64 steps quantizes the state to fp16 (~1e-3 relative rounding), and errors compound through the recurrence; the resulting relative L2 error may exceed the contract's 0.002 bound.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Final output must have relative L2 error at most 0.002 vs float64 reference for the fixed make_inputs workload."
+          }
+        ],
+        "scope_rationale": "Contract requires relative L2 error <= 0.002 on the fixed make_inputs() workload.",
+        "statement": "The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload."
+      },
+      "created_at": "2026-09-23T21:35:29Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-23T21:35:29Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Each of 64 steps quantizes the state to fp16 (~1e-3 relative rounding), and errors compound through the recurrence; the resulting relative L2 error may exceed the contract's 0.002 bound.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Final output must have relative L2 error at most 0.002 vs float64 reference for the fixed make_inputs workload."
+          }
+        ],
+        "scope_rationale": "Contract requires relative L2 error <= 0.002 on the fixed make_inputs() workload.",
+        "statement": "The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload.",
+        "status": "open",
+        "updated_at": "2026-09-23T21:35:29Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, '/root/numerical_cases/case_f')\nfrom kernel import run, make_inputs, make_inputs_numpy\n\nmatrix, initial, drive = make_inputs()\nout = run(matrix, initial, drive)\ntorch.cuda.synchronize()\n\nm64 = matrix.cpu().numpy().astype(np.float64)\ns64 = initial.cpu().numpy().astype(np.float64)\nd64 = drive.cpu().numpy().astype(np.float64)\nfor t in range(64):\n    s64 = m64 @ s64 + d64[t]\n\no = out.cpu().numpy().astype(np.float64)\nnum = np.linalg.norm(o - s64)\nden = max(np.linalg.norm(s64), 0.001*np.sqrt(16))\nprint(json.dumps({\n    \"metric\": \"relative L2 error vs float64 reference\",\n    \"num\": float(num), \"den\": float(den),\n    \"rel_err\": float(num/den),\n    \"bound\": 0.002,\n    \"finite\": bool(np.all(np.isfinite(o))),\n    \"shape\": list(o.shape),\n    \"passes\": bool(num/den <= 0.002)\n}))\n",
+        "expected_signal": "rel_err exceeds 0.002"
+      },
+      "created_at": "2026-09-23T21:35:40Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "d933765de2b30315027ebca501f6b37de8aab4857fb649df2dd1706bd06680ff"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "20e950944bf80ffde47153e1fb253533e7f7ceb69bb68b76203665f371cea145"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "2d14cb8339a83195f4624f137171f08d960d18e10a6b8cf93b499cac0a5648b4"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload.",
+        "cwd": "/root/numerical_cases/case_f",
+        "duration_s": 4.515833,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "d933765de2b30315027ebca501f6b37de8aab4857fb649df2dd1706bd06680ff"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "20e950944bf80ffde47153e1fb253533e7f7ceb69bb68b76203665f371cea145"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "2d14cb8339a83195f4624f137171f08d960d18e10a6b8cf93b499cac0a5648b4"
+              }
+            ],
+            "duration_s": 4.515833,
+            "exit_code": 0,
+            "expected_signal": "rel_err exceeds 0.002",
+            "json_parse_error": null,
+            "json_result": {
+              "bound": 0.002,
+              "den": 162.41431887628192,
+              "finite": true,
+              "metric": "relative L2 error vs float64 reference",
+              "num": 0.7971033936944146,
+              "passes": false,
+              "rel_err": 0.0049078394023965525,
+              "shape": [
+                16
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"num\": 0.7971033936944146, \"den\": 162.41431887628192, \"rel_err\": 0.0049078394023965525, \"bound\": 0.002, \"finite\": true, \"shape\": [16], \"passes\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": "rel_err exceeds 0.002",
+        "json_parse_error": null,
+        "json_result": {
+          "bound": 0.002,
+          "den": 162.41431887628192,
+          "finite": true,
+          "metric": "relative L2 error vs float64 reference",
+          "num": 0.7971033936944146,
+          "passes": false,
+          "rel_err": 0.0049078394023965525,
+          "shape": [
+            16
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"num\": 0.7971033936944146, \"den\": 162.41431887628192, \"rel_err\": 0.0049078394023965525, \"bound\": 0.002, \"finite\": true, \"shape\": [16], \"passes\": false}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "den": 162.41431887628192,
+          "finite": true,
+          "num": 0.7971033936944146,
+          "rel_err": 0.0049078394023965525,
+          "shape": [
+            16
+          ],
+          "tolerance": 0.002
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "On the fixed make_inputs() workload, run() output (finite, shape (16,)) has relative L2 error 0.004908 vs the float64 reference, exceeding the contract's 0.002 bound \u2014 consistent with fp16 intermediate quantization accumulating over 64 steps.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-23T21:35:45Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-23T21:35:29Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-23T21:35:45Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "d933765de2b30315027ebca501f6b37de8aab4857fb649df2dd1706bd06680ff"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "20e950944bf80ffde47153e1fb253533e7f7ceb69bb68b76203665f371cea145"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "2d14cb8339a83195f4624f137171f08d960d18e10a6b8cf93b499cac0a5648b4"
+                  }
+                ],
+                "den": 162.41431887628192,
+                "duration_s": 4.515833,
+                "exit_code": 0,
+                "expected_signal": "rel_err exceeds 0.002",
+                "finite": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "bound": 0.002,
+                  "den": 162.41431887628192,
+                  "finite": true,
+                  "metric": "relative L2 error vs float64 reference",
+                  "num": 0.7971033936944146,
+                  "passes": false,
+                  "rel_err": 0.0049078394023965525,
+                  "shape": [
+                    16
+                  ]
+                },
+                "num": 0.7971033936944146,
+                "rel_err": 0.0049078394023965525,
+                "shape": [
+                  16
+                ],
+                "stderr": "",
+                "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"num\": 0.7971033936944146, \"den\": 162.41431887628192, \"rel_err\": 0.0049078394023965525, \"bound\": 0.002, \"finite\": true, \"shape\": [16], \"passes\": false}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.002
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the fixed make_inputs() workload, run() output (finite, shape (16,)) has relative L2 error 0.004908 vs the float64 reference, exceeding the contract's 0.002 bound \u2014 consistent with fp16 intermediate quantization accumulating over 64 steps.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Each of 64 steps quantizes the state to fp16 (~1e-3 relative rounding), and errors compound through the recurrence; the resulting relative L2 error may exceed the contract's 0.002 bound.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Final output must have relative L2 error at most 0.002 vs float64 reference for the fixed make_inputs workload."
+            }
+          ],
+          "scope_rationale": "Contract requires relative L2 error <= 0.002 on the fixed make_inputs() workload.",
+          "statement": "The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload.",
+          "status": "confirmed",
+          "updated_at": "2026-09-23T21:35:45Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-23T21:35:45Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "d933765de2b30315027ebca501f6b37de8aab4857fb649df2dd1706bd06680ff"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "20e950944bf80ffde47153e1fb253533e7f7ceb69bb68b76203665f371cea145"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "2d14cb8339a83195f4624f137171f08d960d18e10a6b8cf93b499cac0a5648b4"
+              }
+            ],
+            "den": 162.41431887628192,
+            "duration_s": 4.515833,
+            "exit_code": 0,
+            "expected_signal": "rel_err exceeds 0.002",
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "bound": 0.002,
+              "den": 162.41431887628192,
+              "finite": true,
+              "metric": "relative L2 error vs float64 reference",
+              "num": 0.7971033936944146,
+              "passes": false,
+              "rel_err": 0.0049078394023965525,
+              "shape": [
+                16
+              ]
+            },
+            "num": 0.7971033936944146,
+            "rel_err": 0.0049078394023965525,
+            "shape": [
+              16
+            ],
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"num\": 0.7971033936944146, \"den\": 162.41431887628192, \"rel_err\": 0.0049078394023965525, \"bound\": 0.002, \"finite\": true, \"shape\": [16], \"passes\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.002
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the fixed make_inputs() workload, run() output (finite, shape (16,)) has relative L2 error 0.004908 vs the float64 reference, exceeding the contract's 0.002 bound \u2014 consistent with fp16 intermediate quantization accumulating over 64 steps.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.98,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 ran run(*make_inputs()) on the actual GPU workload and compared to the float64 reference defined in problem.txt. Output was finite with shape (16,), but relative L2 error = 0.004908 (num 0.7971, den 162.414), exceeding the contract's bound of 0.002. This is caused by the kernel's per-step float16 quantization of the intermediate state (kernel.py line 16) over 64 recurrence steps, accumulating error beyond what the contract tolerates on this fixed workload. Claim c1 is in_scope and confirmed; the kernel violates the numerical contract.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-23T21:35:50Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.98,
+        "created_at": "2026-09-23T21:35:50Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 ran run(*make_inputs()) on the actual GPU workload and compared to the float64 reference defined in problem.txt. Output was finite with shape (16,), but relative L2 error = 0.004908 (num 0.7971, den 162.414), exceeding the contract's bound of 0.002. This is caused by the kernel's per-step float16 quantization of the intermediate state (kernel.py line 16) over 64 recurrence steps, accumulating error beyond what the contract tolerates on this fixed workload. Claim c1 is in_scope and confirmed; the kernel violates the numerical contract.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.98,
+    "created_at": "2026-09-23T21:35:50Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t6 ran run(*make_inputs()) on the actual GPU workload and compared to the float64 reference defined in problem.txt. Output was finite with shape (16,), but relative L2 error = 0.004908 (num 0.7971, den 162.414), exceeding the contract's bound of 0.002. This is caused by the kernel's per-step float16 quantization of the intermediate state (kernel.py line 16) over 64 recurrence steps, accumulating error beyond what the contract tolerates on this fixed workload. Claim c1 is in_scope and confirmed; the kernel violates the numerical contract.",
+    "verdict": "reject"
+  }
+}

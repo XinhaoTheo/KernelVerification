@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-14256a46806c4adf8060bae2e9184909",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I have the full artifact context; I'll record a structured description of the contract, kernel behavior, and the key numerical risk surface.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b4d3b1a975fbebc5",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Fixed public workload: only the float32 tensors from make_inputs() — coefficients (8,49) and points (8,) — are in scope; arbitrary other inputs are out of scope.\", \"Reference is defined per row as sum_{k=0}^{48} coefficients[i,k]*points[i]**k, evaluated in float64 using the stored float32 input values (coefficients[i,0] is the rounded stored value, not the generating expression).\", \"Output must be a finite shape-(8,) vector; relative L2 error metric is ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(8)) and must be <= 2e-4.\", \"The contract explicitly states each Horner multiply and add rounds separately to float32 (no FMA fusion), so the fp32 kernel rounding behavior is part of the contract, not incidental.\", \"The input generator anchors the polynomial value: coefficients[:,0] is chosen so the float64 value of the polynomial at anchor 1.015625 is approximately 0.003, i.e. the true reference is tiny relative to the coefficient magnitudes (~N(0,1)).\"], \"kernel_model\": [\"Single Triton program (grid (1,)) evaluates all 8 rows in one BLOCK=32 lane vector; mask row<8, loads points and the degree-48 coefficient (index DEGREE=48) as initial Horner value.\", \"Horner recurrence: for step in 0..47, k = 48-1-step, loads coefficients[row,k], computes result = result*point + coefficient; fp fusion disabled so each op rounds to fp32.\", \"run() allocates a fresh fp32 output tensor of shape (8,) and launches with N=8, DEGREE=48, BLOCK=32, num_warps=1, enable_fp_fusion=False; output stored with mask.\", \"make_inputs_numpy uses PCG64(501973): coefficients ~ N(0,1) fp32; coefficients[:,0] set to (-sum_{k>=1} c_k * anchor^k in fp64) + 0.003, then rounded to fp32; points = anchor + N(0,4e-5) fp32.\", \"No special precision tricks (no fp64 accumulation, no Kahan) — plain fp32 Horner with per-op rounding, exactly as the contract describes.\"], \"risk_map\": [\"Catastrophic cancellation: the true value per row is ~0.003 while intermediate Horner partial sums (working from k=48 down) grow to magnitude on the order of sum of |c_k|*anchor^k, roughly tens (sum of ~48 N(0,1) terms weighted by powers up to ~2.1). Each of the 48 fp32 multiply/add roundings contributes absolute error ~ulp(partial) ~ 1e-6*|partial|, so accumulated absolute error may reach ~1e-4..1e-3, comparable to or exceeding the reference magnitude and the 2e-4 relative bound — this is the primary bug surface.\", \"Error metric denominator: since reference entries ~0.003 each, ||ref||_2 ~ 0.008 vs floor 0.001*sqrt(8) ~ 0.0028, so the floor is not the binding denominator; the relative-error budget is effectively 2e-4 * ~0.008 ~ 1.6e-6 absolute per-row L2, extremely tight vs expected fp32 Horner drift.\", \"The generator adds +0.003 before rounding to fp32, so the exact stored c[i,0] and hence exact reference differ slightly from 0.003; the reference must use the stored fp32 value as the contract states — a probe computing the reference from the generating expression would be wrong.\", \"Points deviate from anchor by ~4e-5, which slightly perturbs the near-cancellation and reference magnitude; error growth per unit point perturbation is O(sum k*c_k*anchor^(k-1)), potentially large.\", \"No out-of-scope generalization: verdict must rest on this fixed workload only; passing or failing one alternative input is irrelevant.\"], \"open_questions\": [\"Actual magnitudes of the fp32 Horner intermediate partial sums and the accumulated rounding error relative to the 2e-4 bound need an experiment (float64 emulation of the exact fp32 Horner per-op-rounded sequence vs fp64 reference).\", \"Whether the exact fp64 reference per row is near 0.003 or dominated by fp32 rounding of c[:,0] (c[:,0] itself rounds at ~1e-7 relative of a magnitude-~30 value, i.e. absolute ~ few e-6, which already perturbs the reference).\"], \"scope_notes\": \"Only the make_inputs() workload is in scope; the verdict question is whether the fp32 Horner kernel meets rel-L2 <= 2e-4 against the fp64 reference on this fixed input, not general polynomial-evaluation correctness.\\\"]\", \"summary\": \"Described case_m: fp32 Horner evaluation of 8 degree-48 polynomials near a cancellation anchor; contract demands relative L2 <= 2e-4 vs a float64 reference, with per-op fp32 rounding mandated.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Record description update. Note key risk: Horner in fp32 with catastrophic cancellation — coefficients[:,0] crafted so polynomial at anchor ≈ 0.003, but the partial sums are huge (~sum of powers ~ anchor^48/(anchor-1) large?). Actually sum of coefficients*anchor^k ≈ 0.003 while intermediate Horner values grow to large magnitude ~ sum of |terms| ≈ sum of powers which is huge (anchor^48 ≈ 2.1). Wait coefficients ~N(0,1), sum of 48 terms × powers — partial Horner value near top reaches magnitude ~ tens. Rounding errors fp32 relative to that magnitude can exceed 0.003 tolerance. Reference is tiny (~0.003), so relative error can be large. That's the core risk.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790208746,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1334,
+    "prompt_tokens": 4963,
+    "total_tokens": 6297,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 172,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 347,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 172
+    }
+  }
+}

@@ -1,0 +1,212 @@
+[
+  {
+    "created_at": "2026-09-24T01:10:02Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T01:11:12Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "069f369da9a80abd140867697c4e48f126e59f06a9359d61865988077a36db17"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "944c443a0a1843f96c0e5463916d6fd6901db38a28abd42c7a585604300f6bdd"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t12_json_result.json",
+              "sha256": "5cd108c9add06012c0c6670f7bc0fc9a8dace67bf6229ad4301a6856261d1f0b"
+            }
+          ],
+          "duration_s": 5.296215,
+          "exit_code": 0,
+          "expected_signal": "relative error of kernel output and of emulated float32 elimination vs float64 reference, compared to 1e-4 tolerance",
+          "json_parse_error": null,
+          "json_result": {
+            "elim_only_rel_err_f64log_of_f32_pivots": 2.1688983461404225e-07,
+            "emulated_full_f32_rel_err": 2.0235508512601344e-07,
+            "kernel_output": 24.486507415771484,
+            "kernel_rel_err": 2.0235508512601344e-07,
+            "min_pivot_f32": 0.004353702068328857,
+            "min_pivot_positive": true,
+            "pivot_rel_err_vs_f64": [
+              0.0,
+              1.3046487242756224e-08,
+              3.1670237749867784e-08,
+              1.351737610973052e-08,
+              1.579099014007697e-07,
+              7.425199844186428e-08,
+              2.045437818347381e-07,
+              4.81593887996075e-06
+            ],
+            "pivots_f32": [
+              179.0009765625,
+              90.18539428710938,
+              133.37551879882812,
+              57.818763732910156,
+              39.20834732055664,
+              107.41633605957031,
+              18.876049041748047,
+              0.004353702068328857
+            ],
+            "reference_logdet_f64": 24.486502460803194,
+            "tolerance": 0.0001
+          },
+          "kernel_output": 24.486507415771484,
+          "kernel_rel_err": 2.0235508512601344e-07,
+          "min_pivot_f32": 0.004353702068328857,
+          "min_pivot_positive": true,
+          "reference_logdet_f64": 24.486502460803194,
+          "stderr": "",
+          "stdout": "{\"reference_logdet_f64\": 24.486502460803194, \"kernel_output\": 24.486507415771484, \"kernel_rel_err\": 2.0235508512601344e-07, \"tolerance\": 0.0001, \"elim_only_rel_err_f64log_of_f32_pivots\": 2.1688983461404225e-07, \"emulated_full_f32_rel_err\": 2.0235508512601344e-07, \"pivots_f32\": [179.0009765625, 90.18539428710938, 133.37551879882812, 57.818763732910156, 39.20834732055664, 107.41633605957031, 18.876049041748047, 0.004353702068328857], \"pivot_rel_err_vs_f64\": [0.0, 1.3046487242756224e-08, 3.1670237749867784e-08, 1.351737610973052e-08, 1.579099014007697e-07, 7.425199844186428e-08, 2.045437818347381e-07, 4.81593887996075e-06], \"min_pivot_f32\": 0.004353702068328857, \"min_pivot_positive\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.0001,
+          "trailing_pivot_rel_err": 4.81593887996075e-06
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Actual kernel output on the fixed workload has relative error 2.02e-7 vs the float64 log(det) reference, ~500x below the 1e-4 tolerance. All float32 pivots stay positive (min 0.00435), the last pivot's relative deviation from the float64 elimination pivot is only 4.8e-6, and the elimination-only error contribution (float64 log of float32 pivots) is 2.17e-7. The claimed >1e-4 rounding-error breach does not occur.",
+        "supports": "rebutted",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The kernel performs all elimination arithmetic in float32 with round-to-nearest division and no pivoting; over 8 elimination steps on an 8x7 Gram matrix with only a 2^-10 diagonal regularizer, trailing pivots can become small, amplifying relative rounding error in the sum of log(pivot). The contract fixes this exact algorithm and a strict 1e-4 relative tolerance vs a float64 reference, making accumulated float32 rounding the decisive failure mode.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Numerical error ||output-reference||_2 / max(||reference||_2,1.0) must be <= 0.0001 for this fixed workload; reference is float64 log(det) of the stored float32 entries. The implementation 'uses elimination without pivoting and accumulates the logarithms of its diagonal pivots'."
+      }
+    ],
+    "scope_rationale": "The contract requires error <= 0.0001 for this exact fixed workload computed by float32 elimination without pivoting; accumulated float32 rounding in the fixed workload's own computation is therefore in scope.",
+    "statement": "The float32 no-pivot elimination of the fixed seed-98339 (8,8) matrix accumulates enough rounding error that the sum of log(pivots) deviates from the float64 reference by more than 1e-4 relative error.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T01:11:12Z"
+  },
+  {
+    "created_at": "2026-09-24T01:10:02Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T01:11:12Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t13_probe.py",
+              "sha256": "52a9697987317e80aa4ed0ef9cc2e168ddbde7efdbe1ac9b25ed3218f5140d55"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t13_stdout.txt",
+              "sha256": "3a825d4934f3183d6c4576542ad71d42ea4fdf623ccd425705a07825356775ad"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t13_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t13_json_result.json",
+              "sha256": "a171cff8e68d6806ff7e2eae548626a50efe17ed9a7407ff892498b7e30b649e"
+            }
+          ],
+          "duration_s": 4.584728,
+          "exit_code": 0,
+          "expected_signal": "tl.log sum vs correctly-rounded float32 log sum on the 8 actual pivots, relative error compared to 1e-4",
+          "json_parse_error": null,
+          "json_result": {
+            "correctly_rounded_log_values": [
+              5.18739128112793,
+              4.501867294311523,
+              4.8931684494018555,
+              4.057313442230225,
+              3.6688897609710693,
+              4.676712512969971,
+              2.937893867492676,
+              -5.4367289543151855
+            ],
+            "kernel_output_rel_err": 2.0235508512601344e-07,
+            "log_only_rel_err": 9.736732672074818e-09,
+            "max_abs_per_pivot_log_diff": 0.0,
+            "pivots_f32": [
+              179.0009765625,
+              90.18539428710938,
+              133.37551879882812,
+              57.818763732910156,
+              39.20834732055664,
+              107.41633605957031,
+              18.876049041748047,
+              0.004353702068328857
+            ],
+            "reference_logdet_f64": 24.486502460803194,
+            "sum_correctly_rounded_f32": 24.486507654190063,
+            "sum_tl_log_f32": 24.486507415771484,
+            "tl_log_values": [
+              5.18739128112793,
+              4.501867294311523,
+              4.8931684494018555,
+              4.057313442230225,
+              3.6688897609710693,
+              4.676712512969971,
+              2.937893867492676,
+              -5.4367289543151855
+            ],
+            "tolerance": 0.0001
+          },
+          "kernel_output_rel_err": 2.0235508512601344e-07,
+          "log_only_rel_err": 9.736732672074818e-09,
+          "max_abs_per_pivot_log_diff": 0.0,
+          "stderr": "",
+          "stdout": "{\"pivots_f32\": [179.0009765625, 90.18539428710938, 133.37551879882812, 57.818763732910156, 39.20834732055664, 107.41633605957031, 18.876049041748047, 0.004353702068328857], \"tl_log_values\": [5.18739128112793, 4.501867294311523, 4.8931684494018555, 4.057313442230225, 3.6688897609710693, 4.676712512969971, 2.937893867492676, -5.4367289543151855], \"correctly_rounded_log_values\": [5.18739128112793, 4.501867294311523, 4.8931684494018555, 4.057313442230225, 3.6688897609710693, 4.676712512969971, 2.937893867492676, -5.4367289543151855], \"max_abs_per_pivot_log_diff\": 0.0, \"sum_tl_log_f32\": 24.486507415771484, \"sum_correctly_rounded_f32\": 24.486507654190063, \"log_only_rel_err\": 9.736732672074818e-09, \"tolerance\": 0.0001, \"kernel_output_rel_err\": 2.0235508512601344e-07, \"reference_logdet_f64\": 24.486502460803194}\n",
+          "sum_correctly_rounded_f32": 24.486507654190063,
+          "sum_tl_log_f32": 24.486507415771484,
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.0001
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "tl.log on the 8 actual pivots is bitwise identical to the correctly-rounded float32 log (max per-pivot diff 0.0); the float32 sums differ by 2.4e-7 absolute (9.7e-9 relative), ~10000x below the 1e-4 tolerance. The claimed tl.log accuracy breach does not occur.",
+        "supports": "rebutted",
+        "tool_event_id": "t13"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "tl.log uses a device fast log2-based implementation with limited float32 precision; summed over 8 pivots it could contribute error comparable to the 1e-4 budget. The contract requires 1e-4 relative accuracy for this fixed workload, so log accuracy alone could breach tolerance even if pivots were exact.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Output must be a finite float32 vector with relative error <= 0.0001 against a float64-evaluated log(det) reference; the implementation 'accumulates the logarithms of its diagonal pivots', so the accuracy of tl.log on those pivots directly enters the output."
+      }
+    ],
+    "scope_rationale": "The contract's stated algorithm accumulates logarithms of diagonal pivots for this fixed workload, so tl.log accuracy on those pivots directly determines whether the 1e-4 tolerance is met \u2014 in scope.",
+    "statement": "Triton's tl.log (device libm approximation, float32) applied to the 8 pivots yields total log error beyond the 1e-4 relative tolerance for this workload.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T01:11:12Z"
+  }
+]

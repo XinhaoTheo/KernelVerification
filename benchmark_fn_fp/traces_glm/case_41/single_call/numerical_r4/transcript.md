@@ -1,0 +1,654 @@
+# Single-call trace
+
+## System prompt
+
+You are verifying whether a GPU (Triton) kernel implementation is correct.
+
+You will be given:
+1. A problem statement describing the operation's contract and its reference behavior.
+2. The kernel implementation under test.
+
+Decide one of:
+- "reject": the implementation has a real defect / violates the stated contract.
+- "trust": the implementation is correct, or is an equally valid alternative implementation.
+- "needs_more_evidence": you genuinely cannot tell.
+
+Answer with the JSON object required by the output schema.
+Output schema:
+{"type": "object", "required": ["verdict", "confidence", "reason"], "properties": {"verdict": {"type": "string", "enum": ["trust", "reject", "needs_more_evidence"], "description": "'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell."}, "confidence": {"type": "number", "description": "0.0 to 1.0."}, "reason": {"type": "string", "description": "One or two sentences."}}, "additionalProperties": false}
+
+## User prompt
+
+## Problem statement (contract + reference behavior)
+
+Evaluate a recurrent linear state update on the fixed workload in kernel.py.
+
+The only inputs in scope are the float32 tensors returned by make_inputs():
+matrix has shape (16,16), initial has shape (16,), and drive has shape (64,16).
+The full input generator and its seeds are public. The desired output is the
+final state of this recurrence, evaluated in float64 on those float32 inputs:
+  reference_state = initial
+  for t in range(64):
+      reference_state = matrix @ reference_state + drive[t]
+
+The implementation may approximate intermediate states. Its final output must
+be a finite vector of shape (16,), with relative L2 error
+  ||output - reference_state||_2 / max(||reference_state||_2, 0.001*sqrt(16))
+at most 0.002. The target execution device is an NVIDIA T4.
+
+Decide whether run(*make_inputs()) satisfies this numerical contract for the
+specified workload. Alternative inputs are outside this question's scope.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+import numpy as np
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _recurrence_kernel(Matrix, Initial, Drive, Output, N: tl.constexpr, STEPS: tl.constexpr):
+    i = tl.arange(0, N)
+    j = tl.arange(0, N)
+    matrix = tl.load(Matrix + i[:, None] * N + j[None, :])
+    state = tl.load(Initial + i).to(tl.float32)
+    for step in range(STEPS):
+        forcing = tl.load(Drive + step * N + i)
+        next_state = tl.sum(matrix * state[None, :], axis=1) + forcing
+        state = next_state.to(tl.float16).to(tl.float32)
+    tl.store(Output + i, state)
+
+
+def run(matrix, initial, drive):
+    output = torch.empty((16,), device=matrix.device, dtype=torch.float32)
+    _recurrence_kernel[(1,)](matrix, initial, drive, output, N=16, STEPS=64,
+                            num_warps=4, enable_fp_fusion=False)
+    return output
+
+
+def make_inputs_numpy():
+    orthogonal = np.array([[1.0]], dtype=np.float64)
+    while len(orthogonal) < 16:
+        orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])
+    orthogonal /= 4.0
+    matrix_rng = np.random.Generator(np.random.PCG64(20260923))
+    diagonal = matrix_rng.choice(np.array([0.875, 0.90625, 0.9375, 0.96875]), size=16)
+    upper = np.diag(diagonal)
+    upper += np.diag(np.full(15, 0.1875), 1)
+    upper += np.diag(matrix_rng.choice([-0.03125, 0.03125], size=14), 2)
+    left = np.sum(orthogonal[:, :, None] * upper[None, :, :], axis=1)
+    matrix = np.sum(left[:, :, None] * orthogonal.T[None, :, :], axis=1).astype(np.float32)
+    rng = np.random.Generator(np.random.PCG64(202002))
+    initial = rng.normal(0.0, 0.1, 16).astype(np.float32)
+    drive = rng.normal(0.0, 0.1, (64, 16)).astype(np.float32)
+    return matrix, initial, drive
+
+
+def make_inputs(device="cuda"):
+    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())
+
+```
+
+Is this implementation correct?
+
+## Provider reasoning (verbatim)
+
+Let me analyze this problem carefully.
+
+The reference computation:
+```
+reference_state = initial
+for t in range(64):
+    reference_state = matrix @ reference_state + drive[t]
+```
+evaluated in float64 on the float32 inputs.
+
+The kernel implementation:
+- Loads matrix, initial state as float32.
+- For each of 64 steps:
+  - loads forcing drive[t]
+  - computes next_state = sum(matrix * state[None,:], axis=1) + forcing — this is matrix @ state + drive[t]
+  - Then converts state to float16 and back to float32: `state = next_state.to(tl.float16).to(tl.float32)`
+
+The key issue: intermediate states are stored in float16 precision. That's allowed per contract ("The implementation may approximate intermediate states"), as long as final relative L2 error ≤ 0.002.
+
+So the question is: does fp16 rounding of intermediate states, accumulated over 64 steps, keep the error under 0.002 relative L2?
+
+Let me think about the magnitudes. The matrix is constructed as Q * upper * Q^T where Q is a 16x16 orthogonal matrix (a normalized Walsh-Hadamard-like matrix: built by repeatedly blocking [[O, O], [O, -O]], starting from [[1]], which gives a 16x16 Hadamard matrix, then divided by 4 = sqrt(16), making it orthogonal).
+
+The upper triangular matrix has diagonal entries from {0.875, 0.90625, 0.9375, 0.96875}, plus 0.1875 on the superdiagonal, plus ±0.03125 on the second superdiagonal.
+
+So matrix = Q U Q^T where U is upper triangular with diagonal entries ~0.875–0.96875.
+
+The eigenvalues of matrix are the diagonal entries of U (since Q U Q^T is a similarity transform... wait, Q is orthogonal so Q^T = Q^{-1}, and matrix = Q U Q^T has the same eigenvalues as U, which are the diagonal entries since U is triangular). All eigenvalues are in [0.875, 0.96875], so the spectral radius < 1. The recurrence is stable.
+
+The steady-state magnitude: state ~ sum over t of M^t * drive. Since eigenvalues ~0.9, the effective "gain" is ~1/(1-0.9) = 10 per mode, roughly. But also the superdiagonal 0.1875 entries make U non-normal, so transient growth possible but bounded.
+
+Actually, let's think about the error propagation. The kernel does:
+state_{t+1} = round_fp16(M @ state_t + d_t)
+
+The fp16 rounding relative error is 2^-11 ≈ 4.88e-4 (half precision has 10 explicit mantissa bits + implicit, so unit roundoff is 2^-11 ≈ 4.88e-4).
+
+The error dynamics: e_{t+1} = M @ e_t + rounding_t, where |rounding_t| ≤ u * |state_t| elementwise roughly (u = 2^-11).
+
+The state magnitude: initial ~ N(0, 0.1), drive ~ N(0, 0.1) per entry. The steady state: state ≈ sum_{s} M^s d. Since eigenvalues of M are ~0.875-0.97, ||M^s|| ~ 0.97^s (times condition-type factors). The sum of gains: each entry of the state has std ~ 0.1 * sqrt(sum over t of ||M^s||_F^2 ... hmm, more carefully).
+
+Let me think in terms of the transformed coordinates: y = Q^T x. Then y_{t+1} = U y_t + Q^T d_t. The forcing Q^T d_t has entries ~ N(0, 0.1) each (since Q orthogonal, preserves norm).
+
+U is upper triangular with diagonal λ_i ~0.875-0.97 and superdiagonal 0.1875, sub-superdiagonal ±0.03125.
+
+Steady state y_i: y_i = sum over contributions. Roughly |y_i| ~ 0.1 * sqrt(1/(1-λ_i^2)) ~ 0.1 * sqrt(1/(1-0.94^2)) ~ 0.1 * sqrt(1/0.116) ~ 0.1 * 2.94 ~ 0.3. Plus coupling from superdiagonal terms (0.1875 * y_{i+1}), which adds somewhat.
+
+So states have magnitude ~0.1-0.5 or so. Actually, let me be more careful. The state vector norm: x = Q y, so ||x|| = ||y||.
+
+Roughly, the final state norm might be around 0.1 * sqrt(16 * something) — let's estimate ||y||: each y_i has std σ_i where σ_i^2 ≈ 0.01 * (1/(1-λ_i^2)) plus contributions from coupling. With λ ~ 0.9375 average, 1/(1-λ²) ≈ 1/(1-0.8789) ≈ 8.2. So σ_i ~ 0.1*2.87 ≈ 0.287. Coupling from superdiagonal: y_i gets 0.1875 * y_{i+1} contributions, effectively increasing variance by factor (1 + 0.1875²/(1-λ_i)²)... hmm, 0.1875/(1-0.9375) = 3, so the coupling could amplify substantially. Actually the effective transfer from y_{i+1} to y_i is 0.1875/(1-λ_i) ~ 3. So y_i variance could be multiplied by ~10 due to the coupling. Hmm, this could make some components much larger.
+
+Actually let's not go down the analytical path too far. The key question: is fp16 rounding of intermediates acceptable within 0.002 relative error over 64 steps?
+
+The relative error analysis: at each step, elementwise rounding error δ_t with |δ_t| ≤ u|state| where u = 2^-11 ≈ 4.88e-4. Errors propagate: e_final = sum_t M^(63-t) δ_t. Since ||M^s|| ≤ ~1 (spectral radius < 1 but non-normal can have transient growth; with 0.1875 superdiagonal and 16 dimensions, transient growth factor could be modest).
+
+The accumulated error: ||e_final|| ≲ u * sum_t ||M^(63-t)|| * ||state||... roughly u * sqrt(64) * ||state|| * gain factors if errors are independent (random walk), or u * 64 * ||state|| worst case correlated.
+
+Relative error ≈ u * sqrt(64) ≈ 4.88e-4 * 8 ≈ 3.9e-3 > 2e-3? Hmm, that's borderline. Or with random-walk accumulation it might be u * sqrt(effective steps)... Actually let me think again.
+
+Errors at each step are roughly independent random. e_final = sum_{t=0}^{63} M^{63-t} δ_t. Each δ_t is elementwise rounding of state_t, with |δ_t,i| ≈ u |state_t,i| (random sign). Then ||M^{63-t} δ_t|| ≈ ||δ_t|| (since M approximately norm-preserving-ish; eigenvalues < 1 so contracting). ||δ_t|| ≈ u ||state_t||.
+
+So ||e_final|| ≈ u * sqrt(sum_t ||state_t||²) (random signs). If ||state_t|| is roughly constant ≈ ||state_final|| = S, then ||e_final|| ≈ u * sqrt(64) * S = 8 * 4.88e-4 * S ≈ 3.9e-3 * S.
+
+Relative error ≈ 3.9e-3 > 2e-3. Hmm, that suggests it fails!
+
+But wait — the relative error is computed against reference_state which is the true final state. But also, the final state itself: after the last step, state = fp16(round of (M @ state_63 + d_63)). Hmm wait, actually the last step also rounds to fp16 then stores. Wait: `state = next_state.to(tl.float16).to(tl.float32)` then `tl.store(Output + i, state)`. So the output is the fp16-rounded final state too. That adds one more rounding but that's minor.
+
+Also, the fp16 accumulation error: within each step, tl.sum of matrix*state products in fp32 — that's fine, fp32 arithmetic.
+
+So the main error source is fp16 rounding of intermediate states, u = 2^-11 ≈ 4.883e-4.
+
+Hmm, but wait. Is the analysis right? Let me reconsider: the errors accumulate as a random walk over 64 steps, giving relative error ~ u * sqrt(64) ≈ 3.9e-3. That's about 2x the tolerance of 2e-3. But this is a rough estimate; the actual value depends on the specifics.
+
+Hmm, but actually there's a subtlety: the error propagation through M. Since eigenvalues of M are ~0.875-0.97, errors from earlier steps get contracted by λ^(63-t). So the effective sum: sum_{t} λ^(63-t) — for λ=0.9375, sum_{s=0}^{63} 0.9375^s ≈ 1/(1-0.9375) = 16. So with random signs: sqrt(sum λ^{2s}) = sqrt(1/(1-λ²)) = sqrt(8.2) ≈ 2.87.
+
+So ||e_final|| ≈ u * 2.87 * S_avg where S_avg is the typical state norm (roughly). Relative error ≈ u * 2.87 ≈ 1.4e-3 < 2e-3. Borderline but might pass!
+
+Hmm, so the answer depends on details: the actual eigenvalues (random choice from {0.875, 0.90625, 0.9375, 0.96875}), the coupling, the actual state norms, whether errors behave like independent random.
+
+Also, there's another huge consideration: the matrix entries. matrix = Q U Q^T where Q is Hadamard/4. The entries of matrix are (1/16) * integer combos... Q entries are ±1/4. U entries: diagonal ~0.875-0.97, superdiag 0.1875, sub-superdiag ±0.03125. All these are exact in fp32 (they're dyadic rationals: 0.875 = 7/8, 0.90625 = 29/32, 0.9375 = 15/16, 0.96875 = 31/32, 0.1875 = 3/16, 0.03125 = 1/32). Q entries ±0.25 exact. So matrix = Q U Q^T computed in float64 then cast to float32 — the products/sums are dyadic rationals with small denominators: (1/16)*(sums of products of dyadic rationals)... Actually Q U Q^T entries: sum of 16 terms each of magnitude ≤ (1/4)(1)(1/4) = 1/16, values are multiples of... U entries are multiples of 1/32, Q entries multiples of 1/4. Products are multiples of 1/(32*16)=1/512. Sum of 16 such terms: multiples of 1/512... wait each term (1/4)*u*(1/4) where u multiple of 1/32 → each term multiple of 1/512. Sum of 16 terms multiple of 1/512. Sum magnitude ≤ 16/16 = 1. Hmm, actually is the sum exactly representable in fp32? Multiples of 1/512 up to magnitude ~1: 1/512 = 2^-9, so values are k*2^-9 with |k| ≤ 512ish. fp32 has 24-bit mantissa, so exactly representable. So the float32 matrix is exactly the float64 matrix. 
+
+Also drive and initial are float32 from normal RNG — those are what they are.
+
+The reference is computed in float64 on float32 inputs. The kernel computes in fp32 with fp16 intermediate rounding.
+
+Now the crucial question: does the fp16 rounding of intermediate states cause relative L2 error > 0.002?
+
+Let me try to estimate more carefully. Actually, I should consider simulating mentally... that's hard. Let me think about whether this problem is designed to pass or fail.
+
+The problem statement says "The implementation may approximate intermediate states." This strongly suggests that fp16 intermediates is the intended trick being tested, and the question is whether the accumulated fp16 error stays under 0.002.
+
+Given the design: eigenvalues chosen from {0.875, 0.90625, 0.9375, 0.96875} — these are all dyadic, exactly representable in fp16. The matrix entries: multiples of 1/512 — fp16 has 11-bit mantissa significand (10 stored + implicit). k*2^-9 with |k| up to ~512: needs 10 bits for k up to 1024? fp16 can represent integers up to 2048 exactly. k*2^-9 where k is an integer with |k| ≤ ~512 (since |matrix entry| ≤ ~1, actually let's bound: ||U||... entries of Q U Q^T: row i col j = sum_k sum_l Q_ik U_kl Q_lj /... with Q entries ±1/4: |entry| ≤ 16 * (1/4)(1)(1/4) = 1). Actually typical entries will be smallish. k up to 512 needs 10 bits (512 = 2^9), representable exactly in fp16 as long as within normal range (2^-9 * 512 = 1, fine; smallest: 2^-9 * 1 = 2^-9, fine, well above fp16 min normal 2^-14). So the matrix is exactly representable in fp16! Interesting. But the kernel loads matrix as fp32 (input is fp32), and multiplies matrix (fp32) * state (fp32) — the fp16 rounding only applies to state after each step.
+
+Hmm wait, actually re-read: `matrix = tl.load(Matrix + ...)` — dtype from pointer, fp32. `state = tl.load(Initial + i).to(tl.float32)` — initial is fp32 already, so no-op. In the loop: `next_state = tl.sum(matrix * state[None, :], axis=1) + forcing` — fp32 arithmetic. Then `state = next_state.to(tl.float16).to(tl.float32)` — round to fp16.
+
+Also note: `enable_fp_fusion=False` — prevents fusing multiply-add into FMA, so each product is rounded to fp32 then sum in fp32. Minor.
+
+So the only approximation is fp16 rounding of the state after every step, including the final one (output is fp16-rounded too).
+
+Error estimate: Let me define the true recurrence x_{t+1} = M x_t + d_t (in exact arithmetic on the fp32 inputs). The kernel computes ŝ_{t+1} = fp16(M_f32 @ ŝ_t + d_t) where M_f32 = M exactly (since matrix is exactly representable, fp32 load = exact values; the matvec in fp32 has rounding errors too, but those are ~2^-24 relative, negligible compared to fp16's 2^-11).
+
+Hmm wait, actually the matvec in fp32: products matrix_ij * state_j, each rounded to fp32 (error 2^-24 relative), sum of 16 terms in fp32 (error accumulation ~ 16 * 2^-24 * magnitudes). Negligible vs fp16.
+
+So error model: ŝ_{t+1} = (M ŝ_t + d_t)(1 + ε) elementwise-ish, |ε| ≤ 2^-11 = 4.883e-4 (round-to-nearest, unit roundoff for fp16 is 2^-11 since 10 explicit bits).
+
+Error: e_{t+1} = M e_t + η_t, where η_t = fp16 rounding error of (M ŝ_t + d_t), |η_{t,i}| ≤ 2^-11 |ŝ_{t+1,i}| roughly (well, ≤ u * |value before rounding|).
+
+Final error e_64 = sum_{t=1}^{64} M^{64-t} η_t.
+
+Now, the state magnitudes. Let me think about the actual state norm. In the transformed basis y = Q^T x (Q Hadamard orthogonal): y_{t+1} = U y_t + g_t, g_t = Q^T d_t. Since d_t ~ N(0, 0.01 I_16) (each entry std 0.1), g_t ~ N(0, 0.01 I_16) as well (orthogonal transform of iid Gaussian).
+
+U upper triangular, diag λ_i ∈ {0.875, ..., 0.96875} (randomly chosen per index with the specific seed), superdiag 0.1875, second superdiag ±0.03125.
+
+Steady state: y_i = sum_{s≥0} [stuff]. Let me compute the variance of y_i in steady state (t large, 64 steps is long enough to reach steady state since 0.9375^64 ≈ e^{64 * ln 0.9375} = e^{-4.14} ≈ 0.016, so mostly converged).
+
+y_i(t+1) = λ_i y_i(t) + 0.1875 y_{i+1}(t) + c_i y_{i+2}(t) + g_i(t), c_i = ±0.03125.
+
+Backward substitution from i=15 down: y_15 has variance σ²/(1-λ_15²) where σ²=0.01. y_14: λ_14 y_14 + 0.1875 y_15 + ...: variance = (0.01 + 0.1875² Var(y_15) + c² Var(y_16→0))/(1-λ_14²).
+
+Let me guess the λ values. The seed PCG64(20260923), choice of 16 values from {0.875, 0.90625, 0.9375, 0.96875} — I can't compute this without running. Let me just consider the range of outcomes.
+
+Case: all λ = 0.96875 (worst case). Then 1/(1-λ²) = 1/(1-0.9385) = 16.26. Var(y_15) = 0.01*16.26 = 0.1626, std 0.403.
+
+y_14: 0.1875² * 0.1626 = 0.00572; plus 0.01 → 0.01572; / (1-0.9385) = 0.2556; std 0.506.
+
+y_13: 0.1875² * 0.2556 = 0.00898; +0.03125²*0.1626≈0.000159; +0.01 = 0.01914; /0.06152 = 0.311; std 0.558.
+
+Continuing, the std grows as we go down the diagonal. Roughly, each step multiplies variance by (1 + 0.03516 * previous-variance-ratio...) hmm, let me just note the recurrence Var_i = (0.01 + 0.03516 Var_{i+1} + 0.000977 Var_{i+2}) / (1 - λ²).
+
+With 1/(1-λ²) = 16.26: Var_15 = 0.1626. Var_14 = 16.26*(0.01 + 0.03516*0.1626) = 16.26 * 0.01572 = 0.2556. Var_13 = 16.26*(0.01 + 0.03516*0.2556 + 0.000977*0.1626) = 16.26*(0.01+0.008987+0.000159)=16.26*0.019146=0.3113. Var_12 = 16.26*(0.01+0.03516*0.3113+0.000977*0.2556)=16.26*(0.01+0.010947+0.00025)=16.26*0.021197=0.3447. Var_11 = 16.26*(0.01+0.03516*0.3447+0.000977*0.3113) = 16.26*(0.01+0.012121+0.000304)=16.26*0.022425=0.3646. Var_10 = 16.26*(0.01+0.012823+0.000337)=16.26*0.02316=0.3766. Var_9=16.26*(0.01+0.013245+0.000348)=16.26*0.023593=0.3836. It converges to ~0.39: fixed point V = 16.26*(0.01 + 0.03516V + 0.000977V) → V = 0.1626 + 0.5877V → V(1-0.5877)=0.1626 → V=0.394. 
+
+So in the worst case (all λ=0.96875), Var(y_i) → ~0.39, std ~0.63 for the lowest indices, 0.40 for the top. Total ||y||² ≈ sum ≈ 16 * ~0.35 ≈ 5.6, ||y|| ≈ 2.37. Hmm wait, but that's steady-state variance; also initial contributes negligibly.
+
+Hmm wait, but actually I should double check the state norm relative to the error. Let me reconsider: relative error = ||e||/||x||. The rounding errors η_t have magnitude u * |state| elementwise. The errors propagate through M^s which in the y-basis is U^s (upper triangular, contracting with factor λ per step but with the 0.1875 coupling causing... hmm, actually U^s norm can exceed 1 transiently due to non-normality).
+
+Let me think about ||U^s||. U = D(I + N) roughly where D has diag λ, N strictly upper with entries 0.1875/λ ≈ 0.2 on superdiag and small on second. N^16 = 0, ||N|| ~ 0.2ish. U^s = D^s (I+N)^s ≈ D^s sum_{k<16} C(s,k) N^k. The term k=1: s * 0.2 * λ^{s-1}... max over s of s λ^{s-1} * 0.2: with λ=0.96875, s*0.96875^{s-1} max at s = 1/|ln λ| ≈ 31.8, value ≈ 31.8 * 0.96875^30.8 ≈ 31.8 * e^{-0.99} ≈ 31.8*0.372 ≈ 11.8, times 0.2 ≈ 2.36. So ||U^s|| can be ~2-3 transiently. OK so moderate transient growth.
+
+So error accumulation: e_64 = sum_t U^{64-t} η_t (in y-basis, η transformed similarly). ||η_t|| ≈ u ||y_t|| ≈ u * 2.4 (worst case above). With random signs and contraction: ||e|| ≈ u * ||y|| * sqrt(sum_s ||U^s||²_F-ish)... 
+
+Let me just crudely estimate: sum over s of ||U^s||² : for s small (0-60), ||U^s|| ~ between λ^s and ~3. sqrt(sum) — if ||U^s|| ≈ 1 on average over 64 steps, sqrt(64)=8. So ||e|| ≈ u * 8 * ||y_typical||... relative error ≈ u * 8 ≈ 3.9e-3. If ||U^s|| effective is more like sqrt(1/(1-λ²)) ≈ 4 (for λ=0.96875, 1/(1-λ²)=16.26, sqrt=4.03), relative error ≈ u * 4 ≈ 2e-3. Hmm, right at the boundary!
+
+Hmm. This is genuinely borderline. The answer hinges on the actual random λ values and actual error realization. Let me think differently — maybe I can reason about what the problem designer intended.
+
+The problem is from a benchmark of Triton kernels (looks like "KernelBench"-style or a "correctness verification" dataset). The statement explicitly says "The implementation may approximate intermediate states." — this is a hint that the fp16 trick is allowed in principle. The tolerance 0.002 with fp16 intermediates over 64 steps... 
+
+Let me reconsider. Actually, wait. Let me reconsider the error more carefully. There's an important subtlety: fp16 round-to-nearest gives relative error ≤ 2^-11 per element per step. But the errors are somewhat random (round-to-nearest errors are roughly uniform in [-u, u], mean zero). Over 64 steps, accumulated error relative ~ u * sqrt(64) * (propagation gain) — but wait, the propagation gain: the error introduced at step t is propagated through (64 - t) applications of M, each contracting by ~λ. So the error from step t at the end has magnitude ~λ^{64-t} u ||y_t||. Sum with random signs: sqrt(sum_t λ^{2(64-t)}) * u * ||y|| = u ||y|| sqrt(1/(1-λ²)) ≈ u ||y|| * 4 (λ=0.96875).
+
+But also the errors η_t are elementwise random, so within one step, ||η_t|| ≈ u ||y_t|| / sqrt(16) * sqrt(16) = u ||y_t||... no wait. η_{t,i} ≈ u |y_{t,i}| * random sign. ||η_t|| = sqrt(sum_i u² y_i²) = u ||y_t||. Yes.
+
+Then propagated: U^{64-t} η_t — ||U^{64-t} η_t|| ≤ ||U^{64-t}|| u ||y_t||. With random direction, expected norm ~ u ||y|| ||U^s|| / sqrt(16)... hmm, actually for a random vector, E||A v|| ≈ ||A||_F ||v|| / sqrt(d) roughly. ||U^s||_F ≈ sqrt(16) * (typical singular value)... For s where U^s ≈ λ^s I-ish, ||U^s||_F ≈ 4 λ^s, and E||U^s η|| ≈ ||U^s η||... if U^s ≈ λ^s I then ||U^s η|| = λ^s ||η|| exactly. OK so roughly ||U^s η_t|| ≈ λ^s u ||y_t|| with the coupling adding factors of a few for some s.
+
+Total: ||e_64|| ≈ u * ||y|| * sqrt(sum_{s=0}^{63} λ^{2s} * g_s²) where g_s are O(1)-3 factors from non-normality.
+
+If g_s ≈ 1: sqrt(1/(1-0.9375²)) for average λ=0.9375: 1/(1-0.8789)=8.24, sqrt=2.87. Relative error ≈ 4.883e-4 * 2.87 ≈ 1.4e-3. Under 2e-3. Passes with ~30% margin.
+
+If λs are larger (0.96875 heavy): sqrt(16.26)=4.03, rel err ≈ 1.97e-3. Right at the edge. With non-normal transient growth factors, could exceed.
+
+Hmm. Also note: the relative error is measured against ||reference_state||, and the errors also affect... wait, actually one more consideration: the error is relative to the final state norm, but the final state norm might be smaller than typical intermediate state norms? No — the state reaches steady state quickly (within ~30 steps), and stays there. Final norm ≈ steady norm ≈ typical norm. OK.
+
+Hmm, wait, actually there's another consideration I missed: the tolerance denominator is max(||ref||, 0.001*sqrt(16)) = max(||ref||, 0.004). ||ref|| is around 1-2.4, so denominator ≈ ||ref||.
+
+Let me estimate the actual state norm with average λ = 0.9375 (expected 2 of each value if uniform... 16 draws from 4 values, expect 4 each). Average 1/(1-λ²): for λ=0.875: 1/(1-0.7656)=4.27; 0.90625: 1/(1-0.8213)=5.60; 0.9375: 8.24; 0.96875: 16.26. Average over uniform: (4.27+5.6+8.24+16.26)/4 = 8.59.
+
+But the coupling recursion matters: Var_i = (0.01 + 0.03516 Var_{i+1} + 0.000977 Var_{i+2})/(1-λ_i²). The variances build up along the down-diagonal. With mixed λs, hard to say exactly. Order of magnitude: Var ~ 0.2-0.4 for the lower indices, less for upper. ||y||² = sum Var_i ≈ maybe 3-5, ||y|| ≈ 1.7-2.2.
+
+And the error: hmm, let me think about whether the relative error is likely above or below 2e-3.
+
+Actually, you know what — this problem seems designed with specific numbers. The tolerance 0.002, fp16 unit roundoff 4.88e-4, 64 steps, spectral radius ~0.94. The designers presumably tested this. The phrase "The implementation may approximate intermediate states" strongly suggests the intended solution uses reduced-precision intermediates, and the question is whether THIS implementation (fp16) meets it. 
+
+Hmm, alternatively the intended solution might use bf16 (u = 2^-8 = 3.9e-3) which would definitely fail, and fp16 is the borderline one that... passes? Or the trap is that fp16 fails and you need fp32?
+
+Let me try to be more precise. I'll attempt to mentally simulate... that's really hard. Let me instead think about worst-case vs typical.
+
+Key insight attempt: Actually, let me reconsider. There's a correlation effect: the rounding error at step t is proportional to the state at step t, and the state at step t is correlated with the state at later steps (both driven by the same forcing). But errors have random signs, so cross terms vanish on average.
+
+Expected squared error: E||e_64||² = sum_t E||U^{64-t} η_t||² (cross terms vanish). E||U^s η_t||² = u²/3 * ... hmm, rounding error ε_i uniform-ish in [-u, u] relative, so E[η_i²] = (u²/3) y_i². E||U^s η||² = (u²/3) y^T (U^s)^T (U^s) y... wait no, that's for the specific realization; expectation over rounding: E||U^s η||² = (u²/3) sum_j (U^s col norms²) y_j² = (u²/3) y^T [(U^s)^T U^s ∘ diag applied]... precisely E||U^s η||² = (u²/3) Σ_j (U^T U)_{jj}^{(s)} y_j² where the diagonal entries of (U^s)^T U^s are squared column norms.
+
+For s with U^s ≈ Λ^s (diagonal-ish), col norms² = λ_j^{2s}, so E||U^s η||² ≈ (u²/3) Σ λ_j^{2s} y_j².
+
+Sum over s=0..63: Σ_s λ_j^{2s} ≈ 1/(1-λ_j²).
+
+E||e||² ≈ (u²/3) Σ_j y_j² / (1 - λ_j²).
+
+||y||² = Σ y_j². So E||e||² ≈ (u²/3) ||y||² * avg_j[1/(1-λ_j²)] weighted by y_j².
+
+Now here's the thing: y_j² is itself larger for indices with larger 1/(1-λ_j²) (more amplification → bigger variance) AND for lower indices (more coupling accumulation). So the weighted average of 1/(1-λ_j²) is biased upward — the indices with slow decay have bigger states AND bigger error multipliers. Double whammy.
+
+Weighted avg maybe ~10-16 (if the large-λ indices dominate the norm). Then ||e||/||y|| ≈ u * sqrt(10/3) ≈ 4.88e-4 * 1.83 ≈ 8.9e-4. Hmm, wait: sqrt(avg/3)? Let me redo: E||e||² = (u²/3) Σ_j y_j²/(1-λ_j²) = (u²/3) ||y||² * wavg where wavg = Σ y_j²/(1-λ_j²) / Σ y_j². So ||e||/||y|| = u sqrt(wavg/3).
+
+If wavg = 12: u * sqrt(4) = 2u = 9.77e-4. Under tolerance by 2x. 
+If wavg = 16.26 (all weight on λ=0.96875 index): u*sqrt(5.42)=2.33u=1.14e-3. Still under.
+Hmm, wait but this analysis ignored: (a) the final fp16 rounding of output (adds u*||y|| error directly: relative u = 4.88e-4, hmm no—the last step's rounding IS the final rounding; my sum includes s=0 term which is the last step's error); (b) non-normal transient growth (||U^s|| > λ^s) — this increases the effective multipliers beyond 1/(1-λ_j²); (c) the coupling terms 0.1875 mean U^s has off-diagonal entries ~ s*0.2*λ^{s-1} increasing column norms.
+
+Let me reconsider (b),(c): column j of U^s: entries (U^s)_{ij} for i ≤ j. For i=j: λ_j^s... roughly. For i=j-1: ~ s * 0.1875 * (geometric mean λ)^{s-1}. Column norm² ≈ λ_j^{2s} + s² 0.035 λ^{2s-2} + ... Summing over s: Σ λ^{2s} = 1/(1-λ²); Σ s² λ^{2s-2} ≈ (1+λ²)/(1-λ²)³ ≈ 2/(1-λ²)³. For λ=0.96875: (1-λ²)=0.0615, cubed = 2.33e-4, 2/2.33e-4 = 8583, times 0.035 = 300, sqrt = 17.3?? That seems too big — the column norm contribution from the superdiagonal term: sqrt(0.035 * 8583) ≈ sqrt(300) ≈ 17. That would mean errors propagating from index j+1... wait, hmm, I need to be careful about direction.
+
+Hmm wait, I think I have the coupling direction confused. In y-recurrence: y_i(t+1) = λ_i y_i + 0.1875 y_{i+1} + ... So index i is driven by index i+1 (higher index). In U (matrix acting on y), U_{i,i+1} = 0.1875. Column j of U affects... (U y)_i = Σ_j U_{ij} y_j, so U_{i,i+1}=0.1875 means y_i gets contribution from y_{i+1}: column i+1 has entry 0.1875 in row i.
+
+Column j of U^s: the entries (U^s)_{ij}, i ≤ j. The dominant entries: diagonal λ_j^s and the band below... hmm, (U^s)_{j-1,j} ≈ Σ over paths, the 1-step path: 0.1875 * λ^{s-1} * s (choose when to take the superdiag step among s steps): ≈ s * 0.1875 * λ̄^{s-1}. Max over s: s λ^{s-1} with λ=0.96875: max ≈ 11.8 (computed before), so max entry ≈ 11.8*0.1875 ≈ 2.2. Two-superdiag steps: (s choose 2)-ish * 0.1875² * λ^{s-2} * (0.03125/0.1875²?) hmm, entries 0.03125: paths with one 0.03125 step: s * 0.03125 * λ^{s-1}: max ≈ 11.8*0.03125 ≈ 0.37. Two 0.1875 steps: C(s,2) 0.035 λ^{s-2}: max at s≈63: hmm, C(63,2)=1953, *0.035=68, *λ^61=0.96875^61=e^{-1.95}=0.142 → 9.7?? That can't be right — wait, C(s,2) * 0.1875² * λ^{s-2}: for s=63: 1953 * 0.03516 * 0.96875^61. 0.96875^61 = e^{61*ln(0.96875)} = e^{61*(-0.03175)} = e^{-1.937} = 0.144. So 1953*0.03516*0.144 = 9.89. Hmm, that suggests (U^63)_{j-2,j} ≈ 9.9?? That seems way too big. Let me sanity check with a simpler calc: (I + N)^s where N has 0.1875/λ ≈ 0.1935 superdiagonal (factoring D out: U = D(I + D^{-1}N'), hmm, careful: U = D + N where D diag. U^s ≠ D^s (I + ...)^s exactly unless D commutes... roughly U^s ≈ D^s (I + D^{-1}N)^s and D^{-1}N has entries 0.1875/λ_i ≈ 0.19-0.21).
+
+(I + K)^s with K superdiag 0.2: entry (j-2, j): C(s,2) 0.04 λ^{s}... with λ^{s} at s=63: 0.144*... hmm I conflated. Let me redo: (I+K)^s = Σ_k C(s,k) K^k. K² has entries 0.04 at distance 2. K^k has 0.2^k at distance k. So (I+K)^s_{j-2,j} = C(s,2)*0.04. For s=63: 1953*0.04 = 78?? And then U^s ≈ D^s (I+K)^s — but the D^s contraction applies... D^s (I+K)^s: the entries get multiplied by λ_i^s on the left (row i). Hmm: D^s (I+K)^s_{j-2,j} = λ_{j-2}^s * C(s,2)*0.04 = 0.144 * 78 ≈ 11.2. 
+
+Hmm, that suggests ||U^63|| is huge?! That contradicts stability... wait, no — this is the standard non-normal transient growth. Let me sanity check numerically in my head with a small example: U = [[λ, a],[0, λ]]. U^s = [[λ^s, s a λ^{s-1}],[0, λ^s]]. With a=0.1875, λ=0.96875, s=63: top-right = 63*0.1875*0.96875^62 = 11.8*0.148 ≈ 1.75. OK so 2x2 gives 1.75. For 16x16 with multiple superdiag steps, entries at distance 2: C(s,2) a² λ^{s-2}: 1953*0.0352*0.153 = 10.5?? Hmm wait, but that's for the exactly-λ case: C(63,2)*0.1875²*λ^61 = 1953 * 0.03516 * 0.144 ≈ 9.9. Hmm, but wait — is that right? In the 2x2 case the top-right entry is s a λ^{s-1}. For distance-2 in a 3x3: [[λ,a,0],[0,λ,a],[0,0,λ]]^s: the (1,3) entry = C(s,2) a² λ^{s-2}. With a=0.1875, λ=0.96875, s=63: 1953 * 0.03516 * 0.96875^61. 0.96875^61 ≈ 0.144. So 1953*0.03516*0.144 ≈ 9.88. 
+
+Hmm really? Let me verify with s=2: C(2,2)*a²*λ^0 = 0.0352. Direct: U²_{13} = 2a²... wait [[λ,a,0],[0,λ,a],[0,0,λ]]² = [[λ², 2aλ, a²],[0,λ²,2aλ],[0,0,λ²]]. Yes (1,3) = a². C(2,2)a²λ^0 = a². ✓. s=3: U³_{13} = 3a²λ. C(3,2)a²λ^1 = 3a²λ ✓. So formula right. For s=63: 9.88. Yes, so U^63 has entries ~10 at distance 2?! Let me double check the magnitude: C(63,2) = 1953. a² = 0.03516. Product = 68.7. Times λ^61 = 0.144 → 9.9. Hmm, but hold on — the max over s: the term C(s,2)a²λ^{s-2} as function of s increases until... d/ds [s²/2 * 0.035 * λ^s] = 0 → s = -2/ln λ = 63. So s=63 is right at the max. So yes, ||U^63|| ≳ 10 for a 3x3 block with λ=0.96875.
+
+Whoa. So if some λs are 0.96875, the error propagation gain ||U^s|| can be ~10-30 for s near 60. Then early errors get amplified by ~10 before... no wait — but this is U^s applied to error vectors; errors introduced at step t are amplified by U^{64-t}. If ||U^{60}|| ~ 10-30, then errors from steps 1-4 are amplified 10-30x!! Then relative error could be u * ||y|| * 10 / ||y|| ≈ 5e-3. FAIL?!
+
+Hmm wait, but hold on. But the same amplification applies to the state itself — the state is driven through the same dynamics. But the state at steady state has already "saturated" — the transient growth affects components... Hmm, let me think again.
+
+Actually wait. I need to recompute. The steady-state y = Σ_s U^s g. If ||U^s|| ~ 10 for some s, then ||y|| would also be large (~ Σ_s ||U^s|| ||g|| ~ 10 * 0.4 ... ). Hmm, but I computed ||y|| ≈ 2.4 earlier via the variance recursion which should account for this. Let me recheck the variance recursion vs. the U^s entry analysis — they should be consistent.
+
+Variance recursion: Var(y_13) includes 0.1875² Var(y_14)/(1-λ²) — the factor 1/(1-λ²) = 16 represents Σ λ^{2s}, i.e., the diagonal propagation. The cross terms (error in y_14 propagating to y_13 via the superdiag path with s steps) — in steady state, y_13 = Σ_s [U^s g]_13, and [U^s]_{13} includes C(s,2)a²λ^{s-2} terms. Var(y_13) = Σ_s Σ_j (U^s_{13-j}... ) hmm: Var(y_i) = σ² Σ_s ||row i of U^s||². Row i of U^s: entries (U^s)_{ij}, j ≥ i. So Var(y_i) = σ² Σ_s Σ_{j≥i} (U^s_{ij})². The j=i+2 term: Σ_s C(s,2)² a⁴ λ^{2(s-2)} ≈ ... Σ_s s⁴/4 * a⁴ λ^{2s}: with λ²=0.9385, Σ s⁴ λ^{2s} = related to 4!/(1-λ²)^5-ish = 24/(0.0615)^5 — that's astronomically large: 0.0615^5 = 8.8e-7, 24/8.8e-7 = 2.7e7?? times a⁴/4 = 3.1e-4/4=7.7e-5 → 2090?? That would give Var(y_13) ≈ 0.01 * 2090 = 20.9?? That contradicts my earlier recursion giving 0.31.
+
+I think I'm making an error. Σ_s s⁴ x^s with x = λ² = 0.9385: 1/(1-x)^5 * 4! * x²... formula: Σ_{s≥0} s⁴ x^s = x(1+x)(1+10x+x²)/(1-x)^5. With x=0.9385: numerator ≈ 0.9385*1.9385*(1+9.385+0.8808) ≈ 0.9385*1.9385*11.27 ≈ 20.5. Denominator (1-x)^5 = 0.0615^5 = 8.86e-7. So Σ s⁴ x^s ≈ 2.31e7. Hmm. Then Σ_s [C(s,2)a²λ^{s-2}]² ≈ (a⁴/4) λ^{-4} Σ s⁴... wait C(s,2)² = s²(s-1)²/4 ≈ s⁴/4. So Σ_s C(s,2)² a⁴ λ^{2s-4} = (a⁴/4) λ^{-4} Σ (s² (s-1)²/... ugh let me just: ≈ (a⁴/4) λ^{-4} * 2.31e7 * ... hmm s²(s-1)² ≈ s⁴ for large s. = (0.00122/4)*1.043*2.31e7 ≈ 3.05e-4*1.043*2.31e7 ≈ 7340. So Var contribution = 0.01 * 7340 = 73.4?!
+
+That's absurd — it contradicts the direct variance recursion which is definitely correct (it's just solving a linear system). Where's the discrepancy? Ah wait — I think the issue: in the recursion Var_i = (σ² + a² Var_{i+1} + c² Var_{i+2})/(1-λ_i²), this is exact for steady state. For all λ = 0.96875, I got Var ≈ 0.39 max. So ||row of U^s||² summed must give 39 (=0.39/0.01). But my direct computation of just ONE term (j = i+2) gave 7340. Contradiction → I've made an arithmetic error somewhere.
+
+Let me recheck: the row-i, distance-2 entry of U^s. Hmm wait, actually is (U^s)_{i,i+2} = C(s,2) a² λ^{s-2}? For U = λI + aS + cS² (S shift). U^s = (λI + aS + cS²)^s. The coefficient of S² in the expansion: terms with two aS factors and rest λI: C(s,2) a² λ^{s-2}; plus terms with one cS²: s c λ^{s-1}. Yes. So (U^s)_{i,i+2} = C(s,2)a²λ^{s-2} + s c λ^{s-1}.
+
+Hmm wait, but which direction does S act? S has entries S_{i,i+1} = 1 (superdiagonal). (S y)_i = y_{i+1}. So U = λI + aS: y_i gets a y_{i+1}. ✓ consistent with recurrence y_i(t+1) = λ y_i + a y_{i+1}.
+
+Steady state: y = Σ_s U^s g (from y(0)=0; ignoring initial). y_i = Σ_s (U^s g)_i = Σ_s Σ_{j≥i} (U^s)_{ij} g_j. Var(y_i) = σ² Σ_s Σ_j (U^s)_{ij}².
+
+Now the variance recursion: In steady state, y_i = λ y_i^- ... the recursion Var_i = (σ² + a² Var_{i+1} + c² Var_{i+2})/(1-λ²) assumes y_i correlated only with... it computes Var(y_i) = Var(Σ_s λ^s (a y_{i+1}(t-s) + c y_{i+2}(t-s) + g_i)) — cross-terms between different lags: y_{i+1}(t-s) are correlated across s! The recursion treats Σ_s λ^s (a y_{i+1}) as a geometric sum with variance a² Var_{i+1} * Σ λ^{2s} — this is WRONG if y_{i+1}(t-s) are strongly correlated across time (they are, since y_{i+1} is itself a smoothed process — its autocorrelation decays like λ_{i+1}^s, slowly).
+
+So the correct variance is larger than my recursion estimate! The recursion underestimates because it ignores temporal correlation of the driving terms. Hmm, no wait — actually let me redo. The steady-state recursion solves the linear system exactly: y_i(t+1) = λ y_i(t) + a y_{i+1}(t) + c y_{i+2}(t) + g_i(t). In steady state, Var(y_i(t+1)) = Var(y_i(t)) = V_i. Then V_i = Var(λ y_i(t) + a y_{i+1}(t) + c y_{i+2}(t) + g_i) — this requires cross-covariances between y_i(t), y_{i+1}(t), y_{i+2}(t)! I ignored those. y_i and y_{i+1} are correlated (both driven by shared noise). So my recursion was wrong (it assumed independence).
+
+The correct computation: y = Σ U^s g, Var(y_i) = σ² Σ_s Σ_j (U^s)_{ij}² = σ² [Σ_s U^s (U^s)^T]_{ii} = σ² [(I - U U^T)^{-1}... no: Σ_s (U^s)(U^s)^T — since U U^T ≠ U^T U, can't simplify to (I-UU^T)^{-1} directly... Actually Σ_{s≥0} U^s (U^s)^T: Let P = Σ U^s ⊗ U^s (vectorized)... whatever. The point: Var(y_i) = σ² Σ_{s,j} (U^s)_{ij}².
+
+And the error: e_64 = Σ_t U^{64-t} η_t with η_t elementwise ~ u * |y(t)| (random). E||e||² = Σ_t E||U^{64-t} η_t||². E||U^s η||² = (u²/3) Σ_j (U^s col_j norm)² y_j(t)² ≈ (u²/3) Σ_j [(U^s)^T U^s]_{jj} y_j².
+
+Hmm OK so both the state norm and the error involve sums of squared entries of U^s, but weighted differently (rows for state variance, columns for error propagation). The RATIO is what matters:
+
+rel_err² = E||e||²/||y||² = (u²/3) [Σ_j w_j y_j²] / [Σ_i y_i²], where w_j = Σ_s [(U^s)^T U^s]_{jj} = Σ_s ||col_j of U^s||².
+
+And y_j² = σ² Σ_s ||row_j of U^s||² (in expectation: E y_j² = σ² Σ_{s,j'} (U^s)_{jj'}²).
+
+Note Σ_j w_j = Σ_s ||U^s||_F² = Σ_i (row sums) = same total. So both numerator and denominator involve the same total mass, differently distributed. The ratio [Σ_j w_j y_j²]/[Σ y_j²] is like a weighted average of w_j with weights y_j²/E-stuff... 
+
+If w_j (column sums) and v_j ≡ E y_j²/σ² (row sums) are correlated across j (both larger for small j — the bottom of the triangle accumulates more), then the weighted average of w with weights v exceeds the plain average... The plain average of w_j = (1/16)Σ_s ||U^s||_F². Hmm.
+
+This is getting complicated. Let me just try to estimate Σ_s ||U^s||_F², which drives everything.
+
+U = λI + aS + cS² with λ ∈ [0.875, 0.96875], a = 0.1875, c = ±0.03125 (assume uniform-ish λ; for a rough estimate take λ ≈ 0.9375, and treat as if scalar λ for all — not exactly right but indicative).
+
+||U^s||_F² = Σ_{distances k} Σ_i (U^s_{i,i+k})². (U^s)_{i,i+k} ≈ C(s,k) a^k λ^{s-k} (dominant path). So ||U^s||_F² ≈ Σ_k (16-k) C(s,k)² a^{2k} λ^{2(s-k)}.
+
+Σ_s ||U^s||_F² ≈ Σ_k (16-k) a^{2k} λ^{-2k} Σ_s C(s,k)² λ^{2s}.
+
+Σ_s C(s,k)² x^s: for k=0: 1/(1-x). k=1: Σ s² x^s = x(1+x)/(1-x)³. k=2: Σ (s²(s-1)²/4) x^s = (1/4) Σ s²(s-1)² x^s ≈ (1/4)*[x²(1+x)²... formula: Σ s(s-1).. whatever ≈ (1/4) * 4! x²/(1-x)^5 *something* — roughly (k!)² x^k/(1-x)^{2k+1} * poly. General: Σ_s C(s,k)² x^s ≈ C(2k,k)-ish... the known result: Σ_s C(s,k)² x^s ~ (central binomial) x^k/(1-x)^{2k+1} * corrections. For k=1: x(1+x)/(1-x)³ — at x close to 1: ≈ 2/(1-x)³. And C(2,1)=2 ✓. For k=2: ≈ 6 x²/(1-x)^5 (C(4,2)=6). k=3: 20/(1-x)^7. Etc.
+
+With x = λ². Take λ = 0.9375: x = 0.8789, 1-x = 0.1211.
+
+k=0 term: 16 * 1/(1-x) = 16 * 8.26 = 132.
+k=1: 15 * a² * x/(1-x)³ ≈ 15 * 0.03516 * 0.879/0.001776 = 15*0.03516*495 = 261. Hmm: (1-x)³ = 0.1211³ = 0.001776. x(1+x)/(1-x)³ = 0.879*1.879/0.001776 = 1.651/0.001776 = 930. So k=1: 15*0.03516*930 = 490.
+k=2: 14 * a⁴ * 6x²/(1-x)^5 = 14 * 0.001237 * 6*0.7725/2.6e-5. (1-x)^5 = 0.1211^5 = 2.60e-5. 6x² = 4.635. So 4.635/2.6e-5 = 178,269... wait: 6*0.7725 = 4.635; 4.635/2.60e-5 = 1.783e5. Times 14*0.001237 = 0.01732. → 3088.
+k=3: 13 * a^6 * 20 x³/(1-x)^7. a^6 = 0.0000434. (1-x)^7 = 0.1211^7 = 3.81e-7. 20x³ = 20*0.679 = 13.58. 13.58/3.81e-7 = 3.56e7. Times 13*4.34e-5 = 5.64e-4 → 20,100.
+k=4: 12 * a^8 * 70 x^4/(1-x)^9. a^8 = 1.526e-6. (1-x)^9 = 0.1211^9 = 5.59e-9. 70 x^4 = 70*0.5967=41.8. 41.8/5.59e-9 = 7.48e9. Times 12*1.526e-6 = 1.83e-5 → 137,000.
+k=5: 11 * a^10 * 252 x^5/(1-x)^11. a^10 = 5.36e-8. (1-x)^11 = 0.1211^11 = 8.19e-11. 252 x^5 = 252*0.5245=132.2. 132.2/8.19e-11 = 1.61e12. Times 11*5.36e-8 = 5.9e-7 → 951,000.
+
+So Σ_s ||U^s||_F² is dominated by large k: k=5: ~1e6, and growing with k! k=6: 10*a^12*924x^6/(1-x)^13: a^12=1.88e-9, (1-x)^13=1.2e-12, 924*0.461=426, 426/1.2e-12=3.55e14, times 1.88e-8 → 6.7e6. k=7: 9*a^14*3432x^7/(1-x)^15: a^14=6.6e-11, (1-x)^15=1.76e-15, 3432*0.405=1390, 1390/1.76e-15=7.9e17, times 5.9e-10 → 4.7e8?! 
+
+Hmm, this is blowing up. The ratio between successive k terms: (16-k)/(...) * [C(2(k+1),k+1)/C(2k,k)] * a² * x/(1-x)² = ~1 * [(2(2k+1))/(k+1)] * a² x/(1-x)². For k=5: (22/6)=3.67 * 0.03516*0.879/0.01467 = 3.67*0.03088/0.01467 = 3.67*2.104 = 7.7. So each k adds ~8x more. With 15 distances, the total is dominated by k=15: astronomically large?!
+
+That would mean ||y|| is astronomically large, which contradicts... hmm wait, does it? Let me reconsider. Hmm, wait — the issue: the approximation C(s,k) a^k λ^{s-k} for (U^s)_{i,i+k} and the sum over s from 0 to ∞. But s must be ≥ k, and also the sum converges only if... Σ_s C(s,k)² x^s converges for x<1. Yes it converges but to huge values when 1-x is small.
+
+Hmm, but wait — this suggests the steady-state variance is enormous, like σ² * 1e6+?! That can't be right — the recurrence y_{t+1} = U y_t + g_t with spectral radius 0.94 has bounded steady state... but non-normal systems can have enormous transient amplification! The steady-state covariance is Σ_s U^s U^{sT} σ², and if ||U^s||_F ~ huge for some s, the covariance is huge.
+
+Hmm wait, but is ||U^s|| really huge? Let me sanity check with the 2x2 example: U = [[0.9375, 0.1875],[0, 0.9375]]. U^s = [[λ^s, s a λ^{s-1}],[0, λ^s]]. Max of s a λ^{s-1}: s λ^{s-1} max at s = 1/|lnλ| = 1/0.0645 = 15.5, value 15.5 * 0.9375^14.5 = 15.5 * e^{-15.5*0.0645} = 15.5*e^{-1.0} = 15.5*0.368 = 5.7. Times a=0.1875 → 1.07. So ||U^15|| ≈ 1.4. Fine, modest.
+
+For the 16x16 with distance-15 paths: C(s,15) a^15 λ^{s-15}: max over s... the ratio test: term(s+1)/term(s) = [(s+1)/(s-14)] * λ = (s+1)λ/(s-14). This exceeds 1 when (s+1)λ > s-14 → s(1-λ) < 14λ+1 → s < (14*0.9375+1)/0.0625 = 14.125/0.0625 = 226. So the max is at s=226! Value: C(226,15) * 0.1875^15 * 0.9375^211. C(226,15) ≈ 226!/(15! 211!) — log10: roughly (15 log10(226e/15)) using entropy approx: 15*log10(226/15*2.718...)... let me use the approximation C(n,k) ≈ (en/k)^k: (2.718*226/15)^15 = (40.97)^15. log10(40.97) = 1.6125, *15 = 24.2. So C ≈ 10^24.2. 0.1875^15 = (1.875e-1)^15: log10 = 15*(log10 1.875 - 1) = 15*(0.2730-1) = 15*(-0.727) = -10.9. λ^211: log10 = 211*log10(0.9375) = 211*(-0.02803) = -5.92. Total: 24.2 - 10.9 - 5.92 = 7.4. So (U^226)_{1,16} ≈ 10^7.4 ≈ 2.5e7!!!
+
+So ||U^226|| ~ 10^7. The system has ENORMOUS transient growth (non-normal with 15 superdiagonal steps of 0.1875 each and slow decay 0.9375). The Kreiss constant is huge.
+
+BUT: we only run 64 steps, not 226. So we need ||U^s|| for s ≤ 63 only. Let me recompute for s ≤ 63: the distance-k entries at s=63: C(63,k) a^k λ^{63-k}. For which k is this maximized at s=63 (within our range)? From the ratio test above (with general k): max at s* ≈ (kλ+... )/ (1-λ)... general: term(s) = C(s,k)a^kλ^{s-k}; ratio term(s+1)/term(s) = (s+1)/(s+1-k) * λ ≥ 1 iff (s+1)λ ≥ (s+1-k)λ + ... let me redo: (s+1)λ/(s+1-k) ≥ 1 iff (s+1)λ ≥ s+1-k iff (s+1)(1-λ) ≤ k iff s+1 ≤ k/(1-λ). With 1-λ = 0.0625: k/0.0625 = 16k. So max at s ≈ 16k - 1. For k=4: s*=63. So at s=63, distance-4 entries are at their max!
+
+C(63,4) a^4 λ^59 = 63*62*61*60/24 * 0.001237 * 0.9375^59. C(63,4) = 595,663? Let me compute: 63*62=3906, *61=238,266, *60=14,295,960, /24 = 595,665. a^4 = 0.001237. λ^59 = 10^(-59*0.02803) = 10^-1.654 = 0.0222. Product: 595,665 * 0.001237 * 0.0222 = 595,665 * 2.746e-5 = 16.4. So (U^63)_{i,i+4} ≈ 16.4!! And distance-5: max at s≈79, but at s=63: C(63,5)a^5λ^58 = 5,956,650*... C(63,5) = 595,665*58/5 = 6,909,714? (63 choose 5) = 63!/(5!58!) = (63*62*61*60*59)/120 = 14,295,960*59/120 = 843,461,640/120 = 7,028,847. a^5 = 2.32e-4. λ^58 = 10^-1.626 = 0.0237. Product: 7.03e6 * 2.32e-4 * 0.0237 = 7.03e6 * 5.5e-6 = 38.7?! Wait: 2.32e-4 * 0.0237 = 5.50e-6. 7.03e6 * 5.5e-6 = 38.7. Hmm that's bigger than k=4. Let me check k=6: C(63,6) = C(63,5)*57/6 = 7.03e6*9.5 = 6.68e7. a^6 = 4.35e-5. λ^57 = 0.0253. Product: 6.68e7 * 4.35e-5 * 0.0253 = 6.68e7 * 1.1e-6 = 73.5. k=7: C(63,7) = 6.68e7 * 56/7 = 5.34e8. a^7 = 8.15e-6. λ^56 = 0.027. Product: 5.34e8*8.15e-6*0.027 = 5.34e8 * 2.2e-7 = 117. k=8: C(63,8) = 5.34e8*55/8 = 3.67e9. a^8 = 1.53e-6. λ^55 = 0.0288. → 3.67e9 * 4.4e-8 = 161. k=9: C(63,9)=3.67e9*54/9=2.2e10. a^9=2.87e-7. λ^54=0.0307. → 2.2e10*8.8e-9 = 194. k=10: C(63,10)=2.2e10*53/10=1.17e11. a^10=5.4e-8. λ^53=0.0327. → 1.17e11*1.77e-9=206. k=11: C(63,11)=1.17e11*52/11=5.5e11. a^11=1.0e-8. λ^52=0.0349. → 5.5e11*3.5e-10=192. k=12: C(63,12)=5.5e11*51/12=2.3e12. a^12=1.9e-9. λ^51=0.0372. →2.3e12*7.1e-11=163. So max around k=10: ~206.
+
+So ||U^63|| ~ 200?!?! With λ=0.9375 uniformly. Hmm, wait, but this assumed ALL λ equal 0.9375 and treated the product naively (the path product should have λ_i per step, varying). But order of magnitude: ||U^63|| could be ~10-100+.
+
+Hmm, hold on. But wait — is that consistent with the state norm being modest? The state after 64 steps: y(64) = U^64 y(0) + Σ_{t<64} U^{63-t}... wait, y(64) = Σ_{s=0}^{63} U^s g(63-s). The forcing g are iid N(0, σ²I). So E||y(64)||² = σ² Σ_{s=0}^{63} ||U^s||_F². With ||U^63||_F ~ maybe 500+ (Frobenius over all entries) and growing for s near 63... E||y(64)||² could be σ² * (large). Let me estimate Σ_{s≤63} ||U^s||_F² with the numbers above.
+
+Hmm wait, but earlier the "variance recursion" (which was WRONG due to ignoring correlations) gave small values. The correct computation gives huge values if ||U^s|| ~ 200 for s near 63. Let me recompute ||U^s||_F² for s=63: entries at distance k: (16-k) entries each ~ (values computed above)². k=10: 6 * 206² = 6*42,436 = 254,616. k=9: 7*194² = 7*37,636=263,452. k=8: 8*161²=8*25,921=207,368. k=11: 5*192²=184,320. k=7: 9*117²=123,201. k=12: 4*163²=106,276. k=6: 10*73.5²=54,022. k=13: 3*~130²=50,700. k=5: 11*38.7²=16,468. k=14: 2*~90²=16,200. k=4: 12*16.4²=3,233. k=15: 1*~50²=2,500. k=3: 13*~4²=208... 
+
+Sum ≈ 254,616+263,452+207,368+184,320+123,201+106,276+54,022+50,700+16,468+16,200+3,233+2,500+... ≈ 1.28e6. So ||U^63||_F ≈ 1132. And ||U^s||_F grows roughly geometrically as s→63? For s=62, similar order slightly less. The sum Σ_{s≤63} ||U^s||_F² is dominated by the largest s: roughly ||U^63||_F² * (1/(1-r)) where r = ratio... if ||U^s||_F² grows like e^{c s} with the s→s+1 ratio around... from the 2x2-type analysis, hmm. The growth ratio of the max entries: term(s+1)/term(s) for the dominant k at that s... complicated. Let me guess Σ_{s≤63} ||U^s||_F² ≈ few × 1.28e6, maybe 3-5e6.
+
+Then E||y(64)||² = 0.01 * 3e6 = 30,000?? ||y(64)|| ~ 173?? That means the STATE itself is huge (~100+), not ~1-2!
+
+Hmm wait, that changes everything. Hmm, but wait — is that plausible? The recurrence x_{t+1} = M x_t + d_t with M = QUQ^T, ||M||... the transient amplification: with random initial ~0.1 and forcing ~0.1, after 64 steps the state could be amplified to ~100 if the transient gain is ~1000. Since spectral radius < 1, eventually it would decay, but at t=64 we might be right at peak transient.
+
+Hmm hold on, wait. But this assumed ALL diagonal entries λ = 0.9375. The actual λ_i are drawn from {0.875, 0.90625, 0.9375, 0.96875} randomly. The transient growth depends on the products along paths: a path of length k has gain a^k λ^{s-k} — with mixed λs, roughly (geometric mean λ)^(s-k) * a^k. If some λs are 0.875 (faster decay), the growth is tempered. Expected λ = 0.921875. Let me redo with λ = 0.92: 1-λ = 0.08. Max at s ≈ k/0.08 = 12.5k. For s=63: k ≈ 5. k=5 at s=63: C(63,5)a^5λ^58 = 7.03e6 * 2.32e-4 * 0.92^58. 0.92^58 = e^{58 ln0.92} = e^{58*(-0.0834)} = e^{-4.84} = 0.0079. → 7.03e6*2.32e-4*0.0079 = 7.03e6 * 1.83e-6 = 12.9. k=6: C(63,6)=6.68e7, a^6=4.35e-5, λ^57=0.0086 → 6.68e7*3.74e-7=25. k=7: C=5.34e8, a^7=8.15e-6, λ^56=0.0093 → 5.34e8*7.6e-8=40.5. k=8: C=3.67e9, a^8=1.53e-6, λ^55=0.0101→3.67e9*1.55e-8=57. k=9: 2.2e10*2.87e-7*0.011=2.2e10*3.16e-9=69.5. k=10: 1.17e11*5.4e-8*0.012=1.17e11*6.5e-10=76. k=11: 5.5e11*1e-8*0.013=5.5e11*1.3e-10=71.5. Max ~76 at k=10. ||U^63|| ~ 76, ||U^63||_F ~ 76*sqrt(~50 entries weighing) ~ 400.
+
+Still large. So regardless, ||U^63|| ~ 50-200, ||y(64)|| ~ sqrt(0.01 * Σ||U^s||_F²) — with Σ||U^s||_F² ~ maybe 1e5-1e6, ||y|| ~ 30-100.
+
+Hmm, so the state norm is large (~30-100), driven by transient amplification of the noise. Then what about the fp16 error?
+
+The error e_64 = Σ_{t=1}^{64} U^{64-t} η_t with ||η_t|| ≈ u ||y(t)||. Now the states y(t) for t near 64 have large norms (~30-100), but errors from those late steps have little propagation (U^0, U^1, ...). Errors from early steps (t small) propagate through U^{~60} with gain ~50-200, but the early states y(t) are small (still growing).
+
+E||e||² = (u²/3) Σ_t Σ_j [(U^{64-t})^T U^{64-t}]_{jj} y_j(t)².
+
+Hmm. And E||y(64)||² = σ² Σ_s ||U^s||_F² (row-col symmetry: Σ_j colnorm²(s) = ||U^s||_F²).
+
+For the error: Σ_t Σ_j c_j(64-t) y_j(t)² where c_j(s) = ||col_j U^s||². And E y_j(t)² = σ² Σ_s r_j(s) where r_j(s) = ||row_j U^s||².
+
+E||e||² = (u²/3) σ² Σ_t Σ_j c_j(64-t) Σ_s r_j(s)... this is getting messy. Rough approach: E||e||² ≈ (u²/3) Σ_t ||U^{64-t}||_F² * E||y(t)||²/16... hmm no. Let me simplify: assume isotropic-ish: E||U^s η_t||² ≈ (u²/3)(||U^s||_F²/16)||y(t)||²... wait: ||U^s η||² = η^T U^{sT}U^s η; E over η with E η η^T = (u²/3) diag(y²): E||U^sη||² = (u²/3) Σ_j (U^{sT}U^s)_{jj} y_j² = (u²/3) Σ_j c_j(s) y_j². If y² concentrated where... ugh.
+
+Crude bound: E||U^s η||² ≤ (u²/3) ||U^s||²_2 ||y||² — too loose. Alternative: ≈ (u²/3) (||U^s||_F²/16) ||y||² if aligned randomly.
+
+So E||e||² ≈ (u²/3σ²... let me define S_t = E||y(t)||² = σ² Σ_{s<t} ||U^s||_F². Then E||e||² ≈ (u²/48) Σ_t ||U^{64-t}||_F² S_t... hmm wait: (u²/3)*(1/16)*||U^{64-t}||_F² * S_t. Hmm, but there's a correlation: y(t) is large exactly in the directions that U^{64-t} amplifies (the state grows along the amplifying subspace, and errors in the state... hmm, actually errors η_t are elementwise rounding of y(t), so they're large where y(t) is large, and y(t) is large in the amplified directions... and U^{64-t} further amplifies those directions. This correlation could make it worse than the isotropic estimate.)
+
+Let me just try to get the order of magnitude with the isotropic estimate:
+
+E||e||² ≈ (u²/48) Σ_{s=0}^{63} ||U^s||_F² * S_{64-s}, where S_t = σ² Σ_{s'<t} ||U^{s'}||_F².
+
+Let F_s = ||U^s||_F². Suppose F_s grows ~ exponentially toward s=63: F_s ≈ F_63 * ρ^{s-63} with ρ ~ maybe 0.7-0.9 (growth rate of the Frobenius norm). And S_t = σ² Σ_{s'<t} F_{s'}.
+
+Σ_s F_s S_{64-s} = σ² Σ_s F_s Σ_{s'<64-s} F_{s'} = σ² Σ_{s,s': s+s'≤63} F_s F_{s'}.
+
+If F concentrated near max s: Σ_{s+s'≤63} F_s F_{s'} ≈ ... with exponential F_s = F e^{α(s-63)}: Σ_{s+s'≤63} e^{α(s+s'-126)} ≈ ∫∫ over triangle s+s'≤63: the max of s+s' is 63, so e^{α(s+s'-126)} ≤ e^{-63α}. The integral: ∫_0^63 ds ∫_0^{63-s} ds' e^{α(s+s'-126)}. Let w = s+s': ∫_0^63 w e^{α(w-126)} dw ≈ [for α large] e^{-63α} * (1/α²)-ish... Let me just parametrize: Σ_{s+s'≤63} F_s F_{s'} ≈ F_63² * c/α² where the constraint forces s+s' ≈ 63 - O(1/α), giving each factor discount e^{-α(63-s)} with (63-s)+(63-s') ≈ 63. Hmm: if s = 63 - p, s' = 63 - q with p + q ≥ 63: F_s F_{s'} = F² e^{-α(p+q)} ≤ F² e^{-63α}. The number of (p,q) pairs with p+q = 63+w is ~64. So Σ ≈ F² Σ_w 64 e^{-α(63+w)} ≈ 64 F² e^{-63α}/(1-e^{-α}). With α: F_s growth rate. From the dominant-k analysis: the max entry grows like... at s=63, k=10 dominates; the "growth" of F_s as s increases by 1 near 63: hmm, actually for the entries near max, term(s+1)/term(s) ≈ 1 (we're at the max of the saddle). The FROBENIUS norm growth: F_{s+1}/F_s ≈ e^{α}... Let me estimate from the 2x2 case: entries s a λ^{s-1}: near max, growth is slow (saddle point), but the Frobenius norm over all k... 
+
+Alternatively, use the exact relation: Σ_{s+s'≤63} F_s F_{s'} — note that Σ_s F_s (full, unconstrained) would be the "steady state" total (astronomically large, ~10^13 from the earlier k-series which included s up to ∞). The constraint s+s' ≤ 63 cuts it off. 
+
+Hmm, let me instead directly estimate the key ratio: E||e||²/E||y(64)||².
+
+E||y(64)||² = σ² Σ_{s≤63} F_s ≈ σ² F_63 * (geometric sum) ≈ σ² F_63/(1-e^{-α}).
+
+E||e||² ≈ (u²/48) σ² Σ_{s+s'≤63} F_s F_{s'} ≈ (u²/48) σ² * 64 F_63² e^{-63α}/(1-e^{-α}).
+
+Ratio² = E||e||²/E||y||² = (u²/48) * 64 F_63² e^{-63α}/(1-e^{-α}) * (1-e^{-α})/(σ² F_63) — wait I need to divide by E||y||² = σ² F_63/(1-e^{-α}):
+
+Ratio² = (u²/48) * [64 F_63 e^{-63α}/(1-e^{-α})] / [F_63/(1-e^{-α})] * ... hmm I think I mangled it. Let me redo:
+
+E||e||² = (u²/48) σ² G, where G = Σ_{s+s'≤63} F_s F_{s'}.
+E||y||² = σ² H, where H = Σ_{s≤63} F_s.
+
+Ratio² = (u²/48) G/H.
+
+Now I need G/H. With F_s = F_63 e^{-α(63-s)}:
+
+H = F_63 Σ_{p≥0} e^{-αp} = F_63/(1-e^{-α}).
+G = Σ_{p,q≥0, p+q≥63} F² e^{-α(p+q)} = F² Σ_{w≥63} (w+1) e^{-αw} ≈ F² * 63 e^{-63α} * (1/(1-e^{-α})) roughly (dominated by w=63: 64 e^{-63α}, next 65 e^{-64α}, ...).
+
+G/H ≈ F_63 * 64 e^{-63α}.
+
+Hmm interesting. So Ratio² ≈ (u²/48) * 64 F_63 e^{-63α} = (4u²/3) F_63 e^{-63α}.
+
+Now what's α? The exponential growth rate of F_s = ||U^s||_F². Hmm. F_s involves entries at distance k: C(s,k)²a^{2k}λ^{2(s-k)}(16-k). The saddle analysis: for each s, dominant k*(s) ≈ s(1-λ)... hmm earlier: max at s ≈ 16k for λ=0.9375 (k/(1-λ) = k/0.0625). So k*(s) ≈ s(1-λ) = 0.0625 s. At s=63: k* ≈ 3.9 — but I computed above the max over k at s=63 was around k=10?! Let me recheck. Hmm, I think I made an inconsistency. Earlier ratio test: term(s+1)/term(s) = [(s+1)/(s+1-k)] λ ≥ 1 iff s+1 ≤ k/(1-λ)... this is for fixed k, finding the s that maximizes. So for k=10: s* = 10/0.0625 = 160. So at s=63, the k=10 term is still GROWING (hasn't reached its max at s=160). For s=63, which k gives the largest entry? The k maximizing C(63,k)a^kλ^{63-k} — I computed k≈10 gives ~206. OK so at s=63, the dominant distance is k=10, with entries ~206.
+
+And the growth rate: F_s as s increases near 63: each entry at (k fixed) grows like (s+1)λ/(s+1-k) — for k=10, s=63: 64*0.9375/54 = 1.111 — 11% per step. And k shifts upward. Overall F growth: roughly, F_{s+1}/F_s ≈ e^α with α ≈ ln(1.11) + (shifting k contributions) ≈ maybe 0.15-0.25. Let me estimate α ≈ 0.2 (i.e., F grows ~20% per step near s=63).
+
+Hmm, wait, but actually I should double check ||U^63|| ~ 200 with the mixed λs. The λs are randomly drawn from {0.875, 0.90625, 0.9375, 0.96875} — expected 4 of each. The path gains: a^k * Π λ_i^{...} — the decay along a path depends on WHICH rows/cols the path visits. Roughly, use geometric mean λ_g = (0.875*0.90625*0.9375*0.96875)^{1/4} = ? ln: -0.1335, -0.0984, -0.0645, -0.0317; mean = -0.082; λ_g = e^{-0.082} = 0.921. So effective 1-λ_g = 0.079, k*(s)≈ s*0.079 ≈ 5 at s=63... but with the max over k computed at λ_g: earlier with λ=0.92 I found max at k≈10 with value ~76. So ||U^63|| ~ 50-100 (mixed), ~200 (all 0.9375), maybe ~1000 (all 0.96875: 1-λ = 0.03125, k*(63) = 2... hmm, for λ=0.96875: max over k at s=63: C(63,k)a^kλ^{63-k}: k=15: C(63,15)a^15λ^48: log10 C(63,15) ≈ 15*log10(2.718*63/15)=15*log10(11.42)=15*1.058=15.87→~7.4e15... a^15: 10^-10.9; λ^48: 10^-0.66=0.219→10^-0.66. Total log10: 15.87-10.9-0.66 = 4.3 → 2e4. So ||U^63|| ~ 2e4 if all λ=0.96875!). 
+
+Yikes. So the answer depends heavily on the actual λ draw. With 16 draws from 4 values, we'll get a mix; the number of 0.96875s matters a lot.
+
+OK let me step back. This is getting extremely complicated analytically. The state norm ||y(64)|| is itself possibly large (~10-100). The relative error of fp16 rounding... Let me reconsider.
+
+The relative error ratio² ≈ (4u²/3) F_63 e^{-63α}. Hmm, with F_63 = ||U^63||_F² ≈ (say) 1e6 (for ||U^63||_2 ~ 200, F ~ maybe 10x the 2-norm squared... earlier F_63 ≈ 1.28e6 for the all-0.9375 case) and e^{-63α} with α=0.2: e^{-12.6} = 3.4e-6. So F_63 e^{-63α} ≈ 1.28e6 * 3.4e-6 = 4.35. Ratio² ≈ (4/3)(4.883e-4)² * 4.35 = 1.333*2.384e-7*4.35 = 1.38e-6. Ratio ≈ 1.18e-3. Under 2e-3!
+
+Hmm interesting. But this used my rough exponential model. The quantity F_63 e^{-63α} = F_63 e^{-α(63)} — hmm, note that F_63 e^{-63α}... if F_s = F_63 e^{α(s-63)}, then... hmm, actually wait: F_63 e^{-63α} = F_0 e^{α*63} e^{-63α}... no: F_0 = F_63 e^{-63α}. So G/H ≈ 64 F_0!! Interesting: G/H ≈ 64 * ||U^0||_F² = 64*16 = 1024?? Hmm wait, that doesn't seem right either. Let me redo: G/H ≈ 64 F_63 e^{-63α} where F_s = F_63 e^{-α(63-s)} means F_0 = F_63 e^{-63α}. So G/H ≈ 64 F_0 = 64*16 = 1024. Hmm, but that assumed the exponential model all the way down to s=0, which is wrong (F_0 = 16 exactly, and F_s for small s is small, then grows super-exponentially-ish... actually the growth isn't uniform exponential).
+
+Hmm, hmm. Let me reconsider. The model F_s = F_63 e^{α(s-63)} with α = 0.2: F_63 = 1.28e6 → F_0 model = 1.28e6 e^{-12.6} = 4.4. But actual F_0 = 16, F_1 = ||U||_F² = 16λ² + 15a² + 14c² ≈ 16*0.879 + 15*0.0352+14*0.001 = 14.06+0.528+0.014 = 14.6?? Wait that's LESS than F_0=16? F_0 = ||I||_F² = 16. F_1 = 14.6. Hmm, so F decreases initially then grows? For λ=0.9375: F_1 = 16*0.879 + 15*0.0352 + ... = 14.06+0.53+0.01 = 14.6. Yes — initial contraction (diagonal shrinks faster than off-diagonal grows). Then eventually the combinatorial growth kicks in and F grows huge.
+
+So the exponential model is bad. Let me think about G/H differently.
+
+G = Σ_{s+s'≤63} F_s F_{s'}, H = Σ_{s≤63} F_s.
+
+Since F_s is heavily increasing in s (for s beyond the initial dip), G is dominated by pairs with s+s' = 63 exactly-ish (the boundary), balancing the two factors. G ≈ Σ_{s=0}^{63} F_s F_{63-s} (boundary) * O(1/α_eff-ish correction)... hmm, actually pairs with s+s' < 63 contribute less since both factors are smaller. If F grows super fast, G ≈ Σ_{s} F_s F_{63-s} where the sum is dominated by the s maximizing F_s F_{63-s}, i.e., balancing growth rates.
+
+Let me just try to numerically estimate F_s for the mixed-λ case at several s... this is getting really heavy. Let me instead reconsider the problem from the designer's perspective.
+
+The problem gives specific seeds and specific dyadic values. The tolerance is 0.002 relative L2. The kernel uses fp16 intermediates. The intended question: does fp16 rounding accumulate beyond tolerance over 64 steps?
+
+Given the elaborate construction (orthogonal similarity transform of a triangular matrix with slowly-decaying diagonal), the designer clearly crafted a STABLE recurrence (all eigenvalues < 1) with controlled non-normality. The values 0.1875 superdiagonal and ±0.03125 second superdiagonal are chosen to make the transient growth modest-ish? Hmm, but my analysis above suggests ||U^63|| could be ~10-200, which is NOT modest.
+
+Hmm wait, wait. Let me recheck the direction of the superdiagonal coupling and the transient growth. U upper triangular with positive superdiagonal a=0.1875. The transient growth of U^s: the classic result — for the Jordan-like block with λ on diagonal and a on superdiagonal, (U^s)_{ij} = C(s, j-i) a^{j-i} λ^{s-(j-i)}. With λ=0.9375, a=0.1875: a/(1-λ) = 0.1875/0.0625 = 3. The entries at distance k peak at s ≈ k/(1-λ) with peak value ≈ (a/(1-λ))^k * poly ≈ 3^k * (1/sqrt(2π k s/...)) — roughly (a/(1-λ))^k = 3^k discounted by binomial-type factors. At s=63, dominant k≈10, entry ~206. And (a/(1-λ))^k = 3^10 = 59049 — the binomial coefficients and λ powers discount it to 206. OK.
+
+So ||U^63|| ~ 200 (all-0.9375 case). The state at t=64: y(64) = Σ_{s≤63} U^s g(63-s) — dominated by the s≈63 term: ||U^63 g|| ~ ||U^63|| * ||g|| / sqrt(16) (random vector, 2-norm of matrix times random vector: E||U^63 g||² = σ²F_63 → ||U^63 g|| ~ σ sqrt(F_63) = 0.1 * 1131 = 113 (all-0.9375 case). So ||y(64)|| ~ 100+?? And ||y(63)|| ~ ||U^62 g + ...|| similar magnitude ~90, etc.
+
+Hmm OK so in the all-0.9375 scenario, ||y(64)|| ~ 113 (2-norm ~ E sqrt... roughly). Now the error: e_64 = Σ_t U^{64-t} η_t, η_t ~ u * |y(t)| elementwise. The late-step errors (t near 64): ||η_64|| ~ u ||y(64)|| ~ 4.88e-4 * 113 ≈ 0.055, no propagation. Early-step errors (t small): η_t ~ u ||y(t)||, with ||y(t)|| small for small t... but propagated by U^{63-t} with gain ||U^{63-t}|| ~ up to 200.
+
+Let me compute E||e||² = (u²/3)Σ_t [Σ_j c_j(64-t) y_j(t)²]. Hmm. Alternatively realize: e_64 = Σ_t U^{64-t} η_t. Compare with y(64) = Σ_t U^{63-t}... hmm, actually here's a cleaner way to think:
+
+y(64) = Σ_{t=0}^{63} U^{63-t} g(t) (g(t) = forcing at time t, 0-indexed: y(t+1) = U y(t) + g(t), y(0)=y0). 
+
+e(64) = Σ_{t=1}^{64} U^{64-t} η_t where η_t = rounding of y(t) (y(t) exact-ish ≈ ŷ(t)). η_t ≈ u D_t ξ_t where D_t = diag(|ŷ(t)|), ξ_t random signs unit-ish.
+
+Each η_t is like a "forcing" of magnitude u||y(t)|| at time t, propagated (64-t) more steps.
+
+The ratio: ||e(64)||/||y(64)|| ≈ u * sqrt( Σ_t ||U^{64-t} D_t||² / Σ_t ||U^{63-t}||² σ²/... ) hmm — treating both as sums of propagated random forcings:
+
+E||y(64)||² = σ² Σ_s F_s (s = 63-t).
+E||e(64)||² ≈ (u²/3) Σ_t [weighted F_{64-t} with y(t)² weights] ≈ (u²/3) Σ_t F_{64-t} * ||y(t)||²/16 (isotropic approx: Σ_j c_j y_j² ≈ (F/16)Σy_j²).
+
+With ||y(t)||² ≈ σ² Σ_{s<t} F_s:
+
+E||e||² ≈ (u²/48) σ² Σ_t F_{64-t} Σ_{s<t} F_s = (u²/48) σ² Σ_{s+s'≤63...} — same as before: G = Σ_{s+s'≤63} F_s F_{s'} with s=64-t... indices: t from 1..64: s = 64-t ∈ [0,63]; Σ_{s'<t} = Σ_{s'<64-s}: s+s' ≤ 63. Yes G as before.
+
+So ratio² = (u²/48) G/H, H = Σ_{s≤63} F_s.
+
+Now let me actually estimate F_s over s=0..63 for a realistic mixed-λ U. Ugh, OK. Let me at least handle the structure: F_s = Σ_{k=0}^{15} Σ_{i} [(U^s)_{i,i+k}]². (U^s)_{i,i+k} = sum over paths i→i+k of length s... = Σ over compositions... For mixed λ, (U^s)_{i,i+k} ≈ C(s,k) a^k (Π λ's along path)^{...} — roughly C(s,k) a^k λ_eff^{s-k} with λ_eff depending on the specific rows. The rows with larger λ contribute more.
+
+OK here's the thing: I cannot realistically compute the exact numbers without running the code. The analysis says the answer is borderline and depends on the actual λ draw (from PCG64(20260923)) and the actual noise realization. 
+
+Let me think about the DESIGN intent again. The dyadic values (0.875 = 7/8, 0.90625 = 29/32, 0.9375 = 15/16, 0.96875 = 31/32, 0.1875 = 3/16, 0.03125 = 1/32) — ALL exactly representable in fp16. The matrix Q U Q^T has entries that are multiples of 1/512 — exactly representable in fp16 (needs mantissa bits: k/512 with |k| ≤ 512 → 10 bits + sign; fp16 has 11-bit significand precision → integers to 2048 exact; and k/512 = k * 2^-9, k ≤ 512 needs 10 bits — representable as long as ≥ 2^-14 normal min: 2^-9 ≥ 2^-14 ✓; subnormals not needed). So the matrix is EXACT in fp16.
+
+But the kernel doesn't use fp16 for the matrix — it uses fp32 for matrix and arithmetic; only the state is rounded to fp16. The state values: initially ~0.1 scale, growing to ~10-100 (per my transient analysis). fp16 relative precision 2^-11 applies throughout the normal range (up to 65504). Fine.
+
+Hmm, so why would the designer choose these specific dyadic eigenvalues? To make the REFERENCE exact in a sense, and to make the dynamics have spectral radius ~0.875-0.97 — stable, decaying. And 64 steps. And tolerance 0.002.
+
+Actually — hold on. Let me reconsider whether the transient growth is really that large, because maybe I should reconsider whether the state really grows to ~100. Let me recompute more carefully with a concrete small-scale check of my formula. 
+
+Take 4x4, λ=0.9375 all, a=0.1875. (U^s)_{1,4} (distance 3) = C(s,3)a³λ^{s-3}. At s=48 (= 3/0.0625): C(48,3) = 17,296; a³ = 0.00659; λ^45 = 0.9375^45 = e^{-45*0.0645} = e^{-2.903} = 0.0549. Product: 17,296*0.00659*0.0549 = 17,296*3.62e-4 = 6.26. And (a/(1-λ))³ = 3³=27 discounted to 6.26. OK. So ||U^48|| ≳ 6 for a mere 4x4. For 16x16, distances up to 15 → much bigger. So yes, transient growth is real and large. With λ=0.9375, at s=63, distance-10 entries ~206. So ||U^63|| ~ hundreds. The state after 64 steps is dominated by these amplifications: ||y(64)|| ~ σ sqrt(F_63) ~ 0.1 * 1000 = 100.
+
+Hmm wait, but hmm, actually let me double-check F_63 estimate ~1.28e6 (all-0.9375). Entries at distance k, i from 1 to 16-k: each ~E_k(s=63) (computed: k=4:16.4, k=5:38.7, k=6:73.5, k=7:117, k=8:161, k=9:194, k=10:206, k=11:192, k=12:163, k=13:~130, k=14:~90, k=15:~50 — let me sanity check k=15: C(63,15)a^15λ^48: log10 C(63,15): use C(n,k)≈(en/k)^k: (2.718*63/15)^15 = (11.42)^15: log10 = 15*1.0577 = 15.87 → 7.4e15. a^15 = 1.875^15 e-15: log10(1.875^15) = 15*0.273 = 4.095 → a^15 = 10^4.095 * 10^-15 = 1.25e-11. λ^48 = 10^(-48*0.02803) = 10^-1.345 = 0.0452. Product: 7.4e15 * 1.25e-11 * 0.0452 = 7.4e15 * 5.65e-13 = 4182?? Hmm, that contradicts my earlier k=15 estimate of ~50. Let me recompute. Earlier for k=15 I think I used λ=0.96875 or made an error. Let me redo k=15, λ=0.9375, s=63: C(63,15): let me compute more carefully. ln C(63,15) = ln(63!) - ln(15!) - ln(48!). Using Stirling: ln(63!) ≈ 63 ln63 - 63 + 0.5 ln(2π*63) = 63*4.1431 - 63 + 0.5*ln(395.8) = 261.02 - 63 + 0.5*5.981 = 261.02-63+2.99 = 201.01. ln(15!) = 15 ln15 - 15 + 0.5 ln(2π*15) = 15*2.708 - 15 + 0.5 ln(94.25) = 40.62-15+2.273 = 27.89. (Actual ln(15!) = ln(1307674368000) = 27.899 ✓.) ln(48!) = 48 ln48 - 48 + 0.5 ln(2π*48) = 48*3.8712 - 48 + 0.5 ln(301.6) = 185.82-48+2.855 = 140.67. (Check: 48! ≈ 1.24e61, ln = 61*2.3026+ln1.24 = 140.46+0.215=140.67 ✓.) So ln C = 201.01 - 27.89 - 140.67 = 32.45 → C(63,15) = e^32.45 = 1.27e14. (My (en/k)^k estimate gave 7.4e15 — off by 58x; the entropy approximation overestimates for k/n = 0.238? Hmm, (en/k)^k = (e*4.2)^15 = (11.42)^15 = e^{15*2.435} = e^{36.5} = 7.2e15. The more accurate Stirling: e^{32.45} = 1.27e14. The approximation (en/k)^k ignores the (1-k/n)^{-(n-k)}... factor... fine, use Stirling: 1.27e14.)
+
+a^15: ln = 15 ln 0.1875 = 15*(-1.674) = -25.10 → e^-25.1 = 1.21e-11.
+λ^48: ln = 48 * ln 0.9375 = 48*(-0.06454) = -3.098 → 0.0451.
+Product: 1.27e14 * 1.21e-11 * 0.0451 = 1.27e14 * 5.46e-13 = 69.4.
+
+OK so k=15 entry ≈ 69 (not 4182 — my log10 C estimate was off). Let me redo the others with Stirling-accurate C(63,k):
+
+C(63,k) values: C(63,4) = 595,665 ✓ (computed exactly). C(63,5) = 7,028,847? Let me verify: C(63,5) = C(63,4)*59/5 = 595,665*11.8 = 7,028,847 ✓. C(63,6) = C(63,5)*58/6 = 7,028,847*9.667 = 67,945,519. C(63,7) = *57/7 = 67,945,519*8.143 = 553,268,300. C(63,8) = *56/8 = *7 = 3.873e9. C(63,9) = *55/9 = *6.111 = 2.367e10. C(63,10) = *54/10 = *5.4 = 1.278e11. C(63,11) = *53/11 = *4.818 = 6.158e11. C(63,12) = *52/12 = *4.333 = 2.668e12. C(63,13) = *51/13 = *3.923 = 1.047e13. C(63,14) = *50/14 = *3.571 = 3.740e13. C(63,15) = *49/15 = *3.267 = 1.222e14 ✓ (matches Stirling 1.27e14).
+
+Now entries E_k = C(63,k) a^k λ^{63-k}, λ=0.9375, a=0.1875:
+
+λ^{63-k}: ln λ = -0.06454. 
+
+k=4: C=5.957e5, a⁴=1.237e-3, λ^59: e^{-59*0.06454}=e^{-3.808}=0.0222. E=5.957e5*1.237e-3*0.0222=5.957e5*2.747e-5=16.4 ✓.
+k=5: C=7.029e6, a⁵=2.320e-4, λ^58=e^{-3.743}=0.0237. E=7.029e6*5.499e-6=38.7 ✓.
+k=6: C=6.795e7, a⁶=4.35e-5, λ^57=e^{-3.679}=0.0253. E=6.795e7*1.101e-6=74.8.
+k=7: C=5.533e8, a⁷=8.153e-6, λ^56=e^{-3.614}=0.0269. E=5.533e8*2.193e-7=121.3.
+k=8: C=3.873e9, a⁸=1.529e-6, λ^55=e^{-3.550}=0.0288. E=3.873e9*4.403e-8=170.6.
+k=9: C=2.367e10, a⁹=2.867e-7, λ^54=e^{-3.485}=0.0307. E=2.367e10*8.80e-9=208.3.
+k=10: C=1.278e11, a^10=5.375e-8, λ^53=e^{-3.421}=0.0326. E=1.278e11*1.752e-9=223.9.
+k=11: C=6.158e11, a^11=1.008e-8, λ^52=e^{-3.356}=0.0348. E=6.158e11*3.508e-10=215.9.
+k=12: C=2.668e12, a^12=1.889e-9, λ^51=e^{-3.292}=0.0372. E=2.668e12*7.03e-11=187.5.
+k=13: C=1.047e13, a^13=3.542e-10, λ^50=e^{-3.227}=0.0397. E=1.047e13*1.406e-11=147.2.
+k=14: C=3.740e13, a^14=6.641e-11, λ^49=e^{-3.163}=0.0423. E=3.740e13*2.809e-12=105.1.
+k=15: C=1.222e14, a^15=1.245e-11, λ^48=e^{-3.098}=0.0451. E=1.222e14*5.615e-13=68.6.
+
+F_63 ≈ Σ_k (16-k) E_k² = 12*16.4² + 11*38.7² + 10*74.8² + 9*121.3² + 8*170.6² + 7*208.3² + 6*223.9² + 5*215.9² + 4*187.5² + 3*147.2² + 2*105.1² + 1*68.6² + (k≤3 terms: k=3: C(63,3)=39711, a³=6.59e-3, λ^60=e^{-3.872}=0.0208: E=39711*1.371e-4=5.44; 13*5.44²=385. k=2: C(63,2)=1953, a²=0.03516, λ^61=0.0195: E=1953*6.856e-4=1.339; 14*1.79=25. k=1: 63*0.1875*λ^62=63*0.1875*0.0187=0.2207; 15*0.0487=0.73. k=0: λ^63=0.0172; 16*2.96e-4=0.005.)
+
+Sum: 12*269=3228; 11*1498=16,478; 10*5595=55,950; 9*14,714=132,426; 8*29,104=232,832; 7*43,389=303,723; 6*50,131=300,786; 5*46,613=233,065; 4*35,156=140,624; 3*21,668=65,004; 2*11,046=22,092; 1*4706=4706; +385+25+0.7. 
+
+Total F_63 ≈ 3228+16478+55950+132426+232832+303723+300786+233065+140624+65004+22092+4706+411 ≈ 1,511,000. So F_63 ≈ 1.5e6, ||U^63||_F ≈ 1230. ✓ (matches earlier).
+
+Now I need F_s for all s ≤ 63 to get H = ΣF_s and G = Σ_{s+s'≤63} F_s F_{s'}. The growth of F_s: let me compute F_s at a few points (all-λ=0.9375 case):
+
+E_k(s) = C(s,k) a^k λ^{s-k}. 
+
+s=32: dominant k ≈ ? Let me compute several k:
+k=4: C(32,4)=35,960; a⁴=1.237e-3; λ^28=e^{-1.807}=0.1641. E=35,960*2.03e-4=7.30.
+k=5: C(32,5)=201,376; a⁵=2.32e-4; λ^27=e^{-1.743}=0.1752. E=201,376*4.065e-5=8.19.
+k=6: C(32,6)=906,192; a⁶=4.35e-5; λ^26=e^{-1.678}=0.1868. E=906,192*8.126e-6=7.36.
+k=7: C(32,7)=3,365,856; a⁷=8.15e-6; λ^25=e^{-1.614}=0.1992. E=3.366e6*1.624e-6=5.47.
+k=3: C(32,3)=4960; a³=6.59e-3; λ^29=e^{-1.872}=0.1538. E=4960*1.014e-3=5.03.
+So max E_k at s=32 is ~8.2 (k=5). F_32 ≈ Σ(16-k)E_k²: k=3: 13*25.3=329; k=4: 12*53.3=640; k=5: 11*67.1=738; k=6: 10*54.2=542; k=7: 9*29.9=269; k=8: C(32,8)=10,518,300; a⁸=1.529e-6; λ^24=e^{-1.549}=0.2125. E=1.052e7*3.249e-7=3.42; 8*11.7=93.5; k=2: 496*0.03516*0.1438(e^{-1.937}=0.1441)=496*5.065e-3=2.51; 14*6.3=88. k=9: C(32,9)=28,048,800; a⁹=2.867e-7; λ^23=e^{-1.484}=0.2268. E=2.805e7*6.5e-8=1.82; 7*3.3=23. k=1: 32*0.1875*0.2367(e^{-1.807}... wait λ^31=e^{-2.001}=0.1353): 32*0.1875*0.1353=0.811; 15*0.658=9.9. k=10: C(32,10)=64,512,240; a^10=5.375e-8; λ^22=e^{-1.420}=0.2418. E=6.45e7*1.3e-8=0.839; 6*0.70=4.2.
+F_32 ≈ 329+640+738+542+269+93.5+88+23+9.9+4.2 ≈ 2736. So F_32 ≈ 2.7e3.
+
+s=48: 
+k=8: C(48,8)=377,348,994 (known: 48C8 = 377,348,994). a⁸=1.529e-6; λ^40=e^{-2.582}=0.0756. E=3.773e8*1.156e-7=43.6.
+k=9: 48C9 = 1,677,106,640. a⁹=2.867e-7; λ^39=e^{-2.517}=0.0807. E=1.677e9*2.313e-8=38.8.
+k=7: 48C7=73,629,072. a⁷=8.15e-6; λ^41=e^{-2.646}=0.0710. E=7.363e7*5.787e-7=42.6.
+k=10: 48C10=6,540,715,896. a^10=5.375e-8; λ^38=e^{-2.453}=0.0860. E=6.54e9*4.62e-9=30.2.
+k=6: 48C6=12,271,512. a⁶=4.35e-5; λ^42=e^{-2.711}=0.0665. E=1.227e7*2.893e-6=35.5.
+k=11: 48C11=22,595,003,616? (48C11 ≈ 2.26e10). a^11=1.008e-8; λ^37=e^{-2.388}=0.0918. E=2.26e10*9.25e-10=20.9.
+k=5: 48C5=1,712,304. a⁵=2.32e-4; λ^43=e^{-2.775}=0.0623. E=1.712e6*1.445e-5=24.7.
+k=12: 48C12≈6.97e10. a^12=1.889e-9; λ^36=e^{-2.323}=0.0980. E=6.97e10*1.851e-10=12.9.
+k=4: 48C4=194,580. a⁴=1.237e-3; λ^44=e^{-2.840}=0.0584. E=194,580*7.224e-5=14.06.
+k=13: 48C13≈1.92e11. a^13=3.54e-10; λ^35=e^{-2.259}=0.1044. E=1.92e11*3.696e-11=7.1.
+k=3: 48C3=17,296. a³=6.59e-3; λ^45=e^{-2.905}=0.0548. E=17,296*3.613e-4=6.25.
+k=14: 48C14≈4.58e11. a^14=6.64e-11; λ^34=e^{-2.194}=0.1114. E=4.58e11*7.4e-12=3.39.
+k=2: 48C2=1128. a²=0.03516; λ^46=e^{-2.969}=0.0513. E=1128*1.804e-3=2.03.
+k=15: 48C15≈9.37e11? a^15=1.245e-11; λ^33=e^{-2.130}=0.1186. E=9.37e11*1.477e-12=1.38.
+k=1: 48*0.1875*λ^47=e^{-3.034}=0.0481: 48*0.1875*0.0481=0.433.
+F_48 ≈ 8*43.6²+7*38.8²+9*42.6²+6*30.2²+10*35.5²+5*20.9²+11*24.7²+4*12.9²+12*14.06²+3*7.1²+13*6.25²+2*3.39²+14*2.03²+1*1.38²+15*0.433²
+= 8*1901=15,208; 7*1505=10,538; 9*1815=16,332; 6*912=5472; 10*1260=12,602; 5*437=2185; 11*610=6712; 4*166=665; 12*198=2373; 3*50=151; 13*39=508; 2*11.5=23; 14*4.1=58; 0.9+15*0.19=2.8.
+Total ≈ 15,208+10,538+16,332+5,472+12,602+2,185+6,712+665+2,373+151+508+23+58+3 ≈ 72,830. F_48 ≈ 7.3e4.
+
+So F_32 ≈ 2.7e3, F_48 ≈ 7.3e4, F_63 ≈ 1.5e6. Growth: from 32→48 (16 steps): factor 27 (1.22^16 ≈ e^{16*0.202}); from 48→63 (15 steps): factor 20.6 (1.217^15). So roughly geometric with ratio ~1.22 per step in F (α = ln(1.22) = 0.20 ✓ matches earlier guess).
+
+Check smaller s: F_16: dominant k≈1-2. k=2: C(16,2)=120; a²=0.03516; λ^14=e^{-0.904}=0.405. E=120*1.424e-2=1.71. k=1: 16*0.1875*λ^15=e^{-0.968}=0.380: 16*0.1875*0.380=1.14. k=3: C(16,3)=560; a³=6.59e-3; λ^13=e^{-0.839}=0.432. E=560*2.847e-3=1.59. k=0: λ^16=e^{-1.033}=0.356. k=4: C(16,4)=1820; a⁴=1.237e-3; λ^12=e^{-0.774}=0.461. E=1820*5.703e-4=1.04. k=5: C(16,5)=4368; a⁵=2.32e-4; λ^11=e^{-0.710}=0.4915. E=4368*1.14e-4=0.498.
+F_16 ≈ 14*1.71²+15*1.14²+13*1.59²+16*0.356²+12*1.04²+11*0.498²+... = 14*2.92=40.9+15*1.30=19.5+13*2.53=32.9+16*0.127=2.0+12*1.08=13+11*0.248=2.7+ (k=6: C(16,6)=8008;a⁶=4.35e-5;λ^10=e^{-0.645}=0.525: E=8008*2.28e-5=0.183; 10*0.033=0.33) ≈ 111.3. F_16 ≈ 111.
+
+F_0 = 16. F_8: k=1: 8*0.1875*λ^7=e^{-0.452}=0.636: 8*0.1875*0.636=0.954. k=2: 28*0.03516*λ^6=e^{-0.387}=0.679: 28*0.03516*0.679=0.668. k=3: 56*6.59e-3*λ^5=e^{-0.323}=0.724: 56*6.59e-3*0.724=0.267. k=0: λ^8=e^{-0.516}=0.597. F_8 ≈ 15*0.910+14*0.446+13*0.0713+16*0.356+12*(C(8,4)=70;a⁴=1.237e-3;λ^4=e^{-0.258}=0.772: E=70*9.55e-4=0.0668; 0.0597) ≈ 13.65+6.25+0.93+5.70+0.72 ≈ 27.3.
+
+So F: s=0: 16; s=8: 27; s=16: 111; s=24: ~let me interpolate geometric: between 16 (111) and 32 (2736): ratio 24.6 over 16 steps → 1.219/step ✓ consistent. s=24: 111*1.219^8 = 111*4.83 = 536. s=40: between 32 (2736) and 48 (72,830): ratio 26.6 over 16 → 1.221/step. F_40 ≈ 2736*1.221^8 = 2736*4.87 = 13,324. F_56 ≈ 72,830*1.217^8 = 72,830*4.78 = 348,100. 
+
+H = Σ_{s=0}^{63} F_s ≈ F_63 * Σ_p (1.22)^{-p} for p = 0..63, but F_0..F_8 deviate (16, 27 vs model 1.5e6*1.22^-63 = 1.5e6*e^{-12.6} = 5.1 — model underestimates small s but those contribute negligibly). H ≈ F_63/(1 - 1/1.22) = 1.5e6/(0.180) = 8.3e6. Hmm: 1-1/1.22 = 1-0.8197 = 0.1803. H ≈ 1.5e6/0.1803 = 8.32e6.
+
+E||y(64)||² = σ² H = 0.01 * 8.32e6 = 83,200 → ||y(64)|| ≈ 288?? Hmm wait, that's for the all-λ=0.9375 case. RMS state norm ~288?! Hmm, wait but that seems too big. Let me sanity check: the forcing g has ||g|| ≈ 0.1*4 = 0.4 per step. Amplification: the dominant term U^63 g(0): E||U^63 g||² = σ² F_63 = 0.01*1.5e6 = 15,000 → ||U^63 g(0)|| ≈ 122. Plus U^62 g(1): F_62 ≈ 1.5e6/1.22 = 1.23e6 → 0.01*1.23e6 = 12,300 → 111. Sum over all: total variance 83,200, norm 288. Yes — the state norm is ~288 in the all-0.9375 case. Big!
+
+G = Σ_{s+s'≤63} F_s F_{s'}. With F_s ≈ F_63 r^{s-63}, r = 1/1.22 = 0.8197: G ≈ Σ_{p,q ≥ 0, p+q ≥ 63} F² r^{p+q} (p = 63-s, q = 63-s'; s+s' ≤ 63 ⟺ p+q ≥ 63). = F² Σ_{w=63}^{126} (w-62) r^w ≈ F² * 64 r^63/(1-r) [since (w-62) grows linearly but r^w decays; Σ_{w≥63} (w-62) r^w ≈ 1*r^63*(1 + 2r + 3r² + ...) = r^63/(1-r)²]. So G ≈ F² r^63/(1-r)².
+
+r^63 = e^{63 ln 0.8197} = e^{63*(-0.1989)} = e^{-12.53} = 3.61e-6. (1-r)² = (0.1803)² = 0.0325. 
+
+G ≈ (1.5e6)² * 3.61e-6 / 0.0325 = 2.25e12 * 3.61e-6/0.0325 = 2.25e12 * 1.111e-4 = 2.5e8.
+
+E||e||² ≈ (u²/48) σ² G = (2.384e-7/48)*0.01*2.5e8 = (4.967e-9)*(2.5e6) = 0.0124. Hmm: (u²/48) = 2.384e-7/48 = 4.967e-9. Times σ²=0.01 → 4.967e-11. Times G=2.5e8 → 0.0124. So E||e||² ≈ 0.0124 → ||e|| ≈ 0.111.
+
+Relative error = 0.111/288 = 3.9e-4. WELL under 2e-3!!
+
+Interesting! So in the all-λ=0.9375 scenario, the relative error is ~4e-4, comfortably passing. The reason: the state itself is huge (amplified by the same transient growth that amplifies errors), and the error accumulates in a way that... the ratio² = (u²/48) G/H = 4.967e-9*... wait let me recompute: ratio² = E||e||²/E||y||² = 0.0124/83,200 = 1.49e-7 → ratio = 3.85e-4 ✓.
+
+Alternatively via formula: ratio² = (u²/48) G/H = 4.967e-9 * 2.5e8/8.32e6 = 4.967e-9*30.0 = 1.49e-7 ✓. G/H = 30.0. Interesting: G/H = F² r^63/(1-r)² / (F/(1-r)) = F r^63/(1-r) = 1.5e6*3.61e-6/0.1803 = 5.4/0.1803 = 30.0 ✓.
+
+So the relative error ≈ u/sqrt(48) * sqrt(G/H) = (4.883e-4/6.93)*5.48 = 7.04e-5*5.48 = 3.86e-4.
+
+Hmm nice. But this was the all-λ=0.9375 case with isotropic approximation. What about mixed λs? The concern: with mixed λs, the state might be smaller (if fewer large λs) while the error... hmm, actually both state and error scale with the same F_s, so the ratio is somewhat robust. The ratio² = (u²/48) G/H where G/H = [Σ_{s+s'≤63}F_sF_{s'}]/[Σ_s F_s]. 
+
+Note G/H has a nice interpretation: G/H = Σ_{s'} F_{s'} * [Σ_{s ≤ 63-s'} F_s]/H — it's like an effective "remaining amplification" averaged over the forcing distribution. Hmm.
+
+For a pure scalar decaying case (no coupling, F_s = 16 λ^{2s}): G = Σ_{s+s'≤63} 256 λ^{2(s+s')} = 256 Σ_{w≤63} (w+1) λ^{2w} ≈ 256/(1-λ²)². H = 16/(1-λ²). G/H = 16/(1-λ²) — wait: 256/(1-x)² / (16/(1-x)) = 16/(1-x) where x = λ². So ratio² = (u²/48)*16/(1-λ²) → ratio = (u/√3)*1/√(1-λ²) = 2.82e-4 * sqrt(1/(1-λ²)). For λ=0.9375: sqrt(8.24) = 2.87 → ratio = 8.1e-4. Hmm interesting — in the pure scalar case (diagonal M, no transient growth), relative error ≈ 8e-4 < 2e-3 ✓.
+
+Wait, that's different from my earlier estimate of 1.4e-3. Earlier I said rel err ≈ u*sqrt(1/(1-λ²)) = 4.88e-4*2.87 = 1.4e-3. Now with the isotropic factor 1/16 inside (the (u²/48) instead of (u²/3))... Hmm, which is right for the scalar case? Let me redo carefully. Scalar-diagonal case: M = λI (16 independent scalar recurrences). Each component: x_i(t+1) = λ x_i(t) + g_i(t). Kernel: rounds each component to fp16: error per step u|x_i| random. Final error e_i = Σ_t λ^{63-t} η_{t,i}, E e_i² = (u²/3) x_i²-ish Σ λ^{2s} = (u²/3)x_i²/(1-λ²). Hmm — here η_{t,i} = u x_i(t) ξ, and x_i(t) ≈ x_i(63) (steady state, correlated though...). E||e||² = Σ_i (u²/3) x_i²/(1-λ²). Relative: u/sqrt(3) * sqrt(1/(1-λ²)) = 2.82e-4*2.87 = 8.1e-4. 
+
+Ah I see — earlier I forgot the 1/√3 from E η² = u²x²/3 (round-to-nearest error uniform in [-u,u] relative → variance u²/3). So the scalar-case estimate is 8.1e-4, not 1.4e-3. Good — that's a factor-2.4 margin under 2e-3.
+
+And the all-0.9375-with-coupling case: 3.9e-4 — even better (the transient growth amplifies signal more than error, since the state "rides" the full amplification while errors only get partial propagation... interesting).
+
+Hmm wait, but hold on — in the coupled case, is the isotropic approximation (u²/48) valid? The errors η_t are elementwise rounding, but the amplification U^{64-t} acts anisotropically, and the state y(t) is concentrated in the amplifying directions. The E||U^s η||² = (u²/3) Σ_j c_j(s) y_j². If y(t) is concentrated where the columns of U^s are large... c_j(s) = ||col_j(U^s)||². The columns of U^s: col_j has entries at rows i ≤ j — distance (j-i) below the diagonal... wait U upper triangular: col_j has nonzeros at rows i ≤ j, i.e., (U^s)_{ij} with i ≤ j: distance j-i ≥ 0 going UP (row index smaller). Hmm, and the rows of U^s: row_i has entries at cols j ≥ i.
+
+The state y(t): y_i = [Σ_s U^s g]_i — row i of U^s determines y_i. Rows with SMALL i (bottom of the triangle, i=0)
+
+## Final response (verbatim)
+
+(no final text)
+
+## Verdict
+
+{
+  "verdict": null,
+  "status": "no_final_verdict"
+}
+
+## Usage and stop reason
+
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "provider": "fireworks",
+  "response": {
+    "verdict": "no_verdict",
+    "reason": "Missing or invalid final JSON verdict"
+  },
+  "usage": {
+    "input_tokens": 1057,
+    "output_tokens": 32768
+  },
+  "stop_reason": "length",
+  "max_tokens": 32768,
+  "elapsed_s": 427.75768787483685,
+  "kernel_sha256": "8f84da257fac15212325643fbedba11590b90f539c0a21c994b781236b976814",
+  "problem_sha256": "e17e6f34dc30ee8d4acecd87431b9f0386c749016d624ebc104ea51baf9418a7",
+  "prompt_variant": "original",
+  "estimated_usd": 0.03634076,
+  "pricing": "project profile estimate; not invoice; excludes GPU and unreported HTTP usage"
+}

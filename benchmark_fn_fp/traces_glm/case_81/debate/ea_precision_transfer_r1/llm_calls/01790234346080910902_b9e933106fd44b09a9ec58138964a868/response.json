@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-395f323f559441de92224fe872f8f449",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run runtime probes for both open claims: c1 compares run()'s actual output to the exact real-number target, and c2 emulates the kernel's fp32 Neumaier correction accumulator in NumPy while recording the SEED-203604 permutation order.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a5c9a48743a6c278",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import numpy as np, torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/evidence_cases/case_e20/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nx, = k.make_inputs()\\nbefore = x.clone()\\nout = k.run(x)\\n# exact real-number target: convert stored fp32 values to float64 (exact) and sum in high precision\\nvals = before.detach().cpu().numpy().astype(np.float64)\\ntarget = vals.sum(axis=1)\\nactual = out.detach().cpu().numpy().astype(np.float64)\\nrel = float(np.linalg.norm(actual - target) / max(np.linalg.norm(target), 1e-12))\\nprint(json.dumps({\\n  \\\"output\\\": actual.tolist(),\\n  \\\"exact_target\\\": target.tolist(),\\n  \\\"relative_error\\\": rel,\\n  \\\"tolerance\\\": 1e-5,\\n  \\\"input_unmodified\\\": bool(torch.equal(x, before)),\\n  \\\"shape\\\": list(out.shape), \\\"dtype\\\": str(out.dtype),\\n  \\\"finite\\\": bool(np.isfinite(actual).all()),\\n  \\\"passes_contract\\\": bool(rel <= 1e-5)\\n}))\", \"expected_signal\": \"output vs exact real target relative error; >1e-5 supports c1\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-8d43bee3abf079af",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import numpy as np, json\\nSEED = 203604\\nrng = np.random.Generator(np.random.PCG64(SEED))\\nlow = rng.uniform(0.25, 1.75, (4, 8)).astype(np.float32)\\ninterior = np.concatenate((np.full((4,1), 2.0**30, np.float32),\\n                           np.full((4,1), -(2.0**30), np.float32), low), axis=1)\\norder = rng.permutation(10)\\nx = np.empty((4,12), dtype=np.float32)\\nx[:,0] = np.float32(2.0**80)\\nx[:,1:-1] = interior[:, order]\\nx[:,-1] = np.float32(-(2.0**80))\\n\\n# Emulate kernel's fp32 Neumaier accumulation exactly (np.float32 ops, no fusion)\\nf = np.float32\\nresults = []\\ntrace = []\\nfor r in range(4):\\n    total = f(0.0); corr = f(0.0)\\n    for c in range(12):\\n        v = x[r, c]\\n        upd = f(total + v)\\n        if abs(total) >= abs(v):\\n            lost = f(f(total - upd) + v)\\n        else:\\n            lost = f(f(v - upd) + total)\\n        corr = f(corr + lost)\\n        total = upd\\n    results.append(float(f(total + corr)))\\n    trace.append(float(corr))\\n\\n# permutation positions: where do +2^30 (interior col 0) and -2^30 (col 1) land\\np230 = int(np.where(order == 0)[0][0]); m230 = int(np.where(order == 1)[0][0])\\ntarget = x.astype(np.float64).sum(axis=1)\\nprint(json.dumps({\\n  \\\"permutation_order\\\": order.tolist(),\\n  \\\"pos_plus_2p30_in_interior\\\": p230, \\\"pos_minus_2p30_in_interior\\\": m230,\\n  \\\"num_smalls_between_plus_and_minus_2p30\\\": abs(p230 - m230) - 1,\\n  \\\"emulated_final_correction\\\": trace,\\n  \\\"emulated_output\\\": results,\\n  \\\"exact_target\\\": target.tolist(),\\n  \\\"fp32_ulp_at_2p30\\\": 128.0\\n}))\", \"expected_signal\": \"smalls lost while correction holds 2^30; output 0.0 supports c2\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "I'll run two probes: c1 exact-target comparison via run() on GPU, and c2 a CPU fp32 emulation of the correction accumulator (plus permutation order). Both independent — launch together.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790234347,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 923,
+    "prompt_tokens": 32682,
+    "total_tokens": 33605,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 40,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 540,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 40
+    }
+  }
+}

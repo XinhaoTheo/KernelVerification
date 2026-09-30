@@ -1,0 +1,467 @@
+[
+  {
+    "created_at": "2026-09-24T07:14:39Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:16:43Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t20_probe.py",
+              "sha256": "cad90700bb16062053a200c0b4b8a2fa0f3d784f3d9b549ab739ad6511822194"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t20_stdout.txt",
+              "sha256": "6d03f5576f377b991831b9ca21d4d19b398d46942edd2555d0b81665c9b409a0"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t20_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t20_json_result.json",
+              "sha256": "c3f830bd7061d789d02c90c30dad30ab85eec8c707f1668f455e8413da8121ce"
+            }
+          ],
+          "duration_s": 4.529608,
+          "exact_target": [
+            10.0639,
+            10.6631,
+            8.6131,
+            8.269
+          ],
+          "exit_code": 0,
+          "expected_signal": "relative L2 error of kernel output vs exact target far exceeds 1e-5",
+          "finite": true,
+          "input_unmodified": true,
+          "json_parse_error": null,
+          "json_result": {
+            "dtype": "torch.float32",
+            "exact_target": [
+              10.063904345035553,
+              10.663134455680847,
+              8.613103806972504,
+              8.269033074378967
+            ],
+            "finite": true,
+            "input_unmodified": true,
+            "output": [
+              0.7218434810638428,
+              1.2222856283187866,
+              1.1249507665634155,
+              1.3434942960739136
+            ],
+            "passed": false,
+            "relative_l2_error": 0.8856309517807359,
+            "shape": [
+              4
+            ],
+            "tolerance": 1e-05
+          },
+          "output": [
+            0.7218434810638428,
+            1.2222856283187866,
+            1.1249507665634155,
+            1.3434942960739136
+          ],
+          "passed": false,
+          "relative_l2_error": 0.8856309517807359,
+          "stderr": "",
+          "stdout": "{\"output\": [0.7218434810638428, 1.2222856283187866, 1.1249507665634155, 1.3434942960739136], \"exact_target\": [10.063904345035553, 10.663134455680847, 8.613103806972504, 8.269033074378967], \"relative_l2_error\": 0.8856309517807359, \"tolerance\": 1e-05, \"passed\": false, \"finite\": true, \"shape\": [4], \"dtype\": \"torch.float32\", \"input_unmodified\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 1e-05
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Ran the actual Triton kernel on the contract workload. Output [0.7218, 1.2223, 1.1249, 1.3435] vs exact Fraction target [10.0639, 10.6631, 8.6131, 8.2690] gives relative L2 error 0.886, ~88000x the 1e-5 tolerance. Shape/dtype/finite/input-unmodified all fine, but the row sums are massively wrong: c1 confirmed. (Note: exact targets are 8-10, not the ~4-8 estimated, since the eight smalls sum to ~8-10, not 4-8; the deviation conclusion is unchanged and even stronger.)",
+        "supports": "confirmed",
+        "tool_event_id": "t20"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The interior 2^30 and -2^30 cancel exactly, and 2^80 and -2^80 cancel, so target[r] = sum of the eight values in [0.25,1.75], about 4-8 per row; the recorded output of 0.72-1.34 is far outside the 1e-5 relative tolerance of that, indicating the compensation scheme loses most of the small values.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Target is the exact real-number row sum target[r]=sum_j X[r,j]; acceptance requires ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5 with norms in float64, for the fixed (4,12) array from make_inputs()."
+      },
+      {
+        "source": "kernel.py make_inputs_numpy",
+        "summary": "Each row contains +2^80, -2^80, +2^30, -2^30 and eight values uniform in [0.25,1.75], so the exact row sum equals the sum of the eight small values (~4-8)."
+      },
+      {
+        "source": "problem.txt (recorded initial probe)",
+        "summary": "Recorded kernel output [0.7218, 1.2223, 1.1249, 1.3435] \u2014 far from any plausible exact target of ~4-8 per row, and the recorded run reports passed=false."
+      }
+    ],
+    "scope_rationale": "The contract (problem.txt) fixes the workload to the stored (4,12) make_inputs() array, defines the target as the exact real-number row sum, and requires relative L2 error <= 1e-5 in float64; for this array the exact target reduces to the sum of eight values in [0.25,1.75], so a recorded output of ~0.72-1.34 per row violates the stated acceptance criterion.",
+    "statement": "On the fixed contract workload (make_inputs, seed 203600), run(X) returns row sums that deviate from the exact real-number target (which equals the sum of the eight small values in [0.25,1.75], ~4-8 per row) by far more than the 1e-5 relative L2 tolerance; e.g., recorded outputs ~0.72-1.34 per row.",
+    "status": "confirmed",
+    "updated_at": "2026-09-24T07:16:43Z"
+  },
+  {
+    "created_at": "2026-09-24T07:14:39Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:16:43Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t21_probe.py",
+              "sha256": "39d9063bf1a70724aae42cf16bb44f352442edca2e88b06a8fc798937646c76f"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t21_stdout.txt",
+              "sha256": "458378708740737acf4c1ed7c0b5d5599d36a60acad0e9d7686783e98cd7fccb"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t21_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t21_json_result.json",
+              "sha256": "6f2f643a05e6f40ea69119671eb740414a723942ce7794fb18ec280f3d3e1cf3"
+            }
+          ],
+          "correction_trace_first_row": [
+            0,
+            1.3466,
+            3.0541,
+            4.4083,
+            -1073741824,
+            -1073741824,
+            -1073741824,
+            -1073741824,
+            -1073741824,
+            0,
+            0.7218434810638428,
+            0.7218434810638428
+          ],
+          "duration_s": 0.204041,
+          "exit_code": 0,
+          "expected_signal": "float32 simulation reproduces loss of small addends; error far above tolerance",
+          "json_parse_error": null,
+          "json_result": {
+            "correction_trace_first_row": [
+              0.0,
+              1.3466322422027588,
+              3.054051637649536,
+              4.408254623413086,
+              -1073741824.0,
+              -1073741824.0,
+              -1073741824.0,
+              -1073741824.0,
+              -1073741824.0,
+              0.0,
+              0.7218434810638428,
+              0.7218434810638428
+            ],
+            "exact_target": [
+              10.063904345035553,
+              10.663134455680847,
+              8.613103806972504,
+              8.269033074378967
+            ],
+            "lost_terms_first_row": [
+              0.0,
+              1.3466322422027588,
+              1.7074193954467773,
+              1.3542027473449707,
+              -1073741824.0,
+              0.710860550403595,
+              1.2819342613220215,
+              1.6789605617523193,
+              1.2620511054992676,
+              1073741824.0,
+              0.7218434810638428,
+              0.0
+            ],
+            "passed": false,
+            "relative_l2_error": 0.8856309517807359,
+            "sample_recorded_output": [
+              0.7218434810638428,
+              1.2222856283187866,
+              1.1249507665634155,
+              1.3434942960739136
+            ],
+            "simulated_output": [
+              0.7218434810638428,
+              1.2222856283187866,
+              1.1249507665634155,
+              1.3434942960739136
+            ],
+            "tolerance": 1e-05
+          },
+          "lost_terms_first_row": [
+            0,
+            1.3466,
+            1.7074,
+            1.3542,
+            -1073741824,
+            0.7109,
+            1.2819,
+            1.679,
+            1.2621,
+            1073741824,
+            0.7218,
+            0
+          ],
+          "relative_l2_error": 0.8856309517807359,
+          "simulated_output": [
+            0.7218434810638428,
+            1.2222856283187866,
+            1.1249507665634155,
+            1.3434942960739136
+          ],
+          "stderr": "",
+          "stdout": "{\"simulated_output\": [0.7218434810638428, 1.2222856283187866, 1.1249507665634155, 1.3434942960739136], \"exact_target\": [10.063904345035553, 10.663134455680847, 8.613103806972504, 8.269033074378967], \"relative_l2_error\": 0.8856309517807359, \"tolerance\": 1e-05, \"passed\": false, \"lost_terms_first_row\": [0.0, 1.3466322422027588, 1.7074193954467773, 1.3542027473449707, -1073741824.0, 0.710860550403595, 1.2819342613220215, 1.6789605617523193, 1.2620511054992676, 1073741824.0, 0.7218434810638428, 0.0], \"correction_trace_first_row\": [0.0, 1.3466322422027588, 3.054051637649536, 4.408254623413086, -1073741824.0, -1073741824.0, -1073741824.0, -1073741824.0, -1073741824.0, 0.0, 0.7218434810638428, 0.7218434810638428], \"sample_recorded_output\": [0.7218434810638428, 1.2222856283187866, 1.1249507665634155, 1.3434942960739136]}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Step-by-step float32 simulation of the kernel's Neumaier arithmetic exactly reproduces the GPU output [0.7218, 1.2223, 1.1249, 1.3435], isolating the mechanism: once the -2^30 lost term is added, the correction accumulator sits at -1073741824.0 (2^30 scale, ulp=128) and the subsequent ~1 lost terms (0.71, 1.28, 1.68, 1.26) are absorbed to zero (correction stays exactly -1073741824.0); only the last ~0.72 lost term survives. The uncompensated float32 `correction` accumulation loses the small addends, confirming c2's mechanism.",
+        "supports": "confirmed",
+        "tool_event_id": "t21"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The correction accumulator is a plain float32 running sum; adding a lost term of magnitude 2^30 to a correction holding values ~1-8 (or vice versa) rounds the small values away (ulp(2^30)=128), so the eight small addends are largely lost from the final total+correction, producing outputs well below the true ~4-8 target. Directly testable by simulating the kernel's float32 arithmetic step by step.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "No particular algorithm is required; only the final row sums versus the exact real sum at 1e-5 relative tolerance matter, so an algorithm that loses the small addends fails regardless of intent."
+      },
+      {
+        "source": "kernel.py lines 10-22",
+        "summary": "correction = correction + lost is plain float32 accumulation with no second-order compensation; lost terms for this input include 2^30-scale and ~1-scale values that mix in the same accumulator."
+      }
+    ],
+    "scope_rationale": "The contract prescribes only final row sums versus the exact real sum at 1e-5 relative tolerance; the kernel's float32-only correction accumulation (kernel.py lines 12-22) operates on exactly the fixed make_inputs() workload, so any precision loss it causes in the final sums is an in-scope contract violation.",
+    "statement": "The kernel's compensation mechanism is itself uncompensated: the float32 accumulation of `correction` loses the small (~1) lost-terms when a 2^30-magnitude lost term is added (or when correction ~2^30 swallows subsequent ~1 lost terms), so the final total+correction under-represents the sum of the eight small values.",
+    "status": "confirmed",
+    "updated_at": "2026-09-24T07:16:43Z"
+  },
+  {
+    "created_at": "2026-09-24T07:14:39Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:16:43Z",
+        "data": {
+          "all_nonzero": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t19_probe.py",
+              "sha256": "0f27c4b799fcf5125ceac0b4713b99e1e8996ba3f577e5eb256a7347bee4fddb"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t19_stdout.txt",
+              "sha256": "aeb7ff095b34008b1b14851b19812823a1ae146d3bc3f0ee5b6db46dcd536281"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t19_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t19_json_result.json",
+              "sha256": "b84e78e44e74c26f994e529d36817c6a3bea8efb4879e22af637efc54f32addf"
+            }
+          ],
+          "duration_s": 0.214006,
+          "exact_fraction_target": [
+            10.063904345035553,
+            10.663134455680847,
+            8.613103806972504,
+            8.269033074378967
+          ],
+          "exit_code": 0,
+          "expected_signal": "exact/Fraction and float64 references are nonzero (~4-8), contradicting recorded 0.0",
+          "float64_matches_exact": false,
+          "float64_sequential": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "json_parse_error": null,
+          "json_result": {
+            "all_nonzero": true,
+            "exact_fraction_target": [
+              10.063904345035553,
+              10.663134455680847,
+              8.613103806972504,
+              8.269033074378967
+            ],
+            "float64_matches_exact": false,
+            "float64_sequential": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "target_norm": 18.908915152932785
+          },
+          "stderr": "",
+          "stdout": "{\"exact_fraction_target\": [10.063904345035553, 10.663134455680847, 8.613103806972504, 8.269033074378967], \"float64_sequential\": [0.0, 0.0, 0.0, 0.0], \"all_nonzero\": true, \"float64_matches_exact\": false, \"target_norm\": 18.908915152932785}\n",
+          "target_norm": 18.908915152932785,
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "Exact Fraction arithmetic over the stored values gives nonzero targets [10.06, 10.66, 8.61, 8.27] (norm 18.91), so the contract denominator is non-degenerate and the recorded probe's 0.0 reference is wrong \u2014 c3 confirmed. Root cause of the recorded 0.0: sequential float64 accumulation of the whole row is NOT exact here (float64_sequential = [0,0,0,0]) because ulp(2^80) = 2^56 swallows the 2^30 and small terms before the -2^80 cancels; the exact Fraction sum (the contract's mathematical target) is nonzero ~8-10 per row. Also note the exact targets are ~8-10, not the ~4-8 estimate in the claims; the conclusion stands.",
+        "supports": "confirmed",
+        "tool_event_id": "t19"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "All input values are exactly representable in float64 (2^80, 2^30, and 24-bit-significand smalls), so sequential float64 accumulation is exact and must give the nonzero sum of the eight small values; a reference of exactly 0.0 per row is arithmetically inconsistent with the described inputs, so the recorded relative_error (2.2e12, computed against 0.0) is not the contract metric and the true error must be recomputed against the ~4-8 target.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The acceptance metric's norms are 'evaluated in float64 or more accurately against the mathematical target', and the mathematical target is the exact real sum of the stored values \u2014 which cannot be 0 for rows containing eight values in [0.25,1.75] plus exactly cancelling 2^80/2^30 pairs."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "The recorded initial-probe execution is explicitly 'not an oracle verdict', so its reported reference must be re-derived rather than trusted."
+      }
+    ],
+    "scope_rationale": "The contract defines the mathematical target as the exact real sum of the stored input values and requires norms in float64; those sums are nonzero (~4-8 per row) for the fixed make_inputs() array, so the recorded probe's 0.0 reference contradicts the stated contract and any verdict must be recomputed against the true nonzero target.",
+    "statement": "The recorded initial-probe reference of exactly 0.0 for every row is wrong: the exact real-number target for the stored input values is the sum of the eight small values per row (nonzero, ~4-8), so the contract's acceptance denominator is non-degenerate and the kernel's failure must be judged against this nonzero target.",
+    "status": "confirmed",
+    "updated_at": "2026-09-24T07:16:43Z"
+  },
+  {
+    "created_at": "2026-09-24T07:15:20Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:16:23Z",
+        "data": {
+          "all_finite": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t14_probe.py",
+              "sha256": "fba39c06427407a6a81b7906fc7318911e30eaffca6d1849e7ba520384dcee50"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t14_stdout.txt",
+              "sha256": "e3e051932ce2337e96dfaaa990d43f9dba4a97947a06377ae97e0a17499df01d"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t14_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t14_json_result.json",
+              "sha256": "43bf98d31db66aad5281f92d4c55c9d9f3ade2c761a0b4b75c4e00d51736e800"
+            }
+          ],
+          "contains_2e30": true,
+          "duration_s": 0.34236,
+          "exit_code": 0,
+          "expected_signal": "stored first/last columns are finite \u00b12^80 (or \u00b1inf), deciding the target premise",
+          "first_col_bits": "0x67800000",
+          "first_col_value": 1.2089258196146292e+24,
+          "float32_max": 3.4028234663852886e+38,
+          "json_parse_error": null,
+          "json_result": {
+            "all_finite": true,
+            "contains_2e30": true,
+            "first_col_bits": [
+              "0x67800000",
+              "0x67800000",
+              "0x67800000",
+              "0x67800000"
+            ],
+            "first_col_values": [
+              1.2089258196146292e+24,
+              1.2089258196146292e+24,
+              1.2089258196146292e+24,
+              1.2089258196146292e+24
+            ],
+            "float32_max": 3.4028234663852886e+38,
+            "last_col_bits": [
+              "0xe7800000",
+              "0xe7800000",
+              "0xe7800000",
+              "0xe7800000"
+            ],
+            "last_col_values": [
+              -1.2089258196146292e+24,
+              -1.2089258196146292e+24,
+              -1.2089258196146292e+24,
+              -1.2089258196146292e+24
+            ],
+            "max_abs": 1.2089258196146292e+24,
+            "num_small_in_range": 32,
+            "two_pow80": 1.2089258196146292e+24
+          },
+          "last_col_bits": "0xe7800000",
+          "last_col_value": -1.2089258196146292e+24,
+          "num_small_in_range": 32,
+          "stderr": "",
+          "stdout": "{\"first_col_values\": [1.2089258196146292e+24, 1.2089258196146292e+24, 1.2089258196146292e+24, 1.2089258196146292e+24], \"first_col_bits\": [\"0x67800000\", \"0x67800000\", \"0x67800000\", \"0x67800000\"], \"last_col_values\": [-1.2089258196146292e+24, -1.2089258196146292e+24, -1.2089258196146292e+24, -1.2089258196146292e+24], \"last_col_bits\": [\"0xe7800000\", \"0xe7800000\", \"0xe7800000\", \"0xe7800000\"], \"all_finite\": true, \"contains_2e30\": true, \"num_small_in_range\": 32, \"max_abs\": 1.2089258196146292e+24, \"float32_max\": 3.4028234663852886e+38, \"two_pow80\": 1.2089258196146292e+24}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c4.e1",
+        "kind": "runtime_probe",
+        "summary": "Runtime dump of the stored make_inputs() array: first/last columns are finite \u00b12^80 = \u00b11.2089e24 (bits 0x67800000 / 0xe7800000), 2^80 \u2248 1.2e24 is far below float32 max 3.4e38, \u00b12^30 present, 32 small values in [0.25,1.75], all entries finite. The premise of c1\u2013c3 (finite stored \u00b12^80) is confirmed; the possible \u00b1inf storage hypothesized by c4 is rebutted.",
+        "supports": "rebutted",
+        "tool_event_id": "t14"
+      }
+    ],
+    "id": "c4",
+    "raised_by": "skeptic",
+    "rationale": "2^80 \u2248 1.2e24? No \u2014 2^80 \u2248 1.2e24 is wrong; 2^80 = 1.2e24... actually 2^10\u22481e3, so 2^80\u22481.2e24, which is well below float32 max 3.4e38. On recheck, 2^80 does NOT overflow float32, so the stored values are finite and the describer's overflow concern is unfounded. Nevertheless the stored bit patterns have never been runtime-confirmed, and c1\u2013c3's target derivation depends on them, so a probe dumping the actual stored values remains necessary.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "",
+    "statement": "The stored first/last columns of X may not be the finite \u00b12^80 values assumed by claims c1\u2013c3 (e.g., if float32 overflow stores \u00b1inf), so the exact real-number target must be derived from a runtime dump of the actually stored X before c1\u2013c3 can be judged; a quick magnitude check suggests 2^80 \u2248 1.2e24 is below float32 max, so finite storage is likely but unconfirmed.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T07:16:23Z"
+  }
+]

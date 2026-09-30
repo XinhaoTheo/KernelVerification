@@ -1,0 +1,284 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Skeptic agent in an agentic kernel verification system.\nYour job is to raise concrete, testable bug hypotheses about the kernel.\n\nRules:\n- Read description_model first: contract_model bounds scope, kernel_model explains implementation, risk_map suggests attack surfaces.\n- Prefer specific claims over generic doubt.\n- In one turn, record at most 3 highest-risk, directly testable claims unless existing evidence clearly requires more.\n- A claim must describe a condition and a possible wrong behavior.\n- Before recording a claim, decide whether its input/case is inside the stated contract, not just general PyTorch behavior.\n- The contract is whatever the artifact actually states. problem.txt is always authoritative. test.py, get_inputs, get_init_inputs, seed files, meta.json, and artifact metadata are additional sources when the artifact provides them; many artifacts provide only problem.txt and kernel.py, which is sufficient.\n- Avoid dtype, shape, stride/non-contiguous, NaN/Inf, autograd, zero-size, broadcasting, and module-config changes unless the stated contract explicitly requires them.\n- When calling record_claim, include scope as one of: in_scope, out_of_scope, unknown.\n- Include scope_rationale explaining which contract detail makes the claim in-scope or why scope is unknown/out-of-scope.\n- For scope=in_scope, include scope_evidence with at least one {source, summary} item drawn from whichever contract sources the artifact provides (problem.txt alone is a valid source).\n- If the contract states a required behavior (a formula, an invariant, a tie-break rule, a declared numeric format), a claim that the kernel may violate that stated behavior is in_scope even when no test file exists to pin exact inputs; choose representative inputs the contract admits and say so in scope_rationale.\n- Do not mark a claim in_scope merely because it is interesting or because PyTorch would generally support it; scope_evidence must tie it to the stated input/output contract.\n- Rationale is only the reason for suspicion; it is not evidence.\n- Use record_claim to add a claim to the ledger. It requires BOTH `statement` (what might be wrong) and `rationale` (why you suspect it) -- these are two separate fields, and neither is `scope_rationale`, which answers a different question. Omitting `rationale` is rejected and costs the turn; it happened four times across a 64-run evaluation, three of them in a single case.\n- After reviewing the latest claims, evidence, and tool events, if you find no additional high-quality in-scope claims, call record_no_new_claims.\n- Do not call record_no_new_claims in the same turn where you record_claim.\n- REVIEW TURN: when run state `convergence.request` is \"skeptic_final_review\", this turn is a review, not a new round of attack. This round's probes are already finished and the Judge is waiting on you. Default to record_no_new_claims. Record a claim instead only if the new evidence exposes a material, testable, in-scope problem that no existing claim already covers -- curiosity, generalization questions, or lines you would like to explore further are not sufficient reason to hold up the verdict.\n- Use request_description when source interpretation, contract scope, or prior evidence is ambiguous and should be clarified by Describer.\n- Use inspect_problem, inspect_kernel_source, read_artifact_file, or read_claim_ledger when more context is needed.\n- Do not run experiments yourself unless explicitly acting as the experimenter.\n- Do not output a final verdict.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_e11\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import numpy as np\\n2: import torch\\n3: import triton\\n4: import triton.language as tl\\n5: \\n6: SEED = 194001\\n7: \\n8: \\n9: @triton.jit\\n10: def _pruned_ffn(X, Out, N: tl.constexpr, BLOCK: tl.constexpr):\\n11:     row = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n12:     x0 = tl.load(X + row * 12, row < N, other=0.0)\\n13:     x1 = tl.load(X + row * 12 + 1, row < N, other=0.0)\\n14:     value = 0.25 * x0 + 0.5 * x1\\n15:     tl.store(Out + row, value, row < N)\\n16: \\n17: \\n18: def run(x, weights, biases, coefficients):\\n19:     output = torch.empty((x.shape[0],), dtype=torch.float32, device=x.device)\\n20:     _pruned_ffn[(triton.cdiv(x.shape[0], 128),)](\\n21:         x, output, N=x.shape[0], BLOCK=128, enable_fp_fusion=False)\\n22:     return output\\n23: \\n24: \\n25: def make_inputs_numpy():\\n26:     rng = np.random.Generator(np.random.PCG64(SEED))\\n27:     center = rng.choice(np.asarray([-1, 1]), size=12)\\n28:     flip_probability = rng.uniform(0.05, 0.4)\\n29:     flips = np.where(rng.uniform(size=(6, 12)) < flip_probability, -1, 1)\\n30:     magnitudes = rng.choice(np.asarray([0.5, 1.0]), size=(6, 12))\\n31:     weights = (center[None, :] * flips * magnitudes).astype(np.float32)\\n32:     biases = (0.75 * np.abs(weights).sum(axis=1)).astype(np.float32)\\n33:     coefficients = np.full(6, 0.25, dtype=np.float32)\\n34:     smoke = np.concatenate((np.zeros((1, 12)), np.eye(12), -np.eye(12),\\n35:                             rng.uniform(-1.0, 1.0, size=(16, 12))), axis=0).astype(np.float32)\\n36:     return smoke, weights, biases, coefficients\\n37: \\n38: \\n39: def make_inputs(device=\\\"cuda\\\"):\\n40:     return tuple(torch.from_numpy(value).to(device) for value in make_inputs_numpy())\\n41: \\n42: \\n43: def initial_probe():\\n44:     inputs = make_inputs()\\n45:     before = [value.clone() for value in inputs]\\n46:     actual = run(*inputs)\\n47:     x, w, b, c = [value.double() for value in inputs]\\n48:     expected = 0.25*x[:, 0] + 0.5*x[:, 1] + torch.relu(x @ w.T - b) @ c\\n49:     error = torch.abs(actual.double() - expected)\\n50:     structural = (actual.dtype == torch.float32 and actual.shape == (41,)\\n51:                   and bool(torch.isfinite(actual).all())\\n52:                   and all(torch.equal(a, z) for a, z in zip(inputs, before)))\\n53:     return {\\\"scope\\\": \\\"41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples\\\",\\n54:             \\\"max_absolute_error\\\": float(error.max()), \\\"tolerance\\\": 1.0,\\n55:             \\\"shape_dtype_finite_and_inputs_unmodified\\\": bool(structural),\\n56:             \\\"all_passed\\\": bool(structural and float(error.max()) <= 1.0)}\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Validate pruning of a rare-activation ReLU residual over a continuous input box.\\n\\nThe fixed parameters W (6,12), b (6,), and c (6,) are the actual float32\\narrays generated in make_inputs_numpy(). They do not change between calls.\\nThe legal input is ANY contiguous finite float32 matrix X of shape (n,12),\\n1 <= n <= 4096, whose entries all lie in [-1,1]. The workload is the whole\\nbox, not just the smoke inputs returned by make_inputs_numpy().\\n\\nFor each row x the mathematical target, over its actual stored float32\\nvalues and the stored parameters, is\\n  target(x) = 0.25*x[0] + 0.5*x[1]\\n              + sum_{j=0..5} c[j] * max(dot(W[j],x) - b[j], 0).\\nThe candidate omits the small residual module, retaining the linear base.\\nIt is acceptable iff EVERY legal x has absolute output error <= 1.0 against\\nthis mathematical target (evaluate the reference in float64 or better).\\nNo relative-error test or independent per-neuron error threshold applies.\\n\\nrun(X,W,b,c) must return a finite float32 vector of shape (n,) without\\nmodifying any input. There is no requirement on parameters from other seeds.\\nmake_inputs() supplies the fixed parameters and a convenient smoke batch;\\nother legal X may be constructed to establish or refute the whole-box bound.\\n\\nkernel.py includes initial_probe(), an executable prior experiment. Its\\ncode and observed result are evidence to assess, not an authoritative verdict\\nor a replacement for the universal-domain requirement. All evaluation\\nsystems receive the same code, contract, and initial observations.\\n\\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\\n{\\n  \\\"scope\\\": \\\"41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples\\\",\\n  \\\"max_absolute_error\\\": 2.9802322387695312e-08,\\n  \\\"tolerance\\\": 1.0,\\n  \\\"shape_dtype_finite_and_inputs_unmodified\\\": true,\\n  \\\"all_passed\\\": true\\n}\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/evidence_cases/case_e11\",\n    \"status\": \"unverified\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [\n      \"Legal domain: any contiguous finite float32 X of shape (n,12), 1<=n<=4096, entries in [-1,1]; whole box, not just the 41 smoke rows.\",\n      \"Target per row: 0.25*x[0] + 0.5*x[1] + sum_j c[j]*max(dot(W[j],x)-b[j],0) with c[j]=0.25, using the stored float32 W,b from SEED 194001; reference in float64.\",\n      \"Acceptance iff EVERY legal x has absolute error <= 1.0 (absolute only, no relative or per-neuron threshold).\",\n      \"run must return finite float32 (n,) without mutating inputs; parameters from other seeds out of scope.\",\n      \"initial_probe is evidence only; its passing result covers just 41 smoke rows and cannot establish the universal bound.\"\n    ],\n    \"kernel_model\": [\n      \"Kernel is a Triton kernel _pruned_ffn that computes only the linear base 0.25*x[0] + 0.5*x[1] per row, ignoring weights, biases, coefficients entirely (they are accepted but unused in run).\",\n      \"Assumes contiguous row-major X with stride 12 (X + row*12); BLOCK=128, grid = ceil(n/128), masked loads/stores for n not a multiple of 128.\",\n      \"enable_fp_fusion=False is set; base is computed elementwise so error vs float64 reference is only fp32 rounding (~1e-8).\",\n      \"Pruning assumption baked in: residual sum_j 0.25*relu(W[j].x - b[j]) is assumed <= 1.0 - |base error| for all box x; this is a global worst-case property needing analytic or grid verification.\"\n    ],\n    \"open_questions\": [],\n    \"risk_map\": [\n      \"Omitted residual magnitude: b[j] = 0.75*sum|W[j]| means max activation per neuron is 0.25*sum|W[j]| (b/3), so total residual <= 0.25 * 0.25 * sum_{j,k}|W[j,k]|; with all |W|=1 this bound is 0.0625*72=4.5, so the universal <=1.0 bound is NOT automatic \\u2014 Skeptic should compute the true worst case (multiple rows' maximizers conflict via flips, and half the weights have magnitude 0.5).\",\n      \"Worst case may occur at box corners sign-aligned with a single dominant row, not on the 41 smoke samples; the initial probe passing says nothing about it.\",\n      \"Stride assumption: X + row*12 is wrong if X were non-contiguous, though contract requires contiguous \\u2014 low risk but worth noting contract wording 'contiguous'.\",\n      \"N passed as tl.constexpr causes recompile per distinct n (performance only, no correctness effect).\"\n    ],\n    \"scope_notes\": [\n      \"Family: box_relu_audit. Fixed params from seed 194001 only; no other seeds. Tolerance absolute 1.0, float64 reference. Structural requirements (dtype/shape/finiteness/input immutability) already verified by initial_probe on the smoke batch.\\\"]\"\n    ]\n  },\n  \"entry\": \"case_e11\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_e11\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_e11\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_e11\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_e11\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"describer\",\n      \"round\": 2,\n      \"text\": \"I have full context already; I'll record the structured description of this pruning-audit case.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"contract_model\": [\n              \"Legal domain: any contiguous finite float32 X of shape (n,12), 1<=n<=4096, entries in [-1,1]; whole box, not just the 41 smoke rows.\",\n              \"Target per row: 0.25*x[0] + 0.5*x[1] + sum_j c[j]*max(dot(W[j],x)-b[j],0) with c[j]=0.25, using the stored float32 W,b from SEED 194001; reference in float64.\",\n              \"Acceptance iff EVERY legal x has absolute error <= 1.0 (absolute only, no relative or per-neuron threshold).\",\n              \"run must return finite float32 (n,) without mutating inputs; parameters from other seeds out of scope.\",\n              \"initial_probe is evidence only; its passing result covers just 41 smoke rows and cannot establish the universal bound.\"\n            ],\n            \"kernel_model\": [\n              \"Kernel is a Triton kernel _pruned_ffn that computes only the linear base 0.25*x[0] + 0.5*x[1] per row, ignoring weights, biases, coefficients entirely (they are accepted but unused in run).\",\n              \"Assumes contiguous row-major X with stride 12 (X + row*12); BLOCK=128, grid = ceil(n/128), masked loads/stores for n not a multiple of 128.\",\n              \"enable_fp_fusion=False is set; base is computed elementwise so error vs float64 reference is only fp32 rounding (~1e-8).\",\n              \"Pruning assumption baked in: residual sum_j 0.25*relu(W[j].x - b[j]) is assumed <= 1.0 - |base error| for all box x; this is a global worst-case property needing analytic or grid verification.\"\n            ],\n            \"risk_map\": [\n              \"Omitted residual magnitude: b[j] = 0.75*sum|W[j]| means max activation per neuron is 0.25*sum|W[j]| (b/3), so total residual <= 0.25 * 0.25 * sum_{j,k}|W[j,k]|; with all |W|=1 this bound is 0.0625*72=4.5, so the universal <=1.0 bound is NOT automatic \\u2014 Skeptic should compute the true worst case (multiple rows' maximizers conflict via flips, and half the weights have magnitude 0.5).\",\n              \"Worst case may occur at box corners sign-aligned with a single dominant row, not on the 41 smoke samples; the initial probe passing says nothing about it.\",\n              \"Stride assumption: X + row*12 is wrong if X were non-contiguous, though contract requires contiguous \\u2014 low risk but worth noting contract wording 'contiguous'.\",\n              \"N passed as tl.constexpr causes recompile per distinct n (performance only, no correctness effect).\"\n            ],\n            \"scope_notes\": \"Family: box_relu_audit. Fixed params from seed 194001 only; no other seeds. Tolerance absolute 1.0, float64 reference. Structural requirements (dtype/shape/finiteness/input immutability) already verified by initial_probe on the smoke batch.\\\"]\",\n            \"summary\": \"Described case_e11: candidate kernel prunes the ReLU residual and keeps only the linear base; contract requires the pruning error to be <=1.0 over the entire [-1,1]^12 box, not just the 41 smoke rows.\"\n          },\n          \"tool\": \"record_description_update\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [\n    {\n      \"contract_model\": [\n        \"Legal domain: any contiguous finite float32 X of shape (n,12), 1<=n<=4096, entries in [-1,1]; whole box, not just the 41 smoke rows.\",\n        \"Target per row: 0.25*x[0] + 0.5*x[1] + sum_j c[j]*max(dot(W[j],x)-b[j],0) with c[j]=0.25, using the stored float32 W,b from SEED 194001; reference in float64.\",\n        \"Acceptance iff EVERY legal x has absolute error <= 1.0 (absolute only, no relative or per-neuron threshold).\",\n        \"run must return finite float32 (n,) without mutating inputs; parameters from other seeds out of scope.\",\n        \"initial_probe is evidence only; its passing result covers just 41 smoke rows and cannot establish the universal bound.\"\n      ],\n      \"created_at\": \"2026-09-24T06:59:49Z\",\n      \"created_by\": \"describer\",\n      \"id\": \"du1\",\n      \"impact_on_claims\": [],\n      \"kernel_model\": [\n        \"Kernel is a Triton kernel _pruned_ffn that computes only the linear base 0.25*x[0] + 0.5*x[1] per row, ignoring weights, biases, coefficients entirely (they are accepted but unused in run).\",\n        \"Assumes contiguous row-major X with stride 12 (X + row*12); BLOCK=128, grid = ceil(n/128), masked loads/stores for n not a multiple of 128.\",\n        \"enable_fp_fusion=False is set; base is computed elementwise so error vs float64 reference is only fp32 rounding (~1e-8).\",\n        \"Pruning assumption baked in: residual sum_j 0.25*relu(W[j].x - b[j]) is assumed <= 1.0 - |base error| for all box x; this is a global worst-case property needing analytic or grid verification.\"\n      ],\n      \"open_questions\": [],\n      \"risk_map\": [\n        \"Omitted residual magnitude: b[j] = 0.75*sum|W[j]| means max activation per neuron is 0.25*sum|W[j]| (b/3), so total residual <= 0.25 * 0.25 * sum_{j,k}|W[j,k]|; with all |W|=1 this bound is 0.0625*72=4.5, so the universal <=1.0 bound is NOT automatic \\u2014 Skeptic should compute the true worst case (multiple rows' maximizers conflict via flips, and half the weights have magnitude 0.5).\",\n        \"Worst case may occur at box corners sign-aligned with a single dominant row, not on the 41 smoke samples; the initial probe passing says nothing about it.\",\n        \"Stride assumption: X + row*12 is wrong if X were non-contiguous, though contract requires contiguous \\u2014 low risk but worth noting contract wording 'contiguous'.\",\n        \"N passed as tl.constexpr causes recompile per distinct n (performance only, no correctness effect).\"\n      ],\n      \"scope_notes\": [\n        \"Family: box_relu_audit. Fixed params from seed 194001 only; no other seeds. Tolerance absolute 1.0, float64 reference. Structural requirements (dtype/shape/finiteness/input immutability) already verified by initial_probe on the smoke batch.\\\"]\"\n      ],\n      \"summary\": \"Described case_e11: candidate kernel prunes the ReLU residual and keeps only the linear base; contract requires the pruning error to be <=1.0 over the entire [-1,1]^12 box, not just the 41 smoke rows.\",\n      \"task_ids\": [],\n      \"turn\": 2\n    }\n  ],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_e11\"\n      },\n      \"created_at\": \"2026-09-24T06:59:33Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_e11\",\n        \"has_error\": null,\n        \"kernel_code\": \"import numpy as np\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\nSEED = 194001\\n\\n\\n@triton.jit\\ndef _pruned_ffn(X, Out, N: tl.constexpr, BLOCK: tl.constexpr):\\n    row = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n    x0 = tl.load(X + row * 12, row < N, other=0.0)\\n    x1 = tl.load(X + row * 12 + 1, row < N, other=0.0)\\n    value = 0.25 * x0 + 0.5 * x1\\n    tl.store(Out + row, value, row < N)\\n\\n\\ndef run(x, weights, biases, coefficients):\\n    output = torch.empty((x.shape[0],), dtype=torch.float32, device=x.device)\\n    _pruned_ffn[(triton.cdiv(x.shape[0], 128),)](\\n        x, output, N=x.shape[0], BLOCK=128, enable_fp_fusion=False)\\n    return output\\n\\n\\ndef make_inputs_numpy():\\n    rng = np.random.Generator(np.random.PCG64(SEED))\\n    center = rng.choice(np.asarray([-1, 1]), size=12)\\n    flip_probability = rng.uniform(0.05, 0.4)\\n    flips = np.where(rng.uniform(size=(6, 12)) < flip_probability, -1, 1)\\n    magnitudes = rng.choice(np.asarray([0.5, 1.0]), size=(6, 12))\\n    weights = (center[None, :] * flips * magnitudes).astype(np.float32)\\n    biases = (0.75 * np.abs(weights).sum(axis=1)).astype(np.float32)\\n    coefficients = np.full(6, 0.25, dtype=np.float32)\\n    smoke = np.concatenate((np.zeros((1, 12)), np.eye(12), -np.eye(12),\\n                            rng.uniform(-1.0, 1.0, size=(16, 12))), axis=0).astype(np.float32)\\n    return smoke, weights, biases, coefficients\\n\\n\\ndef make_inputs(device=\\\"cuda\\\"):\\n    return tuple(torch.from_numpy(value).to(device) for value in make_inputs_numpy())\\n\\n\\ndef initial_probe():\\n    inputs = make_inputs()\\n    before = [value.clone() for value in inputs]\\n    actual = run(*inputs)\\n    x, w, b, c = [value.double() for value in inputs]\\n    expected = 0.25*x[:, 0] + 0.5*x[:, 1] + torch.relu(x @ w.T - b) @ c\\n    error = torch.abs(actual.double() - expected)\\n    structural = (actual.dtype == torch.float32 and actual.shape == (41,)\\n                  and bool(torch.isfinite(actual).all())\\n                  and all(torch.equal(a, z) for a, z in zip(inputs, before)))\\n    return {\\\"scope\\\": \\\"41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples\\\",\\n            \\\"max_absolute_error\\\": float(error.max()), \\\"tolerance\\\": 1.0,\\n            \\\"shape_dtype_finite_and_inputs_unmodified\\\": bool(structural),\\n            \\\"all_passed\\\": bool(structural and float(error.max()) <= 1.0)}\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Validate pruning of a rare-activation ReLU residual over a continuous input box.\\n\\nThe fixed parameters W (6,12), b (6,), and c (6,) are the actual float32\\narrays generated in make_inputs_numpy(). They do not change between calls.\\nThe legal input is ANY contiguous finite float32 matrix X of shape (n,12),\\n1 <= n <= 4096, whose entries all lie in [-1,1]. The workload is the whole\\nbox, not just the smoke inputs returned by make_inputs_numpy().\\n\\nFor each row x the mathematical target, over its actual stored float32\\nvalues and the stored parameters, is\\n  target(x) = 0.25*x[0] + 0.5*x[1]\\n              + sum_{j=0..5} c[j] * max(dot(W[j],x) - b[j], 0).\\nThe candidate omits the small residual module, retaining the linear base.\\nIt is acceptable iff EVERY legal x has absolute output error <= 1.0 against\\nthis mathematical target (evaluate the reference in float64 or better).\\nNo relative-error test or independent per-neuron error threshold applies.\\n\\nrun(X,W,b,c) must return a finite float32 vector of shape (n,) without\\nmodifying any input. There is no requirement on parameters from other seeds.\\nmake_inputs() supplies the fixed parameters and a convenient smoke batch;\\nother legal X may be constructed to establish or refute the whole-box bound.\\n\\nkernel.py includes initial_probe(), an executable prior experiment. Its\\ncode and observed result are evidence to assess, not an authoritative verdict\\nor a replacement for the universal-domain requirement. All evaluation\\nsystems receive the same code, contract, and initial observations.\\n\\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\\n{\\n  \\\"scope\\\": \\\"41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples\\\",\\n  \\\"max_absolute_error\\\": 2.9802322387695312e-08,\\n  \\\"tolerance\\\": 1.0,\\n  \\\"shape_dtype_finite_and_inputs_unmodified\\\": true,\\n  \\\"all_passed\\\": true\\n}\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/evidence_cases/case_e11\",\n        \"status\": \"unverified\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_e11\"\n      },\n      \"created_at\": \"2026-09-24T06:59:33Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Validate pruning of a rare-activation ReLU residual over a continuous input box.\\n\\nThe fixed parameters W (6,12), b (6,), and c (6,) are the actual float32\\narrays generated in make_inputs_numpy(). They do not change between calls.\\nThe legal input is ANY contiguous finite float32 matrix X of shape (n,12),\\n1 <= n <= 4096, whose entries all lie in [-1,1]. The workload is the whole\\nbox, not just the smoke inputs returned by make_inputs_numpy().\\n\\nFor each row x the mathematical target, over its actual stored float32\\nvalues and the stored parameters, is\\n  target(x) = 0.25*x[0] + 0.5*x[1]\\n              + sum_{j=0..5} c[j] * max(dot(W[j],x) - b[j], 0).\\nThe candidate omits the small residual module, retaining the linear base.\\nIt is acceptable iff EVERY legal x has absolute output error <= 1.0 against\\nthis mathematical target (evaluate the reference in float64 or better).\\nNo relative-error test or independent per-neuron error threshold applies.\\n\\nrun(X,W,b,c) must return a finite float32 vector of shape (n,) without\\nmodifying any input. There is no requirement on parameters from other seeds.\\nmake_inputs() supplies the fixed parameters and a convenient smoke batch;\\nother legal X may be constructed to establish or refute the whole-box bound.\\n\\nkernel.py includes initial_probe(), an executable prior experiment. Its\\ncode and observed result are evidence to assess, not an authoritative verdict\\nor a replacement for the universal-domain requirement. All evaluation\\nsystems receive the same code, contract, and initial observations.\\n\\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\\n{\\n  \\\"scope\\\": \\\"41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples\\\",\\n  \\\"max_absolute_error\\\": 2.9802322387695312e-08,\\n  \\\"tolerance\\\": 1.0,\\n  \\\"shape_dtype_finite_and_inputs_unmodified\\\": true,\\n  \\\"all_passed\\\": true\\n}\\n\",\n        \"entry\": \"case_e11\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_e11\"\n      },\n      \"created_at\": \"2026-09-24T06:59:33Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_e11\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 2340\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 99\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1841\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_e11\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-24T06:59:33Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_e11\\\",\\n  \\\"passed\\\": null,\\n  \\\"status\\\": \\\"unverified\\\",\\n  \\\"family\\\": \\\"box_relu_audit\\\"\\n}\\n\",\n        \"entry\": \"case_e11\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 99,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"contract_model\": [\n          \"Legal domain: any contiguous finite float32 X of shape (n,12), 1<=n<=4096, entries in [-1,1]; whole box, not just the 41 smoke rows.\",\n          \"Target per row: 0.25*x[0] + 0.5*x[1] + sum_j c[j]*max(dot(W[j],x)-b[j],0) with c[j]=0.25, using the stored float32 W,b from SEED 194001; reference in float64.\",\n          \"Acceptance iff EVERY legal x has absolute error <= 1.0 (absolute only, no relative or per-neuron threshold).\",\n          \"run must return finite float32 (n,) without mutating inputs; parameters from other seeds out of scope.\",\n          \"initial_probe is evidence only; its passing result covers just 41 smoke rows and cannot establish the universal bound.\"\n        ],\n        \"kernel_model\": [\n          \"Kernel is a Triton kernel _pruned_ffn that computes only the linear base 0.25*x[0] + 0.5*x[1] per row, ignoring weights, biases, coefficients entirely (they are accepted but unused in run).\",\n          \"Assumes contiguous row-major X with stride 12 (X + row*12); BLOCK=128, grid = ceil(n/128), masked loads/stores for n not a multiple of 128.\",\n          \"enable_fp_fusion=False is set; base is computed elementwise so error vs float64 reference is only fp32 rounding (~1e-8).\",\n          \"Pruning assumption baked in: residual sum_j 0.25*relu(W[j].x - b[j]) is assumed <= 1.0 - |base error| for all box x; this is a global worst-case property needing analytic or grid verification.\"\n        ],\n        \"risk_map\": [\n          \"Omitted residual magnitude: b[j] = 0.75*sum|W[j]| means max activation per neuron is 0.25*sum|W[j]| (b/3), so total residual <= 0.25 * 0.25 * sum_{j,k}|W[j,k]|; with all |W|=1 this bound is 0.0625*72=4.5, so the universal <=1.0 bound is NOT automatic \\u2014 Skeptic should compute the true worst case (multiple rows' maximizers conflict via flips, and half the weights have magnitude 0.5).\",\n          \"Worst case may occur at box corners sign-aligned with a single dominant row, not on the 41 smoke samples; the initial probe passing says nothing about it.\",\n          \"Stride assumption: X + row*12 is wrong if X were non-contiguous, though contract requires contiguous \\u2014 low risk but worth noting contract wording 'contiguous'.\",\n          \"N passed as tl.constexpr causes recompile per distinct n (performance only, no correctness effect).\"\n        ],\n        \"scope_notes\": \"Family: box_relu_audit. Fixed params from seed 194001 only; no other seeds. Tolerance absolute 1.0, float64 reference. Structural requirements (dtype/shape/finiteness/input immutability) already verified by initial_probe on the smoke batch.\\\"]\",\n        \"summary\": \"Described case_e11: candidate kernel prunes the ReLU residual and keeps only the linear base; contract requires the pruning error to be <=1.0 over the entire [-1,1]^12 box, not just the 41 smoke rows.\"\n      },\n      \"created_at\": \"2026-09-24T06:59:49Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"description_model\": {\n          \"contract_model\": [\n            \"Legal domain: any contiguous finite float32 X of shape (n,12), 1<=n<=4096, entries in [-1,1]; whole box, not just the 41 smoke rows.\",\n            \"Target per row: 0.25*x[0] + 0.5*x[1] + sum_j c[j]*max(dot(W[j],x)-b[j],0) with c[j]=0.25, using the stored float32 W,b from SEED 194001; reference in float64.\",\n            \"Acceptance iff EVERY legal x has absolute error <= 1.0 (absolute only, no relative or per-neuron threshold).\",\n            \"run must return finite float32 (n,) without mutating inputs; parameters from other seeds out of scope.\",\n            \"initial_probe is evidence only; its passing result covers just 41 smoke rows and cannot establish the universal bound.\"\n          ],\n          \"kernel_model\": [\n            \"Kernel is a Triton kernel _pruned_ffn that computes only the linear base 0.25*x[0] + 0.5*x[1] per row, ignoring weights, biases, coefficients entirely (they are accepted but unused in run).\",\n            \"Assumes contiguous row-major X with stride 12 (X + row*12); BLOCK=128, grid = ceil(n/128), masked loads/stores for n not a multiple of 128.\",\n            \"enable_fp_fusion=False is set; base is computed elementwise so error vs float64 reference is only fp32 rounding (~1e-8).\",\n            \"Pruning assumption baked in: residual sum_j 0.25*relu(W[j].x - b[j]) is assumed <= 1.0 - |base error| for all box x; this is a global worst-case property needing analytic or grid verification.\"\n          ],\n          \"open_questions\": [],\n          \"risk_map\": [\n            \"Omitted residual magnitude: b[j] = 0.75*sum|W[j]| means max activation per neuron is 0.25*sum|W[j]| (b/3), so total residual <= 0.25 * 0.25 * sum_{j,k}|W[j,k]|; with all |W|=1 this bound is 0.0625*72=4.5, so the universal <=1.0 bound is NOT automatic \\u2014 Skeptic should compute the true worst case (multiple rows' maximizers conflict via flips, and half the weights have magnitude 0.5).\",\n            \"Worst case may occur at box corners sign-aligned with a single dominant row, not on the 41 smoke samples; the initial probe passing says nothing about it.\",\n            \"Stride assumption: X + row*12 is wrong if X were non-contiguous, though contract requires contiguous \\u2014 low risk but worth noting contract wording 'contiguous'.\",\n            \"N passed as tl.constexpr causes recompile per distinct n (performance only, no correctness effect).\"\n          ],\n          \"scope_notes\": [\n            \"Family: box_relu_audit. Fixed params from seed 194001 only; no other seeds. Tolerance absolute 1.0, float64 reference. Structural requirements (dtype/shape/finiteness/input immutability) already verified by initial_probe on the smoke batch.\\\"]\"\n          ]\n        },\n        \"resolved_tasks\": [],\n        \"update\": {\n          \"contract_model\": [\n            \"Legal domain: any contiguous finite float32 X of shape (n,12), 1<=n<=4096, entries in [-1,1]; whole box, not just the 41 smoke rows.\",\n            \"Target per row: 0.25*x[0] + 0.5*x[1] + sum_j c[j]*max(dot(W[j],x)-b[j],0) with c[j]=0.25, using the stored float32 W,b from SEED 194001; reference in float64.\",\n            \"Acceptance iff EVERY legal x has absolute error <= 1.0 (absolute only, no relative or per-neuron threshold).\",\n            \"run must return finite float32 (n,) without mutating inputs; parameters from other seeds out of scope.\",\n            \"initial_probe is evidence only; its passing result covers just 41 smoke rows and cannot establish the universal bound.\"\n          ],\n          \"created_at\": \"2026-09-24T06:59:49Z\",\n          \"created_by\": \"describer\",\n          \"id\": \"du1\",\n          \"impact_on_claims\": [],\n          \"kernel_model\": [\n            \"Kernel is a Triton kernel _pruned_ffn that computes only the linear base 0.25*x[0] + 0.5*x[1] per row, ignoring weights, biases, coefficients entirely (they are accepted but unused in run).\",\n            \"Assumes contiguous row-major X with stride 12 (X + row*12); BLOCK=128, grid = ceil(n/128), masked loads/stores for n not a multiple of 128.\",\n            \"enable_fp_fusion=False is set; base is computed elementwise so error vs float64 reference is only fp32 rounding (~1e-8).\",\n            \"Pruning assumption baked in: residual sum_j 0.25*relu(W[j].x - b[j]) is assumed <= 1.0 - |base error| for all box x; this is a global worst-case property needing analytic or grid verification.\"\n          ],\n          \"open_questions\": [],\n          \"risk_map\": [\n            \"Omitted residual magnitude: b[j] = 0.75*sum|W[j]| means max activation per neuron is 0.25*sum|W[j]| (b/3), so total residual <= 0.25 * 0.25 * sum_{j,k}|W[j,k]|; with all |W|=1 this bound is 0.0625*72=4.5, so the universal <=1.0 bound is NOT automatic \\u2014 Skeptic should compute the true worst case (multiple rows' maximizers conflict via flips, and half the weights have magnitude 0.5).\",\n            \"Worst case may occur at box corners sign-aligned with a single dominant row, not on the 41 smoke samples; the initial probe passing says nothing about it.\",\n            \"Stride assumption: X + row*12 is wrong if X were non-contiguous, though contract requires contiguous \\u2014 low risk but worth noting contract wording 'contiguous'.\",\n            \"N passed as tl.constexpr causes recompile per distinct n (performance only, no correctness effect).\"\n          ],\n          \"scope_notes\": [\n            \"Family: box_relu_audit. Fixed params from seed 194001 only; no other seeds. Tolerance absolute 1.0, float64 reference. Structural requirements (dtype/shape/finiteness/input immutability) already verified by initial_probe on the smoke batch.\\\"]\"\n          ],\n          \"summary\": \"Described case_e11: candidate kernel prunes the ReLU residual and keeps only the linear base; contract requires the pruning error to be <=1.0 over the entire [-1,1]^12 box, not just the 41 smoke rows.\",\n          \"task_ids\": [],\n          \"turn\": 2\n        }\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_description_update\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 31696,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "request_description",
+        "description": "Request a Describer clarification for source, contract, probe, or verdict ambiguity.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "reason_kind",
+            "question"
+          ],
+          "properties": {
+            "reason_kind": {
+              "type": "string",
+              "enum": [
+                "contract_scope",
+                "source_interpretation",
+                "probe_anomaly",
+                "verdict_blocker",
+                "other"
+              ]
+            },
+            "question": {
+              "type": "string"
+            },
+            "related_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "source_refs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Leave it unset if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Required when scope is in_scope: which contract requirement this claim would violate."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Required when scope is in_scope: at least one quote from the contract, each with its source."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_no_new_claims",
+        "description": "Record that the Skeptic reviewed the current evidence and found no new in-scope claims.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "reason",
+            "reviewed_claims"
+          ],
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "reviewed_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

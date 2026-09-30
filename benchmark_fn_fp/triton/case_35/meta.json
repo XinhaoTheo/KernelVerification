@@ -1,0 +1,37 @@
+{
+  "name": "fp12_int8_grid_atomic_bitwise",
+  "benchmark_version": "fn_fp_triton_v1",
+  "group": "FP",
+  "seed_class": "FP7",
+  "failure_mode": "false_positive",
+  "kernel_family": "blocked sum with atomic accumulation",
+  "reference": "split-K GEMM in triton-lang/triton tutorials and vLLM; atomic accumulation in all-reduce kernels",
+  "mechanism": "Float atomics land in an order the scheduler does not fix, which is the standard reason a bitwise-reproducibility contract and atomic accumulation are held to be incompatible. On this input domain they are not. Every element is an integer multiple of one power of two, so every partial sum and every intermediate value of the accumulator is an integer multiple of that same power of two; the largest such integer reachable is 127 * 65536 = 8.32e6, inside the 2^24 = 1.68e7 range fp32 represents exactly. Exact addition is associative, so every landing order produces the same bits. The property belongs to the declared domain, not to int8 quantisation in general: repeat the same sum with a non-power-of-two scale and the orders diverge.",
+  "default_tolerance": {
+    "rtol": 0.0,
+    "atol": 0.0
+  },
+  "expected": {
+    "ground_truth": "every partial sum is exactly representable, so the unspecified atomic order cannot change the returned bits",
+    "naive_allclose_verdict": "PASS",
+    "correct_verdict": "CORRECT"
+  },
+  "pair": {
+    "partner": "fn22_fp32_atomic_bitwise",
+    "shared": "kernel.py, byte-identical after the name header is stripped",
+    "differs": "problem.txt declares a different input domain; the contract paragraph is the same",
+    "rationale": "A reader who answers from the presence of tl.atomic_add answers both halves the same way, and the two answers are opposite."
+  },
+  "verification": {
+    "order_independence_cpu": "64 random summation orders over int8 x 2^-7 data, N = 65536: 1 distinct bit pattern. All-127 worst case: 1 distinct. Non-power-of-two scales 0.007 and 0.1: 15 distinct over 16 orders.",
+    "gpu_t4": "20 runs bitwise identical = True, 1 distinct bit pattern. Value equals the float64 sum exactly (-122.9609375). Largest reachable integer 8323072 vs 2^24, headroom 2.02x. The same data on a non-power-of-two scale gives 6 distinct bit patterns, so the reproducibility is a property of the declared domain rather than of the kernel."
+  },
+  "gate": {
+    "baseline2_single_llm": "not run",
+    "provisional": "The case is only doing its job if one model call with no tools answers it wrongly. Until that is measured it is a candidate, not a result."
+  },
+  "status": "seed_v3_gate_pending",
+  "source": "constructed",
+  "requires_gpu": true,
+  "passed": null
+}

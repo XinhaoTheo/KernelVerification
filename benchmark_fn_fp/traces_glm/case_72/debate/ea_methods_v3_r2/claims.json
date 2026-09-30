@@ -1,0 +1,115 @@
+[
+  {
+    "created_at": "2026-09-24T07:00:03Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:00:54Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "134380579f5a75da0aa0ef15247269dee66dd14dd212e82bc7cdefbfea33235a"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "14508dda9299fcc21ebaa231f153ccd7044d051b86a60bb6e6008847c88d0b82"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "29cddc8d7c1b1827473e616e99ed15e716c438c88cfe5900e6a58e54c67d6f1b"
+            }
+          ],
+          "duration_s": 6.227832,
+          "exit_code": 0,
+          "expected_signal": "max residual over all box corners vs the 1.0 tolerance; kernel error at worst corner",
+          "json_parse_error": null,
+          "json_result": {
+            "claim_breach_found": false,
+            "kernel_abs_error_at_worst_corner": 0.71875,
+            "margin_to_tolerance": 0.28125,
+            "max_residual_all_corners": 0.71875,
+            "max_residual_per_row_sign_aligned": 0.71875,
+            "max_residual_random_4096_corners": 0.71875,
+            "metric": "max omitted residual sum_j c[j]*relu(W[j].x-b[j]) over all 2^12 box corners + kernel abs error at worst corner, float64 reference",
+            "per_neuron_activation_at_worst": [
+              0.5625,
+              0.0625,
+              0.0,
+              0.0,
+              0.0,
+              0.09375
+            ],
+            "reason": "contract requires EVERY x in [-1,1]^12 to have abs error <=1.0; residual is convex piecewise-linear so its box maximum is attained at a corner; kernel error == residual magnitude",
+            "structural_ok": true,
+            "tolerance": 1.0,
+            "worst_corner": [
+              1.0,
+              1.0,
+              -1.0,
+              -1.0,
+              1.0,
+              -1.0,
+              1.0,
+              -1.0,
+              1.0,
+              1.0,
+              -1.0,
+              1.0
+            ]
+          },
+          "kernel_abs_error_at_worst_corner": 0.71875,
+          "margin_to_tolerance": 0.28125,
+          "max_residual_all_4096_corners": 0.71875,
+          "max_residual_random_4096_corners": 0.71875,
+          "max_residual_row_sign_aligned": 0.71875,
+          "per_neuron_activation_at_worst": [
+            0.5625,
+            0.0625,
+            0.0,
+            0.0,
+            0.0,
+            0.09375
+          ],
+          "stderr": "",
+          "stdout": "{\"metric\": \"max omitted residual sum_j c[j]*relu(W[j].x-b[j]) over all 2^12 box corners + kernel abs error at worst corner, float64 reference\", \"reason\": \"contract requires EVERY x in [-1,1]^12 to have abs error <=1.0; residual is convex piecewise-linear so its box maximum is attained at a corner; kernel error == residual magnitude\", \"max_residual_all_corners\": 0.71875, \"max_residual_per_row_sign_aligned\": 0.71875, \"max_residual_random_4096_corners\": 0.71875, \"worst_corner\": [1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0], \"per_neuron_activation_at_worst\": [0.5625, 0.0625, 0.0, 0.0, 0.0, 0.09375], \"kernel_abs_error_at_worst_corner\": 0.71875, \"tolerance\": 1.0, \"structural_ok\": true, \"claim_breach_found\": false, \"margin_to_tolerance\": 0.28125}\n",
+          "structural_ok": true,
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 1.0
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Exhaustive enumeration of all 2^12 box corners (plus 4096 random corners and per-row sign-aligned corners) shows the maximum omitted residual sum_j 0.25*relu(W[j]x-b[j]) is 0.71875, well under the 1.0 tolerance. The residual is convex piecewise-linear, so its maximum over the box is attained at a corner \u2014 the enumeration is exhaustive for the whole-box bound. The actual kernel at the worst corner gives abs error 0.71875 vs the float64 reference, with structure intact. No legal input breaches the tolerance; claim c1 is rebutted.",
+        "supports": "rebutted",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "b[j] = 0.75*sum|W[j]| gives each neuron a max activation of 0.25*sum|W[j]|, so the total residual bound 0.0625*sum|W| can reach ~4.5 in magnitude terms; the actual worst case depends on flip conflicts and 0.5 magnitudes, but the <=1.0 tolerance is not automatic and no evidence beyond 41 smoke rows exists. A probe should search box corners x_k = sign(W[j,k]) aligned per row j and mixed-corner/interior samples, comparing against the float64 reference.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The legal input is ANY contiguous finite float32 X of shape (n,12) with entries in [-1,1]; acceptance requires EVERY legal x to have absolute output error <= 1.0, with the whole box as the workload, not just smoke inputs."
+      }
+    ],
+    "scope_rationale": "problem.txt defines the legal domain as any X in [-1,1]^12 (whole box, not just the 41 smoke rows) and requires absolute error <= 1.0 against the float64 target for EVERY legal x; a box-corner input that activates the pruned ReLU residual beyond 1.0 is directly in this domain.",
+    "statement": "There exists a legal input x in [-1,1]^12 (e.g., a box corner with signs aligned to a single row of W, or a mixed-corner maximizer) for which the omitted residual sum_j 0.25*relu(W[j]\u00b7x - b[j]) exceeds 1.0, so the kernel's output error against the float64 target exceeds the 1.0 tolerance.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T07:00:54Z"
+  }
+]

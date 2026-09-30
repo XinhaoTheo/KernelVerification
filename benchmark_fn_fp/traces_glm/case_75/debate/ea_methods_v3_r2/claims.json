@@ -1,0 +1,250 @@
+[
+  {
+    "created_at": "2026-09-24T07:02:02Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:03:21Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "bb88370ac52bfbf4437ff51d1ae6e465ef27f3e4c2d40853cea518439b4653f6"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "e906964678d82f1d21393c449cf0d631c0e7610fb0ddc8664bee04cdd06c7f14"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "1157cf05b04461c4201f12ffae923b5ad963902cac0c9a5f71d65590ce72d14f"
+            }
+          ],
+          "duration_s": 4.899592,
+          "exit_code": 0,
+          "expected_signal": "kernel output far from sum(low) per row, relative_error >> 1e-5",
+          "json_parse_error": null,
+          "json_result": {
+            "finite": true,
+            "inputs_unmodified": true,
+            "metric": "relative L2 error vs exact real-number row sum (float64)",
+            "order": [
+              8,
+              1,
+              6,
+              7,
+              5,
+              2,
+              3,
+              4,
+              9,
+              0
+            ],
+            "output": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "relative_error": 0.0,
+            "target": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "tolerance": 1e-05
+          },
+          "kernel_output": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "metric_flaw": "fp64 target is not exact: ulp at 2^80 = 2^28 absorbs low values and \u00b12^30",
+          "probe_target": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_error": 0.0,
+          "stderr": "",
+          "stdout": "{\"metric\": \"relative L2 error vs exact real-number row sum (float64)\", \"order\": [8, 1, 6, 7, 5, 2, 3, 4, 9, 0], \"target\": [0.0, 0.0, 0.0, 0.0], \"output\": [0.0, 0.0, 0.0, 0.0], \"relative_error\": 0.0, \"tolerance\": 1e-05, \"inputs_unmodified\": true, \"finite\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe ran the actual kernel on the fixed input (output [0,0,0,0], inputs unmodified, finite), but its \"exact\" target used float64 accumulation, which itself absorbs the low values (fp64 ulp at 2^80 is 2^28) and yields [0,0,0,0]. So the probe cannot distinguish whether the kernel's zero output matches the contract's exact real-number target (which is sum(low) \u2248 [6.60, 8.41, 8.37, 7.15]); it is inconclusive for c1. An exact-arithmetic (Fraction) probe is needed.",
+        "supports": "inconclusive",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The 'lost' term captures 2^30 exactly when total=2^80, so correction grows to ~2^30 whose fp32 ulp is 2^7=128; subsequent low values (~1) added into correction are rounded away, and if the \u00b12^30 terms cancel the stored result is ~0 while the exact row sum is sum(low)\u22484, giving relative error ~1.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Target is the exact real-number sum of the stored (4,12) array from make_inputs() (2^80, -2^80, \u00b12^30, 8 low values in [0.25,1.75] per row), i.e. per-row target \u2248 sum(low), with 1e-5 relative L2 tolerance; the kernel's output for this exact fixed input is judged."
+      },
+      {
+        "source": "kernel.py make_inputs_numpy (lines 34-41)",
+        "summary": "The fixed seed 193602 permutation determines the order in which 2^30, -2^30 and the low values reach the Kahan loop, so whether the 2^30 terms enter the correction accumulator before or after the low values is a concrete, recomputable property of the in-scope workload."
+      }
+    ],
+    "scope_rationale": "The contract requires the final row sums of the exact fixed make_inputs() array (seed 193602) to match the exact real-number sum within 1e-5 relative L2 in float64; per row the exact target is sum of the 8 low values (~O(4), nonzero almost surely). If the kernel's fp32 Kahan chain loses the low values, its output would be ~0 and the relative error would be ~1.",
+    "statement": "On the fixed seed-193602 input, the kernel's uncompensated fp32 correction accumulator can absorb the \u00b12^30 lost terms before the low values are added, so the low values (each <2) are lost to rounding (ulp 2^7 at magnitude 2^30) and the final output is ~0 instead of the exact target sum(low) (\u2248O(4) per row), violating the 1e-5 relative tolerance.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-24T07:03:21Z"
+  },
+  {
+    "created_at": "2026-09-24T07:02:02Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:03:08Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "764b7f79e47c625b0eeb52e46ec6a26ebb487d478b67749dae9e500745f8d300"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "7b22f0f1abf113231ee710ad803a5c6d0f94d29a2317c4a6ac603b4bebac91d2"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "2cdc67c8ccf983d8267c860a108d3b6e30e3a46e1f727c2ae01381784fd55454"
+            }
+          ],
+          "duration_s": 0.195208,
+          "exact_real_sum_recheck_needed": true,
+          "exit_code": 0,
+          "expected_signal": "recomputed float64 reference is nonzero (sum of low values), inconsistent with recorded [0,0,0,0]",
+          "fp64_reference": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "fp64_ulp_at_2e80": 268435456.0,
+          "json_parse_error": null,
+          "json_result": {
+            "exact_real_sum": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "metric": "recomputed initial_probe float64 sequential reference vs recorded [0,0,0,0]",
+            "mismatch_with_recorded": false,
+            "permutation_order": [
+              8,
+              1,
+              6,
+              7,
+              5,
+              2,
+              3,
+              4,
+              9,
+              0
+            ],
+            "recomputed_reference": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "recorded_reference": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "sum_of_low_values": [
+              6.598899990320206,
+              8.408386647701263,
+              8.367730170488358,
+              7.147134065628052
+            ]
+          },
+          "metric": "recomputed float64 sequential reference vs recorded [0,0,0,0]",
+          "recomputed_reference": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "recorded_reference": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "stderr": "",
+          "stdout": "{\"metric\": \"recomputed initial_probe float64 sequential reference vs recorded [0,0,0,0]\", \"recomputed_reference\": [0.0, 0.0, 0.0, 0.0], \"exact_real_sum\": [0.0, 0.0, 0.0, 0.0], \"sum_of_low_values\": [6.598899990320206, 8.408386647701263, 8.367730170488358, 7.147134065628052], \"recorded_reference\": [0.0, 0.0, 0.0, 0.0], \"mismatch_with_recorded\": false, \"permutation_order\": [8, 1, 6, 7, 5, 2, 3, 4, 9, 0]}\n",
+          "sum_of_low_values": [
+            6.598899990320206,
+            8.408386647701263,
+            8.367730170488358,
+            7.147134065628052
+          ],
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "The recomputed float64 sequential reference from the shown make_inputs_numpy is exactly [0,0,0,0], matching the recorded reference \u2014 no inconsistency. The claim's premise was wrong: float64 ulp at 2^80 is 2^28, so low values (~1) and even \u00b12^30 are absorbed into the 2^80 running sum in float64. The recorded initial-probe result is fully consistent with the shown code (though its reference method does not equal the exact real sum sum(low) \u2248 [6.60, 8.41, 8.37, 7.15]).",
+        "supports": "rebutted",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "Float64 has enough precision to represent 2^80, 2^30 and low values simultaneously, so the sequential row-order reference must equal sum(low) \u2260 0 almost surely; zeros indicate the recorded result does not match the code shown, so the passing initial-probe record cannot be trusted as evidence.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "problem.txt explicitly states the recorded initial-probe result is evidence to assess, not an authoritative verdict, and that the acceptance metric is against the exact real-number target of the stored array."
+      },
+      {
+        "source": "kernel.py initial_probe (lines 49-65)",
+        "summary": "The probe computes the reference by sequential float64 accumulation in column order of the stored values, which mathematically equals sum(low) per row and cannot yield [0,0,0,0] for the shown make_inputs_numpy."
+      }
+    ],
+    "scope_rationale": "The contract states the target is the exact real-number sum of the stored inputs, which the float64 row-order accumulation in initial_probe should reproduce as sum(low), nonzero; the recorded [0,0,0,0] reference is inconsistent, so the recorded \"passed: true\" is not valid evidence for the in-scope acceptance check.",
+    "statement": "The recorded initial-probe reference of [0,0,0,0] is inconsistent with the float64 sequential reference computed from the shown make_inputs_numpy, which should be the nonzero per-row sum of the 8 low values; therefore the recorded \"passed\" result is not evidence that the kernel satisfies the contract.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T07:03:08Z"
+  }
+]

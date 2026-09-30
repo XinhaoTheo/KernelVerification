@@ -250,3 +250,90 @@ def test_finalize_requires_named_data_when_the_probe_printed_no_json(tmp_path) -
     )
     assert ok["claim"]["status"] == "confirmed"
     assert ok["evidence"]["data"]["max_abs_err"] == 60.57
+
+
+def _probe_ctx():
+    """The solo role, which may both raise claims and probe them."""
+    from verifier.agentic.state import RunState, Role
+    from verifier.agentic.tools.registry import ToolContext, build_core_registry
+
+    state = RunState()
+    return build_core_registry(), ToolContext(
+        state=state, current_role=Role.SOLO.value, current_turn=1
+    ), state
+
+
+def _open_claim(registry, context):
+    result = registry.call(
+        "record_claim",
+        {"statement": "The kernel drops the trailing partial group when K is not an exact "
+                      "multiple of group_size, so those columns use the wrong scale row.",
+         "rationale": "floor division on the group count"},
+        context=context,
+    )
+    assert result.get("ok") is not False, result
+    return result["id"]
+
+
+def test_a_claim_with_an_unconsumed_successful_probe_cannot_be_reprobed() -> None:
+    """A good result that has not been interpreted must be spent, not repeated.
+
+    Probes for independent claims go out together and are finalized next turn.
+    When one claim's probe code keeps failing the batch keeps being re-issued,
+    and a claim that already succeeded is re-probed alongside it every turn --
+    it is still open, so the launch rule still names it. A measured run probed
+    one claim four times for three identical results while a sibling failed four
+    times running, and the wasted turns came out of the budget the stuck claim
+    needed.
+    """
+    registry, context, _ = _probe_ctx()
+    claim_id = _open_claim(registry, context)
+
+    first = registry.call(
+        "run_claim_probe",
+        {"claim_id": claim_id, "code": "print(\'{\"ok\": 1}\')", "use_gpu": False},
+        context=context,
+    )
+    assert first["exit_code"] == 0, first
+
+    again = registry.call(
+        "run_claim_probe",
+        {"claim_id": claim_id, "code": "print(\'{\"ok\": 2}\')", "use_gpu": False},
+        context=context,
+    )
+    assert again["ok"] is False
+    assert "finalize_probe_evidence" in again["message"]
+
+    # Spending it unblocks the claim for a genuinely different experiment.
+    spent = registry.call(
+        "finalize_probe_evidence",
+        {"event_id": first["event_id"], "supports": "confirmed",
+         "summary": "measured", "data": {"max_abs_err": 1.0}},
+        context=context,
+    )
+    assert spent.get("ok") is not False, spent
+    third = registry.call(
+        "run_claim_probe",
+        {"claim_id": claim_id, "code": "print(\'{\"ok\": 3}\')", "use_gpu": False},
+        context=context,
+    )
+    assert third.get("ok") is not False, third
+
+
+def test_a_failed_probe_may_always_be_rewritten() -> None:
+    """Rewriting broken probe code is the loop working, not waste.
+
+    One measured run needed four attempts to get its int4 bit-packing right.
+    Blocking that would break the recovery path the guard above depends on.
+    """
+    registry, context, _ = _probe_ctx()
+    claim_id = _open_claim(registry, context)
+
+    for _ in range(3):
+        result = registry.call(
+            "run_claim_probe",
+            {"claim_id": claim_id, "code": "import sys; sys.exit(1)", "use_gpu": False},
+            context=context,
+        )
+        assert result.get("ok") is not False, result
+        assert result["exit_code"] != 0

@@ -1,0 +1,1322 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_o",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _projection_kernel(U, B, Output, N: tl.constexpr):\n    numerator = tl.full((), 0.0, tl.float32)\n    denominator = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        numerator = numerator + u * b\n        denominator = denominator + u * u\n    coefficient = tl.div_rn(numerator, denominator)\n    norm_squared = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        residual = b - u * coefficient\n        norm_squared = norm_squared + residual * residual\n    norm = tl.sqrt(norm_squared)\n    j = tl.arange(0, N)\n    u = tl.load(U + j).to(tl.float32)\n    b = tl.load(B + j).to(tl.float32)\n    residual = b - u * coefficient\n    tl.store(Output + j, tl.div_rn(residual, norm))\n\n\ndef run(u, b):\n    output = torch.empty((32,), device=u.device, dtype=torch.float32)\n    _projection_kernel[(1,)](u, b, output, N=32, num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(830230))\n    u = rng.normal(size=32).astype(np.float32)\n    b = (1.125 * u.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n    return u, b\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "passed": null,
+    "problem_text": "Compute a normalized orthogonal projection for a fixed public workload.\n\nOnly the two float32 vectors u and b returned by make_inputs() are in scope.\nEach has shape (32,). The mathematical reference on these actual stored inputs is\n  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]\n  residual[j] = b[j] - alpha*u[j]\n  reference = residual / ||residual||_2.\nUse at least float64 accuracy for the reference. Algebraically equivalent\nrecentring is allowed to avoid numerical cancellation in the reference itself.\nThe residual on this workload is nonzero.\n\nThe output must be a finite vector of shape (32,), and\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.\n\nDecide whether this kernel satisfies that contract for the fixed generated\nworkload. Arbitrary alternative vectors are outside the scope. The kernel uses\nfloat32 arithmetic, sequential accumulations and separately rounded products\nand sums; its launch disables FP multiply/add fusion.\n",
+    "rounds": null,
+    "session_dir": "/root/numerical_cases/case_o",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T00:58:17Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:59:04Z",
+          "data": {
+            "alpha_fp32_kernel": 1.125000238418579,
+            "alpha_fp64": 1.125000242654227,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "074641770771e5c1fc48d9d519ff0efc8ed7ffec4ca92573fa6391566835b04d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "2e903c7fb1457efa0e66ee8ef0d677a9be64302f357be2e499a35168268cc4dc"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "a322ea00b8741075859bf534de6c2d79f7cea41245aec72cbe9a1219e146c5b2"
+              }
+            ],
+            "bitmatch_gpu_vs_emu": true,
+            "duration_s": 7.05006,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of kernel output vs fp64 reference on fixed workload, decisive vs 0.01 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "alpha_fp32_kernel": 1.125000238418579,
+              "alpha_fp64": 1.125000242654227,
+              "bitmatch_gpu_vs_emu": true,
+              "output_finite": true,
+              "passes_tolerance": true,
+              "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+              "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+              "residual_norm_fp64": 6.621097760007478e-05,
+              "shape": [
+                32
+              ],
+              "tolerance": 0.01
+            },
+            "passes_tolerance": true,
+            "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+            "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+            "residual_norm_fp64": 6.621097760007478e-05,
+            "stderr": "",
+            "stdout": "{\"rel_l2_gpu_vs_fp64ref\": 0.0015436494833812023, \"rel_l2_fp32emu_vs_fp64ref\": 0.0015436494833812023, \"bitmatch_gpu_vs_emu\": true, \"alpha_fp64\": 1.125000242654227, \"alpha_fp32_kernel\": 1.125000238418579, \"residual_norm_fp64\": 6.621097760007478e-05, \"tolerance\": 0.01, \"passes_tolerance\": true, \"output_finite\": true, \"shape\": [32]}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.01
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Decisive probe on the fixed make_inputs() workload: kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), a margin of ~6.5x below the limit. Output is finite, shape (32,). The fp32 CPU emulation of the kernel arithmetic matches the GPU output bit-for-bit, confirming the GPU arithmetic behaves as IEEE round-to-nearest as assumed. Cancellation is present (residual norm 6.6e-5 vs O(1) operands) but the resulting direction error stays well within tolerance, so c1's predicted failure does not occur on this fixed workload.",
+          "supports": "rebutted",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
+        }
+      ],
+      "scope_rationale": "The contract fixes the input domain to exactly the make_inputs() vectors (b nearly parallel to u with ~1e-5 orthogonal noise) and requires relative L2 error <= 0.01 versus a float64 reference; cancellation in b - alpha*u on this exact workload is therefore directly decisive for the stated tolerance.",
+      "statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01.",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T00:59:04Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Contract covers only the two float32 (32,) vectors u and b produced by make_inputs() (seed 830230); arbitrary other vectors are out of scope.",
+      "Reference (float64 or better, recentring allowed): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2; residual is guaranteed nonzero on this workload.",
+      "Output must be finite, shape (32,), with relative L2 error ||output-reference||_2 / max(||reference||,1e-12) <= 0.01.",
+      "Problem states the kernel uses float32 arithmetic, sequential accumulations, separately rounded products/sums, and disables FP fusion \u2014 these are acknowledged implementation traits, not automatic violations."
+    ],
+    "kernel_model": [
+      "_projection_kernel is a single-program (grid (1,), num_warps=1, enable_fp_fusion=False) Triton kernel with N=32 hardwired via run().",
+      "Pass 1: scalar fp32 loop over tl.static_range(0,32) accumulates numerator = sum(u*b) and denominator = sum(u*u) sequentially, then alpha = tl.div_rn(num, den).",
+      "Pass 2: second sequential scalar loop accumulates norm_squared = sum((b - u*coefficient)^2); norm = tl.sqrt(norm_squared).",
+      "Pass 3: vectorized epilogue recomputes residual = b - u*coefficient with tl.arange(0,32) and stores residual/norm via tl.div_rn into a preallocated fp32 output tensor of shape (32,).",
+      "make_inputs: u ~ N(0,1) fp32; b = fp32(1.125*u_fp64 + 1e-5*N(0,1)) \u2014 i.e., b is b-almost-exactly parallel to u with tiny orthogonal noise. Note 1.125 is exactly representable in fp32.",
+      "run() allocates output on u.device and returns it directly; no validation, no reference computation in-kernel.",
+      "Error decomposition on the fixed workload: ideal alpha is exactly 1.125 (b = 1.125*u + 1e-5*noise, 1.125 exactly representable in fp32), so residual[j] = noise[j] with amplitude ~1e-5; ||residual||_2 ~ sqrt(32)*1e-5 ~ 6e-5.",
+      "Error source A (product rounding): each stored residual b_j - alpha*u_j has absolute error ~ ulp(1) ~ 1e-7 from rounding of alpha*u_j (and of b_j itself in its construction); ||deltaA||_2 ~ sqrt(32)*1e-7 ~ 6e-7, i.e. ~1% of ||residual||, which lands directly at the 0.01 tolerance boundary \u2014 this is what makes c1 borderline rather than clearly pass or fail.",
+      "Error source B (alpha error): fp32 alpha differs from 1.125 by ~1e-7 relative; the induced residual perturbation is along u, exactly orthogonal to the ideal residual direction, so it adds ~|alpha_err|*||u|| ~ 1e-7*sqrt(32) to the error \u2014 same order as source A.",
+      "Because both error sources are of order 1e-2 relative and partially systematic, a single run of the kernel on the fixed inputs vs a float64 recentred reference is the decisive experiment; sign cannot be predicted from source alone.",
+      "A CPU-side exact simulation is feasible: run() is a deterministic fp32 sequential loop with no fusion, so a numpy float32 emulation of lines 9-28 on the fixed u, b reproduces the GPU arithmetic to rounding (assuming IEEE round-to-nearest as the problem asserts), and gives a GPU-free estimate to cross-check."
+    ],
+    "open_questions": [
+      "Empirical relative-L2 gap between the fp32 kernel output and the fp64 recentred reference on the fixed workload \u2014 decisive for the 0.01 tolerance; requires an Experimenter probe.",
+      "Whether the fixed seed's residual norm is large enough (~sqrt(32)*1e-5) that fp32 product-rounding error (~1e-7*|b|) stays below 1% of it; order-of-magnitude estimate says it is borderline (ratio roughly 1e-2), so measurement is needed.",
+      "Whether tl.div_rn / separate rounding on the actual GPU matches the assumed IEEE round-to-nearest behavior assumed above (problem statement asserts separately rounded products and sums).",
+      "Measured relative-L2 error on the fixed workload \u2014 expected order ~1e-2, right at the 0.01 tolerance; the sign of the margin is the whole verdict.",
+      "Whether the fp32 CPU emulation (round-to-nearest, no fusion) matches the GPU bit-for-bit; if it disagrees, the GPU result is still what the contract tests.",
+      "Second-order detail: whether b_j's own fp32 construction rounding (in make_inputs) is absorbed identically by both kernel and reference (it is \u2014 both read the same stored b), so only alpha*u_j rounding matters for A."
+    ],
+    "risk_map": [
+      "Catastrophic cancellation in residual: b_j - alpha*u_j subtracts two O(1) values to yield O(1e-5) residuals; fp32 rounding of the products (~1e-7 relative to O(1) operands) is comparable to the noise amplitude, so the computed residual direction may deviate from the fp64 reference by an amount near the 0.01 relative-L2 tolerance. This is the decisive risk and needs a numeric probe, not source reading alone.",
+      "fp32 alpha error: numerator/denominator accumulated sequentially in fp32 give alpha accurate to ~1e-7 relative; since the ideal alpha is exactly 1.125 (b constructed as 1.125*u + eps), the residual error is dominated by per-element product rounding b_j - 1.125*u_j rather than by alpha.",
+      "Epilogue recomputation (lines 24-28) recomputes residual identically to pass 2, so norm and stored vector are consistent \u2014 no pass-to-pass inconsistency risk.",
+      "tl.arange(0, N) with N=32 is a power of two, so no masking/size hazards; N matches run()'s N=32 and the input shape.",
+      "Denominator sum(u*u) > 0 with high probability (Gaussian u, 32 elements) \u2014 division by zero essentially out of scope, but the guarantee is only 'residual nonzero' on this workload, not 'denominator nonzero' by contract.",
+      "Normalization output is unit-norm by construction (norm computed from same residuals), so finiteness is safe unless norm underflows to 0; residual norm ~1e-5*sqrt(32) ~ 6e-5 in fp32, far from underflow.",
+      "Decisive numeric fact for c1: expected relative error \u2248 (sources A+B, each ~ sqrt(32)*1e-7) / (sqrt(32)*1e-5) \u2248 1e-2, i.e. exactly at the 0.01 tolerance \u2014 the verdict hinges on the actual measured constant, not on qualitative 'cancellation' reasoning.",
+      "Secondary: norm_squared accumulation over ~1e-10-sized squared residuals in fp32 \u2014 relative error of the norm is small (~1e-7 relative each, sum of 32), negligible vs the residual-direction error; not the decisive risk.",
+      "Reference-side hazard for probes: a naive fp64 reference b - alpha*u computed with alpha from a non-recentred fp64 dot product also suffers mild cancellation (~1e-16 relative of O(1) operands, negligible here since 1e-16*1 << 1e-5), so recentring is optional in practice for fp64; either reference form is decisive."
+    ],
+    "scope_notes": [
+      "In scope: the single fixed workload from make_inputs(), tolerance 0.01 relative L2, float64 reference with allowed recentring.\", \"Out of scope: adversarial alternative inputs, other N values (N is constexpr 32), GPU portability beyond the fixed artifact, performance.\", \"The tolerance is generous (1%) relative to typical fp32-vs-fp64 gaps, but the near-parallel construction of b makes the ratio error/noise-scale the governing quantity, not raw fp32 epsilon.\"]",
+      "Probe design note: the single decisive probe is kernel output on make_inputs() vs a float64 reference (recentred: residual_j = b_j - 1.125_proj*u_j with fp64 alpha, or equivalently the stored noise component); report the exact relative-L2 value, not just pass/fail, since it sits near the boundary.",
+      "A supporting probe: fp32 CPU emulation of the kernel arithmetic on the same inputs to separate GPU-specific rounding from the intrinsic fp32 precision limit."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Contract covers only the two float32 (32,) vectors u and b produced by make_inputs() (seed 830230); arbitrary other vectors are out of scope.",
+        "Reference (float64 or better, recentring allowed): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2; residual is guaranteed nonzero on this workload.",
+        "Output must be finite, shape (32,), with relative L2 error ||output-reference||_2 / max(||reference||,1e-12) <= 0.01.",
+        "Problem states the kernel uses float32 arithmetic, sequential accumulations, separately rounded products/sums, and disables FP fusion \u2014 these are acknowledged implementation traits, not automatic violations."
+      ],
+      "created_at": "2026-09-24T00:58:04Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "_projection_kernel is a single-program (grid (1,), num_warps=1, enable_fp_fusion=False) Triton kernel with N=32 hardwired via run().",
+        "Pass 1: scalar fp32 loop over tl.static_range(0,32) accumulates numerator = sum(u*b) and denominator = sum(u*u) sequentially, then alpha = tl.div_rn(num, den).",
+        "Pass 2: second sequential scalar loop accumulates norm_squared = sum((b - u*coefficient)^2); norm = tl.sqrt(norm_squared).",
+        "Pass 3: vectorized epilogue recomputes residual = b - u*coefficient with tl.arange(0,32) and stores residual/norm via tl.div_rn into a preallocated fp32 output tensor of shape (32,).",
+        "make_inputs: u ~ N(0,1) fp32; b = fp32(1.125*u_fp64 + 1e-5*N(0,1)) \u2014 i.e., b is b-almost-exactly parallel to u with tiny orthogonal noise. Note 1.125 is exactly representable in fp32.",
+        "run() allocates output on u.device and returns it directly; no validation, no reference computation in-kernel."
+      ],
+      "open_questions": [
+        "Empirical relative-L2 gap between the fp32 kernel output and the fp64 recentred reference on the fixed workload \u2014 decisive for the 0.01 tolerance; requires an Experimenter probe.",
+        "Whether the fixed seed's residual norm is large enough (~sqrt(32)*1e-5) that fp32 product-rounding error (~1e-7*|b|) stays below 1% of it; order-of-magnitude estimate says it is borderline (ratio roughly 1e-2), so measurement is needed.",
+        "Whether tl.div_rn / separate rounding on the actual GPU matches the assumed IEEE round-to-nearest behavior assumed above (problem statement asserts separately rounded products and sums)."
+      ],
+      "risk_map": [
+        "Catastrophic cancellation in residual: b_j - alpha*u_j subtracts two O(1) values to yield O(1e-5) residuals; fp32 rounding of the products (~1e-7 relative to O(1) operands) is comparable to the noise amplitude, so the computed residual direction may deviate from the fp64 reference by an amount near the 0.01 relative-L2 tolerance. This is the decisive risk and needs a numeric probe, not source reading alone.",
+        "fp32 alpha error: numerator/denominator accumulated sequentially in fp32 give alpha accurate to ~1e-7 relative; since the ideal alpha is exactly 1.125 (b constructed as 1.125*u + eps), the residual error is dominated by per-element product rounding b_j - 1.125*u_j rather than by alpha.",
+        "Epilogue recomputation (lines 24-28) recomputes residual identically to pass 2, so norm and stored vector are consistent \u2014 no pass-to-pass inconsistency risk.",
+        "tl.arange(0, N) with N=32 is a power of two, so no masking/size hazards; N matches run()'s N=32 and the input shape.",
+        "Denominator sum(u*u) > 0 with high probability (Gaussian u, 32 elements) \u2014 division by zero essentially out of scope, but the guarantee is only 'residual nonzero' on this workload, not 'denominator nonzero' by contract.",
+        "Normalization output is unit-norm by construction (norm computed from same residuals), so finiteness is safe unless norm underflows to 0; residual norm ~1e-5*sqrt(32) ~ 6e-5 in fp32, far from underflow."
+      ],
+      "scope_notes": [
+        "In scope: the single fixed workload from make_inputs(), tolerance 0.01 relative L2, float64 reference with allowed recentring.\", \"Out of scope: adversarial alternative inputs, other N values (N is constexpr 32), GPU portability beyond the fixed artifact, performance.\", \"The tolerance is generous (1%) relative to typical fp32-vs-fp64 gaps, but the near-parallel construction of b makes the ratio error/noise-scale the governing quantity, not raw fp32 epsilon.\"]"
+      ],
+      "summary": "Described case_o: fp32 Triton normalized-projection kernel on a fixed 32-length near-parallel workload; contract is 1% relative-L2 vs a float64 reference; the decisive risk is catastrophic cancellation in b - alpha*u since residual amplitude (~1e-5) is near fp32 rounding scale of the O(1) operands.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [],
+      "created_at": "2026-09-24T00:58:34Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Error decomposition on the fixed workload: ideal alpha is exactly 1.125 (b = 1.125*u + 1e-5*noise, 1.125 exactly representable in fp32), so residual[j] = noise[j] with amplitude ~1e-5; ||residual||_2 ~ sqrt(32)*1e-5 ~ 6e-5.",
+        "Error source A (product rounding): each stored residual b_j - alpha*u_j has absolute error ~ ulp(1) ~ 1e-7 from rounding of alpha*u_j (and of b_j itself in its construction); ||deltaA||_2 ~ sqrt(32)*1e-7 ~ 6e-7, i.e. ~1% of ||residual||, which lands directly at the 0.01 tolerance boundary \u2014 this is what makes c1 borderline rather than clearly pass or fail.",
+        "Error source B (alpha error): fp32 alpha differs from 1.125 by ~1e-7 relative; the induced residual perturbation is along u, exactly orthogonal to the ideal residual direction, so it adds ~|alpha_err|*||u|| ~ 1e-7*sqrt(32) to the error \u2014 same order as source A.",
+        "Because both error sources are of order 1e-2 relative and partially systematic, a single run of the kernel on the fixed inputs vs a float64 recentred reference is the decisive experiment; sign cannot be predicted from source alone.",
+        "A CPU-side exact simulation is feasible: run() is a deterministic fp32 sequential loop with no fusion, so a numpy float32 emulation of lines 9-28 on the fixed u, b reproduces the GPU arithmetic to rounding (assuming IEEE round-to-nearest as the problem asserts), and gives a GPU-free estimate to cross-check."
+      ],
+      "open_questions": [
+        "Measured relative-L2 error on the fixed workload \u2014 expected order ~1e-2, right at the 0.01 tolerance; the sign of the margin is the whole verdict.",
+        "Whether the fp32 CPU emulation (round-to-nearest, no fusion) matches the GPU bit-for-bit; if it disagrees, the GPU result is still what the contract tests.",
+        "Second-order detail: whether b_j's own fp32 construction rounding (in make_inputs) is absorbed identically by both kernel and reference (it is \u2014 both read the same stored b), so only alpha*u_j rounding matters for A."
+      ],
+      "risk_map": [
+        "Decisive numeric fact for c1: expected relative error \u2248 (sources A+B, each ~ sqrt(32)*1e-7) / (sqrt(32)*1e-5) \u2248 1e-2, i.e. exactly at the 0.01 tolerance \u2014 the verdict hinges on the actual measured constant, not on qualitative 'cancellation' reasoning.",
+        "Secondary: norm_squared accumulation over ~1e-10-sized squared residuals in fp32 \u2014 relative error of the norm is small (~1e-7 relative each, sum of 32), negligible vs the residual-direction error; not the decisive risk.",
+        "Reference-side hazard for probes: a naive fp64 reference b - alpha*u computed with alpha from a non-recentred fp64 dot product also suffers mild cancellation (~1e-16 relative of O(1) operands, negligible here since 1e-16*1 << 1e-5), so recentring is optional in practice for fp64; either reference form is decisive."
+      ],
+      "scope_notes": [
+        "Probe design note: the single decisive probe is kernel output on make_inputs() vs a float64 reference (recentred: residual_j = b_j - 1.125_proj*u_j with fp64 alpha, or equivalently the stored noise component); report the exact relative-L2 value, not just pass/fail, since it sits near the boundary.",
+        "A supporting probe: fp32 CPU emulation of the kernel arithmetic on the same inputs to separate GPU-specific rounding from the intrinsic fp32 precision limit."
+      ],
+      "summary": "Refined error analysis for c1: both dominant error sources (product rounding in alpha*u_j and fp32 alpha error) are ~sqrt(32)*1e-7 against a residual norm of ~sqrt(32)*1e-5, i.e. ~1% relative error, landing exactly at the 0.01 tolerance; a single precise measurement of relative-L2 on the fixed workload, optionally cross-checked by an fp32 CPU emulation, is the decisive evidence.",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_o",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_o"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_o"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_o"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_o",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 18.614247832,
+      "role": "describer",
+      "round": 2,
+      "text": "The artifact context is already fully loaded, so I can describe it directly. The kernel is a Triton float32 sequential-accumulation implementation of the projection, and the workload makes b nearly parallel to u, so residual cancellation is the dominant risk surface.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Contract covers only the two float32 (32,) vectors u and b produced by make_inputs() (seed 830230); arbitrary other vectors are out of scope.",
+              "Reference (float64 or better, recentring allowed): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2; residual is guaranteed nonzero on this workload.",
+              "Output must be finite, shape (32,), with relative L2 error ||output-reference||_2 / max(||reference||,1e-12) <= 0.01.",
+              "Problem states the kernel uses float32 arithmetic, sequential accumulations, separately rounded products/sums, and disables FP fusion \u2014 these are acknowledged implementation traits, not automatic violations."
+            ],
+            "kernel_model": [
+              "_projection_kernel is a single-program (grid (1,), num_warps=1, enable_fp_fusion=False) Triton kernel with N=32 hardwired via run().",
+              "Pass 1: scalar fp32 loop over tl.static_range(0,32) accumulates numerator = sum(u*b) and denominator = sum(u*u) sequentially, then alpha = tl.div_rn(num, den).",
+              "Pass 2: second sequential scalar loop accumulates norm_squared = sum((b - u*coefficient)^2); norm = tl.sqrt(norm_squared).",
+              "Pass 3: vectorized epilogue recomputes residual = b - u*coefficient with tl.arange(0,32) and stores residual/norm via tl.div_rn into a preallocated fp32 output tensor of shape (32,).",
+              "make_inputs: u ~ N(0,1) fp32; b = fp32(1.125*u_fp64 + 1e-5*N(0,1)) \u2014 i.e., b is b-almost-exactly parallel to u with tiny orthogonal noise. Note 1.125 is exactly representable in fp32.",
+              "run() allocates output on u.device and returns it directly; no validation, no reference computation in-kernel."
+            ],
+            "open_questions": [
+              "Empirical relative-L2 gap between the fp32 kernel output and the fp64 recentred reference on the fixed workload \u2014 decisive for the 0.01 tolerance; requires an Experimenter probe.",
+              "Whether the fixed seed's residual norm is large enough (~sqrt(32)*1e-5) that fp32 product-rounding error (~1e-7*|b|) stays below 1% of it; order-of-magnitude estimate says it is borderline (ratio roughly 1e-2), so measurement is needed.",
+              "Whether tl.div_rn / separate rounding on the actual GPU matches the assumed IEEE round-to-nearest behavior assumed above (problem statement asserts separately rounded products and sums)."
+            ],
+            "risk_map": [
+              "Catastrophic cancellation in residual: b_j - alpha*u_j subtracts two O(1) values to yield O(1e-5) residuals; fp32 rounding of the products (~1e-7 relative to O(1) operands) is comparable to the noise amplitude, so the computed residual direction may deviate from the fp64 reference by an amount near the 0.01 relative-L2 tolerance. This is the decisive risk and needs a numeric probe, not source reading alone.",
+              "fp32 alpha error: numerator/denominator accumulated sequentially in fp32 give alpha accurate to ~1e-7 relative; since the ideal alpha is exactly 1.125 (b constructed as 1.125*u + eps), the residual error is dominated by per-element product rounding b_j - 1.125*u_j rather than by alpha.",
+              "Epilogue recomputation (lines 24-28) recomputes residual identically to pass 2, so norm and stored vector are consistent \u2014 no pass-to-pass inconsistency risk.",
+              "tl.arange(0, N) with N=32 is a power of two, so no masking/size hazards; N matches run()'s N=32 and the input shape.",
+              "Denominator sum(u*u) > 0 with high probability (Gaussian u, 32 elements) \u2014 division by zero essentially out of scope, but the guarantee is only 'residual nonzero' on this workload, not 'denominator nonzero' by contract.",
+              "Normalization output is unit-norm by construction (norm computed from same residuals), so finiteness is safe unless norm underflows to 0; residual norm ~1e-5*sqrt(32) ~ 6e-5 in fp32, far from underflow."
+            ],
+            "scope_notes": "In scope: the single fixed workload from make_inputs(), tolerance 0.01 relative L2, float64 reference with allowed recentring.\", \"Out of scope: adversarial alternative inputs, other N values (N is constexpr 32), GPU portability beyond the fixed artifact, performance.\", \"The tolerance is generous (1%) relative to typical fp32-vs-fp64 gaps, but the near-parallel construction of b makes the ratio error/noise-scale the governing quantity, not raw fp32 epsilon.\"]",
+            "summary": "Described case_o: fp32 Triton normalized-projection kernel on a fixed 32-length near-parallel workload; contract is 1% relative-L2 vs a float64 reference; the decisive risk is catastrophic cancellation in b - alpha*u since residual amplitude (~1e-5) is near fp32 rounding scale of the O(1) operands."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.614,
+        "input_tokens": 4777,
+        "output_tokens": 1459
+      }
+    },
+    {
+      "duration_s": 6.506884462000002,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The decisive risk is clear from the description: catastrophic cancellation in the residual on the near-parallel fixed workload, where fp32 rounding noise (~1e-7 of O(1) operands) is comparable to the orthogonal noise amplitude (~1e-5), putting the output direction near the 0.01 relative-L2 tolerance. I'll record this as the primary testable claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
+              }
+            ],
+            "statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.507,
+        "input_tokens": 13700,
+        "output_tokens": 404
+      }
+    },
+    {
+      "duration_s": 6.502152360999997,
+      "role": "skeptic",
+      "round": 4,
+      "text": "The prior claim submission was rejected only for missing scope_rationale, so I'll resubmit the same in-scope claim properly.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
+              }
+            ],
+            "scope_rationale": "The contract fixes the input domain to exactly the make_inputs() vectors (b nearly parallel to u with ~1e-5 orthogonal noise) and requires relative L2 error <= 0.01 versus a float64 reference; cancellation in b - alpha*u on this exact workload is therefore directly decisive for the stated tolerance.",
+            "statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.502,
+        "input_tokens": 14594,
+        "output_tokens": 394
+      }
+    },
+    {
+      "duration_s": 17.742956764,
+      "role": "describer",
+      "round": 5,
+      "text": "The existing description model covers the artifact, but claim c1 is still evidence-less and the error-magnitude estimate is borderline, so I'll refine the model with a sharper decomposition of the error mechanisms and probe-design guidance for the Experimenter.",
+      "tool_calls": [
+        {
+          "args": {
+            "kernel_model": [
+              "Error decomposition on the fixed workload: ideal alpha is exactly 1.125 (b = 1.125*u + 1e-5*noise, 1.125 exactly representable in fp32), so residual[j] = noise[j] with amplitude ~1e-5; ||residual||_2 ~ sqrt(32)*1e-5 ~ 6e-5.",
+              "Error source A (product rounding): each stored residual b_j - alpha*u_j has absolute error ~ ulp(1) ~ 1e-7 from rounding of alpha*u_j (and of b_j itself in its construction); ||deltaA||_2 ~ sqrt(32)*1e-7 ~ 6e-7, i.e. ~1% of ||residual||, which lands directly at the 0.01 tolerance boundary \u2014 this is what makes c1 borderline rather than clearly pass or fail.",
+              "Error source B (alpha error): fp32 alpha differs from 1.125 by ~1e-7 relative; the induced residual perturbation is along u, exactly orthogonal to the ideal residual direction, so it adds ~|alpha_err|*||u|| ~ 1e-7*sqrt(32) to the error \u2014 same order as source A.",
+              "Because both error sources are of order 1e-2 relative and partially systematic, a single run of the kernel on the fixed inputs vs a float64 recentred reference is the decisive experiment; sign cannot be predicted from source alone.",
+              "A CPU-side exact simulation is feasible: run() is a deterministic fp32 sequential loop with no fusion, so a numpy float32 emulation of lines 9-28 on the fixed u, b reproduces the GPU arithmetic to rounding (assuming IEEE round-to-nearest as the problem asserts), and gives a GPU-free estimate to cross-check."
+            ],
+            "open_questions": [
+              "Measured relative-L2 error on the fixed workload \u2014 expected order ~1e-2, right at the 0.01 tolerance; the sign of the margin is the whole verdict.",
+              "Whether the fp32 CPU emulation (round-to-nearest, no fusion) matches the GPU bit-for-bit; if it disagrees, the GPU result is still what the contract tests.",
+              "Second-order detail: whether b_j's own fp32 construction rounding (in make_inputs) is absorbed identically by both kernel and reference (it is \u2014 both read the same stored b), so only alpha*u_j rounding matters for A."
+            ],
+            "risk_map": [
+              "Decisive numeric fact for c1: expected relative error \u2248 (sources A+B, each ~ sqrt(32)*1e-7) / (sqrt(32)*1e-5) \u2248 1e-2, i.e. exactly at the 0.01 tolerance \u2014 the verdict hinges on the actual measured constant, not on qualitative 'cancellation' reasoning.",
+              "Secondary: norm_squared accumulation over ~1e-10-sized squared residuals in fp32 \u2014 relative error of the norm is small (~1e-7 relative each, sum of 32), negligible vs the residual-direction error; not the decisive risk.",
+              "Reference-side hazard for probes: a naive fp64 reference b - alpha*u computed with alpha from a non-recentred fp64 dot product also suffers mild cancellation (~1e-16 relative of O(1) operands, negligible here since 1e-16*1 << 1e-5), so recentring is optional in practice for fp64; either reference form is decisive."
+            ],
+            "scope_notes": [
+              "Probe design note: the single decisive probe is kernel output on make_inputs() vs a float64 reference (recentred: residual_j = b_j - 1.125_proj*u_j with fp64 alpha, or equivalently the stored noise component); report the exact relative-L2 value, not just pass/fail, since it sits near the boundary.",
+              "A supporting probe: fp32 CPU emulation of the kernel arithmetic on the same inputs to separate GPU-specific rounding from the intrinsic fp32 precision limit."
+            ],
+            "summary": "Refined error analysis for c1: both dominant error sources (product rounding in alpha*u_j and fp32 alpha error) are ~sqrt(32)*1e-7 against a residual norm of ~sqrt(32)*1e-5, i.e. ~1% relative error, landing exactly at the 0.01 tolerance; a single precise measurement of relative-L2 on the fixed workload, optionally cross-checked by an fp32 CPU emulation, is the decisive evidence."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.743,
+        "input_tokens": 14608,
+        "output_tokens": 1247
+      }
+    },
+    {
+      "duration_s": 6.425407379999996,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The decisive in-scope claim (c1, catastrophic cancellation on the fixed near-parallel workload) is already recorded and the description model covers both contributing error sources (product rounding and fp32 alpha error). Other residual risks (norm underflow, masking, denominator zero) are negligible or out of scope on this fixed workload. I see no additional distinct high-value claims to raise.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The single decisive in-scope risk (c1: fp32 cancellation in b - alpha*u on the fixed make_inputs() workload, expected relative-L2 error ~1e-2 vs the 0.01 tolerance) is already recorded. The description model's refined analysis shows both dominant error sources (product rounding and fp32 alpha error) feed the same boundary condition and are covered by c1; all other risks (underflow, masking with N=32 power of two, denominator zero, epilogue inconsistency) are negligible or out of scope on this fixed workload. What remains is an Experimenter probe, not new claims.",
+            "reviewed_claims": [
+              "c1"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.425,
+        "input_tokens": 23391,
+        "output_tokens": 310
+      }
+    },
+    {
+      "duration_s": 9.304178883000006,
+      "role": "experimenter",
+      "round": 7,
+      "text": "The single open claim c1 needs the decisive numeric probe: run the kernel on the fixed make_inputs() workload and compare to a float64 reference, with an fp32 CPU emulation as cross-check.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, numpy as np, torch, triton\nimport sys\nsys.path.insert(0, \"/root/numerical_cases/case_o\")\nimport kernel as K\n\nu, b = K.make_inputs(\"cuda\")\nout = K.run(u, b)\ntorch.cuda.synchronize()\nout_np = out.detach().cpu().numpy().astype(np.float64)\n\nu64 = u.detach().cpu().numpy().astype(np.float64)\nb64 = b.detach().cpu().numpy().astype(np.float64)\n\n# fp64 reference (recentred-free, cancellation negligible in fp64)\nalpha = (u64 * b64).sum() / (u64 * u64).sum()\nres = b64 - alpha * u64\nref = res / np.linalg.norm(res)\n\nerr = np.linalg.norm(out_np - ref) / max(np.linalg.norm(ref), 1e-12)\n\n# fp32 CPU emulation of kernel arithmetic\nu32 = u.detach().cpu().numpy(); b32 = b.detach().cpu().numpy()\nnum = np.float32(0.0); den = np.float32(0.0)\nfor j in range(32):\n    num = np.float32(num + np.float32(u32[j] * b32[j]))\n    den = np.float32(den + np.float32(u32[j] * u32[j]))\ncoef = np.float32(num / den)\nnsq = np.float32(0.0)\nres32 = np.empty(32, dtype=np.float32)\nfor j in range(32):\n    res32[j] = np.float32(b32[j] - np.float32(u32[j] * coef))\n    nsq = np.float32(nsq + np.float32(res32[j] * res32[j]))\nnorm = np.float32(np.sqrt(nsq))\nemu = (res32 / norm).astype(np.float64)\nerr_emu = np.linalg.norm(emu - ref) / max(np.linalg.norm(ref), 1e-12)\nbitmatch = bool(np.array_equal(emu.astype(np.float32), out.detach().cpu().numpy()))\nres_norm = float(np.linalg.norm(res))\nfinite = bool(np.all(np.isfinite(out_np)))\n\nprint(json.dumps({\n  \"rel_l2_gpu_vs_fp64ref\": float(err),\n  \"rel_l2_fp32emu_vs_fp64ref\": float(err_emu),\n  \"bitmatch_gpu_vs_emu\": bitmatch,\n  \"alpha_fp64\": float(alpha), \"alpha_fp32_kernel\": float(coef),\n  \"residual_norm_fp64\": res_norm,\n  \"tolerance\": 0.01,\n  \"passes_tolerance\": bool(err <= 0.01),\n  \"output_finite\": finite,\n  \"shape\": list(out_np.shape)\n}))",
+            "expected_signal": "relative L2 error of kernel output vs fp64 reference on fixed workload, decisive vs 0.01 tolerance"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.304,
+        "input_tokens": 24558,
+        "output_tokens": 685
+      }
+    },
+    {
+      "duration_s": 7.0938953599999905,
+      "role": "experimenter",
+      "round": 8,
+      "text": "The decisive probe for c1 has already completed: measured relative L2 error is 0.00154, well under the 0.01 tolerance, and the CPU fp32 emulation bit-matches the GPU. I'll finalize this as rebutted.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "alpha_fp32_kernel": 1.125000238418579,
+              "alpha_fp64": 1.125000242654227,
+              "bitmatch_gpu_vs_emu": true,
+              "passes_tolerance": true,
+              "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+              "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+              "residual_norm_fp64": 6.621097760007478e-05,
+              "tolerance": 0.01
+            },
+            "event_id": "t10",
+            "status": "rebutted",
+            "summary": "Decisive probe on the fixed make_inputs() workload: kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), a margin of ~6.5x below the limit. Output is finite, shape (32,). The fp32 CPU emulation of the kernel arithmetic matches the GPU output bit-for-bit, confirming the GPU arithmetic behaves as IEEE round-to-nearest as assumed. Cancellation is present (residual norm 6.6e-5 vs O(1) operands) but the resulting direction error stays well within tolerance, so c1's predicted failure does not occur on this fixed workload.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.094,
+        "input_tokens": 27659,
+        "output_tokens": 393
+      }
+    },
+    {
+      "duration_s": 5.079397126999993,
+      "role": "skeptic",
+      "round": 9,
+      "text": "The decisive probe measured relative L2 error 0.00154 versus the 0.01 tolerance on the exact fixed workload, with a bit-exact CPU fp32 emulation matching the GPU output \u2014 c1 is solidly rebutted and no other in-scope risk applies to this single fixed input. I'll record no new claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the sole in-scope claim c1 (fp32 cancellation exceeding the 0.01 tolerance) was decisively rebutted by the runtime probe on the exact fixed make_inputs() workload \u2014 measured relative L2 error 0.00154, ~6.5x below the tolerance, output finite and shape (32,), with a bit-exact fp32 CPU emulation matching the GPU output confirming IEEE round-to-nearest arithmetic as assumed. No other risks (denominator zero, underflow, masking with N=32, epilogue consistency) are material on this fixed workload, and alternative inputs are explicitly out of scope. No new claims warranted.",
+            "reviewed_claims": [
+              "c1"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.079,
+        "input_tokens": 30517,
+        "output_tokens": 248
+      }
+    },
+    {
+      "duration_s": 5.164504340999997,
+      "role": "judge",
+      "round": 10,
+      "text": "The single in-scope claim was decisively rebutted by the runtime probe on the exact fixed workload (relative L2 0.00154 vs tolerance 0.01, ~6.5x margin, finite output, bit-exact fp32 emulation cross-check), and the Skeptic signed off with no new claims. Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The contract (problem.txt) fixes the scope to the single make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise, shape (32,)) and requires a finite output within 0.01 relative-L2 of a float64 reference. The sole in-scope claim c1 \u2014 that catastrophic cancellation in b - alpha*u would push the fp32 kernel past the 0.01 tolerance \u2014 was decisively rebutted by runtime probe t10 on exactly that workload: measured relative L2 error 0.00154 (tolerance 0.01), output finite, shape (32,). A bit-exact fp32 CPU emulation of the kernel arithmetic matched the GPU output, confirming the GPU behaves as the assumed IEEE round-to-nearest arithmetic. The contract explicitly acknowledges fp32 arithmetic with sequential accumulation and disabled FP fusion, so residual fp32-vs-fp64 rounding differences within the 1% tolerance are contract-permitted, and here they sit 6.5x below the limit. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Verdict: trust.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.165,
+        "input_tokens": 30899,
+        "output_tokens": 347
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-24T00:59:09Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the sole in-scope claim c1 (fp32 cancellation exceeding the 0.01 tolerance) was decisively rebutted by the runtime probe on the exact fixed make_inputs() workload \u2014 measured relative L2 error 0.00154, ~6.5x below the tolerance, output finite and shape (32,), with a bit-exact fp32 CPU emulation matching the GPU output confirming IEEE round-to-nearest arithmetic as assumed. No other risks (denominator zero, underflow, masking with N=32, epilogue consistency) are material on this fixed workload, and alternative inputs are explicitly out of scope. No new claims warranted.",
+    "reviewed_claims": [
+      "c1"
+    ],
+    "reviewed_tool_event_count": 11,
+    "tool_event_id": "t12",
+    "turn": 9
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_o"
+      },
+      "created_at": "2026-09-24T00:57:43Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_o",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _projection_kernel(U, B, Output, N: tl.constexpr):\n    numerator = tl.full((), 0.0, tl.float32)\n    denominator = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        numerator = numerator + u * b\n        denominator = denominator + u * u\n    coefficient = tl.div_rn(numerator, denominator)\n    norm_squared = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        residual = b - u * coefficient\n        norm_squared = norm_squared + residual * residual\n    norm = tl.sqrt(norm_squared)\n    j = tl.arange(0, N)\n    u = tl.load(U + j).to(tl.float32)\n    b = tl.load(B + j).to(tl.float32)\n    residual = b - u * coefficient\n    tl.store(Output + j, tl.div_rn(residual, norm))\n\n\ndef run(u, b):\n    output = torch.empty((32,), device=u.device, dtype=torch.float32)\n    _projection_kernel[(1,)](u, b, output, N=32, num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(830230))\n    u = rng.normal(size=32).astype(np.float32)\n    b = (1.125 * u.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n    return u, b\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "passed": null,
+        "problem_text": "Compute a normalized orthogonal projection for a fixed public workload.\n\nOnly the two float32 vectors u and b returned by make_inputs() are in scope.\nEach has shape (32,). The mathematical reference on these actual stored inputs is\n  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]\n  residual[j] = b[j] - alpha*u[j]\n  reference = residual / ||residual||_2.\nUse at least float64 accuracy for the reference. Algebraically equivalent\nrecentring is allowed to avoid numerical cancellation in the reference itself.\nThe residual on this workload is nonzero.\n\nThe output must be a finite vector of shape (32,), and\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.\n\nDecide whether this kernel satisfies that contract for the fixed generated\nworkload. Arbitrary alternative vectors are outside the scope. The kernel uses\nfloat32 arithmetic, sequential accumulations and separately rounded products\nand sums; its launch disables FP multiply/add fusion.\n",
+        "rounds": null,
+        "session_dir": "/root/numerical_cases/case_o",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_o"
+      },
+      "created_at": "2026-09-24T00:57:43Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute a normalized orthogonal projection for a fixed public workload.\n\nOnly the two float32 vectors u and b returned by make_inputs() are in scope.\nEach has shape (32,). The mathematical reference on these actual stored inputs is\n  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]\n  residual[j] = b[j] - alpha*u[j]\n  reference = residual / ||residual||_2.\nUse at least float64 accuracy for the reference. Algebraically equivalent\nrecentring is allowed to avoid numerical cancellation in the reference itself.\nThe residual on this workload is nonzero.\n\nThe output must be a finite vector of shape (32,), and\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.\n\nDecide whether this kernel satisfies that contract for the fixed generated\nworkload. Arbitrary alternative vectors are outside the scope. The kernel uses\nfloat32 arithmetic, sequential accumulations and separately rounded products\nand sums; its launch disables FP multiply/add fusion.\n",
+        "entry": "case_o",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_o"
+      },
+      "created_at": "2026-09-24T00:57:43Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_o",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1519
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 67
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 952
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_o",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T00:57:43Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_o\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_o",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 67,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Contract covers only the two float32 (32,) vectors u and b produced by make_inputs() (seed 830230); arbitrary other vectors are out of scope.",
+          "Reference (float64 or better, recentring allowed): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2; residual is guaranteed nonzero on this workload.",
+          "Output must be finite, shape (32,), with relative L2 error ||output-reference||_2 / max(||reference||,1e-12) <= 0.01.",
+          "Problem states the kernel uses float32 arithmetic, sequential accumulations, separately rounded products/sums, and disables FP fusion \u2014 these are acknowledged implementation traits, not automatic violations."
+        ],
+        "kernel_model": [
+          "_projection_kernel is a single-program (grid (1,), num_warps=1, enable_fp_fusion=False) Triton kernel with N=32 hardwired via run().",
+          "Pass 1: scalar fp32 loop over tl.static_range(0,32) accumulates numerator = sum(u*b) and denominator = sum(u*u) sequentially, then alpha = tl.div_rn(num, den).",
+          "Pass 2: second sequential scalar loop accumulates norm_squared = sum((b - u*coefficient)^2); norm = tl.sqrt(norm_squared).",
+          "Pass 3: vectorized epilogue recomputes residual = b - u*coefficient with tl.arange(0,32) and stores residual/norm via tl.div_rn into a preallocated fp32 output tensor of shape (32,).",
+          "make_inputs: u ~ N(0,1) fp32; b = fp32(1.125*u_fp64 + 1e-5*N(0,1)) \u2014 i.e., b is b-almost-exactly parallel to u with tiny orthogonal noise. Note 1.125 is exactly representable in fp32.",
+          "run() allocates output on u.device and returns it directly; no validation, no reference computation in-kernel."
+        ],
+        "open_questions": [
+          "Empirical relative-L2 gap between the fp32 kernel output and the fp64 recentred reference on the fixed workload \u2014 decisive for the 0.01 tolerance; requires an Experimenter probe.",
+          "Whether the fixed seed's residual norm is large enough (~sqrt(32)*1e-5) that fp32 product-rounding error (~1e-7*|b|) stays below 1% of it; order-of-magnitude estimate says it is borderline (ratio roughly 1e-2), so measurement is needed.",
+          "Whether tl.div_rn / separate rounding on the actual GPU matches the assumed IEEE round-to-nearest behavior assumed above (problem statement asserts separately rounded products and sums)."
+        ],
+        "risk_map": [
+          "Catastrophic cancellation in residual: b_j - alpha*u_j subtracts two O(1) values to yield O(1e-5) residuals; fp32 rounding of the products (~1e-7 relative to O(1) operands) is comparable to the noise amplitude, so the computed residual direction may deviate from the fp64 reference by an amount near the 0.01 relative-L2 tolerance. This is the decisive risk and needs a numeric probe, not source reading alone.",
+          "fp32 alpha error: numerator/denominator accumulated sequentially in fp32 give alpha accurate to ~1e-7 relative; since the ideal alpha is exactly 1.125 (b constructed as 1.125*u + eps), the residual error is dominated by per-element product rounding b_j - 1.125*u_j rather than by alpha.",
+          "Epilogue recomputation (lines 24-28) recomputes residual identically to pass 2, so norm and stored vector are consistent \u2014 no pass-to-pass inconsistency risk.",
+          "tl.arange(0, N) with N=32 is a power of two, so no masking/size hazards; N matches run()'s N=32 and the input shape.",
+          "Denominator sum(u*u) > 0 with high probability (Gaussian u, 32 elements) \u2014 division by zero essentially out of scope, but the guarantee is only 'residual nonzero' on this workload, not 'denominator nonzero' by contract.",
+          "Normalization output is unit-norm by construction (norm computed from same residuals), so finiteness is safe unless norm underflows to 0; residual norm ~1e-5*sqrt(32) ~ 6e-5 in fp32, far from underflow."
+        ],
+        "scope_notes": "In scope: the single fixed workload from make_inputs(), tolerance 0.01 relative L2, float64 reference with allowed recentring.\", \"Out of scope: adversarial alternative inputs, other N values (N is constexpr 32), GPU portability beyond the fixed artifact, performance.\", \"The tolerance is generous (1%) relative to typical fp32-vs-fp64 gaps, but the near-parallel construction of b makes the ratio error/noise-scale the governing quantity, not raw fp32 epsilon.\"]",
+        "summary": "Described case_o: fp32 Triton normalized-projection kernel on a fixed 32-length near-parallel workload; contract is 1% relative-L2 vs a float64 reference; the decisive risk is catastrophic cancellation in b - alpha*u since residual amplitude (~1e-5) is near fp32 rounding scale of the O(1) operands."
+      },
+      "created_at": "2026-09-24T00:58:04Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Contract covers only the two float32 (32,) vectors u and b produced by make_inputs() (seed 830230); arbitrary other vectors are out of scope.",
+            "Reference (float64 or better, recentring allowed): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2; residual is guaranteed nonzero on this workload.",
+            "Output must be finite, shape (32,), with relative L2 error ||output-reference||_2 / max(||reference||,1e-12) <= 0.01.",
+            "Problem states the kernel uses float32 arithmetic, sequential accumulations, separately rounded products/sums, and disables FP fusion \u2014 these are acknowledged implementation traits, not automatic violations."
+          ],
+          "kernel_model": [
+            "_projection_kernel is a single-program (grid (1,), num_warps=1, enable_fp_fusion=False) Triton kernel with N=32 hardwired via run().",
+            "Pass 1: scalar fp32 loop over tl.static_range(0,32) accumulates numerator = sum(u*b) and denominator = sum(u*u) sequentially, then alpha = tl.div_rn(num, den).",
+            "Pass 2: second sequential scalar loop accumulates norm_squared = sum((b - u*coefficient)^2); norm = tl.sqrt(norm_squared).",
+            "Pass 3: vectorized epilogue recomputes residual = b - u*coefficient with tl.arange(0,32) and stores residual/norm via tl.div_rn into a preallocated fp32 output tensor of shape (32,).",
+            "make_inputs: u ~ N(0,1) fp32; b = fp32(1.125*u_fp64 + 1e-5*N(0,1)) \u2014 i.e., b is b-almost-exactly parallel to u with tiny orthogonal noise. Note 1.125 is exactly representable in fp32.",
+            "run() allocates output on u.device and returns it directly; no validation, no reference computation in-kernel."
+          ],
+          "open_questions": [
+            "Empirical relative-L2 gap between the fp32 kernel output and the fp64 recentred reference on the fixed workload \u2014 decisive for the 0.01 tolerance; requires an Experimenter probe.",
+            "Whether the fixed seed's residual norm is large enough (~sqrt(32)*1e-5) that fp32 product-rounding error (~1e-7*|b|) stays below 1% of it; order-of-magnitude estimate says it is borderline (ratio roughly 1e-2), so measurement is needed.",
+            "Whether tl.div_rn / separate rounding on the actual GPU matches the assumed IEEE round-to-nearest behavior assumed above (problem statement asserts separately rounded products and sums)."
+          ],
+          "risk_map": [
+            "Catastrophic cancellation in residual: b_j - alpha*u_j subtracts two O(1) values to yield O(1e-5) residuals; fp32 rounding of the products (~1e-7 relative to O(1) operands) is comparable to the noise amplitude, so the computed residual direction may deviate from the fp64 reference by an amount near the 0.01 relative-L2 tolerance. This is the decisive risk and needs a numeric probe, not source reading alone.",
+            "fp32 alpha error: numerator/denominator accumulated sequentially in fp32 give alpha accurate to ~1e-7 relative; since the ideal alpha is exactly 1.125 (b constructed as 1.125*u + eps), the residual error is dominated by per-element product rounding b_j - 1.125*u_j rather than by alpha.",
+            "Epilogue recomputation (lines 24-28) recomputes residual identically to pass 2, so norm and stored vector are consistent \u2014 no pass-to-pass inconsistency risk.",
+            "tl.arange(0, N) with N=32 is a power of two, so no masking/size hazards; N matches run()'s N=32 and the input shape.",
+            "Denominator sum(u*u) > 0 with high probability (Gaussian u, 32 elements) \u2014 division by zero essentially out of scope, but the guarantee is only 'residual nonzero' on this workload, not 'denominator nonzero' by contract.",
+            "Normalization output is unit-norm by construction (norm computed from same residuals), so finiteness is safe unless norm underflows to 0; residual norm ~1e-5*sqrt(32) ~ 6e-5 in fp32, far from underflow."
+          ],
+          "scope_notes": [
+            "In scope: the single fixed workload from make_inputs(), tolerance 0.01 relative L2, float64 reference with allowed recentring.\", \"Out of scope: adversarial alternative inputs, other N values (N is constexpr 32), GPU portability beyond the fixed artifact, performance.\", \"The tolerance is generous (1%) relative to typical fp32-vs-fp64 gaps, but the near-parallel construction of b makes the ratio error/noise-scale the governing quantity, not raw fp32 epsilon.\"]"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Contract covers only the two float32 (32,) vectors u and b produced by make_inputs() (seed 830230); arbitrary other vectors are out of scope.",
+            "Reference (float64 or better, recentring allowed): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2; residual is guaranteed nonzero on this workload.",
+            "Output must be finite, shape (32,), with relative L2 error ||output-reference||_2 / max(||reference||,1e-12) <= 0.01.",
+            "Problem states the kernel uses float32 arithmetic, sequential accumulations, separately rounded products/sums, and disables FP fusion \u2014 these are acknowledged implementation traits, not automatic violations."
+          ],
+          "created_at": "2026-09-24T00:58:04Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "_projection_kernel is a single-program (grid (1,), num_warps=1, enable_fp_fusion=False) Triton kernel with N=32 hardwired via run().",
+            "Pass 1: scalar fp32 loop over tl.static_range(0,32) accumulates numerator = sum(u*b) and denominator = sum(u*u) sequentially, then alpha = tl.div_rn(num, den).",
+            "Pass 2: second sequential scalar loop accumulates norm_squared = sum((b - u*coefficient)^2); norm = tl.sqrt(norm_squared).",
+            "Pass 3: vectorized epilogue recomputes residual = b - u*coefficient with tl.arange(0,32) and stores residual/norm via tl.div_rn into a preallocated fp32 output tensor of shape (32,).",
+            "make_inputs: u ~ N(0,1) fp32; b = fp32(1.125*u_fp64 + 1e-5*N(0,1)) \u2014 i.e., b is b-almost-exactly parallel to u with tiny orthogonal noise. Note 1.125 is exactly representable in fp32.",
+            "run() allocates output on u.device and returns it directly; no validation, no reference computation in-kernel."
+          ],
+          "open_questions": [
+            "Empirical relative-L2 gap between the fp32 kernel output and the fp64 recentred reference on the fixed workload \u2014 decisive for the 0.01 tolerance; requires an Experimenter probe.",
+            "Whether the fixed seed's residual norm is large enough (~sqrt(32)*1e-5) that fp32 product-rounding error (~1e-7*|b|) stays below 1% of it; order-of-magnitude estimate says it is borderline (ratio roughly 1e-2), so measurement is needed.",
+            "Whether tl.div_rn / separate rounding on the actual GPU matches the assumed IEEE round-to-nearest behavior assumed above (problem statement asserts separately rounded products and sums)."
+          ],
+          "risk_map": [
+            "Catastrophic cancellation in residual: b_j - alpha*u_j subtracts two O(1) values to yield O(1e-5) residuals; fp32 rounding of the products (~1e-7 relative to O(1) operands) is comparable to the noise amplitude, so the computed residual direction may deviate from the fp64 reference by an amount near the 0.01 relative-L2 tolerance. This is the decisive risk and needs a numeric probe, not source reading alone.",
+            "fp32 alpha error: numerator/denominator accumulated sequentially in fp32 give alpha accurate to ~1e-7 relative; since the ideal alpha is exactly 1.125 (b constructed as 1.125*u + eps), the residual error is dominated by per-element product rounding b_j - 1.125*u_j rather than by alpha.",
+            "Epilogue recomputation (lines 24-28) recomputes residual identically to pass 2, so norm and stored vector are consistent \u2014 no pass-to-pass inconsistency risk.",
+            "tl.arange(0, N) with N=32 is a power of two, so no masking/size hazards; N matches run()'s N=32 and the input shape.",
+            "Denominator sum(u*u) > 0 with high probability (Gaussian u, 32 elements) \u2014 division by zero essentially out of scope, but the guarantee is only 'residual nonzero' on this workload, not 'denominator nonzero' by contract.",
+            "Normalization output is unit-norm by construction (norm computed from same residuals), so finiteness is safe unless norm underflows to 0; residual norm ~1e-5*sqrt(32) ~ 6e-5 in fp32, far from underflow."
+          ],
+          "scope_notes": [
+            "In scope: the single fixed workload from make_inputs(), tolerance 0.01 relative L2, float64 reference with allowed recentring.\", \"Out of scope: adversarial alternative inputs, other N values (N is constexpr 32), GPU portability beyond the fixed artifact, performance.\", \"The tolerance is generous (1%) relative to typical fp32-vs-fp64 gaps, but the near-parallel construction of b makes the ratio error/noise-scale the governing quantity, not raw fp32 epsilon.\"]"
+          ],
+          "summary": "Described case_o: fp32 Triton normalized-projection kernel on a fixed 32-length near-parallel workload; contract is 1% relative-L2 vs a float64 reference; the decisive risk is catastrophic cancellation in b - alpha*u since residual amplitude (~1e-5) is near fp32 rounding scale of the O(1) operands.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
+          }
+        ],
+        "statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01."
+      },
+      "created_at": "2026-09-24T00:58:10Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
+          }
+        ],
+        "scope_rationale": "The contract fixes the input domain to exactly the make_inputs() vectors (b nearly parallel to u with ~1e-5 orthogonal noise) and requires relative L2 error <= 0.01 versus a float64 reference; cancellation in b - alpha*u on this exact workload is therefore directly decisive for the stated tolerance.",
+        "statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01."
+      },
+      "created_at": "2026-09-24T00:58:17Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-24T00:58:17Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
+          }
+        ],
+        "scope_rationale": "The contract fixes the input domain to exactly the make_inputs() vectors (b nearly parallel to u with ~1e-5 orthogonal noise) and requires relative L2 error <= 0.01 versus a float64 reference; cancellation in b - alpha*u on this exact workload is therefore directly decisive for the stated tolerance.",
+        "statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01.",
+        "status": "open",
+        "updated_at": "2026-09-24T00:58:17Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "kernel_model": [
+          "Error decomposition on the fixed workload: ideal alpha is exactly 1.125 (b = 1.125*u + 1e-5*noise, 1.125 exactly representable in fp32), so residual[j] = noise[j] with amplitude ~1e-5; ||residual||_2 ~ sqrt(32)*1e-5 ~ 6e-5.",
+          "Error source A (product rounding): each stored residual b_j - alpha*u_j has absolute error ~ ulp(1) ~ 1e-7 from rounding of alpha*u_j (and of b_j itself in its construction); ||deltaA||_2 ~ sqrt(32)*1e-7 ~ 6e-7, i.e. ~1% of ||residual||, which lands directly at the 0.01 tolerance boundary \u2014 this is what makes c1 borderline rather than clearly pass or fail.",
+          "Error source B (alpha error): fp32 alpha differs from 1.125 by ~1e-7 relative; the induced residual perturbation is along u, exactly orthogonal to the ideal residual direction, so it adds ~|alpha_err|*||u|| ~ 1e-7*sqrt(32) to the error \u2014 same order as source A.",
+          "Because both error sources are of order 1e-2 relative and partially systematic, a single run of the kernel on the fixed inputs vs a float64 recentred reference is the decisive experiment; sign cannot be predicted from source alone.",
+          "A CPU-side exact simulation is feasible: run() is a deterministic fp32 sequential loop with no fusion, so a numpy float32 emulation of lines 9-28 on the fixed u, b reproduces the GPU arithmetic to rounding (assuming IEEE round-to-nearest as the problem asserts), and gives a GPU-free estimate to cross-check."
+        ],
+        "open_questions": [
+          "Measured relative-L2 error on the fixed workload \u2014 expected order ~1e-2, right at the 0.01 tolerance; the sign of the margin is the whole verdict.",
+          "Whether the fp32 CPU emulation (round-to-nearest, no fusion) matches the GPU bit-for-bit; if it disagrees, the GPU result is still what the contract tests.",
+          "Second-order detail: whether b_j's own fp32 construction rounding (in make_inputs) is absorbed identically by both kernel and reference (it is \u2014 both read the same stored b), so only alpha*u_j rounding matters for A."
+        ],
+        "risk_map": [
+          "Decisive numeric fact for c1: expected relative error \u2248 (sources A+B, each ~ sqrt(32)*1e-7) / (sqrt(32)*1e-5) \u2248 1e-2, i.e. exactly at the 0.01 tolerance \u2014 the verdict hinges on the actual measured constant, not on qualitative 'cancellation' reasoning.",
+          "Secondary: norm_squared accumulation over ~1e-10-sized squared residuals in fp32 \u2014 relative error of the norm is small (~1e-7 relative each, sum of 32), negligible vs the residual-direction error; not the decisive risk.",
+          "Reference-side hazard for probes: a naive fp64 reference b - alpha*u computed with alpha from a non-recentred fp64 dot product also suffers mild cancellation (~1e-16 relative of O(1) operands, negligible here since 1e-16*1 << 1e-5), so recentring is optional in practice for fp64; either reference form is decisive."
+        ],
+        "scope_notes": [
+          "Probe design note: the single decisive probe is kernel output on make_inputs() vs a float64 reference (recentred: residual_j = b_j - 1.125_proj*u_j with fp64 alpha, or equivalently the stored noise component); report the exact relative-L2 value, not just pass/fail, since it sits near the boundary.",
+          "A supporting probe: fp32 CPU emulation of the kernel arithmetic on the same inputs to separate GPU-specific rounding from the intrinsic fp32 precision limit."
+        ],
+        "summary": "Refined error analysis for c1: both dominant error sources (product rounding in alpha*u_j and fp32 alpha error) are ~sqrt(32)*1e-7 against a residual norm of ~sqrt(32)*1e-5, i.e. ~1% relative error, landing exactly at the 0.01 tolerance; a single precise measurement of relative-L2 on the fixed workload, optionally cross-checked by an fp32 CPU emulation, is the decisive evidence."
+      },
+      "created_at": "2026-09-24T00:58:34Z",
+      "id": "t8",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Contract covers only the two float32 (32,) vectors u and b produced by make_inputs() (seed 830230); arbitrary other vectors are out of scope.",
+            "Reference (float64 or better, recentring allowed): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2; residual is guaranteed nonzero on this workload.",
+            "Output must be finite, shape (32,), with relative L2 error ||output-reference||_2 / max(||reference||,1e-12) <= 0.01.",
+            "Problem states the kernel uses float32 arithmetic, sequential accumulations, separately rounded products/sums, and disables FP fusion \u2014 these are acknowledged implementation traits, not automatic violations."
+          ],
+          "kernel_model": [
+            "_projection_kernel is a single-program (grid (1,), num_warps=1, enable_fp_fusion=False) Triton kernel with N=32 hardwired via run().",
+            "Pass 1: scalar fp32 loop over tl.static_range(0,32) accumulates numerator = sum(u*b) and denominator = sum(u*u) sequentially, then alpha = tl.div_rn(num, den).",
+            "Pass 2: second sequential scalar loop accumulates norm_squared = sum((b - u*coefficient)^2); norm = tl.sqrt(norm_squared).",
+            "Pass 3: vectorized epilogue recomputes residual = b - u*coefficient with tl.arange(0,32) and stores residual/norm via tl.div_rn into a preallocated fp32 output tensor of shape (32,).",
+            "make_inputs: u ~ N(0,1) fp32; b = fp32(1.125*u_fp64 + 1e-5*N(0,1)) \u2014 i.e., b is b-almost-exactly parallel to u with tiny orthogonal noise. Note 1.125 is exactly representable in fp32.",
+            "run() allocates output on u.device and returns it directly; no validation, no reference computation in-kernel.",
+            "Error decomposition on the fixed workload: ideal alpha is exactly 1.125 (b = 1.125*u + 1e-5*noise, 1.125 exactly representable in fp32), so residual[j] = noise[j] with amplitude ~1e-5; ||residual||_2 ~ sqrt(32)*1e-5 ~ 6e-5.",
+            "Error source A (product rounding): each stored residual b_j - alpha*u_j has absolute error ~ ulp(1) ~ 1e-7 from rounding of alpha*u_j (and of b_j itself in its construction); ||deltaA||_2 ~ sqrt(32)*1e-7 ~ 6e-7, i.e. ~1% of ||residual||, which lands directly at the 0.01 tolerance boundary \u2014 this is what makes c1 borderline rather than clearly pass or fail.",
+            "Error source B (alpha error): fp32 alpha differs from 1.125 by ~1e-7 relative; the induced residual perturbation is along u, exactly orthogonal to the ideal residual direction, so it adds ~|alpha_err|*||u|| ~ 1e-7*sqrt(32) to the error \u2014 same order as source A.",
+            "Because both error sources are of order 1e-2 relative and partially systematic, a single run of the kernel on the fixed inputs vs a float64 recentred reference is the decisive experiment; sign cannot be predicted from source alone.",
+            "A CPU-side exact simulation is feasible: run() is a deterministic fp32 sequential loop with no fusion, so a numpy float32 emulation of lines 9-28 on the fixed u, b reproduces the GPU arithmetic to rounding (assuming IEEE round-to-nearest as the problem asserts), and gives a GPU-free estimate to cross-check."
+          ],
+          "open_questions": [
+            "Empirical relative-L2 gap between the fp32 kernel output and the fp64 recentred reference on the fixed workload \u2014 decisive for the 0.01 tolerance; requires an Experimenter probe.",
+            "Whether the fixed seed's residual norm is large enough (~sqrt(32)*1e-5) that fp32 product-rounding error (~1e-7*|b|) stays below 1% of it; order-of-magnitude estimate says it is borderline (ratio roughly 1e-2), so measurement is needed.",
+            "Whether tl.div_rn / separate rounding on the actual GPU matches the assumed IEEE round-to-nearest behavior assumed above (problem statement asserts separately rounded products and sums).",
+            "Measured relative-L2 error on the fixed workload \u2014 expected order ~1e-2, right at the 0.01 tolerance; the sign of the margin is the whole verdict.",
+            "Whether the fp32 CPU emulation (round-to-nearest, no fusion) matches the GPU bit-for-bit; if it disagrees, the GPU result is still what the contract tests.",
+            "Second-order detail: whether b_j's own fp32 construction rounding (in make_inputs) is absorbed identically by both kernel and reference (it is \u2014 both read the same stored b), so only alpha*u_j rounding matters for A."
+          ],
+          "risk_map": [
+            "Catastrophic cancellation in residual: b_j - alpha*u_j subtracts two O(1) values to yield O(1e-5) residuals; fp32 rounding of the products (~1e-7 relative to O(1) operands) is comparable to the noise amplitude, so the computed residual direction may deviate from the fp64 reference by an amount near the 0.01 relative-L2 tolerance. This is the decisive risk and needs a numeric probe, not source reading alone.",
+            "fp32 alpha error: numerator/denominator accumulated sequentially in fp32 give alpha accurate to ~1e-7 relative; since the ideal alpha is exactly 1.125 (b constructed as 1.125*u + eps), the residual error is dominated by per-element product rounding b_j - 1.125*u_j rather than by alpha.",
+            "Epilogue recomputation (lines 24-28) recomputes residual identically to pass 2, so norm and stored vector are consistent \u2014 no pass-to-pass inconsistency risk.",
+            "tl.arange(0, N) with N=32 is a power of two, so no masking/size hazards; N matches run()'s N=32 and the input shape.",
+            "Denominator sum(u*u) > 0 with high probability (Gaussian u, 32 elements) \u2014 division by zero essentially out of scope, but the guarantee is only 'residual nonzero' on this workload, not 'denominator nonzero' by contract.",
+            "Normalization output is unit-norm by construction (norm computed from same residuals), so finiteness is safe unless norm underflows to 0; residual norm ~1e-5*sqrt(32) ~ 6e-5 in fp32, far from underflow.",
+            "Decisive numeric fact for c1: expected relative error \u2248 (sources A+B, each ~ sqrt(32)*1e-7) / (sqrt(32)*1e-5) \u2248 1e-2, i.e. exactly at the 0.01 tolerance \u2014 the verdict hinges on the actual measured constant, not on qualitative 'cancellation' reasoning.",
+            "Secondary: norm_squared accumulation over ~1e-10-sized squared residuals in fp32 \u2014 relative error of the norm is small (~1e-7 relative each, sum of 32), negligible vs the residual-direction error; not the decisive risk.",
+            "Reference-side hazard for probes: a naive fp64 reference b - alpha*u computed with alpha from a non-recentred fp64 dot product also suffers mild cancellation (~1e-16 relative of O(1) operands, negligible here since 1e-16*1 << 1e-5), so recentring is optional in practice for fp64; either reference form is decisive."
+          ],
+          "scope_notes": [
+            "In scope: the single fixed workload from make_inputs(), tolerance 0.01 relative L2, float64 reference with allowed recentring.\", \"Out of scope: adversarial alternative inputs, other N values (N is constexpr 32), GPU portability beyond the fixed artifact, performance.\", \"The tolerance is generous (1%) relative to typical fp32-vs-fp64 gaps, but the near-parallel construction of b makes the ratio error/noise-scale the governing quantity, not raw fp32 epsilon.\"]",
+            "Probe design note: the single decisive probe is kernel output on make_inputs() vs a float64 reference (recentred: residual_j = b_j - 1.125_proj*u_j with fp64 alpha, or equivalently the stored noise component); report the exact relative-L2 value, not just pass/fail, since it sits near the boundary.",
+            "A supporting probe: fp32 CPU emulation of the kernel arithmetic on the same inputs to separate GPU-specific rounding from the intrinsic fp32 precision limit."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [],
+          "created_at": "2026-09-24T00:58:34Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Error decomposition on the fixed workload: ideal alpha is exactly 1.125 (b = 1.125*u + 1e-5*noise, 1.125 exactly representable in fp32), so residual[j] = noise[j] with amplitude ~1e-5; ||residual||_2 ~ sqrt(32)*1e-5 ~ 6e-5.",
+            "Error source A (product rounding): each stored residual b_j - alpha*u_j has absolute error ~ ulp(1) ~ 1e-7 from rounding of alpha*u_j (and of b_j itself in its construction); ||deltaA||_2 ~ sqrt(32)*1e-7 ~ 6e-7, i.e. ~1% of ||residual||, which lands directly at the 0.01 tolerance boundary \u2014 this is what makes c1 borderline rather than clearly pass or fail.",
+            "Error source B (alpha error): fp32 alpha differs from 1.125 by ~1e-7 relative; the induced residual perturbation is along u, exactly orthogonal to the ideal residual direction, so it adds ~|alpha_err|*||u|| ~ 1e-7*sqrt(32) to the error \u2014 same order as source A.",
+            "Because both error sources are of order 1e-2 relative and partially systematic, a single run of the kernel on the fixed inputs vs a float64 recentred reference is the decisive experiment; sign cannot be predicted from source alone.",
+            "A CPU-side exact simulation is feasible: run() is a deterministic fp32 sequential loop with no fusion, so a numpy float32 emulation of lines 9-28 on the fixed u, b reproduces the GPU arithmetic to rounding (assuming IEEE round-to-nearest as the problem asserts), and gives a GPU-free estimate to cross-check."
+          ],
+          "open_questions": [
+            "Measured relative-L2 error on the fixed workload \u2014 expected order ~1e-2, right at the 0.01 tolerance; the sign of the margin is the whole verdict.",
+            "Whether the fp32 CPU emulation (round-to-nearest, no fusion) matches the GPU bit-for-bit; if it disagrees, the GPU result is still what the contract tests.",
+            "Second-order detail: whether b_j's own fp32 construction rounding (in make_inputs) is absorbed identically by both kernel and reference (it is \u2014 both read the same stored b), so only alpha*u_j rounding matters for A."
+          ],
+          "risk_map": [
+            "Decisive numeric fact for c1: expected relative error \u2248 (sources A+B, each ~ sqrt(32)*1e-7) / (sqrt(32)*1e-5) \u2248 1e-2, i.e. exactly at the 0.01 tolerance \u2014 the verdict hinges on the actual measured constant, not on qualitative 'cancellation' reasoning.",
+            "Secondary: norm_squared accumulation over ~1e-10-sized squared residuals in fp32 \u2014 relative error of the norm is small (~1e-7 relative each, sum of 32), negligible vs the residual-direction error; not the decisive risk.",
+            "Reference-side hazard for probes: a naive fp64 reference b - alpha*u computed with alpha from a non-recentred fp64 dot product also suffers mild cancellation (~1e-16 relative of O(1) operands, negligible here since 1e-16*1 << 1e-5), so recentring is optional in practice for fp64; either reference form is decisive."
+          ],
+          "scope_notes": [
+            "Probe design note: the single decisive probe is kernel output on make_inputs() vs a float64 reference (recentred: residual_j = b_j - 1.125_proj*u_j with fp64 alpha, or equivalently the stored noise component); report the exact relative-L2 value, not just pass/fail, since it sits near the boundary.",
+            "A supporting probe: fp32 CPU emulation of the kernel arithmetic on the same inputs to separate GPU-specific rounding from the intrinsic fp32 precision limit."
+          ],
+          "summary": "Refined error analysis for c1: both dominant error sources (product rounding in alpha*u_j and fp32 alpha error) are ~sqrt(32)*1e-7 against a residual norm of ~sqrt(32)*1e-5, i.e. ~1% relative error, landing exactly at the 0.01 tolerance; a single precise measurement of relative-L2 on the fixed workload, optionally cross-checked by an fp32 CPU emulation, is the decisive evidence.",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "The single decisive in-scope risk (c1: fp32 cancellation in b - alpha*u on the fixed make_inputs() workload, expected relative-L2 error ~1e-2 vs the 0.01 tolerance) is already recorded. The description model's refined analysis shows both dominant error sources (product rounding and fp32 alpha error) feed the same boundary condition and are covered by c1; all other risks (underflow, masking with N=32 power of two, denominator zero, epilogue inconsistency) are negligible or out of scope on this fixed workload. What remains is an Experimenter probe, not new claims.",
+        "reviewed_claims": [
+          "c1"
+        ]
+      },
+      "created_at": "2026-09-24T00:58:41Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-24T00:58:41Z",
+        "decision": "no_new_claims",
+        "reason": "The single decisive in-scope risk (c1: fp32 cancellation in b - alpha*u on the fixed make_inputs() workload, expected relative-L2 error ~1e-2 vs the 0.01 tolerance) is already recorded. The description model's refined analysis shows both dominant error sources (product rounding and fp32 alpha error) feed the same boundary condition and are covered by c1; all other risks (underflow, masking with N=32 power of two, denominator zero, epilogue inconsistency) are negligible or out of scope on this fixed workload. What remains is an Experimenter probe, not new claims.",
+        "reviewed_claims": [
+          "c1"
+        ],
+        "reviewed_tool_event_count": 8,
+        "tool_event_id": "t9",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, numpy as np, torch, triton\nimport sys\nsys.path.insert(0, \"/root/numerical_cases/case_o\")\nimport kernel as K\n\nu, b = K.make_inputs(\"cuda\")\nout = K.run(u, b)\ntorch.cuda.synchronize()\nout_np = out.detach().cpu().numpy().astype(np.float64)\n\nu64 = u.detach().cpu().numpy().astype(np.float64)\nb64 = b.detach().cpu().numpy().astype(np.float64)\n\n# fp64 reference (recentred-free, cancellation negligible in fp64)\nalpha = (u64 * b64).sum() / (u64 * u64).sum()\nres = b64 - alpha * u64\nref = res / np.linalg.norm(res)\n\nerr = np.linalg.norm(out_np - ref) / max(np.linalg.norm(ref), 1e-12)\n\n# fp32 CPU emulation of kernel arithmetic\nu32 = u.detach().cpu().numpy(); b32 = b.detach().cpu().numpy()\nnum = np.float32(0.0); den = np.float32(0.0)\nfor j in range(32):\n    num = np.float32(num + np.float32(u32[j] * b32[j]))\n    den = np.float32(den + np.float32(u32[j] * u32[j]))\ncoef = np.float32(num / den)\nnsq = np.float32(0.0)\nres32 = np.empty(32, dtype=np.float32)\nfor j in range(32):\n    res32[j] = np.float32(b32[j] - np.float32(u32[j] * coef))\n    nsq = np.float32(nsq + np.float32(res32[j] * res32[j]))\nnorm = np.float32(np.sqrt(nsq))\nemu = (res32 / norm).astype(np.float64)\nerr_emu = np.linalg.norm(emu - ref) / max(np.linalg.norm(ref), 1e-12)\nbitmatch = bool(np.array_equal(emu.astype(np.float32), out.detach().cpu().numpy()))\nres_norm = float(np.linalg.norm(res))\nfinite = bool(np.all(np.isfinite(out_np)))\n\nprint(json.dumps({\n  \"rel_l2_gpu_vs_fp64ref\": float(err),\n  \"rel_l2_fp32emu_vs_fp64ref\": float(err_emu),\n  \"bitmatch_gpu_vs_emu\": bitmatch,\n  \"alpha_fp64\": float(alpha), \"alpha_fp32_kernel\": float(coef),\n  \"residual_norm_fp64\": res_norm,\n  \"tolerance\": 0.01,\n  \"passes_tolerance\": bool(err <= 0.01),\n  \"output_finite\": finite,\n  \"shape\": list(out_np.shape)\n}))",
+        "expected_signal": "relative L2 error of kernel output vs fp64 reference on fixed workload, decisive vs 0.01 tolerance"
+      },
+      "created_at": "2026-09-24T00:58:57Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "074641770771e5c1fc48d9d519ff0efc8ed7ffec4ca92573fa6391566835b04d"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "2e903c7fb1457efa0e66ee8ef0d677a9be64302f357be2e499a35168268cc4dc"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t10_json_result.json",
+            "sha256": "a322ea00b8741075859bf534de6c2d79f7cea41245aec72cbe9a1219e146c5b2"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01.",
+        "cwd": "/root/numerical_cases/case_o",
+        "duration_s": 7.05006,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "074641770771e5c1fc48d9d519ff0efc8ed7ffec4ca92573fa6391566835b04d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "2e903c7fb1457efa0e66ee8ef0d677a9be64302f357be2e499a35168268cc4dc"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "a322ea00b8741075859bf534de6c2d79f7cea41245aec72cbe9a1219e146c5b2"
+              }
+            ],
+            "duration_s": 7.05006,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of kernel output vs fp64 reference on fixed workload, decisive vs 0.01 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "alpha_fp32_kernel": 1.125000238418579,
+              "alpha_fp64": 1.125000242654227,
+              "bitmatch_gpu_vs_emu": true,
+              "output_finite": true,
+              "passes_tolerance": true,
+              "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+              "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+              "residual_norm_fp64": 6.621097760007478e-05,
+              "shape": [
+                32
+              ],
+              "tolerance": 0.01
+            },
+            "stderr": "",
+            "stdout": "{\"rel_l2_gpu_vs_fp64ref\": 0.0015436494833812023, \"rel_l2_fp32emu_vs_fp64ref\": 0.0015436494833812023, \"bitmatch_gpu_vs_emu\": true, \"alpha_fp64\": 1.125000242654227, \"alpha_fp32_kernel\": 1.125000238418579, \"residual_norm_fp64\": 6.621097760007478e-05, \"tolerance\": 0.01, \"passes_tolerance\": true, \"output_finite\": true, \"shape\": [32]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": "relative L2 error of kernel output vs fp64 reference on fixed workload, decisive vs 0.01 tolerance",
+        "json_parse_error": null,
+        "json_result": {
+          "alpha_fp32_kernel": 1.125000238418579,
+          "alpha_fp64": 1.125000242654227,
+          "bitmatch_gpu_vs_emu": true,
+          "output_finite": true,
+          "passes_tolerance": true,
+          "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+          "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+          "residual_norm_fp64": 6.621097760007478e-05,
+          "shape": [
+            32
+          ],
+          "tolerance": 0.01
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"rel_l2_gpu_vs_fp64ref\": 0.0015436494833812023, \"rel_l2_fp32emu_vs_fp64ref\": 0.0015436494833812023, \"bitmatch_gpu_vs_emu\": true, \"alpha_fp64\": 1.125000242654227, \"alpha_fp32_kernel\": 1.125000238418579, \"residual_norm_fp64\": 6.621097760007478e-05, \"tolerance\": 0.01, \"passes_tolerance\": true, \"output_finite\": true, \"shape\": [32]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "alpha_fp32_kernel": 1.125000238418579,
+          "alpha_fp64": 1.125000242654227,
+          "bitmatch_gpu_vs_emu": true,
+          "passes_tolerance": true,
+          "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+          "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+          "residual_norm_fp64": 6.621097760007478e-05,
+          "tolerance": 0.01
+        },
+        "event_id": "t10",
+        "status": "rebutted",
+        "summary": "Decisive probe on the fixed make_inputs() workload: kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), a margin of ~6.5x below the limit. Output is finite, shape (32,). The fp32 CPU emulation of the kernel arithmetic matches the GPU output bit-for-bit, confirming the GPU arithmetic behaves as IEEE round-to-nearest as assumed. Cancellation is present (residual norm 6.6e-5 vs O(1) operands) but the resulting direction error stays well within tolerance, so c1's predicted failure does not occur on this fixed workload.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-24T00:59:04Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T00:58:17Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T00:59:04Z",
+              "data": {
+                "alpha_fp32_kernel": 1.125000238418579,
+                "alpha_fp64": 1.125000242654227,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "074641770771e5c1fc48d9d519ff0efc8ed7ffec4ca92573fa6391566835b04d"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "2e903c7fb1457efa0e66ee8ef0d677a9be64302f357be2e499a35168268cc4dc"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t10_json_result.json",
+                    "sha256": "a322ea00b8741075859bf534de6c2d79f7cea41245aec72cbe9a1219e146c5b2"
+                  }
+                ],
+                "bitmatch_gpu_vs_emu": true,
+                "duration_s": 7.05006,
+                "exit_code": 0,
+                "expected_signal": "relative L2 error of kernel output vs fp64 reference on fixed workload, decisive vs 0.01 tolerance",
+                "json_parse_error": null,
+                "json_result": {
+                  "alpha_fp32_kernel": 1.125000238418579,
+                  "alpha_fp64": 1.125000242654227,
+                  "bitmatch_gpu_vs_emu": true,
+                  "output_finite": true,
+                  "passes_tolerance": true,
+                  "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+                  "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+                  "residual_norm_fp64": 6.621097760007478e-05,
+                  "shape": [
+                    32
+                  ],
+                  "tolerance": 0.01
+                },
+                "passes_tolerance": true,
+                "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+                "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+                "residual_norm_fp64": 6.621097760007478e-05,
+                "stderr": "",
+                "stdout": "{\"rel_l2_gpu_vs_fp64ref\": 0.0015436494833812023, \"rel_l2_fp32emu_vs_fp64ref\": 0.0015436494833812023, \"bitmatch_gpu_vs_emu\": true, \"alpha_fp64\": 1.125000242654227, \"alpha_fp32_kernel\": 1.125000238418579, \"residual_norm_fp64\": 6.621097760007478e-05, \"tolerance\": 0.01, \"passes_tolerance\": true, \"output_finite\": true, \"shape\": [32]}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.01
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Decisive probe on the fixed make_inputs() workload: kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), a margin of ~6.5x below the limit. Output is finite, shape (32,). The fp32 CPU emulation of the kernel arithmetic matches the GPU output bit-for-bit, confirming the GPU arithmetic behaves as IEEE round-to-nearest as assumed. Cancellation is present (residual norm 6.6e-5 vs O(1) operands) but the resulting direction error stays well within tolerance, so c1's predicted failure does not occur on this fixed workload.",
+              "supports": "rebutted",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
+            }
+          ],
+          "scope_rationale": "The contract fixes the input domain to exactly the make_inputs() vectors (b nearly parallel to u with ~1e-5 orthogonal noise) and requires relative L2 error <= 0.01 versus a float64 reference; cancellation in b - alpha*u on this exact workload is therefore directly decisive for the stated tolerance.",
+          "statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01.",
+          "status": "rebutted",
+          "updated_at": "2026-09-24T00:59:04Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:59:04Z",
+          "data": {
+            "alpha_fp32_kernel": 1.125000238418579,
+            "alpha_fp64": 1.125000242654227,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "074641770771e5c1fc48d9d519ff0efc8ed7ffec4ca92573fa6391566835b04d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "2e903c7fb1457efa0e66ee8ef0d677a9be64302f357be2e499a35168268cc4dc"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "a322ea00b8741075859bf534de6c2d79f7cea41245aec72cbe9a1219e146c5b2"
+              }
+            ],
+            "bitmatch_gpu_vs_emu": true,
+            "duration_s": 7.05006,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of kernel output vs fp64 reference on fixed workload, decisive vs 0.01 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "alpha_fp32_kernel": 1.125000238418579,
+              "alpha_fp64": 1.125000242654227,
+              "bitmatch_gpu_vs_emu": true,
+              "output_finite": true,
+              "passes_tolerance": true,
+              "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+              "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+              "residual_norm_fp64": 6.621097760007478e-05,
+              "shape": [
+                32
+              ],
+              "tolerance": 0.01
+            },
+            "passes_tolerance": true,
+            "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+            "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+            "residual_norm_fp64": 6.621097760007478e-05,
+            "stderr": "",
+            "stdout": "{\"rel_l2_gpu_vs_fp64ref\": 0.0015436494833812023, \"rel_l2_fp32emu_vs_fp64ref\": 0.0015436494833812023, \"bitmatch_gpu_vs_emu\": true, \"alpha_fp64\": 1.125000242654227, \"alpha_fp32_kernel\": 1.125000238418579, \"residual_norm_fp64\": 6.621097760007478e-05, \"tolerance\": 0.01, \"passes_tolerance\": true, \"output_finite\": true, \"shape\": [32]}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.01
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Decisive probe on the fixed make_inputs() workload: kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), a margin of ~6.5x below the limit. Output is finite, shape (32,). The fp32 CPU emulation of the kernel arithmetic matches the GPU output bit-for-bit, confirming the GPU arithmetic behaves as IEEE round-to-nearest as assumed. Cancellation is present (residual norm 6.6e-5 vs O(1) operands) but the resulting direction error stays well within tolerance, so c1's predicted failure does not occur on this fixed workload.",
+          "supports": "rebutted",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: the sole in-scope claim c1 (fp32 cancellation exceeding the 0.01 tolerance) was decisively rebutted by the runtime probe on the exact fixed make_inputs() workload \u2014 measured relative L2 error 0.00154, ~6.5x below the tolerance, output finite and shape (32,), with a bit-exact fp32 CPU emulation matching the GPU output confirming IEEE round-to-nearest arithmetic as assumed. No other risks (denominator zero, underflow, masking with N=32, epilogue consistency) are material on this fixed workload, and alternative inputs are explicitly out of scope. No new claims warranted.",
+        "reviewed_claims": [
+          "c1"
+        ]
+      },
+      "created_at": "2026-09-24T00:59:09Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-09-24T00:59:09Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the sole in-scope claim c1 (fp32 cancellation exceeding the 0.01 tolerance) was decisively rebutted by the runtime probe on the exact fixed make_inputs() workload \u2014 measured relative L2 error 0.00154, ~6.5x below the tolerance, output finite and shape (32,), with a bit-exact fp32 CPU emulation matching the GPU output confirming IEEE round-to-nearest arithmetic as assumed. No other risks (denominator zero, underflow, masking with N=32, epilogue consistency) are material on this fixed workload, and alternative inputs are explicitly out of scope. No new claims warranted.",
+        "reviewed_claims": [
+          "c1"
+        ],
+        "reviewed_tool_event_count": 11,
+        "tool_event_id": "t12",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract (problem.txt) fixes the scope to the single make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise, shape (32,)) and requires a finite output within 0.01 relative-L2 of a float64 reference. The sole in-scope claim c1 \u2014 that catastrophic cancellation in b - alpha*u would push the fp32 kernel past the 0.01 tolerance \u2014 was decisively rebutted by runtime probe t10 on exactly that workload: measured relative L2 error 0.00154 (tolerance 0.01), output finite, shape (32,). A bit-exact fp32 CPU emulation of the kernel arithmetic matched the GPU output, confirming the GPU behaves as the assumed IEEE round-to-nearest arithmetic. The contract explicitly acknowledges fp32 arithmetic with sequential accumulation and disabled FP fusion, so residual fp32-vs-fp64 rounding differences within the 1% tolerance are contract-permitted, and here they sit 6.5x below the limit. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Verdict: trust.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-24T00:59:15Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-24T00:59:15Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract (problem.txt) fixes the scope to the single make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise, shape (32,)) and requires a finite output within 0.01 relative-L2 of a float64 reference. The sole in-scope claim c1 \u2014 that catastrophic cancellation in b - alpha*u would push the fp32 kernel past the 0.01 tolerance \u2014 was decisively rebutted by runtime probe t10 on exactly that workload: measured relative L2 error 0.00154 (tolerance 0.01), output finite, shape (32,). A bit-exact fp32 CPU emulation of the kernel arithmetic matched the GPU output, confirming the GPU behaves as the assumed IEEE round-to-nearest arithmetic. The contract explicitly acknowledges fp32 arithmetic with sequential accumulation and disabled FP fusion, so residual fp32-vs-fp64 rounding differences within the 1% tolerance are contract-permitted, and here they sit 6.5x below the limit. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Verdict: trust.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-24T00:59:15Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The contract (problem.txt) fixes the scope to the single make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise, shape (32,)) and requires a finite output within 0.01 relative-L2 of a float64 reference. The sole in-scope claim c1 \u2014 that catastrophic cancellation in b - alpha*u would push the fp32 kernel past the 0.01 tolerance \u2014 was decisively rebutted by runtime probe t10 on exactly that workload: measured relative L2 error 0.00154 (tolerance 0.01), output finite, shape (32,). A bit-exact fp32 CPU emulation of the kernel arithmetic matched the GPU output, confirming the GPU behaves as the assumed IEEE round-to-nearest arithmetic. The contract explicitly acknowledges fp32 arithmetic with sequential accumulation and disabled FP fusion, so residual fp32-vs-fp64 rounding differences within the 1% tolerance are contract-permitted, and here they sit 6.5x below the limit. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Verdict: trust.",
+    "verdict": "trust"
+  }
+}

@@ -1,0 +1,1715 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_a",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(X, A, B, Y, K: tl.constexpr):\n    row = tl.program_id(0)\n    j = tl.arange(0, K)\n    x = tl.load(X + j)\n    a = tl.load(A + row * K + j)\n    b = tl.load(B + row * K + j)\n    sa = tl.max(tl.abs(a), 0) / 7.0\n    sb = tl.max(tl.abs(b), 0) / 7.0\n    qa = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(a / sa + 0.5)))\n    qb = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(b / sb + 0.5)))\n    ya = tl.sum((qa * sa) * x, 0)\n    yb = tl.sum((qb * sb) * x, 0)\n    tl.store(Y + row, ya + yb)\n\ndef run(x, a, b):\n    out = torch.empty(a.shape[0], device=x.device, dtype=torch.float32)\n    _kernel[(a.shape[0],)](x, a, b, out, a.shape[1], enable_fp_fusion=False)\n    return out\n\nSEED = 921000\nPERMUTATION = [4, 1, 2, 53, 44, 13, 11, 56, 46, 57, 33, 8, 25, 35, 39, 20, 36, 14, 51, 52, 40, 29, 23, 26, 3, 31, 38, 16, 21, 62, 41, 24, 61, 45, 30, 59, 19, 42, 27, 28, 12, 17, 60, 47, 43, 54, 6, 34, 22, 10, 18, 50, 32, 0, 7, 15, 9, 5, 63, 55, 49, 37, 48, 58]\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    x = rng.standard_normal(128)\n    x /= np.linalg.norm(x)\n    # Construct two dense projections with similar signal magnitudes.\n    matrices = []\n    for _ in range(2):\n        w = rng.standard_normal((64, 128))\n        target = 0.5 + 0.02 * rng.standard_normal(64)\n        projection = np.sum(w * x[None, :], axis=1, dtype=np.float64)\n        w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]\n        matrices.append(w.astype(np.float32))\n    arrays = [x.astype(np.float32), matrices[0], matrices[1][PERMUTATION].copy()]\n    return tuple(torch.from_numpy(a.copy()).to(device) for a in arrays)\n",
+    "passed": null,
+    "problem_text": "Evaluate numerical compliance of run(*make_inputs()) on exactly the workload\nspecified in kernel.py. All inputs are float32 and contiguous, with x of shape\n(128,) and A, B of shape (64,128). The complete input construction, PCG64 seed\nand row permutation are provided in the source; no hidden input is involved.\n\nReference: y = A @ x + B @ x on the original float32 inputs, evaluated in float64.\nMetric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64)).\nContract: all outputs must be finite and E <= 0.1. Approximate intermediate\nvalues are allowed if the FINAL output meets this requirement. Either branch\nmay individually exceed 0.1 without violating the contract.\nTarget implementation: the supplied Triton kernel, on an NVIDIA T4. Input\ngenerator uses NumPy PCG64 on CPU. This is finite-workload compliance, not a\nclaim about all inputs, and not a requirement to reproduce INT4 arithmetic\nbit-for-bit. Decide trust, reject, or needs_more_evidence.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_a",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-23T02:53:32Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-23T02:54:23Z",
+          "data": {
+            "E_cpu_emulation": 0.2241157849547494,
+            "E_measured_gpu": 0.22411580644590948,
+            "E_over_threshold_ratio": 2.241158064459095,
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "300627c1ef41b3a67a25507ce3f1e51bcb37d0691b7fd55c080cc2e4ed9cbf36"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "129b50fc934a0014ed669854cc199613ccde0885e022b46ae21224995ceb6431"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "f9d0eeee09207d22e8254f8efd1f4ec12e630ca7cc855998e530b996439c9366"
+              }
+            ],
+            "branchA_abs_err_norm": 0.8499627969070997,
+            "branchB_abs_err_norm": 0.9616883415856585,
+            "clamp_hits_A_of_8192": 100,
+            "clamp_hits_B_of_8192": 101,
+            "denominator": 7.988006980125256,
+            "duration_s": 6.916455,
+            "err_norm": 1.7902386262463257,
+            "exit_code": 0,
+            "expected_signal": "Measured E = ||out-ref||_2 / max(||ref||_2, 0.008); E > 0.1 confirms c1, E <= 0.1 rebuts it.",
+            "gpu": "Tesla T4",
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.22411580644590948,
+              "E_cpu_emulation": 0.2241157849547494,
+              "all_finite": true,
+              "branchA_abs_err_norm": 0.8499627969070997,
+              "branchB_abs_err_norm": 0.9616883415856585,
+              "clamp_hits_A": 100,
+              "clamp_hits_B": 101,
+              "den": 7.988006980125256,
+              "gpu": "Tesla T4",
+              "max_abs_err": 0.5755404823381721,
+              "num": 1.7902386262463257,
+              "ref_max": 1.0589215290725207,
+              "ref_min": 0.9260899602768314,
+              "ref_norm": 7.988006980125256,
+              "scale_a_max": 0.5796835763113839,
+              "scale_a_min": 0.3023895195552281,
+              "threshold": 0.1
+            },
+            "max_abs_err": 0.5755404823381721,
+            "ref_max": 1.0589215290725207,
+            "ref_min": 0.9260899602768314,
+            "ref_norm": 7.988006980125256,
+            "scale_a_max": 0.5796835763113839,
+            "scale_a_min": 0.3023895195552281,
+            "stderr": "",
+            "stdout": "{\"E\": 0.22411580644590948, \"threshold\": 0.1, \"num\": 1.7902386262463257, \"den\": 7.988006980125256, \"ref_norm\": 7.988006980125256, \"ref_min\": 0.9260899602768314, \"ref_max\": 1.0589215290725207, \"E_cpu_emulation\": 0.2241157849547494, \"branchA_abs_err_norm\": 0.8499627969070997, \"branchB_abs_err_norm\": 0.9616883415856585, \"max_abs_err\": 0.5755404823381721, \"scale_a_min\": 0.3023895195552281, \"scale_a_max\": 0.5796835763113839, \"clamp_hits_A\": 100, \"clamp_hits_B\": 101, \"all_finite\": true, \"gpu\": \"Tesla T4\"}\n",
+            "threshold": 0.1,
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Measured on Tesla T4 with the exact make_inputs(SEED=921000) workload: E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.2241, i.e. 2.24x the contract threshold of 0.1. ||ref||_2 = 7.988 (per-row ref in [0.926, 1.059]), error norm 1.790, max abs err 0.576 on a ~1.0 signal. An independent NumPy fp64 emulation of the kernel's own quantization (absmax/7, floor(v/s+0.5), clamp +-7) reproduces E = 0.2241158 versus the kernel's 0.2241158, so the error is the INT4 quantization noise itself, not an fp32/accumulation or indexing artifact. Per-branch dequant error norms are 0.850 (A) and 0.962 (B) and add in quadrature rather than cancel, matching the predicted small-signal (0.5 per branch) vs large-row-norm regime. Clamp hits are only 100/8192 (A) and 101/8192 (B), confirming rounding noise, not clipping, dominates. Contract failed on the E<=0.1 half.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "make_inputs deliberately builds rows that are standard normal (row norm ~11.3, max|entry| ~3) but whose projection onto x is forced to only 0.5 +- 0.02 per branch (kernel.py lines 36-39). Quantizing a row at 4 bits with a per-row absmax scale injects noise of magnitude ~0.12 along any fixed unit direction, which is ~24% of the 0.5 signal per branch; B is additionally row-permuted (line 41) so the A and B errors are independent and add in quadrature to ~0.17 against a combined reference of ~1.0 per row. That analytical estimate lands well above 0.1 and must be checked by direct measurement of E on the exact seed.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"Evaluate numerical compliance of run(*make_inputs()) on exactly the workload specified in kernel.py\" with \"Metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64))\" and \"Contract: all outputs must be finite and E <= 0.1.\""
+        },
+        {
+          "source": "kernel.py lines 25-42",
+          "summary": "make_inputs fixes SEED=921000, PERMUTATION, x of shape (128,) unit-normalized, and A,B of shape (64,128) with per-row projection onto x forced to 0.5 +- 0.02."
+        }
+      ],
+      "scope_rationale": "This is precisely the single workload and metric the contract specifies; no generalization or alternate input is involved.",
+      "statement": "On the exact fixed workload run(*make_inputs()) with SEED=921000, the kernel's per-row INT4 (7-level) symmetric quantization of A and B produces a relative L2 error E = ||out - ref||_2 / max(||ref||_2, 0.008) that exceeds the contract threshold of 0.1 (expected E on the order of 0.15-0.20), because the per-element rounding noise (s/sqrt(12) with s = max|row|/7 ~ 0.4, giving sigma ~ 0.12 per branch dot product against a unit-norm x) is comparable to the engineered per-branch signal of only ~0.5, and the two independent branches add in quadrature rather than cancel.",
+      "status": "confirmed",
+      "updated_at": "2026-09-23T02:54:23Z"
+    },
+    {
+      "created_at": "2026-09-23T02:53:32Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-23T02:54:23Z",
+          "data": {
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "21b2c555b64659cf5f834e2547e963c796a237dcd2cd5ebf9f8e270e7432fbe5"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "d3c204df458041d1740d472f233dd21f2d00c612d0c740a1d895f9ad2fc799cd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "41e2aa179628dea6d880ba034a63744a7803b0ec6160369487c742d7a136de9b"
+              }
+            ],
+            "dtype": "torch.float32",
+            "duration_s": 4.68771,
+            "exception": null,
+            "exit_code": 0,
+            "expected_signal": "If run() raises or any output is non-finite, c2 confirmed; clean execution with 64 finite fp32 outputs and no zero row-max rebuts it.",
+            "gpu": "Tesla T4",
+            "json_parse_error": null,
+            "json_result": {
+              "all_finite": true,
+              "dtype": "torch.float32",
+              "exception": null,
+              "gpu": "Tesla T4",
+              "min_rowmax_A": 2.1167266368865967,
+              "min_rowmax_B": 2.127420425415039,
+              "n_inf": 0,
+              "n_nan": 0,
+              "out_max": 1.546172857284546,
+              "out_min": 0.37438690662384033,
+              "ran": true,
+              "shape": [
+                64
+              ],
+              "triton_version": "3.4.0",
+              "zero_rows_A": 0,
+              "zero_rows_B": 0
+            },
+            "min_rowmax_A": 2.1167266368865967,
+            "min_rowmax_B": 2.127420425415039,
+            "n_inf": 0,
+            "n_nan": 0,
+            "out_max": 1.546172857284546,
+            "out_min": 0.37438690662384033,
+            "ran": true,
+            "shape": [
+              64
+            ],
+            "stderr": "",
+            "stdout": "{\"exception\": null, \"ran\": true, \"shape\": [64], \"dtype\": \"torch.float32\", \"n_nan\": 0, \"n_inf\": 0, \"all_finite\": true, \"min_rowmax_A\": 2.1167266368865967, \"min_rowmax_B\": 2.127420425415039, \"zero_rows_A\": 0, \"zero_rows_B\": 0, \"out_min\": 0.37438690662384033, \"out_max\": 1.546172857284546, \"triton_version\": \"3.4.0\", \"gpu\": \"Tesla T4\"}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "triton_version": "3.4.0",
+            "zero_rows_A": 0,
+            "zero_rows_B": 0
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "run(*make_inputs()) executed without exception on Tesla T4 with Triton 3.4.0 (enable_fp_fusion=False accepted as a launch kwarg). Output is a 64-element torch.float32 tensor with 0 NaN, 0 Inf, all values finite and in [0.374, 1.546]. No degenerate rows exist: min row absmax is 2.117 (A) and 2.127 (B), zero rows 0 for both, so the unguarded division by max|row|/7 never divides by zero on this workload. The finiteness/executability half of the contract is satisfied; c2 is rebutted.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "The contract requires all outputs to be finite, which is a separate condition from E <= 0.1. Division by an unguarded per-row max is a classic NaN source, and enable_fp_fusion is a version-dependent Triton launch option; both are cheap to falsify by simply running the workload and checking torch.isfinite(out).all() and that no exception is raised.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"Contract: all outputs must be finite and E <= 0.1.\" and \"Target implementation: the supplied Triton kernel, on an NVIDIA T4.\""
+        }
+      ],
+      "scope_rationale": "Finiteness of the outputs on this exact workload is explicitly part of the stated contract, and successful execution of run(*make_inputs()) is presupposed by it.",
+      "statement": "run(*make_inputs()) may fail the finiteness half of the contract or fail to execute at all: the scales sa/sb are computed as max|row|/7 with no epsilon and used as divisors (kernel.py lines 12-15), and the launch passes enable_fp_fusion=False as a kernel launch kwarg (line 22), so any degenerate row or unsupported launch option would yield NaN/Inf outputs or an exception rather than a finite 64-element result.",
+      "status": "rebutted",
+      "updated_at": "2026-09-23T02:54:23Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Workload is fully fixed and self-contained: run(*make_inputs()) with PCG64 SEED=921000, x of shape (128,) unit-normalized, A and B of shape (64,128), all float32 contiguous, no hidden inputs (problem.txt; kernel.py lines 25-42).",
+      "Reference is y = A @ x + B @ x computed in float64 on exactly the float32 tensors returned by make_inputs, including the already-applied row PERMUTATION on B (kernel.py line 41) -- the permutation is part of the input, not a transform the kernel must undo.",
+      "Pass metric: E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(64)) <= 0.1, plus all outputs finite. Denominator floor 0.008 is far below the expected ||ref|| (~8), so the plain relative L2 governs.",
+      "Contract explicitly licenses approximate intermediates (INT4 quantization is allowed) and explicitly says either branch's individual error may exceed 0.1; only the combined final vector is judged.",
+      "Target hardware is an NVIDIA T4; this is finite-workload compliance, not a general-input or bit-exact INT4 claim."
+    ],
+    "kernel_model": [
+      "One program per output row (grid = (64,), kernel.py line 22); each program loads all K=128 elements of x, of A[row], and of B[row] with unmasked contiguous loads. K=128 is a power of two and exactly the row length, so tl.arange(0,K) needs no mask.",
+      "Per-row symmetric scale sa = max|A[row]|/7, sb = max|B[row]|/7 (lines 12-13) -- scale is computed independently per row and per matrix, recomputed inside the kernel rather than passed in.",
+      "Quantization is round-half-up via floor(v/s + 0.5) then clamp to [-7,7] (lines 14-15), i.e. 4-bit signed symmetric levels; the clamp is only active for the row max (which maps exactly to +-7) and for ties, so clipping is not the main error source. Rounding is half-up rather than round-half-even, a minor asymmetry.",
+      "Dequantization is immediate (qa*sa, qb*sb) and the dot products are accumulated in fp32 by tl.sum over 128 lanes; the two branch sums ya and yb are added and stored as a single fp32 value (lines 16-18).",
+      "enable_fp_fusion=False (line 22) disables FMA contraction, which slightly changes fp32 rounding but is numerically negligible at this magnitude.",
+      "Input generator makes each row of each matrix standard normal (row L2 ~ sqrt(128) ~ 11.3, max|entry| ~ 2.9) and then applies a rank-1 correction along x so that the exact projection row.x equals 0.5 + 0.02*N(0,1) (lines 36-39). So the reference per-row value is ~1.0 and ||ref||_2 ~ 8, while the quantity being quantized has entries ~40x larger than the signal it must reproduce along x.",
+      "B is row-permuted by PERMUTATION before being returned (line 41); since the reference uses the returned B, the permutation does not create an index mismatch for the kernel -- it mainly decorrelates B's per-row targets from A's and blocks any cross-branch error cancellation."
+    ],
+    "open_questions": [
+      "What is the actual measured E for run(*make_inputs()) on a T4? The analytical estimate (~0.15-0.20) is above 0.1 but close enough to the threshold that only a measurement decides.",
+      "What is the realized ||ref||_2 and the per-row reference spread (targets are 0.5 +- 0.02 per branch), which sets the denominator of E?",
+      "What are the realized per-row scales sa, sb (i.e. max|row| values) for this seed, and how many entries actually hit the +-7 clamp? This separates rounding noise from clipping as the error source.",
+      "Does the fp32 output contain any non-finite values (relevant only if some row max is degenerate)?",
+      "Is the observed error consistent with independent per-branch quadrature addition, or is there any unexpected correlation between the A and B branch errors introduced by the shared rank-1 correction along x?"
+    ],
+    "risk_map": [
+      "Primary bug surface is magnitude of INT4 quantization noise, not indexing: with s = max|row|/7 ~ 0.41, per-element rounding error is ~uniform on [-s/2, s/2] (sigma ~ 0.12), and since ||x||=1 the per-branch dot-product error has sigma ~ 0.12 against a per-branch signal of only 0.5. Two independent branches add in quadrature to ~0.17 error against a combined reference of ~1.0, i.e. an estimated E ~ 0.15-0.20, above the 0.1 threshold. This needs a measured E, not an estimate.",
+      "The contract's 'either branch may individually exceed 0.1' sentence is a misdirection risk: independent A and B quantization errors add in quadrature, so the combined error should be worse than each branch, not better. Any reasoning that assumes cancellation between branches should be checked against the fact that matrices[0] and matrices[1] are independent draws and B is additionally row-permuted.",
+      "Because the signal along x is an engineered rank-1 component of size ~0.5 embedded in a row of norm ~11.3, the error is dominated by noise the quantizer cannot represent; a benign-looking allclose on a generic random matvec would not reproduce this regime. Evidence must use the exact make_inputs workload.",
+      "Scale-computation edge cases: sa/sb divide by max|row|/7 with no epsilon (lines 12-15); an all-zero row would give 0/0 -> NaN. Not expected for this generator, but finiteness of the output is part of the contract and worth a cheap check.",
+      "Rounding convention detail: floor(v/s + 0.5) is round-half-up and is not symmetric for negative halves, and tl.floor on the +7 boundary plus the clamp can bias the extreme levels slightly. Small relative to the main noise term but relevant if measured E lands near 0.1.",
+      "Reproducibility of the metric depends on generating inputs with NumPy PCG64 on CPU exactly as in make_inputs; recomputing x or the rank-1 correction in a different dtype/order (the code uses float64 for the projection, line 38, then casts to float32, line 40) would shift the reference slightly.",
+      "fp32 accumulation order inside tl.sum over 128 lanes differs from the fp64 reference, but at these magnitudes it should be ~1e-6 relative and cannot explain or mask an error at the 0.1 scale."
+    ],
+    "scope_notes": [
+      "In scope: exactly one input instance, run(*make_inputs()) with SEED=921000 on a T4. No distributional sweep is required by the contract, and passing/failing on other random inputs is not decisive.",
+      "Out of scope: bit-exact INT4 semantics, general-input correctness, performance, and any requirement that the kernel undo B's row permutation.",
+      "The deciding metric is the single scalar E over the 64-element output vector plus finiteness; per-row or per-branch error statistics are diagnostic only, not verdict-bearing on their own.",
+      "Because the workload is deterministic and small, a direct measurement of E is available and should outrank analytical noise estimates; any verdict resting only on the sigma ~ 0.12 argument is under-evidenced."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Workload is fully fixed and self-contained: run(*make_inputs()) with PCG64 SEED=921000, x of shape (128,) unit-normalized, A and B of shape (64,128), all float32 contiguous, no hidden inputs (problem.txt; kernel.py lines 25-42).",
+        "Reference is y = A @ x + B @ x computed in float64 on exactly the float32 tensors returned by make_inputs, including the already-applied row PERMUTATION on B (kernel.py line 41) -- the permutation is part of the input, not a transform the kernel must undo.",
+        "Pass metric: E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(64)) <= 0.1, plus all outputs finite. Denominator floor 0.008 is far below the expected ||ref|| (~8), so the plain relative L2 governs.",
+        "Contract explicitly licenses approximate intermediates (INT4 quantization is allowed) and explicitly says either branch's individual error may exceed 0.1; only the combined final vector is judged.",
+        "Target hardware is an NVIDIA T4; this is finite-workload compliance, not a general-input or bit-exact INT4 claim."
+      ],
+      "created_at": "2026-09-23T02:52:57Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "One program per output row (grid = (64,), kernel.py line 22); each program loads all K=128 elements of x, of A[row], and of B[row] with unmasked contiguous loads. K=128 is a power of two and exactly the row length, so tl.arange(0,K) needs no mask.",
+        "Per-row symmetric scale sa = max|A[row]|/7, sb = max|B[row]|/7 (lines 12-13) -- scale is computed independently per row and per matrix, recomputed inside the kernel rather than passed in.",
+        "Quantization is round-half-up via floor(v/s + 0.5) then clamp to [-7,7] (lines 14-15), i.e. 4-bit signed symmetric levels; the clamp is only active for the row max (which maps exactly to +-7) and for ties, so clipping is not the main error source. Rounding is half-up rather than round-half-even, a minor asymmetry.",
+        "Dequantization is immediate (qa*sa, qb*sb) and the dot products are accumulated in fp32 by tl.sum over 128 lanes; the two branch sums ya and yb are added and stored as a single fp32 value (lines 16-18).",
+        "enable_fp_fusion=False (line 22) disables FMA contraction, which slightly changes fp32 rounding but is numerically negligible at this magnitude.",
+        "Input generator makes each row of each matrix standard normal (row L2 ~ sqrt(128) ~ 11.3, max|entry| ~ 2.9) and then applies a rank-1 correction along x so that the exact projection row.x equals 0.5 + 0.02*N(0,1) (lines 36-39). So the reference per-row value is ~1.0 and ||ref||_2 ~ 8, while the quantity being quantized has entries ~40x larger than the signal it must reproduce along x.",
+        "B is row-permuted by PERMUTATION before being returned (line 41); since the reference uses the returned B, the permutation does not create an index mismatch for the kernel -- it mainly decorrelates B's per-row targets from A's and blocks any cross-branch error cancellation."
+      ],
+      "open_questions": [
+        "What is the actual measured E for run(*make_inputs()) on a T4? The analytical estimate (~0.15-0.20) is above 0.1 but close enough to the threshold that only a measurement decides.",
+        "What is the realized ||ref||_2 and the per-row reference spread (targets are 0.5 +- 0.02 per branch), which sets the denominator of E?",
+        "What are the realized per-row scales sa, sb (i.e. max|row| values) for this seed, and how many entries actually hit the +-7 clamp? This separates rounding noise from clipping as the error source.",
+        "Does the fp32 output contain any non-finite values (relevant only if some row max is degenerate)?",
+        "Is the observed error consistent with independent per-branch quadrature addition, or is there any unexpected correlation between the A and B branch errors introduced by the shared rank-1 correction along x?"
+      ],
+      "risk_map": [
+        "Primary bug surface is magnitude of INT4 quantization noise, not indexing: with s = max|row|/7 ~ 0.41, per-element rounding error is ~uniform on [-s/2, s/2] (sigma ~ 0.12), and since ||x||=1 the per-branch dot-product error has sigma ~ 0.12 against a per-branch signal of only 0.5. Two independent branches add in quadrature to ~0.17 error against a combined reference of ~1.0, i.e. an estimated E ~ 0.15-0.20, above the 0.1 threshold. This needs a measured E, not an estimate.",
+        "The contract's 'either branch may individually exceed 0.1' sentence is a misdirection risk: independent A and B quantization errors add in quadrature, so the combined error should be worse than each branch, not better. Any reasoning that assumes cancellation between branches should be checked against the fact that matrices[0] and matrices[1] are independent draws and B is additionally row-permuted.",
+        "Because the signal along x is an engineered rank-1 component of size ~0.5 embedded in a row of norm ~11.3, the error is dominated by noise the quantizer cannot represent; a benign-looking allclose on a generic random matvec would not reproduce this regime. Evidence must use the exact make_inputs workload.",
+        "Scale-computation edge cases: sa/sb divide by max|row|/7 with no epsilon (lines 12-15); an all-zero row would give 0/0 -> NaN. Not expected for this generator, but finiteness of the output is part of the contract and worth a cheap check.",
+        "Rounding convention detail: floor(v/s + 0.5) is round-half-up and is not symmetric for negative halves, and tl.floor on the +7 boundary plus the clamp can bias the extreme levels slightly. Small relative to the main noise term but relevant if measured E lands near 0.1.",
+        "Reproducibility of the metric depends on generating inputs with NumPy PCG64 on CPU exactly as in make_inputs; recomputing x or the rank-1 correction in a different dtype/order (the code uses float64 for the projection, line 38, then casts to float32, line 40) would shift the reference slightly.",
+        "fp32 accumulation order inside tl.sum over 128 lanes differs from the fp64 reference, but at these magnitudes it should be ~1e-6 relative and cannot explain or mask an error at the 0.1 scale."
+      ],
+      "scope_notes": [
+        "In scope: exactly one input instance, run(*make_inputs()) with SEED=921000 on a T4. No distributional sweep is required by the contract, and passing/failing on other random inputs is not decisive.",
+        "Out of scope: bit-exact INT4 semantics, general-input correctness, performance, and any requirement that the kernel undo B's row permutation.",
+        "The deciding metric is the single scalar E over the 64-element output vector plus finiteness; per-row or per-branch error statistics are diagnostic only, not verdict-bearing on their own.",
+        "Because the workload is deterministic and small, a direct measurement of E is available and should outrank analytical noise estimates; any verdict resting only on the sigma ~ 0.12 argument is under-evidenced."
+      ],
+      "summary": "case_a implements a per-row symmetric INT4 (7-level) quantized dequant-matvec for two matrices A and B against a shared vector x, and the contract is a single fixed-workload relative-L2 check (E <= 0.1) against an fp64 A@x + B@x reference. The dominant question is purely quantitative: whether 4-bit per-row quantization noise projected onto x stays under 10% of a reference whose per-row value was deliberately engineered to be only ~0.5 per branch (~1.0 total), i.e. a small-signal-vs-large-row-norm regime where INT4 noise is unusually damaging.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_a",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_a"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_a"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_a"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_a",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 69.064119201,
+      "role": "describer",
+      "round": 2,
+      "text": "",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Workload is fully fixed and self-contained: run(*make_inputs()) with PCG64 SEED=921000, x of shape (128,) unit-normalized, A and B of shape (64,128), all float32 contiguous, no hidden inputs (problem.txt; kernel.py lines 25-42).",
+              "Reference is y = A @ x + B @ x computed in float64 on exactly the float32 tensors returned by make_inputs, including the already-applied row PERMUTATION on B (kernel.py line 41) -- the permutation is part of the input, not a transform the kernel must undo.",
+              "Pass metric: E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(64)) <= 0.1, plus all outputs finite. Denominator floor 0.008 is far below the expected ||ref|| (~8), so the plain relative L2 governs.",
+              "Contract explicitly licenses approximate intermediates (INT4 quantization is allowed) and explicitly says either branch's individual error may exceed 0.1; only the combined final vector is judged.",
+              "Target hardware is an NVIDIA T4; this is finite-workload compliance, not a general-input or bit-exact INT4 claim."
+            ],
+            "kernel_model": [
+              "One program per output row (grid = (64,), kernel.py line 22); each program loads all K=128 elements of x, of A[row], and of B[row] with unmasked contiguous loads. K=128 is a power of two and exactly the row length, so tl.arange(0,K) needs no mask.",
+              "Per-row symmetric scale sa = max|A[row]|/7, sb = max|B[row]|/7 (lines 12-13) -- scale is computed independently per row and per matrix, recomputed inside the kernel rather than passed in.",
+              "Quantization is round-half-up via floor(v/s + 0.5) then clamp to [-7,7] (lines 14-15), i.e. 4-bit signed symmetric levels; the clamp is only active for the row max (which maps exactly to +-7) and for ties, so clipping is not the main error source. Rounding is half-up rather than round-half-even, a minor asymmetry.",
+              "Dequantization is immediate (qa*sa, qb*sb) and the dot products are accumulated in fp32 by tl.sum over 128 lanes; the two branch sums ya and yb are added and stored as a single fp32 value (lines 16-18).",
+              "enable_fp_fusion=False (line 22) disables FMA contraction, which slightly changes fp32 rounding but is numerically negligible at this magnitude.",
+              "Input generator makes each row of each matrix standard normal (row L2 ~ sqrt(128) ~ 11.3, max|entry| ~ 2.9) and then applies a rank-1 correction along x so that the exact projection row.x equals 0.5 + 0.02*N(0,1) (lines 36-39). So the reference per-row value is ~1.0 and ||ref||_2 ~ 8, while the quantity being quantized has entries ~40x larger than the signal it must reproduce along x.",
+              "B is row-permuted by PERMUTATION before being returned (line 41); since the reference uses the returned B, the permutation does not create an index mismatch for the kernel -- it mainly decorrelates B's per-row targets from A's and blocks any cross-branch error cancellation."
+            ],
+            "open_questions": [
+              "What is the actual measured E for run(*make_inputs()) on a T4? The analytical estimate (~0.15-0.20) is above 0.1 but close enough to the threshold that only a measurement decides.",
+              "What is the realized ||ref||_2 and the per-row reference spread (targets are 0.5 +- 0.02 per branch), which sets the denominator of E?",
+              "What are the realized per-row scales sa, sb (i.e. max|row| values) for this seed, and how many entries actually hit the +-7 clamp? This separates rounding noise from clipping as the error source.",
+              "Does the fp32 output contain any non-finite values (relevant only if some row max is degenerate)?",
+              "Is the observed error consistent with independent per-branch quadrature addition, or is there any unexpected correlation between the A and B branch errors introduced by the shared rank-1 correction along x?"
+            ],
+            "risk_map": [
+              "Primary bug surface is magnitude of INT4 quantization noise, not indexing: with s = max|row|/7 ~ 0.41, per-element rounding error is ~uniform on [-s/2, s/2] (sigma ~ 0.12), and since ||x||=1 the per-branch dot-product error has sigma ~ 0.12 against a per-branch signal of only 0.5. Two independent branches add in quadrature to ~0.17 error against a combined reference of ~1.0, i.e. an estimated E ~ 0.15-0.20, above the 0.1 threshold. This needs a measured E, not an estimate.",
+              "The contract's 'either branch may individually exceed 0.1' sentence is a misdirection risk: independent A and B quantization errors add in quadrature, so the combined error should be worse than each branch, not better. Any reasoning that assumes cancellation between branches should be checked against the fact that matrices[0] and matrices[1] are independent draws and B is additionally row-permuted.",
+              "Because the signal along x is an engineered rank-1 component of size ~0.5 embedded in a row of norm ~11.3, the error is dominated by noise the quantizer cannot represent; a benign-looking allclose on a generic random matvec would not reproduce this regime. Evidence must use the exact make_inputs workload.",
+              "Scale-computation edge cases: sa/sb divide by max|row|/7 with no epsilon (lines 12-15); an all-zero row would give 0/0 -> NaN. Not expected for this generator, but finiteness of the output is part of the contract and worth a cheap check.",
+              "Rounding convention detail: floor(v/s + 0.5) is round-half-up and is not symmetric for negative halves, and tl.floor on the +7 boundary plus the clamp can bias the extreme levels slightly. Small relative to the main noise term but relevant if measured E lands near 0.1.",
+              "Reproducibility of the metric depends on generating inputs with NumPy PCG64 on CPU exactly as in make_inputs; recomputing x or the rank-1 correction in a different dtype/order (the code uses float64 for the projection, line 38, then casts to float32, line 40) would shift the reference slightly.",
+              "fp32 accumulation order inside tl.sum over 128 lanes differs from the fp64 reference, but at these magnitudes it should be ~1e-6 relative and cannot explain or mask an error at the 0.1 scale."
+            ],
+            "scope_notes": [
+              "In scope: exactly one input instance, run(*make_inputs()) with SEED=921000 on a T4. No distributional sweep is required by the contract, and passing/failing on other random inputs is not decisive.",
+              "Out of scope: bit-exact INT4 semantics, general-input correctness, performance, and any requirement that the kernel undo B's row permutation.",
+              "The deciding metric is the single scalar E over the 64-element output vector plus finiteness; per-row or per-branch error statistics are diagnostic only, not verdict-bearing on their own.",
+              "Because the workload is deterministic and small, a direct measurement of E is available and should outrank analytical noise estimates; any verdict resting only on the sigma ~ 0.12 argument is under-evidenced."
+            ],
+            "summary": "case_a implements a per-row symmetric INT4 (7-level) quantized dequant-matvec for two matrices A and B against a shared vector x, and the contract is a single fixed-workload relative-L2 check (E <= 0.1) against an fp64 A@x + B@x reference. The dominant question is purely quantitative: whether 4-bit per-row quantization noise projected onto x stays under 10% of a reference whose per-row value was deliberately engineered to be only ~0.5 per branch (~1.0 total), i.e. a small-signal-vs-large-row-norm regime where INT4 noise is unusually damaging."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 3192,
+        "cache_read_input_tokens": 0,
+        "duration_s": 69.064,
+        "input_tokens": 4846,
+        "output_tokens": 5107
+      }
+    },
+    {
+      "duration_s": 35.041770524,
+      "role": "skeptic",
+      "round": 3,
+      "text": "Ledger is empty; recording the two highest-risk, directly testable hypotheses for this fixed workload.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "make_inputs deliberately builds rows that are standard normal (row norm ~11.3, max|entry| ~3) but whose projection onto x is forced to only 0.5 +- 0.02 per branch (kernel.py lines 36-39). Quantizing a row at 4 bits with a per-row absmax scale injects noise of magnitude ~0.12 along any fixed unit direction, which is ~24% of the 0.5 signal per branch; B is additionally row-permuted (line 41) so the A and B errors are independent and add in quadrature to ~0.17 against a combined reference of ~1.0 per row. That analytical estimate lands well above 0.1 and must be checked by direct measurement of E on the exact seed.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"Evaluate numerical compliance of run(*make_inputs()) on exactly the workload specified in kernel.py\" with \"Metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64))\" and \"Contract: all outputs must be finite and E <= 0.1.\""
+              },
+              {
+                "source": "kernel.py lines 25-42",
+                "summary": "make_inputs fixes SEED=921000, PERMUTATION, x of shape (128,) unit-normalized, and A,B of shape (64,128) with per-row projection onto x forced to 0.5 +- 0.02."
+              }
+            ],
+            "scope_rationale": "This is precisely the single workload and metric the contract specifies; no generalization or alternate input is involved.",
+            "statement": "On the exact fixed workload run(*make_inputs()) with SEED=921000, the kernel's per-row INT4 (7-level) symmetric quantization of A and B produces a relative L2 error E = ||out - ref||_2 / max(||ref||_2, 0.008) that exceeds the contract threshold of 0.1 (expected E on the order of 0.15-0.20), because the per-element rounding noise (s/sqrt(12) with s = max|row|/7 ~ 0.4, giving sigma ~ 0.12 per branch dot product against a unit-norm x) is comparable to the engineered per-branch signal of only ~0.5, and the two independent branches add in quadrature rather than cancel."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The contract requires all outputs to be finite, which is a separate condition from E <= 0.1. Division by an unguarded per-row max is a classic NaN source, and enable_fp_fusion is a version-dependent Triton launch option; both are cheap to falsify by simply running the workload and checking torch.isfinite(out).all() and that no exception is raised.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"Contract: all outputs must be finite and E <= 0.1.\" and \"Target implementation: the supplied Triton kernel, on an NVIDIA T4.\""
+              }
+            ],
+            "scope_rationale": "Finiteness of the outputs on this exact workload is explicitly part of the stated contract, and successful execution of run(*make_inputs()) is presupposed by it.",
+            "statement": "run(*make_inputs()) may fail the finiteness half of the contract or fail to execute at all: the scales sa/sb are computed as max|row|/7 with no epsilon and used as divisors (kernel.py lines 12-15), and the launch passes enable_fp_fusion=False as a kernel launch kwarg (line 22), so any degenerate row or unsupported launch option would yield NaN/Inf outputs or an exception rather than a finite 64-element result."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 5980,
+        "cache_read_input_tokens": 0,
+        "duration_s": 35.042,
+        "input_tokens": 21451,
+        "output_tokens": 2835
+      }
+    },
+    {
+      "duration_s": 20.882861047999995,
+      "role": "experimenter",
+      "round": 4,
+      "text": "Both claims are decided by a single execution of the fixed workload, and neither probe's design depends on the other's outcome, so I'm launching them together: c1 measures E against the fp64 reference, c2 checks execution success and finiteness (plus row-scale degeneracy diagnostics).",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport json, importlib.util, math\nimport numpy as np, torch\n\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_a/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nx, A, B = k.make_inputs(\"cuda\")\nout = k.run(x, A, B)\ntorch.cuda.synchronize()\n\nxn = x.detach().cpu().numpy().astype(np.float64)\nAn = A.detach().cpu().numpy().astype(np.float64)\nBn = B.detach().cpu().numpy().astype(np.float64)\nref = An @ xn + Bn @ xn\no = out.detach().cpu().numpy().astype(np.float64)\n\nnum = float(np.linalg.norm(o - ref))\nden = max(float(np.linalg.norm(ref)), 0.001*math.sqrt(64))\nE = num/den\n\n# CPU emulation of the kernel's quantization for diagnostics\ndef q(M):\n    s = np.max(np.abs(M), axis=1, keepdims=True)/7.0\n    qq = np.clip(np.floor(M/s + 0.5), -7, 7)\n    return qq*s, s, qq\nAq, sa, qa = q(An); Bq, sb, qb = q(Bn)\nemu = Aq @ xn + Bq @ xn\nE_emu = float(np.linalg.norm(emu-ref))/den\nerrA = float(np.linalg.norm(Aq@xn - An@xn))\nerrB = float(np.linalg.norm(Bq@xn - Bn@xn))\n\nprint(json.dumps({\n \"E\": E, \"threshold\": 0.1, \"num\": num, \"den\": den,\n \"ref_norm\": float(np.linalg.norm(ref)),\n \"ref_min\": float(ref.min()), \"ref_max\": float(ref.max()),\n \"E_cpu_emulation\": E_emu,\n \"branchA_abs_err_norm\": errA, \"branchB_abs_err_norm\": errB,\n \"max_abs_err\": float(np.abs(o-ref).max()),\n \"scale_a_min\": float(sa.min()), \"scale_a_max\": float(sa.max()),\n \"clamp_hits_A\": int(np.sum(np.abs(qa)>=7)), \"clamp_hits_B\": int(np.sum(np.abs(qb)>=7)),\n \"all_finite\": bool(np.isfinite(o).all()),\n \"gpu\": torch.cuda.get_device_name(0)\n}))\n",
+            "expected_signal": "Measured E = ||out-ref||_2 / max(||ref||_2, 0.008); E > 0.1 confirms c1, E <= 0.1 rebuts it."
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport json, importlib.util, traceback\nimport numpy as np, torch\n\nres = {\"exception\": None}\ntry:\n    spec = importlib.util.spec_from_file_location(\"k2\", \"/root/cases/case_a/kernel.py\")\n    k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n    x, A, B = k.make_inputs(\"cuda\")\n    out = k.run(x, A, B)\n    torch.cuda.synchronize()\n    o = out.detach().cpu().numpy()\n    An = A.detach().cpu().numpy(); Bn = B.detach().cpu().numpy()\n    res.update({\n      \"ran\": True,\n      \"shape\": list(o.shape), \"dtype\": str(out.dtype),\n      \"n_nan\": int(np.isnan(o).sum()), \"n_inf\": int(np.isinf(o).sum()),\n      \"all_finite\": bool(np.isfinite(o).all()),\n      \"min_rowmax_A\": float(np.abs(An).max(axis=1).min()),\n      \"min_rowmax_B\": float(np.abs(Bn).max(axis=1).min()),\n      \"zero_rows_A\": int((np.abs(An).max(axis=1)==0).sum()),\n      \"zero_rows_B\": int((np.abs(Bn).max(axis=1)==0).sum()),\n      \"out_min\": float(o.min()), \"out_max\": float(o.max()),\n      \"triton_version\": __import__(\"triton\").__version__,\n      \"gpu\": torch.cuda.get_device_name(0),\n    })\nexcept Exception as e:\n    res.update({\"ran\": False, \"exception\": repr(e), \"tb\": traceback.format_exc()[-800:]})\nprint(json.dumps(res))\n",
+            "expected_signal": "If run() raises or any output is non-finite, c2 confirmed; clean execution with 64 finite fp32 outputs and no zero row-max rebuts it."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 6370,
+        "cache_read_input_tokens": 0,
+        "duration_s": 20.883,
+        "input_tokens": 27151,
+        "output_tokens": 1993
+      }
+    },
+    {
+      "duration_s": 18.595518752000004,
+      "role": "experimenter",
+      "round": 5,
+      "text": "Both probes returned; finalizing them together. c1's measured E and the independent CPU emulation of the same quantization agree to 7 digits, so the failure is intrinsic to the INT4 scheme, not a GPU artifact. c2 is rebutted: the workload runs cleanly with all-finite outputs and no degenerate row maxima.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "E_cpu_emulation": 0.2241157849547494,
+              "E_measured_gpu": 0.22411580644590948,
+              "E_over_threshold_ratio": 2.241158064459095,
+              "all_finite": true,
+              "branchA_abs_err_norm": 0.8499627969070997,
+              "branchB_abs_err_norm": 0.9616883415856585,
+              "clamp_hits_A_of_8192": 100,
+              "clamp_hits_B_of_8192": 101,
+              "denominator": 7.988006980125256,
+              "err_norm": 1.7902386262463257,
+              "gpu": "Tesla T4",
+              "max_abs_err": 0.5755404823381721,
+              "ref_max": 1.0589215290725207,
+              "ref_min": 0.9260899602768314,
+              "ref_norm": 7.988006980125256,
+              "scale_a_max": 0.5796835763113839,
+              "scale_a_min": 0.3023895195552281,
+              "threshold": 0.1
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "Measured on Tesla T4 with the exact make_inputs(SEED=921000) workload: E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.2241, i.e. 2.24x the contract threshold of 0.1. ||ref||_2 = 7.988 (per-row ref in [0.926, 1.059]), error norm 1.790, max abs err 0.576 on a ~1.0 signal. An independent NumPy fp64 emulation of the kernel's own quantization (absmax/7, floor(v/s+0.5), clamp +-7) reproduces E = 0.2241158 versus the kernel's 0.2241158, so the error is the INT4 quantization noise itself, not an fp32/accumulation or indexing artifact. Per-branch dequant error norms are 0.850 (A) and 0.962 (B) and add in quadrature rather than cancel, matching the predicted small-signal (0.5 per branch) vs large-row-norm regime. Clamp hits are only 100/8192 (A) and 101/8192 (B), confirming rounding noise, not clipping, dominates. Contract failed on the E<=0.1 half.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "all_finite": true,
+              "dtype": "torch.float32",
+              "exception": null,
+              "gpu": "Tesla T4",
+              "min_rowmax_A": 2.1167266368865967,
+              "min_rowmax_B": 2.127420425415039,
+              "n_inf": 0,
+              "n_nan": 0,
+              "out_max": 1.546172857284546,
+              "out_min": 0.37438690662384033,
+              "ran": true,
+              "shape": [
+                64
+              ],
+              "triton_version": "3.4.0",
+              "zero_rows_A": 0,
+              "zero_rows_B": 0
+            },
+            "event_id": "t9",
+            "status": "rebutted",
+            "summary": "run(*make_inputs()) executed without exception on Tesla T4 with Triton 3.4.0 (enable_fp_fusion=False accepted as a launch kwarg). Output is a 64-element torch.float32 tensor with 0 NaN, 0 Inf, all values finite and in [0.374, 1.546]. No degenerate rows exist: min row absmax is 2.117 (A) and 2.127 (B), zero rows 0 for both, so the unguarded division by max|row|/7 never divides by zero on this workload. The finiteness/executability half of the contract is satisfied; c2 is rebutted.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6370,
+        "duration_s": 18.596,
+        "input_tokens": 36364,
+        "output_tokens": 1704
+      }
+    },
+    {
+      "duration_s": 13.565834819999992,
+      "role": "skeptic",
+      "round": 6,
+      "text": "Review turn: the decisive measurement is in and independently cross-checked (GPU E = 0.22412 vs CPU fp64 emulation of the same INT4 scheme E = 0.22412, 2.24x the 0.1 threshold), with clamp counts and per-branch error norms ruling out clipping, indexing, or fp32-accumulation artifacts. The finiteness half is cleanly rebutted. Nothing in the new evidence opens a material, testable, in-scope gap that c1/c2 don't already cover, so I'm not holding up the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The round's probes fully decide both existing claims on exactly the contracted workload. c1 is confirmed by a direct T4 measurement of the contract metric (E = 0.22412 vs threshold 0.1, num 1.790 / den 7.988) and corroborated by an independent NumPy fp64 emulation of the kernel's own quantization reaching E = 0.2241158, which localizes the failure to the INT4 rounding noise itself rather than any indexing, launch-option, or fp32-accumulation artifact; clamp hits of 100/8192 (A) and 101/8192 (B) further exclude clipping as the mechanism, and per-branch error norms 0.850/0.962 combine in quadrature as predicted. c2 is rebutted: the kernel executed on Triton 3.4.0 with enable_fp_fusion=False accepted, returned a 64-element fp32 tensor with 0 NaN/0 Inf, and min row absmax 2.117/2.127 with zero degenerate rows, so the unguarded divide never fires on this seed. The contract is a single fixed workload (SEED=921000) plus finiteness, so there is no remaining in-scope input, metric, or code path that another claim could probe: the quantization-noise magnitude already dominates by 2.24x, and the residual source details (round-half-up asymmetry, tl.sum ordering, permutation of B) are each orders of magnitude too small to change that outcome and are explicitly licensed as approximate intermediates. No additional high-quality in-scope claim is available.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5980,
+        "duration_s": 13.566,
+        "input_tokens": 51091,
+        "output_tokens": 828
+      }
+    },
+    {
+      "duration_s": 13.25734866900001,
+      "role": "judge",
+      "round": 7,
+      "text": "Both claims are fully resolved with direct runtime evidence, and the Skeptic has reviewed the latest evidence and recorded no new claims, so I can finalize now.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The operative contract (problem.txt) is a single fixed workload \u2014 run(*make_inputs()) with PCG64 SEED=921000 on a T4 \u2014 judged by exactly two conditions: all outputs finite, and E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(64)) <= 0.1. Claim c1 is confirmed, in_scope, and its scope evidence cites precisely that stated domain (problem.txt metric/threshold plus kernel.py lines 25-42 fixing the seed, permutation and shapes). Direct measurement on a Tesla T4 (t8) gives E = 0.22412, 2.24x the threshold, with error norm 1.790 against ||ref||_2 = 7.988 and max absolute error 0.576 on a per-row reference of ~1.0. An independent NumPy fp64 emulation of the kernel's own quantization (absmax/7, floor(v/s+0.5), clamp \u00b17) reproduces E = 0.2241158 to seven digits, localizing the failure to the INT4 rounding noise itself rather than to indexing, the enable_fp_fusion launch option, or fp32 accumulation order. Clamp hits of 100/8192 (A) and 101/8192 (B) rule out clipping as the mechanism; per-branch dequant error norms 0.850 and 0.962 add in quadrature as predicted, because B is row-permuted and the two branches are independent. This is not a deviation the contract accounts for: the contract explicitly licenses approximate intermediates and explicitly allows either branch to individually exceed 0.1, but conditions compliance on the FINAL output satisfying E <= 0.1, which it does not; nor is it a near-zero-value relative-error artifact, since ||ref||_2 = 7.988 far exceeds the 0.008 denominator floor and the absolute error is ~58% of a unit-scale signal. Claim c2 (non-finite output / launch failure) was rebutted by t9: the kernel ran cleanly on Triton 3.4.0 returning 64 finite fp32 values with zero degenerate row maxima (min row absmax 2.117/2.127), so the finiteness half of the contract passes \u2014 but the E half fails decisively. No unresolved in-scope claim remains; the Skeptic reviewed the latest evidence and recorded no new claims.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 5846,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.257,
+        "input_tokens": 54198,
+        "output_tokens": 1080
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-23T02:54:37Z",
+    "decision": "no_new_claims",
+    "reason": "The round's probes fully decide both existing claims on exactly the contracted workload. c1 is confirmed by a direct T4 measurement of the contract metric (E = 0.22412 vs threshold 0.1, num 1.790 / den 7.988) and corroborated by an independent NumPy fp64 emulation of the kernel's own quantization reaching E = 0.2241158, which localizes the failure to the INT4 rounding noise itself rather than any indexing, launch-option, or fp32-accumulation artifact; clamp hits of 100/8192 (A) and 101/8192 (B) further exclude clipping as the mechanism, and per-branch error norms 0.850/0.962 combine in quadrature as predicted. c2 is rebutted: the kernel executed on Triton 3.4.0 with enable_fp_fusion=False accepted, returned a 64-element fp32 tensor with 0 NaN/0 Inf, and min row absmax 2.117/2.127 with zero degenerate rows, so the unguarded divide never fires on this seed. The contract is a single fixed workload (SEED=921000) plus finiteness, so there is no remaining in-scope input, metric, or code path that another claim could probe: the quantization-noise magnitude already dominates by 2.24x, and the residual source details (round-half-up asymmetry, tl.sum ordering, permutation of B) are each orders of magnitude too small to change that outcome and are explicitly licensed as approximate intermediates. No additional high-quality in-scope claim is available.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 11,
+    "tool_event_id": "t12",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_a"
+      },
+      "created_at": "2026-09-23T02:51:44Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_a",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(X, A, B, Y, K: tl.constexpr):\n    row = tl.program_id(0)\n    j = tl.arange(0, K)\n    x = tl.load(X + j)\n    a = tl.load(A + row * K + j)\n    b = tl.load(B + row * K + j)\n    sa = tl.max(tl.abs(a), 0) / 7.0\n    sb = tl.max(tl.abs(b), 0) / 7.0\n    qa = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(a / sa + 0.5)))\n    qb = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(b / sb + 0.5)))\n    ya = tl.sum((qa * sa) * x, 0)\n    yb = tl.sum((qb * sb) * x, 0)\n    tl.store(Y + row, ya + yb)\n\ndef run(x, a, b):\n    out = torch.empty(a.shape[0], device=x.device, dtype=torch.float32)\n    _kernel[(a.shape[0],)](x, a, b, out, a.shape[1], enable_fp_fusion=False)\n    return out\n\nSEED = 921000\nPERMUTATION = [4, 1, 2, 53, 44, 13, 11, 56, 46, 57, 33, 8, 25, 35, 39, 20, 36, 14, 51, 52, 40, 29, 23, 26, 3, 31, 38, 16, 21, 62, 41, 24, 61, 45, 30, 59, 19, 42, 27, 28, 12, 17, 60, 47, 43, 54, 6, 34, 22, 10, 18, 50, 32, 0, 7, 15, 9, 5, 63, 55, 49, 37, 48, 58]\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    x = rng.standard_normal(128)\n    x /= np.linalg.norm(x)\n    # Construct two dense projections with similar signal magnitudes.\n    matrices = []\n    for _ in range(2):\n        w = rng.standard_normal((64, 128))\n        target = 0.5 + 0.02 * rng.standard_normal(64)\n        projection = np.sum(w * x[None, :], axis=1, dtype=np.float64)\n        w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]\n        matrices.append(w.astype(np.float32))\n    arrays = [x.astype(np.float32), matrices[0], matrices[1][PERMUTATION].copy()]\n    return tuple(torch.from_numpy(a.copy()).to(device) for a in arrays)\n",
+        "passed": null,
+        "problem_text": "Evaluate numerical compliance of run(*make_inputs()) on exactly the workload\nspecified in kernel.py. All inputs are float32 and contiguous, with x of shape\n(128,) and A, B of shape (64,128). The complete input construction, PCG64 seed\nand row permutation are provided in the source; no hidden input is involved.\n\nReference: y = A @ x + B @ x on the original float32 inputs, evaluated in float64.\nMetric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64)).\nContract: all outputs must be finite and E <= 0.1. Approximate intermediate\nvalues are allowed if the FINAL output meets this requirement. Either branch\nmay individually exceed 0.1 without violating the contract.\nTarget implementation: the supplied Triton kernel, on an NVIDIA T4. Input\ngenerator uses NumPy PCG64 on CPU. This is finite-workload compliance, not a\nclaim about all inputs, and not a requirement to reproduce INT4 arithmetic\nbit-for-bit. Decide trust, reject, or needs_more_evidence.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_a",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_a"
+      },
+      "created_at": "2026-09-23T02:51:44Z",
+      "id": "t2",
+      "output": {
+        "content": "Evaluate numerical compliance of run(*make_inputs()) on exactly the workload\nspecified in kernel.py. All inputs are float32 and contiguous, with x of shape\n(128,) and A, B of shape (64,128). The complete input construction, PCG64 seed\nand row permutation are provided in the source; no hidden input is involved.\n\nReference: y = A @ x + B @ x on the original float32 inputs, evaluated in float64.\nMetric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64)).\nContract: all outputs must be finite and E <= 0.1. Approximate intermediate\nvalues are allowed if the FINAL output meets this requirement. Either branch\nmay individually exceed 0.1 without violating the contract.\nTarget implementation: the supplied Triton kernel, on an NVIDIA T4. Input\ngenerator uses NumPy PCG64 on CPU. This is finite-workload compliance, not a\nclaim about all inputs, and not a requirement to reproduce INT4 arithmetic\nbit-for-bit. Decide trust, reject, or needs_more_evidence.\n",
+        "entry": "case_a",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_a"
+      },
+      "created_at": "2026-09-23T02:51:44Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_a",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1737
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 54
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 971
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_a",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-23T02:51:44Z",
+      "id": "t4",
+      "output": {
+        "content": "{\"name\":\"case_a\",\"passed\":null,\"status\":\"unverified\"}\n",
+        "entry": "case_a",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 54,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Workload is fully fixed and self-contained: run(*make_inputs()) with PCG64 SEED=921000, x of shape (128,) unit-normalized, A and B of shape (64,128), all float32 contiguous, no hidden inputs (problem.txt; kernel.py lines 25-42).",
+          "Reference is y = A @ x + B @ x computed in float64 on exactly the float32 tensors returned by make_inputs, including the already-applied row PERMUTATION on B (kernel.py line 41) -- the permutation is part of the input, not a transform the kernel must undo.",
+          "Pass metric: E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(64)) <= 0.1, plus all outputs finite. Denominator floor 0.008 is far below the expected ||ref|| (~8), so the plain relative L2 governs.",
+          "Contract explicitly licenses approximate intermediates (INT4 quantization is allowed) and explicitly says either branch's individual error may exceed 0.1; only the combined final vector is judged.",
+          "Target hardware is an NVIDIA T4; this is finite-workload compliance, not a general-input or bit-exact INT4 claim."
+        ],
+        "kernel_model": [
+          "One program per output row (grid = (64,), kernel.py line 22); each program loads all K=128 elements of x, of A[row], and of B[row] with unmasked contiguous loads. K=128 is a power of two and exactly the row length, so tl.arange(0,K) needs no mask.",
+          "Per-row symmetric scale sa = max|A[row]|/7, sb = max|B[row]|/7 (lines 12-13) -- scale is computed independently per row and per matrix, recomputed inside the kernel rather than passed in.",
+          "Quantization is round-half-up via floor(v/s + 0.5) then clamp to [-7,7] (lines 14-15), i.e. 4-bit signed symmetric levels; the clamp is only active for the row max (which maps exactly to +-7) and for ties, so clipping is not the main error source. Rounding is half-up rather than round-half-even, a minor asymmetry.",
+          "Dequantization is immediate (qa*sa, qb*sb) and the dot products are accumulated in fp32 by tl.sum over 128 lanes; the two branch sums ya and yb are added and stored as a single fp32 value (lines 16-18).",
+          "enable_fp_fusion=False (line 22) disables FMA contraction, which slightly changes fp32 rounding but is numerically negligible at this magnitude.",
+          "Input generator makes each row of each matrix standard normal (row L2 ~ sqrt(128) ~ 11.3, max|entry| ~ 2.9) and then applies a rank-1 correction along x so that the exact projection row.x equals 0.5 + 0.02*N(0,1) (lines 36-39). So the reference per-row value is ~1.0 and ||ref||_2 ~ 8, while the quantity being quantized has entries ~40x larger than the signal it must reproduce along x.",
+          "B is row-permuted by PERMUTATION before being returned (line 41); since the reference uses the returned B, the permutation does not create an index mismatch for the kernel -- it mainly decorrelates B's per-row targets from A's and blocks any cross-branch error cancellation."
+        ],
+        "open_questions": [
+          "What is the actual measured E for run(*make_inputs()) on a T4? The analytical estimate (~0.15-0.20) is above 0.1 but close enough to the threshold that only a measurement decides.",
+          "What is the realized ||ref||_2 and the per-row reference spread (targets are 0.5 +- 0.02 per branch), which sets the denominator of E?",
+          "What are the realized per-row scales sa, sb (i.e. max|row| values) for this seed, and how many entries actually hit the +-7 clamp? This separates rounding noise from clipping as the error source.",
+          "Does the fp32 output contain any non-finite values (relevant only if some row max is degenerate)?",
+          "Is the observed error consistent with independent per-branch quadrature addition, or is there any unexpected correlation between the A and B branch errors introduced by the shared rank-1 correction along x?"
+        ],
+        "risk_map": [
+          "Primary bug surface is magnitude of INT4 quantization noise, not indexing: with s = max|row|/7 ~ 0.41, per-element rounding error is ~uniform on [-s/2, s/2] (sigma ~ 0.12), and since ||x||=1 the per-branch dot-product error has sigma ~ 0.12 against a per-branch signal of only 0.5. Two independent branches add in quadrature to ~0.17 error against a combined reference of ~1.0, i.e. an estimated E ~ 0.15-0.20, above the 0.1 threshold. This needs a measured E, not an estimate.",
+          "The contract's 'either branch may individually exceed 0.1' sentence is a misdirection risk: independent A and B quantization errors add in quadrature, so the combined error should be worse than each branch, not better. Any reasoning that assumes cancellation between branches should be checked against the fact that matrices[0] and matrices[1] are independent draws and B is additionally row-permuted.",
+          "Because the signal along x is an engineered rank-1 component of size ~0.5 embedded in a row of norm ~11.3, the error is dominated by noise the quantizer cannot represent; a benign-looking allclose on a generic random matvec would not reproduce this regime. Evidence must use the exact make_inputs workload.",
+          "Scale-computation edge cases: sa/sb divide by max|row|/7 with no epsilon (lines 12-15); an all-zero row would give 0/0 -> NaN. Not expected for this generator, but finiteness of the output is part of the contract and worth a cheap check.",
+          "Rounding convention detail: floor(v/s + 0.5) is round-half-up and is not symmetric for negative halves, and tl.floor on the +7 boundary plus the clamp can bias the extreme levels slightly. Small relative to the main noise term but relevant if measured E lands near 0.1.",
+          "Reproducibility of the metric depends on generating inputs with NumPy PCG64 on CPU exactly as in make_inputs; recomputing x or the rank-1 correction in a different dtype/order (the code uses float64 for the projection, line 38, then casts to float32, line 40) would shift the reference slightly.",
+          "fp32 accumulation order inside tl.sum over 128 lanes differs from the fp64 reference, but at these magnitudes it should be ~1e-6 relative and cannot explain or mask an error at the 0.1 scale."
+        ],
+        "scope_notes": [
+          "In scope: exactly one input instance, run(*make_inputs()) with SEED=921000 on a T4. No distributional sweep is required by the contract, and passing/failing on other random inputs is not decisive.",
+          "Out of scope: bit-exact INT4 semantics, general-input correctness, performance, and any requirement that the kernel undo B's row permutation.",
+          "The deciding metric is the single scalar E over the 64-element output vector plus finiteness; per-row or per-branch error statistics are diagnostic only, not verdict-bearing on their own.",
+          "Because the workload is deterministic and small, a direct measurement of E is available and should outrank analytical noise estimates; any verdict resting only on the sigma ~ 0.12 argument is under-evidenced."
+        ],
+        "summary": "case_a implements a per-row symmetric INT4 (7-level) quantized dequant-matvec for two matrices A and B against a shared vector x, and the contract is a single fixed-workload relative-L2 check (E <= 0.1) against an fp64 A@x + B@x reference. The dominant question is purely quantitative: whether 4-bit per-row quantization noise projected onto x stays under 10% of a reference whose per-row value was deliberately engineered to be only ~0.5 per branch (~1.0 total), i.e. a small-signal-vs-large-row-norm regime where INT4 noise is unusually damaging."
+      },
+      "created_at": "2026-09-23T02:52:57Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Workload is fully fixed and self-contained: run(*make_inputs()) with PCG64 SEED=921000, x of shape (128,) unit-normalized, A and B of shape (64,128), all float32 contiguous, no hidden inputs (problem.txt; kernel.py lines 25-42).",
+            "Reference is y = A @ x + B @ x computed in float64 on exactly the float32 tensors returned by make_inputs, including the already-applied row PERMUTATION on B (kernel.py line 41) -- the permutation is part of the input, not a transform the kernel must undo.",
+            "Pass metric: E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(64)) <= 0.1, plus all outputs finite. Denominator floor 0.008 is far below the expected ||ref|| (~8), so the plain relative L2 governs.",
+            "Contract explicitly licenses approximate intermediates (INT4 quantization is allowed) and explicitly says either branch's individual error may exceed 0.1; only the combined final vector is judged.",
+            "Target hardware is an NVIDIA T4; this is finite-workload compliance, not a general-input or bit-exact INT4 claim."
+          ],
+          "kernel_model": [
+            "One program per output row (grid = (64,), kernel.py line 22); each program loads all K=128 elements of x, of A[row], and of B[row] with unmasked contiguous loads. K=128 is a power of two and exactly the row length, so tl.arange(0,K) needs no mask.",
+            "Per-row symmetric scale sa = max|A[row]|/7, sb = max|B[row]|/7 (lines 12-13) -- scale is computed independently per row and per matrix, recomputed inside the kernel rather than passed in.",
+            "Quantization is round-half-up via floor(v/s + 0.5) then clamp to [-7,7] (lines 14-15), i.e. 4-bit signed symmetric levels; the clamp is only active for the row max (which maps exactly to +-7) and for ties, so clipping is not the main error source. Rounding is half-up rather than round-half-even, a minor asymmetry.",
+            "Dequantization is immediate (qa*sa, qb*sb) and the dot products are accumulated in fp32 by tl.sum over 128 lanes; the two branch sums ya and yb are added and stored as a single fp32 value (lines 16-18).",
+            "enable_fp_fusion=False (line 22) disables FMA contraction, which slightly changes fp32 rounding but is numerically negligible at this magnitude.",
+            "Input generator makes each row of each matrix standard normal (row L2 ~ sqrt(128) ~ 11.3, max|entry| ~ 2.9) and then applies a rank-1 correction along x so that the exact projection row.x equals 0.5 + 0.02*N(0,1) (lines 36-39). So the reference per-row value is ~1.0 and ||ref||_2 ~ 8, while the quantity being quantized has entries ~40x larger than the signal it must reproduce along x.",
+            "B is row-permuted by PERMUTATION before being returned (line 41); since the reference uses the returned B, the permutation does not create an index mismatch for the kernel -- it mainly decorrelates B's per-row targets from A's and blocks any cross-branch error cancellation."
+          ],
+          "open_questions": [
+            "What is the actual measured E for run(*make_inputs()) on a T4? The analytical estimate (~0.15-0.20) is above 0.1 but close enough to the threshold that only a measurement decides.",
+            "What is the realized ||ref||_2 and the per-row reference spread (targets are 0.5 +- 0.02 per branch), which sets the denominator of E?",
+            "What are the realized per-row scales sa, sb (i.e. max|row| values) for this seed, and how many entries actually hit the +-7 clamp? This separates rounding noise from clipping as the error source.",
+            "Does the fp32 output contain any non-finite values (relevant only if some row max is degenerate)?",
+            "Is the observed error consistent with independent per-branch quadrature addition, or is there any unexpected correlation between the A and B branch errors introduced by the shared rank-1 correction along x?"
+          ],
+          "risk_map": [
+            "Primary bug surface is magnitude of INT4 quantization noise, not indexing: with s = max|row|/7 ~ 0.41, per-element rounding error is ~uniform on [-s/2, s/2] (sigma ~ 0.12), and since ||x||=1 the per-branch dot-product error has sigma ~ 0.12 against a per-branch signal of only 0.5. Two independent branches add in quadrature to ~0.17 error against a combined reference of ~1.0, i.e. an estimated E ~ 0.15-0.20, above the 0.1 threshold. This needs a measured E, not an estimate.",
+            "The contract's 'either branch may individually exceed 0.1' sentence is a misdirection risk: independent A and B quantization errors add in quadrature, so the combined error should be worse than each branch, not better. Any reasoning that assumes cancellation between branches should be checked against the fact that matrices[0] and matrices[1] are independent draws and B is additionally row-permuted.",
+            "Because the signal along x is an engineered rank-1 component of size ~0.5 embedded in a row of norm ~11.3, the error is dominated by noise the quantizer cannot represent; a benign-looking allclose on a generic random matvec would not reproduce this regime. Evidence must use the exact make_inputs workload.",
+            "Scale-computation edge cases: sa/sb divide by max|row|/7 with no epsilon (lines 12-15); an all-zero row would give 0/0 -> NaN. Not expected for this generator, but finiteness of the output is part of the contract and worth a cheap check.",
+            "Rounding convention detail: floor(v/s + 0.5) is round-half-up and is not symmetric for negative halves, and tl.floor on the +7 boundary plus the clamp can bias the extreme levels slightly. Small relative to the main noise term but relevant if measured E lands near 0.1.",
+            "Reproducibility of the metric depends on generating inputs with NumPy PCG64 on CPU exactly as in make_inputs; recomputing x or the rank-1 correction in a different dtype/order (the code uses float64 for the projection, line 38, then casts to float32, line 40) would shift the reference slightly.",
+            "fp32 accumulation order inside tl.sum over 128 lanes differs from the fp64 reference, but at these magnitudes it should be ~1e-6 relative and cannot explain or mask an error at the 0.1 scale."
+          ],
+          "scope_notes": [
+            "In scope: exactly one input instance, run(*make_inputs()) with SEED=921000 on a T4. No distributional sweep is required by the contract, and passing/failing on other random inputs is not decisive.",
+            "Out of scope: bit-exact INT4 semantics, general-input correctness, performance, and any requirement that the kernel undo B's row permutation.",
+            "The deciding metric is the single scalar E over the 64-element output vector plus finiteness; per-row or per-branch error statistics are diagnostic only, not verdict-bearing on their own.",
+            "Because the workload is deterministic and small, a direct measurement of E is available and should outrank analytical noise estimates; any verdict resting only on the sigma ~ 0.12 argument is under-evidenced."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Workload is fully fixed and self-contained: run(*make_inputs()) with PCG64 SEED=921000, x of shape (128,) unit-normalized, A and B of shape (64,128), all float32 contiguous, no hidden inputs (problem.txt; kernel.py lines 25-42).",
+            "Reference is y = A @ x + B @ x computed in float64 on exactly the float32 tensors returned by make_inputs, including the already-applied row PERMUTATION on B (kernel.py line 41) -- the permutation is part of the input, not a transform the kernel must undo.",
+            "Pass metric: E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(64)) <= 0.1, plus all outputs finite. Denominator floor 0.008 is far below the expected ||ref|| (~8), so the plain relative L2 governs.",
+            "Contract explicitly licenses approximate intermediates (INT4 quantization is allowed) and explicitly says either branch's individual error may exceed 0.1; only the combined final vector is judged.",
+            "Target hardware is an NVIDIA T4; this is finite-workload compliance, not a general-input or bit-exact INT4 claim."
+          ],
+          "created_at": "2026-09-23T02:52:57Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "One program per output row (grid = (64,), kernel.py line 22); each program loads all K=128 elements of x, of A[row], and of B[row] with unmasked contiguous loads. K=128 is a power of two and exactly the row length, so tl.arange(0,K) needs no mask.",
+            "Per-row symmetric scale sa = max|A[row]|/7, sb = max|B[row]|/7 (lines 12-13) -- scale is computed independently per row and per matrix, recomputed inside the kernel rather than passed in.",
+            "Quantization is round-half-up via floor(v/s + 0.5) then clamp to [-7,7] (lines 14-15), i.e. 4-bit signed symmetric levels; the clamp is only active for the row max (which maps exactly to +-7) and for ties, so clipping is not the main error source. Rounding is half-up rather than round-half-even, a minor asymmetry.",
+            "Dequantization is immediate (qa*sa, qb*sb) and the dot products are accumulated in fp32 by tl.sum over 128 lanes; the two branch sums ya and yb are added and stored as a single fp32 value (lines 16-18).",
+            "enable_fp_fusion=False (line 22) disables FMA contraction, which slightly changes fp32 rounding but is numerically negligible at this magnitude.",
+            "Input generator makes each row of each matrix standard normal (row L2 ~ sqrt(128) ~ 11.3, max|entry| ~ 2.9) and then applies a rank-1 correction along x so that the exact projection row.x equals 0.5 + 0.02*N(0,1) (lines 36-39). So the reference per-row value is ~1.0 and ||ref||_2 ~ 8, while the quantity being quantized has entries ~40x larger than the signal it must reproduce along x.",
+            "B is row-permuted by PERMUTATION before being returned (line 41); since the reference uses the returned B, the permutation does not create an index mismatch for the kernel -- it mainly decorrelates B's per-row targets from A's and blocks any cross-branch error cancellation."
+          ],
+          "open_questions": [
+            "What is the actual measured E for run(*make_inputs()) on a T4? The analytical estimate (~0.15-0.20) is above 0.1 but close enough to the threshold that only a measurement decides.",
+            "What is the realized ||ref||_2 and the per-row reference spread (targets are 0.5 +- 0.02 per branch), which sets the denominator of E?",
+            "What are the realized per-row scales sa, sb (i.e. max|row| values) for this seed, and how many entries actually hit the +-7 clamp? This separates rounding noise from clipping as the error source.",
+            "Does the fp32 output contain any non-finite values (relevant only if some row max is degenerate)?",
+            "Is the observed error consistent with independent per-branch quadrature addition, or is there any unexpected correlation between the A and B branch errors introduced by the shared rank-1 correction along x?"
+          ],
+          "risk_map": [
+            "Primary bug surface is magnitude of INT4 quantization noise, not indexing: with s = max|row|/7 ~ 0.41, per-element rounding error is ~uniform on [-s/2, s/2] (sigma ~ 0.12), and since ||x||=1 the per-branch dot-product error has sigma ~ 0.12 against a per-branch signal of only 0.5. Two independent branches add in quadrature to ~0.17 error against a combined reference of ~1.0, i.e. an estimated E ~ 0.15-0.20, above the 0.1 threshold. This needs a measured E, not an estimate.",
+            "The contract's 'either branch may individually exceed 0.1' sentence is a misdirection risk: independent A and B quantization errors add in quadrature, so the combined error should be worse than each branch, not better. Any reasoning that assumes cancellation between branches should be checked against the fact that matrices[0] and matrices[1] are independent draws and B is additionally row-permuted.",
+            "Because the signal along x is an engineered rank-1 component of size ~0.5 embedded in a row of norm ~11.3, the error is dominated by noise the quantizer cannot represent; a benign-looking allclose on a generic random matvec would not reproduce this regime. Evidence must use the exact make_inputs workload.",
+            "Scale-computation edge cases: sa/sb divide by max|row|/7 with no epsilon (lines 12-15); an all-zero row would give 0/0 -> NaN. Not expected for this generator, but finiteness of the output is part of the contract and worth a cheap check.",
+            "Rounding convention detail: floor(v/s + 0.5) is round-half-up and is not symmetric for negative halves, and tl.floor on the +7 boundary plus the clamp can bias the extreme levels slightly. Small relative to the main noise term but relevant if measured E lands near 0.1.",
+            "Reproducibility of the metric depends on generating inputs with NumPy PCG64 on CPU exactly as in make_inputs; recomputing x or the rank-1 correction in a different dtype/order (the code uses float64 for the projection, line 38, then casts to float32, line 40) would shift the reference slightly.",
+            "fp32 accumulation order inside tl.sum over 128 lanes differs from the fp64 reference, but at these magnitudes it should be ~1e-6 relative and cannot explain or mask an error at the 0.1 scale."
+          ],
+          "scope_notes": [
+            "In scope: exactly one input instance, run(*make_inputs()) with SEED=921000 on a T4. No distributional sweep is required by the contract, and passing/failing on other random inputs is not decisive.",
+            "Out of scope: bit-exact INT4 semantics, general-input correctness, performance, and any requirement that the kernel undo B's row permutation.",
+            "The deciding metric is the single scalar E over the 64-element output vector plus finiteness; per-row or per-branch error statistics are diagnostic only, not verdict-bearing on their own.",
+            "Because the workload is deterministic and small, a direct measurement of E is available and should outrank analytical noise estimates; any verdict resting only on the sigma ~ 0.12 argument is under-evidenced."
+          ],
+          "summary": "case_a implements a per-row symmetric INT4 (7-level) quantized dequant-matvec for two matrices A and B against a shared vector x, and the contract is a single fixed-workload relative-L2 check (E <= 0.1) against an fp64 A@x + B@x reference. The dominant question is purely quantitative: whether 4-bit per-row quantization noise projected onto x stays under 10% of a reference whose per-row value was deliberately engineered to be only ~0.5 per branch (~1.0 total), i.e. a small-signal-vs-large-row-norm regime where INT4 noise is unusually damaging.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "make_inputs deliberately builds rows that are standard normal (row norm ~11.3, max|entry| ~3) but whose projection onto x is forced to only 0.5 +- 0.02 per branch (kernel.py lines 36-39). Quantizing a row at 4 bits with a per-row absmax scale injects noise of magnitude ~0.12 along any fixed unit direction, which is ~24% of the 0.5 signal per branch; B is additionally row-permuted (line 41) so the A and B errors are independent and add in quadrature to ~0.17 against a combined reference of ~1.0 per row. That analytical estimate lands well above 0.1 and must be checked by direct measurement of E on the exact seed.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"Evaluate numerical compliance of run(*make_inputs()) on exactly the workload specified in kernel.py\" with \"Metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64))\" and \"Contract: all outputs must be finite and E <= 0.1.\""
+          },
+          {
+            "source": "kernel.py lines 25-42",
+            "summary": "make_inputs fixes SEED=921000, PERMUTATION, x of shape (128,) unit-normalized, and A,B of shape (64,128) with per-row projection onto x forced to 0.5 +- 0.02."
+          }
+        ],
+        "scope_rationale": "This is precisely the single workload and metric the contract specifies; no generalization or alternate input is involved.",
+        "statement": "On the exact fixed workload run(*make_inputs()) with SEED=921000, the kernel's per-row INT4 (7-level) symmetric quantization of A and B produces a relative L2 error E = ||out - ref||_2 / max(||ref||_2, 0.008) that exceeds the contract threshold of 0.1 (expected E on the order of 0.15-0.20), because the per-element rounding noise (s/sqrt(12) with s = max|row|/7 ~ 0.4, giving sigma ~ 0.12 per branch dot product against a unit-norm x) is comparable to the engineered per-branch signal of only ~0.5, and the two independent branches add in quadrature rather than cancel."
+      },
+      "created_at": "2026-09-23T02:53:32Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-23T02:53:32Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "make_inputs deliberately builds rows that are standard normal (row norm ~11.3, max|entry| ~3) but whose projection onto x is forced to only 0.5 +- 0.02 per branch (kernel.py lines 36-39). Quantizing a row at 4 bits with a per-row absmax scale injects noise of magnitude ~0.12 along any fixed unit direction, which is ~24% of the 0.5 signal per branch; B is additionally row-permuted (line 41) so the A and B errors are independent and add in quadrature to ~0.17 against a combined reference of ~1.0 per row. That analytical estimate lands well above 0.1 and must be checked by direct measurement of E on the exact seed.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"Evaluate numerical compliance of run(*make_inputs()) on exactly the workload specified in kernel.py\" with \"Metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64))\" and \"Contract: all outputs must be finite and E <= 0.1.\""
+          },
+          {
+            "source": "kernel.py lines 25-42",
+            "summary": "make_inputs fixes SEED=921000, PERMUTATION, x of shape (128,) unit-normalized, and A,B of shape (64,128) with per-row projection onto x forced to 0.5 +- 0.02."
+          }
+        ],
+        "scope_rationale": "This is precisely the single workload and metric the contract specifies; no generalization or alternate input is involved.",
+        "statement": "On the exact fixed workload run(*make_inputs()) with SEED=921000, the kernel's per-row INT4 (7-level) symmetric quantization of A and B produces a relative L2 error E = ||out - ref||_2 / max(||ref||_2, 0.008) that exceeds the contract threshold of 0.1 (expected E on the order of 0.15-0.20), because the per-element rounding noise (s/sqrt(12) with s = max|row|/7 ~ 0.4, giving sigma ~ 0.12 per branch dot product against a unit-norm x) is comparable to the engineered per-branch signal of only ~0.5, and the two independent branches add in quadrature rather than cancel.",
+        "status": "open",
+        "updated_at": "2026-09-23T02:53:32Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The contract requires all outputs to be finite, which is a separate condition from E <= 0.1. Division by an unguarded per-row max is a classic NaN source, and enable_fp_fusion is a version-dependent Triton launch option; both are cheap to falsify by simply running the workload and checking torch.isfinite(out).all() and that no exception is raised.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"Contract: all outputs must be finite and E <= 0.1.\" and \"Target implementation: the supplied Triton kernel, on an NVIDIA T4.\""
+          }
+        ],
+        "scope_rationale": "Finiteness of the outputs on this exact workload is explicitly part of the stated contract, and successful execution of run(*make_inputs()) is presupposed by it.",
+        "statement": "run(*make_inputs()) may fail the finiteness half of the contract or fail to execute at all: the scales sa/sb are computed as max|row|/7 with no epsilon and used as divisors (kernel.py lines 12-15), and the launch passes enable_fp_fusion=False as a kernel launch kwarg (line 22), so any degenerate row or unsupported launch option would yield NaN/Inf outputs or an exception rather than a finite 64-element result."
+      },
+      "created_at": "2026-09-23T02:53:32Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-23T02:53:32Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "The contract requires all outputs to be finite, which is a separate condition from E <= 0.1. Division by an unguarded per-row max is a classic NaN source, and enable_fp_fusion is a version-dependent Triton launch option; both are cheap to falsify by simply running the workload and checking torch.isfinite(out).all() and that no exception is raised.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"Contract: all outputs must be finite and E <= 0.1.\" and \"Target implementation: the supplied Triton kernel, on an NVIDIA T4.\""
+          }
+        ],
+        "scope_rationale": "Finiteness of the outputs on this exact workload is explicitly part of the stated contract, and successful execution of run(*make_inputs()) is presupposed by it.",
+        "statement": "run(*make_inputs()) may fail the finiteness half of the contract or fail to execute at all: the scales sa/sb are computed as max|row|/7 with no epsilon and used as divisors (kernel.py lines 12-15), and the launch passes enable_fp_fusion=False as a kernel launch kwarg (line 22), so any degenerate row or unsupported launch option would yield NaN/Inf outputs or an exception rather than a finite 64-element result.",
+        "status": "open",
+        "updated_at": "2026-09-23T02:53:32Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport json, importlib.util, math\nimport numpy as np, torch\n\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_a/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nx, A, B = k.make_inputs(\"cuda\")\nout = k.run(x, A, B)\ntorch.cuda.synchronize()\n\nxn = x.detach().cpu().numpy().astype(np.float64)\nAn = A.detach().cpu().numpy().astype(np.float64)\nBn = B.detach().cpu().numpy().astype(np.float64)\nref = An @ xn + Bn @ xn\no = out.detach().cpu().numpy().astype(np.float64)\n\nnum = float(np.linalg.norm(o - ref))\nden = max(float(np.linalg.norm(ref)), 0.001*math.sqrt(64))\nE = num/den\n\n# CPU emulation of the kernel's quantization for diagnostics\ndef q(M):\n    s = np.max(np.abs(M), axis=1, keepdims=True)/7.0\n    qq = np.clip(np.floor(M/s + 0.5), -7, 7)\n    return qq*s, s, qq\nAq, sa, qa = q(An); Bq, sb, qb = q(Bn)\nemu = Aq @ xn + Bq @ xn\nE_emu = float(np.linalg.norm(emu-ref))/den\nerrA = float(np.linalg.norm(Aq@xn - An@xn))\nerrB = float(np.linalg.norm(Bq@xn - Bn@xn))\n\nprint(json.dumps({\n \"E\": E, \"threshold\": 0.1, \"num\": num, \"den\": den,\n \"ref_norm\": float(np.linalg.norm(ref)),\n \"ref_min\": float(ref.min()), \"ref_max\": float(ref.max()),\n \"E_cpu_emulation\": E_emu,\n \"branchA_abs_err_norm\": errA, \"branchB_abs_err_norm\": errB,\n \"max_abs_err\": float(np.abs(o-ref).max()),\n \"scale_a_min\": float(sa.min()), \"scale_a_max\": float(sa.max()),\n \"clamp_hits_A\": int(np.sum(np.abs(qa)>=7)), \"clamp_hits_B\": int(np.sum(np.abs(qb)>=7)),\n \"all_finite\": bool(np.isfinite(o).all()),\n \"gpu\": torch.cuda.get_device_name(0)\n}))\n",
+        "expected_signal": "Measured E = ||out-ref||_2 / max(||ref||_2, 0.008); E > 0.1 confirms c1, E <= 0.1 rebuts it."
+      },
+      "created_at": "2026-09-23T02:54:00Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "300627c1ef41b3a67a25507ce3f1e51bcb37d0691b7fd55c080cc2e4ed9cbf36"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "129b50fc934a0014ed669854cc199613ccde0885e022b46ae21224995ceb6431"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "f9d0eeee09207d22e8254f8efd1f4ec12e630ca7cc855998e530b996439c9366"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On the exact fixed workload run(*make_inputs()) with SEED=921000, the kernel's per-row INT4 (7-level) symmetric quantization of A and B produces a relative L2 error E = ||out - ref||_2 / max(||ref||_2, 0.008) that exceeds the contract threshold of 0.1 (expected E on the order of 0.15-0.20), because the per-element rounding noise (s/sqrt(12) with s = max|row|/7 ~ 0.4, giving sigma ~ 0.12 per branch dot product against a unit-norm x) is comparable to the engineered per-branch signal of only ~0.5, and the two independent branches add in quadrature rather than cancel.",
+        "cwd": "/root/cases/case_a",
+        "duration_s": 6.916455,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "300627c1ef41b3a67a25507ce3f1e51bcb37d0691b7fd55c080cc2e4ed9cbf36"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "129b50fc934a0014ed669854cc199613ccde0885e022b46ae21224995ceb6431"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "f9d0eeee09207d22e8254f8efd1f4ec12e630ca7cc855998e530b996439c9366"
+              }
+            ],
+            "duration_s": 6.916455,
+            "exit_code": 0,
+            "expected_signal": "Measured E = ||out-ref||_2 / max(||ref||_2, 0.008); E > 0.1 confirms c1, E <= 0.1 rebuts it.",
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.22411580644590948,
+              "E_cpu_emulation": 0.2241157849547494,
+              "all_finite": true,
+              "branchA_abs_err_norm": 0.8499627969070997,
+              "branchB_abs_err_norm": 0.9616883415856585,
+              "clamp_hits_A": 100,
+              "clamp_hits_B": 101,
+              "den": 7.988006980125256,
+              "gpu": "Tesla T4",
+              "max_abs_err": 0.5755404823381721,
+              "num": 1.7902386262463257,
+              "ref_max": 1.0589215290725207,
+              "ref_min": 0.9260899602768314,
+              "ref_norm": 7.988006980125256,
+              "scale_a_max": 0.5796835763113839,
+              "scale_a_min": 0.3023895195552281,
+              "threshold": 0.1
+            },
+            "stderr": "",
+            "stdout": "{\"E\": 0.22411580644590948, \"threshold\": 0.1, \"num\": 1.7902386262463257, \"den\": 7.988006980125256, \"ref_norm\": 7.988006980125256, \"ref_min\": 0.9260899602768314, \"ref_max\": 1.0589215290725207, \"E_cpu_emulation\": 0.2241157849547494, \"branchA_abs_err_norm\": 0.8499627969070997, \"branchB_abs_err_norm\": 0.9616883415856585, \"max_abs_err\": 0.5755404823381721, \"scale_a_min\": 0.3023895195552281, \"scale_a_max\": 0.5796835763113839, \"clamp_hits_A\": 100, \"clamp_hits_B\": 101, \"all_finite\": true, \"gpu\": \"Tesla T4\"}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "Measured E = ||out-ref||_2 / max(||ref||_2, 0.008); E > 0.1 confirms c1, E <= 0.1 rebuts it.",
+        "json_parse_error": null,
+        "json_result": {
+          "E": 0.22411580644590948,
+          "E_cpu_emulation": 0.2241157849547494,
+          "all_finite": true,
+          "branchA_abs_err_norm": 0.8499627969070997,
+          "branchB_abs_err_norm": 0.9616883415856585,
+          "clamp_hits_A": 100,
+          "clamp_hits_B": 101,
+          "den": 7.988006980125256,
+          "gpu": "Tesla T4",
+          "max_abs_err": 0.5755404823381721,
+          "num": 1.7902386262463257,
+          "ref_max": 1.0589215290725207,
+          "ref_min": 0.9260899602768314,
+          "ref_norm": 7.988006980125256,
+          "scale_a_max": 0.5796835763113839,
+          "scale_a_min": 0.3023895195552281,
+          "threshold": 0.1
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"E\": 0.22411580644590948, \"threshold\": 0.1, \"num\": 1.7902386262463257, \"den\": 7.988006980125256, \"ref_norm\": 7.988006980125256, \"ref_min\": 0.9260899602768314, \"ref_max\": 1.0589215290725207, \"E_cpu_emulation\": 0.2241157849547494, \"branchA_abs_err_norm\": 0.8499627969070997, \"branchB_abs_err_norm\": 0.9616883415856585, \"max_abs_err\": 0.5755404823381721, \"scale_a_min\": 0.3023895195552281, \"scale_a_max\": 0.5796835763113839, \"clamp_hits_A\": 100, \"clamp_hits_B\": 101, \"all_finite\": true, \"gpu\": \"Tesla T4\"}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport json, importlib.util, traceback\nimport numpy as np, torch\n\nres = {\"exception\": None}\ntry:\n    spec = importlib.util.spec_from_file_location(\"k2\", \"/root/cases/case_a/kernel.py\")\n    k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n    x, A, B = k.make_inputs(\"cuda\")\n    out = k.run(x, A, B)\n    torch.cuda.synchronize()\n    o = out.detach().cpu().numpy()\n    An = A.detach().cpu().numpy(); Bn = B.detach().cpu().numpy()\n    res.update({\n      \"ran\": True,\n      \"shape\": list(o.shape), \"dtype\": str(out.dtype),\n      \"n_nan\": int(np.isnan(o).sum()), \"n_inf\": int(np.isinf(o).sum()),\n      \"all_finite\": bool(np.isfinite(o).all()),\n      \"min_rowmax_A\": float(np.abs(An).max(axis=1).min()),\n      \"min_rowmax_B\": float(np.abs(Bn).max(axis=1).min()),\n      \"zero_rows_A\": int((np.abs(An).max(axis=1)==0).sum()),\n      \"zero_rows_B\": int((np.abs(Bn).max(axis=1)==0).sum()),\n      \"out_min\": float(o.min()), \"out_max\": float(o.max()),\n      \"triton_version\": __import__(\"triton\").__version__,\n      \"gpu\": torch.cuda.get_device_name(0),\n    })\nexcept Exception as e:\n    res.update({\"ran\": False, \"exception\": repr(e), \"tb\": traceback.format_exc()[-800:]})\nprint(json.dumps(res))\n",
+        "expected_signal": "If run() raises or any output is non-finite, c2 confirmed; clean execution with 64 finite fp32 outputs and no zero row-max rebuts it."
+      },
+      "created_at": "2026-09-23T02:54:05Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "21b2c555b64659cf5f834e2547e963c796a237dcd2cd5ebf9f8e270e7432fbe5"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "d3c204df458041d1740d472f233dd21f2d00c612d0c740a1d895f9ad2fc799cd"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "41e2aa179628dea6d880ba034a63744a7803b0ec6160369487c742d7a136de9b"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "run(*make_inputs()) may fail the finiteness half of the contract or fail to execute at all: the scales sa/sb are computed as max|row|/7 with no epsilon and used as divisors (kernel.py lines 12-15), and the launch passes enable_fp_fusion=False as a kernel launch kwarg (line 22), so any degenerate row or unsupported launch option would yield NaN/Inf outputs or an exception rather than a finite 64-element result.",
+        "cwd": "/root/cases/case_a",
+        "duration_s": 4.68771,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "21b2c555b64659cf5f834e2547e963c796a237dcd2cd5ebf9f8e270e7432fbe5"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "d3c204df458041d1740d472f233dd21f2d00c612d0c740a1d895f9ad2fc799cd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "41e2aa179628dea6d880ba034a63744a7803b0ec6160369487c742d7a136de9b"
+              }
+            ],
+            "duration_s": 4.68771,
+            "exit_code": 0,
+            "expected_signal": "If run() raises or any output is non-finite, c2 confirmed; clean execution with 64 finite fp32 outputs and no zero row-max rebuts it.",
+            "json_parse_error": null,
+            "json_result": {
+              "all_finite": true,
+              "dtype": "torch.float32",
+              "exception": null,
+              "gpu": "Tesla T4",
+              "min_rowmax_A": 2.1167266368865967,
+              "min_rowmax_B": 2.127420425415039,
+              "n_inf": 0,
+              "n_nan": 0,
+              "out_max": 1.546172857284546,
+              "out_min": 0.37438690662384033,
+              "ran": true,
+              "shape": [
+                64
+              ],
+              "triton_version": "3.4.0",
+              "zero_rows_A": 0,
+              "zero_rows_B": 0
+            },
+            "stderr": "",
+            "stdout": "{\"exception\": null, \"ran\": true, \"shape\": [64], \"dtype\": \"torch.float32\", \"n_nan\": 0, \"n_inf\": 0, \"all_finite\": true, \"min_rowmax_A\": 2.1167266368865967, \"min_rowmax_B\": 2.127420425415039, \"zero_rows_A\": 0, \"zero_rows_B\": 0, \"out_min\": 0.37438690662384033, \"out_max\": 1.546172857284546, \"triton_version\": \"3.4.0\", \"gpu\": \"Tesla T4\"}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "If run() raises or any output is non-finite, c2 confirmed; clean execution with 64 finite fp32 outputs and no zero row-max rebuts it.",
+        "json_parse_error": null,
+        "json_result": {
+          "all_finite": true,
+          "dtype": "torch.float32",
+          "exception": null,
+          "gpu": "Tesla T4",
+          "min_rowmax_A": 2.1167266368865967,
+          "min_rowmax_B": 2.127420425415039,
+          "n_inf": 0,
+          "n_nan": 0,
+          "out_max": 1.546172857284546,
+          "out_min": 0.37438690662384033,
+          "ran": true,
+          "shape": [
+            64
+          ],
+          "triton_version": "3.4.0",
+          "zero_rows_A": 0,
+          "zero_rows_B": 0
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"exception\": null, \"ran\": true, \"shape\": [64], \"dtype\": \"torch.float32\", \"n_nan\": 0, \"n_inf\": 0, \"all_finite\": true, \"min_rowmax_A\": 2.1167266368865967, \"min_rowmax_B\": 2.127420425415039, \"zero_rows_A\": 0, \"zero_rows_B\": 0, \"out_min\": 0.37438690662384033, \"out_max\": 1.546172857284546, \"triton_version\": \"3.4.0\", \"gpu\": \"Tesla T4\"}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "E_cpu_emulation": 0.2241157849547494,
+          "E_measured_gpu": 0.22411580644590948,
+          "E_over_threshold_ratio": 2.241158064459095,
+          "all_finite": true,
+          "branchA_abs_err_norm": 0.8499627969070997,
+          "branchB_abs_err_norm": 0.9616883415856585,
+          "clamp_hits_A_of_8192": 100,
+          "clamp_hits_B_of_8192": 101,
+          "denominator": 7.988006980125256,
+          "err_norm": 1.7902386262463257,
+          "gpu": "Tesla T4",
+          "max_abs_err": 0.5755404823381721,
+          "ref_max": 1.0589215290725207,
+          "ref_min": 0.9260899602768314,
+          "ref_norm": 7.988006980125256,
+          "scale_a_max": 0.5796835763113839,
+          "scale_a_min": 0.3023895195552281,
+          "threshold": 0.1
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "Measured on Tesla T4 with the exact make_inputs(SEED=921000) workload: E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.2241, i.e. 2.24x the contract threshold of 0.1. ||ref||_2 = 7.988 (per-row ref in [0.926, 1.059]), error norm 1.790, max abs err 0.576 on a ~1.0 signal. An independent NumPy fp64 emulation of the kernel's own quantization (absmax/7, floor(v/s+0.5), clamp +-7) reproduces E = 0.2241158 versus the kernel's 0.2241158, so the error is the INT4 quantization noise itself, not an fp32/accumulation or indexing artifact. Per-branch dequant error norms are 0.850 (A) and 0.962 (B) and add in quadrature rather than cancel, matching the predicted small-signal (0.5 per branch) vs large-row-norm regime. Clamp hits are only 100/8192 (A) and 101/8192 (B), confirming rounding noise, not clipping, dominates. Contract failed on the E<=0.1 half.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-23T02:54:23Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-23T02:53:32Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-23T02:54:23Z",
+              "data": {
+                "E_cpu_emulation": 0.2241157849547494,
+                "E_measured_gpu": 0.22411580644590948,
+                "E_over_threshold_ratio": 2.241158064459095,
+                "all_finite": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "300627c1ef41b3a67a25507ce3f1e51bcb37d0691b7fd55c080cc2e4ed9cbf36"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "129b50fc934a0014ed669854cc199613ccde0885e022b46ae21224995ceb6431"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "f9d0eeee09207d22e8254f8efd1f4ec12e630ca7cc855998e530b996439c9366"
+                  }
+                ],
+                "branchA_abs_err_norm": 0.8499627969070997,
+                "branchB_abs_err_norm": 0.9616883415856585,
+                "clamp_hits_A_of_8192": 100,
+                "clamp_hits_B_of_8192": 101,
+                "denominator": 7.988006980125256,
+                "duration_s": 6.916455,
+                "err_norm": 1.7902386262463257,
+                "exit_code": 0,
+                "expected_signal": "Measured E = ||out-ref||_2 / max(||ref||_2, 0.008); E > 0.1 confirms c1, E <= 0.1 rebuts it.",
+                "gpu": "Tesla T4",
+                "json_parse_error": null,
+                "json_result": {
+                  "E": 0.22411580644590948,
+                  "E_cpu_emulation": 0.2241157849547494,
+                  "all_finite": true,
+                  "branchA_abs_err_norm": 0.8499627969070997,
+                  "branchB_abs_err_norm": 0.9616883415856585,
+                  "clamp_hits_A": 100,
+                  "clamp_hits_B": 101,
+                  "den": 7.988006980125256,
+                  "gpu": "Tesla T4",
+                  "max_abs_err": 0.5755404823381721,
+                  "num": 1.7902386262463257,
+                  "ref_max": 1.0589215290725207,
+                  "ref_min": 0.9260899602768314,
+                  "ref_norm": 7.988006980125256,
+                  "scale_a_max": 0.5796835763113839,
+                  "scale_a_min": 0.3023895195552281,
+                  "threshold": 0.1
+                },
+                "max_abs_err": 0.5755404823381721,
+                "ref_max": 1.0589215290725207,
+                "ref_min": 0.9260899602768314,
+                "ref_norm": 7.988006980125256,
+                "scale_a_max": 0.5796835763113839,
+                "scale_a_min": 0.3023895195552281,
+                "stderr": "",
+                "stdout": "{\"E\": 0.22411580644590948, \"threshold\": 0.1, \"num\": 1.7902386262463257, \"den\": 7.988006980125256, \"ref_norm\": 7.988006980125256, \"ref_min\": 0.9260899602768314, \"ref_max\": 1.0589215290725207, \"E_cpu_emulation\": 0.2241157849547494, \"branchA_abs_err_norm\": 0.8499627969070997, \"branchB_abs_err_norm\": 0.9616883415856585, \"max_abs_err\": 0.5755404823381721, \"scale_a_min\": 0.3023895195552281, \"scale_a_max\": 0.5796835763113839, \"clamp_hits_A\": 100, \"clamp_hits_B\": 101, \"all_finite\": true, \"gpu\": \"Tesla T4\"}\n",
+                "threshold": 0.1,
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Measured on Tesla T4 with the exact make_inputs(SEED=921000) workload: E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.2241, i.e. 2.24x the contract threshold of 0.1. ||ref||_2 = 7.988 (per-row ref in [0.926, 1.059]), error norm 1.790, max abs err 0.576 on a ~1.0 signal. An independent NumPy fp64 emulation of the kernel's own quantization (absmax/7, floor(v/s+0.5), clamp +-7) reproduces E = 0.2241158 versus the kernel's 0.2241158, so the error is the INT4 quantization noise itself, not an fp32/accumulation or indexing artifact. Per-branch dequant error norms are 0.850 (A) and 0.962 (B) and add in quadrature rather than cancel, matching the predicted small-signal (0.5 per branch) vs large-row-norm regime. Clamp hits are only 100/8192 (A) and 101/8192 (B), confirming rounding noise, not clipping, dominates. Contract failed on the E<=0.1 half.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "make_inputs deliberately builds rows that are standard normal (row norm ~11.3, max|entry| ~3) but whose projection onto x is forced to only 0.5 +- 0.02 per branch (kernel.py lines 36-39). Quantizing a row at 4 bits with a per-row absmax scale injects noise of magnitude ~0.12 along any fixed unit direction, which is ~24% of the 0.5 signal per branch; B is additionally row-permuted (line 41) so the A and B errors are independent and add in quadrature to ~0.17 against a combined reference of ~1.0 per row. That analytical estimate lands well above 0.1 and must be checked by direct measurement of E on the exact seed.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"Evaluate numerical compliance of run(*make_inputs()) on exactly the workload specified in kernel.py\" with \"Metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64))\" and \"Contract: all outputs must be finite and E <= 0.1.\""
+            },
+            {
+              "source": "kernel.py lines 25-42",
+              "summary": "make_inputs fixes SEED=921000, PERMUTATION, x of shape (128,) unit-normalized, and A,B of shape (64,128) with per-row projection onto x forced to 0.5 +- 0.02."
+            }
+          ],
+          "scope_rationale": "This is precisely the single workload and metric the contract specifies; no generalization or alternate input is involved.",
+          "statement": "On the exact fixed workload run(*make_inputs()) with SEED=921000, the kernel's per-row INT4 (7-level) symmetric quantization of A and B produces a relative L2 error E = ||out - ref||_2 / max(||ref||_2, 0.008) that exceeds the contract threshold of 0.1 (expected E on the order of 0.15-0.20), because the per-element rounding noise (s/sqrt(12) with s = max|row|/7 ~ 0.4, giving sigma ~ 0.12 per branch dot product against a unit-norm x) is comparable to the engineered per-branch signal of only ~0.5, and the two independent branches add in quadrature rather than cancel.",
+          "status": "confirmed",
+          "updated_at": "2026-09-23T02:54:23Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-23T02:54:23Z",
+          "data": {
+            "E_cpu_emulation": 0.2241157849547494,
+            "E_measured_gpu": 0.22411580644590948,
+            "E_over_threshold_ratio": 2.241158064459095,
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "300627c1ef41b3a67a25507ce3f1e51bcb37d0691b7fd55c080cc2e4ed9cbf36"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "129b50fc934a0014ed669854cc199613ccde0885e022b46ae21224995ceb6431"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "f9d0eeee09207d22e8254f8efd1f4ec12e630ca7cc855998e530b996439c9366"
+              }
+            ],
+            "branchA_abs_err_norm": 0.8499627969070997,
+            "branchB_abs_err_norm": 0.9616883415856585,
+            "clamp_hits_A_of_8192": 100,
+            "clamp_hits_B_of_8192": 101,
+            "denominator": 7.988006980125256,
+            "duration_s": 6.916455,
+            "err_norm": 1.7902386262463257,
+            "exit_code": 0,
+            "expected_signal": "Measured E = ||out-ref||_2 / max(||ref||_2, 0.008); E > 0.1 confirms c1, E <= 0.1 rebuts it.",
+            "gpu": "Tesla T4",
+            "json_parse_error": null,
+            "json_result": {
+              "E": 0.22411580644590948,
+              "E_cpu_emulation": 0.2241157849547494,
+              "all_finite": true,
+              "branchA_abs_err_norm": 0.8499627969070997,
+              "branchB_abs_err_norm": 0.9616883415856585,
+              "clamp_hits_A": 100,
+              "clamp_hits_B": 101,
+              "den": 7.988006980125256,
+              "gpu": "Tesla T4",
+              "max_abs_err": 0.5755404823381721,
+              "num": 1.7902386262463257,
+              "ref_max": 1.0589215290725207,
+              "ref_min": 0.9260899602768314,
+              "ref_norm": 7.988006980125256,
+              "scale_a_max": 0.5796835763113839,
+              "scale_a_min": 0.3023895195552281,
+              "threshold": 0.1
+            },
+            "max_abs_err": 0.5755404823381721,
+            "ref_max": 1.0589215290725207,
+            "ref_min": 0.9260899602768314,
+            "ref_norm": 7.988006980125256,
+            "scale_a_max": 0.5796835763113839,
+            "scale_a_min": 0.3023895195552281,
+            "stderr": "",
+            "stdout": "{\"E\": 0.22411580644590948, \"threshold\": 0.1, \"num\": 1.7902386262463257, \"den\": 7.988006980125256, \"ref_norm\": 7.988006980125256, \"ref_min\": 0.9260899602768314, \"ref_max\": 1.0589215290725207, \"E_cpu_emulation\": 0.2241157849547494, \"branchA_abs_err_norm\": 0.8499627969070997, \"branchB_abs_err_norm\": 0.9616883415856585, \"max_abs_err\": 0.5755404823381721, \"scale_a_min\": 0.3023895195552281, \"scale_a_max\": 0.5796835763113839, \"clamp_hits_A\": 100, \"clamp_hits_B\": 101, \"all_finite\": true, \"gpu\": \"Tesla T4\"}\n",
+            "threshold": 0.1,
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Measured on Tesla T4 with the exact make_inputs(SEED=921000) workload: E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.2241, i.e. 2.24x the contract threshold of 0.1. ||ref||_2 = 7.988 (per-row ref in [0.926, 1.059]), error norm 1.790, max abs err 0.576 on a ~1.0 signal. An independent NumPy fp64 emulation of the kernel's own quantization (absmax/7, floor(v/s+0.5), clamp +-7) reproduces E = 0.2241158 versus the kernel's 0.2241158, so the error is the INT4 quantization noise itself, not an fp32/accumulation or indexing artifact. Per-branch dequant error norms are 0.850 (A) and 0.962 (B) and add in quadrature rather than cancel, matching the predicted small-signal (0.5 per branch) vs large-row-norm regime. Clamp hits are only 100/8192 (A) and 101/8192 (B), confirming rounding noise, not clipping, dominates. Contract failed on the E<=0.1 half.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "all_finite": true,
+          "dtype": "torch.float32",
+          "exception": null,
+          "gpu": "Tesla T4",
+          "min_rowmax_A": 2.1167266368865967,
+          "min_rowmax_B": 2.127420425415039,
+          "n_inf": 0,
+          "n_nan": 0,
+          "out_max": 1.546172857284546,
+          "out_min": 0.37438690662384033,
+          "ran": true,
+          "shape": [
+            64
+          ],
+          "triton_version": "3.4.0",
+          "zero_rows_A": 0,
+          "zero_rows_B": 0
+        },
+        "event_id": "t9",
+        "status": "rebutted",
+        "summary": "run(*make_inputs()) executed without exception on Tesla T4 with Triton 3.4.0 (enable_fp_fusion=False accepted as a launch kwarg). Output is a 64-element torch.float32 tensor with 0 NaN, 0 Inf, all values finite and in [0.374, 1.546]. No degenerate rows exist: min row absmax is 2.117 (A) and 2.127 (B), zero rows 0 for both, so the unguarded division by max|row|/7 never divides by zero on this workload. The finiteness/executability half of the contract is satisfied; c2 is rebutted.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-23T02:54:23Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-23T02:53:32Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-23T02:54:23Z",
+              "data": {
+                "all_finite": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "21b2c555b64659cf5f834e2547e963c796a237dcd2cd5ebf9f8e270e7432fbe5"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "d3c204df458041d1740d472f233dd21f2d00c612d0c740a1d895f9ad2fc799cd"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "41e2aa179628dea6d880ba034a63744a7803b0ec6160369487c742d7a136de9b"
+                  }
+                ],
+                "dtype": "torch.float32",
+                "duration_s": 4.68771,
+                "exception": null,
+                "exit_code": 0,
+                "expected_signal": "If run() raises or any output is non-finite, c2 confirmed; clean execution with 64 finite fp32 outputs and no zero row-max rebuts it.",
+                "gpu": "Tesla T4",
+                "json_parse_error": null,
+                "json_result": {
+                  "all_finite": true,
+                  "dtype": "torch.float32",
+                  "exception": null,
+                  "gpu": "Tesla T4",
+                  "min_rowmax_A": 2.1167266368865967,
+                  "min_rowmax_B": 2.127420425415039,
+                  "n_inf": 0,
+                  "n_nan": 0,
+                  "out_max": 1.546172857284546,
+                  "out_min": 0.37438690662384033,
+                  "ran": true,
+                  "shape": [
+                    64
+                  ],
+                  "triton_version": "3.4.0",
+                  "zero_rows_A": 0,
+                  "zero_rows_B": 0
+                },
+                "min_rowmax_A": 2.1167266368865967,
+                "min_rowmax_B": 2.127420425415039,
+                "n_inf": 0,
+                "n_nan": 0,
+                "out_max": 1.546172857284546,
+                "out_min": 0.37438690662384033,
+                "ran": true,
+                "shape": [
+                  64
+                ],
+                "stderr": "",
+                "stdout": "{\"exception\": null, \"ran\": true, \"shape\": [64], \"dtype\": \"torch.float32\", \"n_nan\": 0, \"n_inf\": 0, \"all_finite\": true, \"min_rowmax_A\": 2.1167266368865967, \"min_rowmax_B\": 2.127420425415039, \"zero_rows_A\": 0, \"zero_rows_B\": 0, \"out_min\": 0.37438690662384033, \"out_max\": 1.546172857284546, \"triton_version\": \"3.4.0\", \"gpu\": \"Tesla T4\"}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "triton_version": "3.4.0",
+                "zero_rows_A": 0,
+                "zero_rows_B": 0
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "run(*make_inputs()) executed without exception on Tesla T4 with Triton 3.4.0 (enable_fp_fusion=False accepted as a launch kwarg). Output is a 64-element torch.float32 tensor with 0 NaN, 0 Inf, all values finite and in [0.374, 1.546]. No degenerate rows exist: min row absmax is 2.117 (A) and 2.127 (B), zero rows 0 for both, so the unguarded division by max|row|/7 never divides by zero on this workload. The finiteness/executability half of the contract is satisfied; c2 is rebutted.",
+              "supports": "rebutted",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "The contract requires all outputs to be finite, which is a separate condition from E <= 0.1. Division by an unguarded per-row max is a classic NaN source, and enable_fp_fusion is a version-dependent Triton launch option; both are cheap to falsify by simply running the workload and checking torch.isfinite(out).all() and that no exception is raised.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"Contract: all outputs must be finite and E <= 0.1.\" and \"Target implementation: the supplied Triton kernel, on an NVIDIA T4.\""
+            }
+          ],
+          "scope_rationale": "Finiteness of the outputs on this exact workload is explicitly part of the stated contract, and successful execution of run(*make_inputs()) is presupposed by it.",
+          "statement": "run(*make_inputs()) may fail the finiteness half of the contract or fail to execute at all: the scales sa/sb are computed as max|row|/7 with no epsilon and used as divisors (kernel.py lines 12-15), and the launch passes enable_fp_fusion=False as a kernel launch kwarg (line 22), so any degenerate row or unsupported launch option would yield NaN/Inf outputs or an exception rather than a finite 64-element result.",
+          "status": "rebutted",
+          "updated_at": "2026-09-23T02:54:23Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-23T02:54:23Z",
+          "data": {
+            "all_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "21b2c555b64659cf5f834e2547e963c796a237dcd2cd5ebf9f8e270e7432fbe5"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "d3c204df458041d1740d472f233dd21f2d00c612d0c740a1d895f9ad2fc799cd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "41e2aa179628dea6d880ba034a63744a7803b0ec6160369487c742d7a136de9b"
+              }
+            ],
+            "dtype": "torch.float32",
+            "duration_s": 4.68771,
+            "exception": null,
+            "exit_code": 0,
+            "expected_signal": "If run() raises or any output is non-finite, c2 confirmed; clean execution with 64 finite fp32 outputs and no zero row-max rebuts it.",
+            "gpu": "Tesla T4",
+            "json_parse_error": null,
+            "json_result": {
+              "all_finite": true,
+              "dtype": "torch.float32",
+              "exception": null,
+              "gpu": "Tesla T4",
+              "min_rowmax_A": 2.1167266368865967,
+              "min_rowmax_B": 2.127420425415039,
+              "n_inf": 0,
+              "n_nan": 0,
+              "out_max": 1.546172857284546,
+              "out_min": 0.37438690662384033,
+              "ran": true,
+              "shape": [
+                64
+              ],
+              "triton_version": "3.4.0",
+              "zero_rows_A": 0,
+              "zero_rows_B": 0
+            },
+            "min_rowmax_A": 2.1167266368865967,
+            "min_rowmax_B": 2.127420425415039,
+            "n_inf": 0,
+            "n_nan": 0,
+            "out_max": 1.546172857284546,
+            "out_min": 0.37438690662384033,
+            "ran": true,
+            "shape": [
+              64
+            ],
+            "stderr": "",
+            "stdout": "{\"exception\": null, \"ran\": true, \"shape\": [64], \"dtype\": \"torch.float32\", \"n_nan\": 0, \"n_inf\": 0, \"all_finite\": true, \"min_rowmax_A\": 2.1167266368865967, \"min_rowmax_B\": 2.127420425415039, \"zero_rows_A\": 0, \"zero_rows_B\": 0, \"out_min\": 0.37438690662384033, \"out_max\": 1.546172857284546, \"triton_version\": \"3.4.0\", \"gpu\": \"Tesla T4\"}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "triton_version": "3.4.0",
+            "zero_rows_A": 0,
+            "zero_rows_B": 0
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "run(*make_inputs()) executed without exception on Tesla T4 with Triton 3.4.0 (enable_fp_fusion=False accepted as a launch kwarg). Output is a 64-element torch.float32 tensor with 0 NaN, 0 Inf, all values finite and in [0.374, 1.546]. No degenerate rows exist: min row absmax is 2.117 (A) and 2.127 (B), zero rows 0 for both, so the unguarded division by max|row|/7 never divides by zero on this workload. The finiteness/executability half of the contract is satisfied; c2 is rebutted.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "The round's probes fully decide both existing claims on exactly the contracted workload. c1 is confirmed by a direct T4 measurement of the contract metric (E = 0.22412 vs threshold 0.1, num 1.790 / den 7.988) and corroborated by an independent NumPy fp64 emulation of the kernel's own quantization reaching E = 0.2241158, which localizes the failure to the INT4 rounding noise itself rather than any indexing, launch-option, or fp32-accumulation artifact; clamp hits of 100/8192 (A) and 101/8192 (B) further exclude clipping as the mechanism, and per-branch error norms 0.850/0.962 combine in quadrature as predicted. c2 is rebutted: the kernel executed on Triton 3.4.0 with enable_fp_fusion=False accepted, returned a 64-element fp32 tensor with 0 NaN/0 Inf, and min row absmax 2.117/2.127 with zero degenerate rows, so the unguarded divide never fires on this seed. The contract is a single fixed workload (SEED=921000) plus finiteness, so there is no remaining in-scope input, metric, or code path that another claim could probe: the quantization-noise magnitude already dominates by 2.24x, and the residual source details (round-half-up asymmetry, tl.sum ordering, permutation of B) are each orders of magnitude too small to change that outcome and are explicitly licensed as approximate intermediates. No additional high-quality in-scope claim is available.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-23T02:54:37Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-09-23T02:54:37Z",
+        "decision": "no_new_claims",
+        "reason": "The round's probes fully decide both existing claims on exactly the contracted workload. c1 is confirmed by a direct T4 measurement of the contract metric (E = 0.22412 vs threshold 0.1, num 1.790 / den 7.988) and corroborated by an independent NumPy fp64 emulation of the kernel's own quantization reaching E = 0.2241158, which localizes the failure to the INT4 rounding noise itself rather than any indexing, launch-option, or fp32-accumulation artifact; clamp hits of 100/8192 (A) and 101/8192 (B) further exclude clipping as the mechanism, and per-branch error norms 0.850/0.962 combine in quadrature as predicted. c2 is rebutted: the kernel executed on Triton 3.4.0 with enable_fp_fusion=False accepted, returned a 64-element fp32 tensor with 0 NaN/0 Inf, and min row absmax 2.117/2.127 with zero degenerate rows, so the unguarded divide never fires on this seed. The contract is a single fixed workload (SEED=921000) plus finiteness, so there is no remaining in-scope input, metric, or code path that another claim could probe: the quantization-noise magnitude already dominates by 2.24x, and the residual source details (round-half-up asymmetry, tl.sum ordering, permutation of B) are each orders of magnitude too small to change that outcome and are explicitly licensed as approximate intermediates. No additional high-quality in-scope claim is available.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 11,
+        "tool_event_id": "t12",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The operative contract (problem.txt) is a single fixed workload \u2014 run(*make_inputs()) with PCG64 SEED=921000 on a T4 \u2014 judged by exactly two conditions: all outputs finite, and E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(64)) <= 0.1. Claim c1 is confirmed, in_scope, and its scope evidence cites precisely that stated domain (problem.txt metric/threshold plus kernel.py lines 25-42 fixing the seed, permutation and shapes). Direct measurement on a Tesla T4 (t8) gives E = 0.22412, 2.24x the threshold, with error norm 1.790 against ||ref||_2 = 7.988 and max absolute error 0.576 on a per-row reference of ~1.0. An independent NumPy fp64 emulation of the kernel's own quantization (absmax/7, floor(v/s+0.5), clamp \u00b17) reproduces E = 0.2241158 to seven digits, localizing the failure to the INT4 rounding noise itself rather than to indexing, the enable_fp_fusion launch option, or fp32 accumulation order. Clamp hits of 100/8192 (A) and 101/8192 (B) rule out clipping as the mechanism; per-branch dequant error norms 0.850 and 0.962 add in quadrature as predicted, because B is row-permuted and the two branches are independent. This is not a deviation the contract accounts for: the contract explicitly licenses approximate intermediates and explicitly allows either branch to individually exceed 0.1, but conditions compliance on the FINAL output satisfying E <= 0.1, which it does not; nor is it a near-zero-value relative-error artifact, since ||ref||_2 = 7.988 far exceeds the 0.008 denominator floor and the absolute error is ~58% of a unit-scale signal. Claim c2 (non-finite output / launch failure) was rebutted by t9: the kernel ran cleanly on Triton 3.4.0 returning 64 finite fp32 values with zero degenerate row maxima (min row absmax 2.117/2.127), so the finiteness half of the contract passes \u2014 but the E half fails decisively. No unresolved in-scope claim remains; the Skeptic reviewed the latest evidence and recorded no new claims.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-23T02:54:50Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-23T02:54:50Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The operative contract (problem.txt) is a single fixed workload \u2014 run(*make_inputs()) with PCG64 SEED=921000 on a T4 \u2014 judged by exactly two conditions: all outputs finite, and E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(64)) <= 0.1. Claim c1 is confirmed, in_scope, and its scope evidence cites precisely that stated domain (problem.txt metric/threshold plus kernel.py lines 25-42 fixing the seed, permutation and shapes). Direct measurement on a Tesla T4 (t8) gives E = 0.22412, 2.24x the threshold, with error norm 1.790 against ||ref||_2 = 7.988 and max absolute error 0.576 on a per-row reference of ~1.0. An independent NumPy fp64 emulation of the kernel's own quantization (absmax/7, floor(v/s+0.5), clamp \u00b17) reproduces E = 0.2241158 to seven digits, localizing the failure to the INT4 rounding noise itself rather than to indexing, the enable_fp_fusion launch option, or fp32 accumulation order. Clamp hits of 100/8192 (A) and 101/8192 (B) rule out clipping as the mechanism; per-branch dequant error norms 0.850 and 0.962 add in quadrature as predicted, because B is row-permuted and the two branches are independent. This is not a deviation the contract accounts for: the contract explicitly licenses approximate intermediates and explicitly allows either branch to individually exceed 0.1, but conditions compliance on the FINAL output satisfying E <= 0.1, which it does not; nor is it a near-zero-value relative-error artifact, since ||ref||_2 = 7.988 far exceeds the 0.008 denominator floor and the absolute error is ~58% of a unit-scale signal. Claim c2 (non-finite output / launch failure) was rebutted by t9: the kernel ran cleanly on Triton 3.4.0 returning 64 finite fp32 values with zero degenerate row maxima (min row absmax 2.117/2.127), so the finiteness half of the contract passes \u2014 but the E half fails decisively. No unresolved in-scope claim remains; the Skeptic reviewed the latest evidence and recorded no new claims.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-23T02:54:50Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The operative contract (problem.txt) is a single fixed workload \u2014 run(*make_inputs()) with PCG64 SEED=921000 on a T4 \u2014 judged by exactly two conditions: all outputs finite, and E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(64)) <= 0.1. Claim c1 is confirmed, in_scope, and its scope evidence cites precisely that stated domain (problem.txt metric/threshold plus kernel.py lines 25-42 fixing the seed, permutation and shapes). Direct measurement on a Tesla T4 (t8) gives E = 0.22412, 2.24x the threshold, with error norm 1.790 against ||ref||_2 = 7.988 and max absolute error 0.576 on a per-row reference of ~1.0. An independent NumPy fp64 emulation of the kernel's own quantization (absmax/7, floor(v/s+0.5), clamp \u00b17) reproduces E = 0.2241158 to seven digits, localizing the failure to the INT4 rounding noise itself rather than to indexing, the enable_fp_fusion launch option, or fp32 accumulation order. Clamp hits of 100/8192 (A) and 101/8192 (B) rule out clipping as the mechanism; per-branch dequant error norms 0.850 and 0.962 add in quadrature as predicted, because B is row-permuted and the two branches are independent. This is not a deviation the contract accounts for: the contract explicitly licenses approximate intermediates and explicitly allows either branch to individually exceed 0.1, but conditions compliance on the FINAL output satisfying E <= 0.1, which it does not; nor is it a near-zero-value relative-error artifact, since ||ref||_2 = 7.988 far exceeds the 0.008 denominator floor and the absolute error is ~58% of a unit-scale signal. Claim c2 (non-finite output / launch failure) was rebutted by t9: the kernel ran cleanly on Triton 3.4.0 returning 64 finite fp32 values with zero degenerate row maxima (min row absmax 2.117/2.127), so the finiteness half of the contract passes \u2014 but the E half fails decisively. No unresolved in-scope claim remains; the Skeptic reviewed the latest evidence and recorded no new claims.",
+    "verdict": "reject"
+  }
+}

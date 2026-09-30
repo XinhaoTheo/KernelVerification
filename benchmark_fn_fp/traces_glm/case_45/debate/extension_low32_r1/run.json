@@ -1,0 +1,1768 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_j",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _layer_norm_kernel(X, Output, N: tl.constexpr):\n    total = tl.full((), 0.0, tl.float32)\n    squares = tl.full((), 0.0, tl.float32)\n    for i in range(0, N):\n        value = tl.load(X + i).to(tl.float32)\n        total = total + value\n        squares = squares + value * value\n    mean = total / N\n    variance = tl.maximum(squares / N - mean * mean, 0.0)\n    denominator = tl.sqrt(variance + 0.00001)\n    offsets = tl.arange(0, N)\n    values = tl.load(X + offsets).to(tl.float32)\n    tl.store(Output + offsets, (values - mean) / denominator)\n\n\ndef run(x):\n    output = torch.empty((128,), device=x.device, dtype=torch.float32)\n    _layer_norm_kernel[(1,)](x, output, N=128, num_warps=4,\n                            enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(782406))\n    x = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)\n    return (x,)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "passed": null,
+    "problem_text": "Implement LayerNorm without an affine transform for this fixed workload.\n\nThe only input in scope is the float32 vector x returned by make_inputs() in\nkernel.py. Its shape is (128,), and its complete contents and element order are\nspecified by that public deterministic generator.\n\nThe reference uses the original float32 input values, evaluated in float64:\n  mean = sum_i x[i] / 128\n  variance = sum_i (x[i] - mean)**2 / 128\n  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)\nUse population variance, with no degrees-of-freedom correction.\n\nThe output must be one finite vector with shape (128,). Its relative L2 error is\n  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).\nThe numerical contract requires this error to be <= 0.02.\n\nDecide whether this implementation satisfies that contract for this fixed\nworkload. Arbitrary alternative tensors are outside this question's scope.\n",
+    "rounds": null,
+    "session_dir": "/root/numerical_cases/case_j",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T00:11:06Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:11:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "eafa52861fe9259ddaac326453df438e75d56ad9878a32d5c381cd9919fbe442"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "7d67b21e0dcf7ff217d1d1c82db2be2e51a3a3aac2e33e0a27e611634f6dfdda"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "270b494294ef1eb9eda20c18f4944f732931dc23a3ffc22f3a59f8a4be97d706"
+              }
+            ],
+            "denom_ratio": 0.8735001996810307,
+            "duration_s": 6.550114,
+            "emul_var": 0.01123046875,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of the actual GPU kernel output vs the float64 two-pass reference exceeds 0.02, and/or raw fp32 subtraction squares/N - mean^2 clamps to <= 0",
+            "gpu_vs_emul_max_abs": 3.765802745192559e-07,
+            "json_parse_error": null,
+            "json_result": {
+              "clamped": false,
+              "denom_ratio": 0.8735001996810307,
+              "emul_relative_l2": 0.14481951664975762,
+              "emul_var": 0.01123046875,
+              "finite": true,
+              "gpu_vs_emul_max_abs": 3.765802745192559e-07,
+              "kernel_denom_emul": 0.10602107644081116,
+              "raw_subtraction": 0.01123046875,
+              "raw_subtraction_positive": true,
+              "ref_denom": 0.12137498821354141,
+              "relative_l2_error": 0.14481964583989307,
+              "shape": [
+                128
+              ],
+              "tolerance": 0.02,
+              "true_var": 0.014721887763837316
+            },
+            "kernel_denom_emul": 0.10602107644081116,
+            "raw_subtraction": 0.01123046875,
+            "raw_subtraction_positive": true,
+            "ref_denom": 0.12137498821354141,
+            "relative_l2_error": 0.14481964583989307,
+            "stderr": "",
+            "stdout": "{\"relative_l2_error\": 0.14481964583989307, \"tolerance\": 0.02, \"raw_subtraction\": 0.01123046875, \"raw_subtraction_positive\": true, \"clamped\": false, \"true_var\": 0.014721887763837316, \"emul_var\": 0.01123046875, \"ref_denom\": 0.12137498821354141, \"kernel_denom_emul\": 0.10602107644081116, \"denom_ratio\": 0.8735001996810307, \"emul_relative_l2\": 0.14481951664975762, \"gpu_vs_emul_max_abs\": 3.765802745192559e-07, \"finite\": true, \"shape\": [128]}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.02,
+            "true_var": 0.014721887763837316
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact seeded input, the actual GPU kernel's relative L2 error vs the float64 two-pass reference is 0.1448, far exceeding the 0.02 tolerance. The one-pass fp32 variance underestimates truth (0.01123 vs 0.01472; denominator ratio 0.8735); raw subtraction stayed positive (no clamp). The CPU fp32 emulation matched the GPU kernel to 3.8e-7, confirming the failure mechanism is the one-pass fp32 variance cancellation, as claimed.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "With squares/N\u22484096 and true variance\u22480.0156, the fp32 subtraction cancels ~18 leading bits, and sequential fp32 accumulation of the square-sum (\u2248524k) adds rounding noise comparable to or exceeding the true variance; errors in the denominator \u22480.125 scale every output element, so relative L2 error could exceed 0.02.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Reference is float64 two-pass mean/population-variance with output (x-mean)/sqrt(var+1e-5), and the output's relative L2 error must be <= 0.02 for the exact x from make_inputs (seed 782406, 64.0 + N(0,0.125,128))."
+        }
+      ],
+      "scope_rationale": "problem.txt defines the exact input (make_inputs, PCG64 seed 782406) and requires relative L2 error <= 0.02 against a float64 two-pass population-variance reference; the one-pass fp32 variance the kernel computes for this exact input may violate that stated numeric bound.",
+      "statement": "For the exact in-scope input (make_inputs, PCG64 seed 782406), the kernel's one-pass fp32 variance squares/N - mean^2 suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156) plus fp32 accumulation rounding, producing a denominator error large enough that the relative L2 error versus the float64 two-pass reference exceeds the 0.02 bound.",
+      "status": "confirmed",
+      "updated_at": "2026-09-24T00:11:59Z"
+    },
+    {
+      "created_at": "2026-09-24T00:11:06Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:11:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "f08edae2cf1ef0817cab7add9408993070c5536c26b8a524d44d21ae2c3793c8"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "40113489ceefa6ab820635a6cff093b835b92ca02b9ef888268fa55f3aa7fecb"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "b2fa91c74355c13449b29eb62bfa61880294c1d2e134ce21ea4cab1073aa4be6"
+              }
+            ],
+            "duration_s": 0.214138,
+            "exit_code": 0,
+            "expected_signal": "fp32 sequential mean absolute error ~1e-3 yielding per-element output offset near or above 1% of the denominator scale and measurable relative L2 contribution",
+            "json_parse_error": null,
+            "json_result": {
+              "denominator": 0.12137498821354141,
+              "mean_abs_err": 1.6868114471435547e-05,
+              "mean_f64": 64.00110465288162,
+              "mean_fp32": 64.0011215209961,
+              "mean_rel_err_vs_denom": 0.0001389752099646641,
+              "output_offset_fraction_per_element": 0.0001389752099646641,
+              "rel_l2_from_mean_bias_alone": 0.00013902240215227552,
+              "tolerance": 0.02
+            },
+            "mean_abs_err": 1.6868114471435547e-05,
+            "mean_f64": 64.00110465288162,
+            "mean_fp32": 64.0011215209961,
+            "output_offset_fraction_per_element": 0.0001389752099646641,
+            "rel_l2_from_mean_bias_alone": 0.00013902240215227552,
+            "stderr": "",
+            "stdout": "{\"mean_fp32\": 64.0011215209961, \"mean_f64\": 64.00110465288162, \"mean_abs_err\": 1.6868114471435547e-05, \"mean_rel_err_vs_denom\": 0.0001389752099646641, \"output_offset_fraction_per_element\": 0.0001389752099646641, \"rel_l2_from_mean_bias_alone\": 0.00013902240215227552, \"denominator\": 0.12137498821354141, \"tolerance\": 0.02}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.02
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "The fp32 sequential mean bias is only 1.69e-5 (not ~1e-3 as claimed), giving a per-element output offset of 0.014% and a mean-bias-only relative L2 contribution of 0.000139 \u2014 negligible versus the 0.02 tolerance. The measured error is dominated by the variance path (c1), not mean accumulation.",
+          "supports": "rebutted",
+          "tool_event_id": "t13"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "Sequential float32 accumulation of 128 values each \u224864 (total \u22488192, ULP \u22482^-10 at that magnitude) can accumulate ~2^-10-scale absolute error in mean; residuals are \u22480.125 so mean error translates into relative residual error at the ~1e-3\u20131% level, additive to the variance-cancellation error and worth measuring separately.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "The contract fixes the reference mean = sum x[i]/128 in float64 and requires relative L2 error <= 0.02 on this exact workload; any kernel mean bias contributes directly to output error."
+        }
+      ],
+      "scope_rationale": "problem.txt specifies the reference mean = sum x[i]/128 in float64 for this exact workload and requires relative L2 error <= 0.02; kernel-side fp32 mean bias for that exact input would contribute directly to the stated error metric.",
+      "statement": "The fp32 sequential accumulation of total (sum of 128 values \u22488192) yields a mean with absolute error of order a few ULPs of 8192 (~1e-3), which, divided by the small denominator \u22480.125, adds a systematic offset of up to ~1% to every output element and contributes measurably to the relative L2 error.",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T00:11:59Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Fixed workload: LayerNorm without affine transform on a single float32 vector x of shape (128,) generated deterministically by make_inputs (PCG64 seed 782406, 64.0 + N(0, 0.125, 128)).",
+      "Reference computed in float64 from the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (two-pass, no df correction), output = (x-mean)/sqrt(var+1e-5).",
+      "Acceptance: one finite (128,) output vector with relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) <= 0.02.",
+      "Out of scope: arbitrary alternative tensors; only this exact workload matters."
+    ],
+    "kernel_model": [
+      "Single Triton program (grid (1,), N=128 constexpr, num_warps=4, enable_fp_fusion=False) processes the whole vector in one block.",
+      "One-pass fp32 accumulation: sequential loop sums value and value*value in float32 scalars; variance = max(squares/N - mean^2, 0); denominator = sqrt(var + 1e-5) matching the contract's epsilon.",
+      "Second pass loads all 128 elements via tl.arange(0,128) and stores (values - mean)/denominator to a pre-allocated fp32 (128,) output; x is loaded via .to(tl.float32) (already fp32).",
+      "run(x) allocates the output and launches the kernel; no dtype/shape guard on x (fine within the fixed contract).",
+      "The kernel's variance path is fully deterministic fp32 sequential: total and squares accumulate scalar-by-scalar over i=0..127, so the exact sequence of fp32 roundings is reproducible in a CPU NumPy emulation (np.float32 operations in the same order) without running the GPU kernel.",
+      "tl.maximum(variance, 0.0) means a negative cancellation result silently yields denominator = sqrt(1e-5) \u2248 0.0032, i.e., outputs scaled ~39x larger than the reference denominator \u2248 0.125; a clamped-to-zero variance is an all-or-nothing failure mode, not a gradual one."
+    ],
+    "open_questions": [
+      "Does squares/N - mean^2 evaluate positive or negative for the exact seeded input? The sign determines whether the failure is gradual (inflated variance) or catastrophic (clamp to 0).",
+      "Does the 2% relative-L2 tolerance absorb a worst-order fp32 one-pass variance error for this particular seed, given ||ref||_2 \u2248 sqrt(128)?"
+    ],
+    "risk_map": [
+      "Catastrophic cancellation in variance: x\u224864\u00b10.125 so squares/N \u2248 4096 while true variance \u2248 0.0156; fp32 one-pass E[x\u00b2]\u2212mean\u00b2 loses ~log2(4096/0.0156)\u224818 significant bits, potentially leaving few accurate bits of variance and amplifying relative error via the small denominator (sqrt(0.0156+1e-5)\u22480.125).",
+      "Sequential fp32 accumulation of 128 values around 64 (sum \u2248 8192, square-sum \u2248 524k): rounding in squares accumulation alone can exceed the true variance's contribution.",
+      "Relative error is measured against a float64 two-pass reference, so kernel-side fp32 one-pass bias may or may not stay within the 2% relative-L2 bound \u2014 this is the central question for Skeptic/Experimenter.",
+      "epsilon placement matches (var + 1e-5), so no epsilon-mismatch bug; denominator never zero due to clamp and epsilon, output finite.",
+      "Worst-case magnitude estimate for c1: sequential fp32 sum of squares \u2248 5.24e5 with term-level rounding ~128 * eps_fp32 * partial-sum magnitudes; naive bound gives square-sum absolute error on the order of 1e-2 to 1e-1, which is the same order as (or larger than) the entire true variance 0.0156 after dividing by 128 \u2014 so the computed variance can be anywhere from clamped-to-zero to ~2x the truth, depending on the exact seeded values.",
+      "Clamp interaction: if squares/N - mean^2 rounds to <= 0, denominator degenerates to sqrt(1e-5)\u22480.0032 and every output element is inflated ~39x \u2014 a probe should check the sign of the raw subtraction, not just the final L2 error.",
+      "Mean-error estimate for c2: sequential fp32 sum \u2248 8192 with ULP \u2248 2^-10 \u2248 1e-3; over 128 terms the accumulated mean error is plausibly ~1e-3 to 4e-3, giving a uniform output offset of ~0.8% to 3% of the \u22480.125 denominator scale \u2014 near the 2% bound on its own.",
+      "Recommended evidence decomposition for Experimenter: (a) exact fp32 emulation of the kernel's accumulation order in NumPy to report mean, squares, raw subtraction, clamped variance, denominator, and final relative L2 error; (b) if available, GPU run plus comparison of the emulated vs actual denominator to confirm the emulation models Triton fp32 behavior (e.g., FMA/rounding mode, note enable_fp_fusion=False which disables FMA contraction, making plain IEEE fp32 emulation closer)."
+    ],
+    "scope_notes": [
+      "Only the exact deterministic input from make_inputs is in scope; behavior on other tensors is irrelevant to the verdict.\", \"Tolerance is generous (2% relative L2), which may absorb the cancellation error; a passing allclose does not prove the variance computation is accurate, only that it meets this bound for this input.\", \"Single-block serial reduction means no parallelism/reduction-order concerns beyond fp32 rounding; no boundary masking needed since N=128 exactly.\"]",
+      "Only the exact make_inputs tensor (seed 782406) is in scope; probes on other distributions are out of scope for the verdict.",
+      "enable_fp_fusion=False in the launch is relevant evidence context: it disables FMA contraction, so the .to(fp32) multiply-then-add sequence can be modeled by plain fp32 IEEE rounding in an emulation."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Fixed workload: LayerNorm without affine transform on a single float32 vector x of shape (128,) generated deterministically by make_inputs (PCG64 seed 782406, 64.0 + N(0, 0.125, 128)).",
+        "Reference computed in float64 from the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (two-pass, no df correction), output = (x-mean)/sqrt(var+1e-5).",
+        "Acceptance: one finite (128,) output vector with relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) <= 0.02.",
+        "Out of scope: arbitrary alternative tensors; only this exact workload matters."
+      ],
+      "created_at": "2026-09-24T00:10:44Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Single Triton program (grid (1,), N=128 constexpr, num_warps=4, enable_fp_fusion=False) processes the whole vector in one block.",
+        "One-pass fp32 accumulation: sequential loop sums value and value*value in float32 scalars; variance = max(squares/N - mean^2, 0); denominator = sqrt(var + 1e-5) matching the contract's epsilon.",
+        "Second pass loads all 128 elements via tl.arange(0,128) and stores (values - mean)/denominator to a pre-allocated fp32 (128,) output; x is loaded via .to(tl.float32) (already fp32).",
+        "run(x) allocates the output and launches the kernel; no dtype/shape guard on x (fine within the fixed contract)."
+      ],
+      "open_questions": [],
+      "risk_map": [
+        "Catastrophic cancellation in variance: x\u224864\u00b10.125 so squares/N \u2248 4096 while true variance \u2248 0.0156; fp32 one-pass E[x\u00b2]\u2212mean\u00b2 loses ~log2(4096/0.0156)\u224818 significant bits, potentially leaving few accurate bits of variance and amplifying relative error via the small denominator (sqrt(0.0156+1e-5)\u22480.125).",
+        "Sequential fp32 accumulation of 128 values around 64 (sum \u2248 8192, square-sum \u2248 524k): rounding in squares accumulation alone can exceed the true variance's contribution.",
+        "Relative error is measured against a float64 two-pass reference, so kernel-side fp32 one-pass bias may or may not stay within the 2% relative-L2 bound \u2014 this is the central question for Skeptic/Experimenter.",
+        "epsilon placement matches (var + 1e-5), so no epsilon-mismatch bug; denominator never zero due to clamp and epsilon, output finite."
+      ],
+      "scope_notes": [
+        "Only the exact deterministic input from make_inputs is in scope; behavior on other tensors is irrelevant to the verdict.\", \"Tolerance is generous (2% relative L2), which may absorb the cancellation error; a passing allclose does not prove the variance computation is accurate, only that it meets this bound for this input.\", \"Single-block serial reduction means no parallelism/reduction-order concerns beyond fp32 rounding; no boundary masking needed since N=128 exactly.\"]"
+      ],
+      "summary": "Described case_j: fixed-workload 128-element LayerNorm (no affine) in one Triton program, one-pass fp32 variance (E[x^2]-mean^2) versus a float64 two-pass reference with 2% relative-L2 tolerance; primary risk is catastrophic cancellation with mean\u224864 and variance\u22480.0156.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [],
+      "created_at": "2026-09-24T00:11:22Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "The kernel's variance path is fully deterministic fp32 sequential: total and squares accumulate scalar-by-scalar over i=0..127, so the exact sequence of fp32 roundings is reproducible in a CPU NumPy emulation (np.float32 operations in the same order) without running the GPU kernel.",
+        "tl.maximum(variance, 0.0) means a negative cancellation result silently yields denominator = sqrt(1e-5) \u2248 0.0032, i.e., outputs scaled ~39x larger than the reference denominator \u2248 0.125; a clamped-to-zero variance is an all-or-nothing failure mode, not a gradual one."
+      ],
+      "open_questions": [
+        "Does squares/N - mean^2 evaluate positive or negative for the exact seeded input? The sign determines whether the failure is gradual (inflated variance) or catastrophic (clamp to 0).",
+        "Does the 2% relative-L2 tolerance absorb a worst-order fp32 one-pass variance error for this particular seed, given ||ref||_2 \u2248 sqrt(128)?"
+      ],
+      "risk_map": [
+        "Worst-case magnitude estimate for c1: sequential fp32 sum of squares \u2248 5.24e5 with term-level rounding ~128 * eps_fp32 * partial-sum magnitudes; naive bound gives square-sum absolute error on the order of 1e-2 to 1e-1, which is the same order as (or larger than) the entire true variance 0.0156 after dividing by 128 \u2014 so the computed variance can be anywhere from clamped-to-zero to ~2x the truth, depending on the exact seeded values.",
+        "Clamp interaction: if squares/N - mean^2 rounds to <= 0, denominator degenerates to sqrt(1e-5)\u22480.0032 and every output element is inflated ~39x \u2014 a probe should check the sign of the raw subtraction, not just the final L2 error.",
+        "Mean-error estimate for c2: sequential fp32 sum \u2248 8192 with ULP \u2248 2^-10 \u2248 1e-3; over 128 terms the accumulated mean error is plausibly ~1e-3 to 4e-3, giving a uniform output offset of ~0.8% to 3% of the \u22480.125 denominator scale \u2014 near the 2% bound on its own.",
+        "Recommended evidence decomposition for Experimenter: (a) exact fp32 emulation of the kernel's accumulation order in NumPy to report mean, squares, raw subtraction, clamped variance, denominator, and final relative L2 error; (b) if available, GPU run plus comparison of the emulated vs actual denominator to confirm the emulation models Triton fp32 behavior (e.g., FMA/rounding mode, note enable_fp_fusion=False which disables FMA contraction, making plain IEEE fp32 emulation closer)."
+      ],
+      "scope_notes": [
+        "Only the exact make_inputs tensor (seed 782406) is in scope; probes on other distributions are out of scope for the verdict.",
+        "enable_fp_fusion=False in the launch is relevant evidence context: it disables FMA contraction, so the .to(fp32) multiply-then-add sequence can be modeled by plain fp32 IEEE rounding in an emulation."
+      ],
+      "summary": "Refined risk map for claims c1/c2: quantified the fp32 one-pass variance error scales (square-sum rounding comparable to the entire true variance; possible clamp-to-zero degeneracy where denominator becomes sqrt(1e-5)\u22480.0032) and recommended a deterministic CPU fp32-emulation probe plus denominator sign check to decompose mean vs variance contributions.",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_j",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_j"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_j"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_j"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_j",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 14.257971535,
+      "role": "describer",
+      "round": 2,
+      "text": "The artifact is a 128-element single-block LayerNorm; the main numerical risk is the one-pass variance formula (E[x\u00b2] \u2212 mean\u00b2) computed in fp32 with a large mean (\u224864) and tiny variance (\u22480.0156), which suffers catastrophic cancellation versus the float64 two-pass reference. I'll record the description model now.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Fixed workload: LayerNorm without affine transform on a single float32 vector x of shape (128,) generated deterministically by make_inputs (PCG64 seed 782406, 64.0 + N(0, 0.125, 128)).",
+              "Reference computed in float64 from the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (two-pass, no df correction), output = (x-mean)/sqrt(var+1e-5).",
+              "Acceptance: one finite (128,) output vector with relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) <= 0.02.",
+              "Out of scope: arbitrary alternative tensors; only this exact workload matters."
+            ],
+            "kernel_model": [
+              "Single Triton program (grid (1,), N=128 constexpr, num_warps=4, enable_fp_fusion=False) processes the whole vector in one block.",
+              "One-pass fp32 accumulation: sequential loop sums value and value*value in float32 scalars; variance = max(squares/N - mean^2, 0); denominator = sqrt(var + 1e-5) matching the contract's epsilon.",
+              "Second pass loads all 128 elements via tl.arange(0,128) and stores (values - mean)/denominator to a pre-allocated fp32 (128,) output; x is loaded via .to(tl.float32) (already fp32).",
+              "run(x) allocates the output and launches the kernel; no dtype/shape guard on x (fine within the fixed contract)."
+            ],
+            "risk_map": [
+              "Catastrophic cancellation in variance: x\u224864\u00b10.125 so squares/N \u2248 4096 while true variance \u2248 0.0156; fp32 one-pass E[x\u00b2]\u2212mean\u00b2 loses ~log2(4096/0.0156)\u224818 significant bits, potentially leaving few accurate bits of variance and amplifying relative error via the small denominator (sqrt(0.0156+1e-5)\u22480.125).",
+              "Sequential fp32 accumulation of 128 values around 64 (sum \u2248 8192, square-sum \u2248 524k): rounding in squares accumulation alone can exceed the true variance's contribution.",
+              "Relative error is measured against a float64 two-pass reference, so kernel-side fp32 one-pass bias may or may not stay within the 2% relative-L2 bound \u2014 this is the central question for Skeptic/Experimenter.",
+              "epsilon placement matches (var + 1e-5), so no epsilon-mismatch bug; denominator never zero due to clamp and epsilon, output finite."
+            ],
+            "scope_notes": "Only the exact deterministic input from make_inputs is in scope; behavior on other tensors is irrelevant to the verdict.\", \"Tolerance is generous (2% relative L2), which may absorb the cancellation error; a passing allclose does not prove the variance computation is accurate, only that it meets this bound for this input.\", \"Single-block serial reduction means no parallelism/reduction-order concerns beyond fp32 rounding; no boundary masking needed since N=128 exactly.\"]",
+            "summary": "Described case_j: fixed-workload 128-element LayerNorm (no affine) in one Triton program, one-pass fp32 variance (E[x^2]-mean^2) versus a float64 two-pass reference with 2% relative-L2 tolerance; primary risk is catastrophic cancellation with mean\u224864 and variance\u22480.0156."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 14.258,
+        "input_tokens": 4509,
+        "output_tokens": 929
+      }
+    },
+    {
+      "duration_s": 13.831142568,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The central risk is clear: the kernel computes a one-pass fp32 variance (E[x\u00b2]\u2212mean\u00b2) with mean\u224864 and variance\u22480.0156, against a float64 two-pass reference with a small denominator. That's the decisive, in-scope claim to test on the exact fixed workload.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "With squares/N\u22484096 and true variance\u22480.0156, the fp32 subtraction cancels ~18 leading bits, and sequential fp32 accumulation of the square-sum (\u2248524k) adds rounding noise comparable to or exceeding the true variance; errors in the denominator \u22480.125 scale every output element, so relative L2 error could exceed 0.02.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference is float64 two-pass mean/population-variance with output (x-mean)/sqrt(var+1e-5), and the output's relative L2 error must be <= 0.02 for the exact x from make_inputs (seed 782406, 64.0 + N(0,0.125,128))."
+              }
+            ],
+            "statement": "For the exact in-scope input (make_inputs, PCG64 seed 782406), the kernel's one-pass fp32 variance squares/N - mean^2 suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156) plus fp32 accumulation rounding, producing a denominator error large enough that the relative L2 error versus the float64 two-pass reference exceeds the 0.02 bound."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Sequential float32 accumulation of 128 values each \u224864 (total \u22488192, unit-in-last-place \u22482^-10 at that magnitude) can accumulate ~2^-10-scale absolute error in mean; residuals are \u22480.125 so relative residual error ~1e-3 level, small but additive to the variance-cancellation error and worth measuring separately.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The contract fixes the reference mean = sum x[i]/128 in float64 and requires relative L2 error <= 0.02 on this exact workload; any kernel mean bias contributes directly to output error."
+              }
+            ],
+            "statement": "The fp32 sequential accumulation of total (sum of 128 values \u22488192) yields a mean with absolute error of order a few ULPs of 8192 (~1e-3), which, divided by the small denominator \u22480.125, adds a systematic offset of up to ~1% to every output element and contributes measurably to the relative L2 error."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.831,
+        "input_tokens": 11312,
+        "output_tokens": 631
+      }
+    },
+    {
+      "duration_s": 8.459071049999999,
+      "role": "skeptic",
+      "round": 4,
+      "text": "Both prior claim attempts were rejected for missing `scope_rationale`; I'll re-record them properly.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "With squares/N\u22484096 and true variance\u22480.0156, the fp32 subtraction cancels ~18 leading bits, and sequential fp32 accumulation of the square-sum (\u2248524k) adds rounding noise comparable to or exceeding the true variance; errors in the denominator \u22480.125 scale every output element, so relative L2 error could exceed 0.02.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference is float64 two-pass mean/population-variance with output (x-mean)/sqrt(var+1e-5), and the output's relative L2 error must be <= 0.02 for the exact x from make_inputs (seed 782406, 64.0 + N(0,0.125,128))."
+              }
+            ],
+            "scope_rationale": "problem.txt defines the exact input (make_inputs, PCG64 seed 782406) and requires relative L2 error <= 0.02 against a float64 two-pass population-variance reference; the one-pass fp32 variance the kernel computes for this exact input may violate that stated numeric bound.",
+            "statement": "For the exact in-scope input (make_inputs, PCG64 seed 782406), the kernel's one-pass fp32 variance squares/N - mean^2 suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156) plus fp32 accumulation rounding, producing a denominator error large enough that the relative L2 error versus the float64 two-pass reference exceeds the 0.02 bound."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Sequential float32 accumulation of 128 values each \u224864 (total \u22488192, ULP \u22482^-10 at that magnitude) can accumulate ~2^-10-scale absolute error in mean; residuals are \u22480.125 so mean error translates into relative residual error at the ~1e-3\u20131% level, additive to the variance-cancellation error and worth measuring separately.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The contract fixes the reference mean = sum x[i]/128 in float64 and requires relative L2 error <= 0.02 on this exact workload; any kernel mean bias contributes directly to output error."
+              }
+            ],
+            "scope_rationale": "problem.txt specifies the reference mean = sum x[i]/128 in float64 for this exact workload and requires relative L2 error <= 0.02; kernel-side fp32 mean bias for that exact input would contribute directly to the stated error metric.",
+            "statement": "The fp32 sequential accumulation of total (sum of 128 values \u22488192) yields a mean with absolute error of order a few ULPs of 8192 (~1e-3), which, divided by the small denominator \u22480.125, adds a systematic offset of up to ~1% to every output element and contributes measurably to the relative L2 error."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.459,
+        "input_tokens": 12986,
+        "output_tokens": 699
+      }
+    },
+    {
+      "duration_s": 15.513250964999997,
+      "role": "describer",
+      "round": 5,
+      "text": "The description model is already in place; what's missing is guidance for how the open claims c1/c2 should be probed. I'll record a refinement noting the quantitative worst-case (accumulation rounding in the square-sum alone can be on the order of the true variance, so the clamp to zero is a real possibility, making the 1e-5 epsilon dominate) and suggest a CPU-side fp32 emulation to decompose mean vs variance error before any GPU run.",
+      "tool_calls": [
+        {
+          "args": {
+            "kernel_model": [
+              "The kernel's variance path is fully deterministic fp32 sequential: total and squares accumulate scalar-by-scalar over i=0..127, so the exact sequence of fp32 roundings is reproducible in a CPU NumPy emulation (np.float32 operations in the same order) without running the GPU kernel.",
+              "tl.maximum(variance, 0.0) means a negative cancellation result silently yields denominator = sqrt(1e-5) \u2248 0.0032, i.e., outputs scaled ~39x larger than the reference denominator \u2248 0.125; a clamped-to-zero variance is an all-or-nothing failure mode, not a gradual one."
+            ],
+            "open_questions": [
+              "Does squares/N - mean^2 evaluate positive or negative for the exact seeded input? The sign determines whether the failure is gradual (inflated variance) or catastrophic (clamp to 0).",
+              "Does the 2% relative-L2 tolerance absorb a worst-order fp32 one-pass variance error for this particular seed, given ||ref||_2 \u2248 sqrt(128)?"
+            ],
+            "risk_map": [
+              "Worst-case magnitude estimate for c1: sequential fp32 sum of squares \u2248 5.24e5 with term-level rounding ~128 * eps_fp32 * partial-sum magnitudes; naive bound gives square-sum absolute error on the order of 1e-2 to 1e-1, which is the same order as (or larger than) the entire true variance 0.0156 after dividing by 128 \u2014 so the computed variance can be anywhere from clamped-to-zero to ~2x the truth, depending on the exact seeded values.",
+              "Clamp interaction: if squares/N - mean^2 rounds to <= 0, denominator degenerates to sqrt(1e-5)\u22480.0032 and every output element is inflated ~39x \u2014 a probe should check the sign of the raw subtraction, not just the final L2 error.",
+              "Mean-error estimate for c2: sequential fp32 sum \u2248 8192 with ULP \u2248 2^-10 \u2248 1e-3; over 128 terms the accumulated mean error is plausibly ~1e-3 to 4e-3, giving a uniform output offset of ~0.8% to 3% of the \u22480.125 denominator scale \u2014 near the 2% bound on its own.",
+              "Recommended evidence decomposition for Experimenter: (a) exact fp32 emulation of the kernel's accumulation order in NumPy to report mean, squares, raw subtraction, clamped variance, denominator, and final relative L2 error; (b) if available, GPU run plus comparison of the emulated vs actual denominator to confirm the emulation models Triton fp32 behavior (e.g., FMA/rounding mode, note enable_fp_fusion=False which disables FMA contraction, making plain IEEE fp32 emulation closer)."
+            ],
+            "scope_notes": [
+              "Only the exact make_inputs tensor (seed 782406) is in scope; probes on other distributions are out of scope for the verdict.",
+              "enable_fp_fusion=False in the launch is relevant evidence context: it disables FMA contraction, so the .to(fp32) multiply-then-add sequence can be modeled by plain fp32 IEEE rounding in an emulation."
+            ],
+            "summary": "Refined risk map for claims c1/c2: quantified the fp32 one-pass variance error scales (square-sum rounding comparable to the entire true variance; possible clamp-to-zero degeneracy where denominator becomes sqrt(1e-5)\u22480.0032) and recommended a deterministic CPU fp32-emulation probe plus denominator sign check to decompose mean vs variance contributions."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.513,
+        "input_tokens": 14574,
+        "output_tokens": 1091
+      }
+    },
+    {
+      "duration_s": 6.696068729000004,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The two in-scope claims (c1: one-pass fp32 variance cancellation; c2: fp32 mean accumulation bias) already capture the decisive risks for this fixed workload, and no new evidence or probe results have arrived since. No additional high-quality claims are warranted.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The ledger's open claims c1 (fp32 one-pass variance cancellation with possible clamp-to-zero) and c2 (fp32 sequential mean bias) already cover the only material, in-scope risk surfaces for this fixed single-input LayerNorm contract. The kernel is otherwise contract-conformant (correct epsilon placement, population variance, (128,) finite fp32 output, N=128 exact fit), and no new evidence has arrived to expose additional claims.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.696,
+        "input_tokens": 22151,
+        "output_tokens": 195
+      }
+    },
+    {
+      "duration_s": 14.272462044999997,
+      "role": "experimenter",
+      "round": 7,
+      "text": "I'll launch two probes in one batch: c1 measures the relative L2 error (and the raw subtraction sign) of the kernel's one-pass fp32 variance vs the float64 two-pass reference on the exact seeded input; c2 isolates the fp32 sequential mean bias and its contribution. Both use the exact make_inputs workload and run the actual GPU kernel plus a deterministic fp32 emulation of the kernel's accumulation order, so neither depends on the other's outcome.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport numpy as np, json, torch\nrng = np.random.Generator(np.random.PCG64(782406))\nx = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)\n\n# float64 two-pass reference\nx64 = x.astype(np.float64)\nmean64 = x64.sum()/128\nvar64 = ((x64-mean64)**2).sum()/128\nref = (x64-mean64)/np.sqrt(var64+1e-5)\n\n# fp32 emulation of kernel accumulation order\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in x:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v*v))\nmean32 = np.float32(total/np.float32(128))\nsq_over_n = np.float32(squares/np.float32(128))\nmean_sq = np.float32(mean32*mean32)\nraw_sub = np.float32(sq_over_n - mean_sq)\nvar32 = np.float32(max(raw_sub, np.float32(0.0)))\ndenom32 = np.float32(np.sqrt(np.float32(var32+np.float32(1e-5))))\n\n# actual GPU kernel\nimport sys\nsys.path.insert(0, '/root/numerical_cases/case_j')\nimport kernel as K\nxt = torch.from_numpy(x).to('cuda')\nout = K.run(xt).cpu().numpy()\n\nerr = np.linalg.norm(out-ref)/max(np.linalg.norm(ref), 0.001*np.sqrt(128))\nemul_err = np.linalg.norm(((x.astype(np.float64)-mean32)/denom32)-ref)/max(np.linalg.norm(ref),0.001*np.sqrt(128))\nprint(json.dumps({\n  \"relative_l2_error\": float(err),\n  \"tolerance\": 0.02,\n  \"raw_subtraction\": float(raw_sub),\n  \"raw_subtraction_positive\": bool(raw_sub > 0),\n  \"clamped\": bool(raw_sub <= 0),\n  \"true_var\": float(var64), \"emul_var\": float(var32),\n  \"ref_denom\": float(np.sqrt(var64+1e-5)), \"kernel_denom_emul\": float(denom32),\n  \"denom_ratio\": float(denom32/np.sqrt(var64+1e-5)),\n  \"emul_relative_l2\": float(emul_err),\n  \"gpu_vs_emul_max_abs\": float(np.abs(out-((x.astype(np.float32).astype(np.float64)-mean32)/denom32)).max()),\n  \"finite\": bool(np.isfinite(out).all()), \"shape\": list(out.shape)\n}))\n",
+            "expected_signal": "relative L2 error of the actual GPU kernel output vs the float64 two-pass reference exceeds 0.02, and/or raw fp32 subtraction squares/N - mean^2 clamps to <= 0"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport numpy as np, json\nrng = np.random.Generator(np.random.PCG64(782406))\nx = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)\nx64 = x.astype(np.float64)\nmean64 = x64.sum()/128\nvar64 = ((x64-mean64)**2).sum()/128\nref = (x64-mean64)/np.sqrt(var64+1e-5)\n\n# kernel fp32 sequential mean\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in x:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v*v))\nmean32 = np.float32(total/np.float32(128))\n\nmean_abs_err = abs(float(mean32) - float(mean64))\nvar32 = np.float32(max(np.float32(np.float32(squares/np.float32(128)) - np.float32(mean32*mean32)), np.float32(0.0)))\ndenom32 = np.float32(np.sqrt(np.float32(var32+np.float32(1e-5))))\nref_denom = np.sqrt(var64+1e-5)\n# output offset contribution from mean bias alone (using exact denominator)\noffset_per_elem = mean_abs_err/ref_denom\nout_mean_only = (x64-mean32)/ref_denom\nerr_mean_only = np.linalg.norm(out_mean_only-ref)/max(np.linalg.norm(ref),0.001*np.sqrt(128))\nprint(json.dumps({\n  \"mean_fp32\": float(mean32), \"mean_f64\": float(mean64),\n  \"mean_abs_err\": mean_abs_err,\n  \"mean_rel_err_vs_denom\": float(mean_abs_err/ref_denom),\n  \"output_offset_fraction_per_element\": float(offset_per_elem),\n  \"rel_l2_from_mean_bias_alone\": float(err_mean_only),\n  \"denominator\": float(ref_denom),\n  \"tolerance\": 0.02\n}))\n",
+            "expected_signal": "fp32 sequential mean absolute error ~1e-3 yielding per-element output offset near or above 1% of the denominator scale and measurable relative L2 contribution"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 14.272,
+        "input_tokens": 23169,
+        "output_tokens": 1363
+      }
+    },
+    {
+      "duration_s": 9.121275690000004,
+      "role": "experimenter",
+      "round": 8,
+      "text": "Both probes are back: c1 is confirmed (relative L2 error 0.145 \u226b 0.02, driven by variance underestimation, not clamping), and c2 is rebutted (fp32 mean error is only 1.7e-5, contributing ~0.014% to the error). Finalizing both now.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "denom_ratio": 0.8735001996810307,
+              "emul_var": 0.01123046875,
+              "gpu_vs_emul_max_abs": 3.765802745192559e-07,
+              "kernel_denom_emul": 0.10602107644081116,
+              "raw_subtraction": 0.01123046875,
+              "raw_subtraction_positive": true,
+              "ref_denom": 0.12137498821354141,
+              "relative_l2_error": 0.14481964583989307,
+              "tolerance": 0.02,
+              "true_var": 0.014721887763837316
+            },
+            "event_id": "t12",
+            "status": "confirmed",
+            "summary": "On the exact seeded input, the actual GPU kernel's relative L2 error vs the float64 two-pass reference is 0.1448, far exceeding the 0.02 tolerance. The one-pass fp32 variance underestimates truth (0.01123 vs 0.01472; denominator ratio 0.8735); raw subtraction stayed positive (no clamp). The CPU fp32 emulation matched the GPU kernel to 3.8e-7, confirming the failure mechanism is the one-pass fp32 variance cancellation, as claimed.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "mean_abs_err": 1.6868114471435547e-05,
+              "mean_f64": 64.00110465288162,
+              "mean_fp32": 64.0011215209961,
+              "output_offset_fraction_per_element": 0.0001389752099646641,
+              "rel_l2_from_mean_bias_alone": 0.00013902240215227552,
+              "tolerance": 0.02
+            },
+            "event_id": "t13",
+            "status": "rebutted",
+            "summary": "The fp32 sequential mean bias is only 1.69e-5 (not ~1e-3 as claimed), giving a per-element output offset of 0.014% and a mean-bias-only relative L2 contribution of 0.000139 \u2014 negligible versus the 0.02 tolerance. The measured error is dominated by the variance path (c1), not mean accumulation.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.121,
+        "input_tokens": 28831,
+        "output_tokens": 685
+      }
+    },
+    {
+      "duration_s": 4.927630909000001,
+      "role": "skeptic",
+      "round": 9,
+      "text": "The evidence is complete and decisive: claim c1 is confirmed with in-scope runtime evidence (actual GPU kernel error 0.145 vs the 0.02 bound on the exact seeded workload), and c2 is rebutted with direct measurement. No new material claims are warranted.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the only material in-scope failure is fully covered by confirmed claim c1 \u2014 on the exact make_inputs workload, the actual GPU kernel's relative L2 error vs the float64 two-pass reference is 0.1448, far above the 0.02 tolerance, caused by one-pass fp32 variance cancellation (denominator ratio 0.8735, no clamp). Claim c2 (mean bias) was measured and rebutted (contribution ~0.00014). The kernel is otherwise contract-conformant (epsilon placement, population variance, finite (128,) fp32 output). No new evidence exposes additional testable in-scope problems.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.928,
+        "input_tokens": 36018,
+        "output_tokens": 238
+      }
+    },
+    {
+      "duration_s": 7.169614534999994,
+      "role": "judge",
+      "round": 10,
+      "text": "The evidence is decisive: on the exact in-scope workload, the actual GPU kernel's relative L2 error is 0.1448 against the contract's \u22640.02 bound, confirmed by claim c1 with GPU runtime evidence matching the mechanism (one-pass fp32 variance cancellation). Claim c2 is rebutted. Skeptic signed off after reviewing the latest evidence, and no open claims remain without evidence.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.98,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Reject: confirmed in-scope claim c1 shows the kernel violates problem.txt's explicit numeric contract on the exact seeded workload (make_inputs, PCG64 782406). The actual GPU kernel's relative L2 error versus the required float64 two-pass reference is 0.1448, far above the mandated <= 0.02 bound. The mechanism is confirmed: the one-pass fp32 variance squares/N - mean^2 catastrophically cancels (computed variance 0.01123 vs true 0.01472, denominator ratio 0.8735), and a CPU fp32 emulation of the kernel's accumulation order matched the GPU output to 3.8e-7, tying the error directly to the kernel's variance path. This is not a tolerance/format clause the contract absorbs \u2014 problem.txt explicitly requires the <= 0.02 relative-L2 bound and a float64 two-pass reference, and the failure occurs on the exact, only in-scope input. The clamp did not trigger (raw subtraction positive), so the failure is the gradual cancellation mode, not a metric artifact. Claim c2 (fp32 mean bias) was measured and rebutted (contribution ~1.4e-4, negligible). The kernel is otherwise contract-conformant (epsilon placement, population variance, finite (128,) fp32 output), but the numeric bound violation alone is decisive.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.17,
+        "input_tokens": 36053,
+        "output_tokens": 410
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-24T00:12:04Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the only material in-scope failure is fully covered by confirmed claim c1 \u2014 on the exact make_inputs workload, the actual GPU kernel's relative L2 error vs the float64 two-pass reference is 0.1448, far above the 0.02 tolerance, caused by one-pass fp32 variance cancellation (denominator ratio 0.8735, no clamp). Claim c2 (mean bias) was measured and rebutted (contribution ~0.00014). The kernel is otherwise contract-conformant (epsilon placement, population variance, finite (128,) fp32 output). No new evidence exposes additional testable in-scope problems.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 15,
+    "tool_event_id": "t16",
+    "turn": 9
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_j"
+      },
+      "created_at": "2026-09-24T00:10:29Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_j",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _layer_norm_kernel(X, Output, N: tl.constexpr):\n    total = tl.full((), 0.0, tl.float32)\n    squares = tl.full((), 0.0, tl.float32)\n    for i in range(0, N):\n        value = tl.load(X + i).to(tl.float32)\n        total = total + value\n        squares = squares + value * value\n    mean = total / N\n    variance = tl.maximum(squares / N - mean * mean, 0.0)\n    denominator = tl.sqrt(variance + 0.00001)\n    offsets = tl.arange(0, N)\n    values = tl.load(X + offsets).to(tl.float32)\n    tl.store(Output + offsets, (values - mean) / denominator)\n\n\ndef run(x):\n    output = torch.empty((128,), device=x.device, dtype=torch.float32)\n    _layer_norm_kernel[(1,)](x, output, N=128, num_warps=4,\n                            enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(782406))\n    x = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)\n    return (x,)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "passed": null,
+        "problem_text": "Implement LayerNorm without an affine transform for this fixed workload.\n\nThe only input in scope is the float32 vector x returned by make_inputs() in\nkernel.py. Its shape is (128,), and its complete contents and element order are\nspecified by that public deterministic generator.\n\nThe reference uses the original float32 input values, evaluated in float64:\n  mean = sum_i x[i] / 128\n  variance = sum_i (x[i] - mean)**2 / 128\n  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)\nUse population variance, with no degrees-of-freedom correction.\n\nThe output must be one finite vector with shape (128,). Its relative L2 error is\n  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).\nThe numerical contract requires this error to be <= 0.02.\n\nDecide whether this implementation satisfies that contract for this fixed\nworkload. Arbitrary alternative tensors are outside this question's scope.\n",
+        "rounds": null,
+        "session_dir": "/root/numerical_cases/case_j",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_j"
+      },
+      "created_at": "2026-09-24T00:10:29Z",
+      "id": "t2",
+      "output": {
+        "content": "Implement LayerNorm without an affine transform for this fixed workload.\n\nThe only input in scope is the float32 vector x returned by make_inputs() in\nkernel.py. Its shape is (128,), and its complete contents and element order are\nspecified by that public deterministic generator.\n\nThe reference uses the original float32 input values, evaluated in float64:\n  mean = sum_i x[i] / 128\n  variance = sum_i (x[i] - mean)**2 / 128\n  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)\nUse population variance, with no degrees-of-freedom correction.\n\nThe output must be one finite vector with shape (128,). Its relative L2 error is\n  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).\nThe numerical contract requires this error to be <= 0.02.\n\nDecide whether this implementation satisfies that contract for this fixed\nworkload. Arbitrary alternative tensors are outside this question's scope.\n",
+        "entry": "case_j",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_j"
+      },
+      "created_at": "2026-09-24T00:10:29Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_j",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1132
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 67
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 908
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_j",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T00:10:29Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_j\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_j",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 67,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Fixed workload: LayerNorm without affine transform on a single float32 vector x of shape (128,) generated deterministically by make_inputs (PCG64 seed 782406, 64.0 + N(0, 0.125, 128)).",
+          "Reference computed in float64 from the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (two-pass, no df correction), output = (x-mean)/sqrt(var+1e-5).",
+          "Acceptance: one finite (128,) output vector with relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) <= 0.02.",
+          "Out of scope: arbitrary alternative tensors; only this exact workload matters."
+        ],
+        "kernel_model": [
+          "Single Triton program (grid (1,), N=128 constexpr, num_warps=4, enable_fp_fusion=False) processes the whole vector in one block.",
+          "One-pass fp32 accumulation: sequential loop sums value and value*value in float32 scalars; variance = max(squares/N - mean^2, 0); denominator = sqrt(var + 1e-5) matching the contract's epsilon.",
+          "Second pass loads all 128 elements via tl.arange(0,128) and stores (values - mean)/denominator to a pre-allocated fp32 (128,) output; x is loaded via .to(tl.float32) (already fp32).",
+          "run(x) allocates the output and launches the kernel; no dtype/shape guard on x (fine within the fixed contract)."
+        ],
+        "risk_map": [
+          "Catastrophic cancellation in variance: x\u224864\u00b10.125 so squares/N \u2248 4096 while true variance \u2248 0.0156; fp32 one-pass E[x\u00b2]\u2212mean\u00b2 loses ~log2(4096/0.0156)\u224818 significant bits, potentially leaving few accurate bits of variance and amplifying relative error via the small denominator (sqrt(0.0156+1e-5)\u22480.125).",
+          "Sequential fp32 accumulation of 128 values around 64 (sum \u2248 8192, square-sum \u2248 524k): rounding in squares accumulation alone can exceed the true variance's contribution.",
+          "Relative error is measured against a float64 two-pass reference, so kernel-side fp32 one-pass bias may or may not stay within the 2% relative-L2 bound \u2014 this is the central question for Skeptic/Experimenter.",
+          "epsilon placement matches (var + 1e-5), so no epsilon-mismatch bug; denominator never zero due to clamp and epsilon, output finite."
+        ],
+        "scope_notes": "Only the exact deterministic input from make_inputs is in scope; behavior on other tensors is irrelevant to the verdict.\", \"Tolerance is generous (2% relative L2), which may absorb the cancellation error; a passing allclose does not prove the variance computation is accurate, only that it meets this bound for this input.\", \"Single-block serial reduction means no parallelism/reduction-order concerns beyond fp32 rounding; no boundary masking needed since N=128 exactly.\"]",
+        "summary": "Described case_j: fixed-workload 128-element LayerNorm (no affine) in one Triton program, one-pass fp32 variance (E[x^2]-mean^2) versus a float64 two-pass reference with 2% relative-L2 tolerance; primary risk is catastrophic cancellation with mean\u224864 and variance\u22480.0156."
+      },
+      "created_at": "2026-09-24T00:10:44Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Fixed workload: LayerNorm without affine transform on a single float32 vector x of shape (128,) generated deterministically by make_inputs (PCG64 seed 782406, 64.0 + N(0, 0.125, 128)).",
+            "Reference computed in float64 from the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (two-pass, no df correction), output = (x-mean)/sqrt(var+1e-5).",
+            "Acceptance: one finite (128,) output vector with relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) <= 0.02.",
+            "Out of scope: arbitrary alternative tensors; only this exact workload matters."
+          ],
+          "kernel_model": [
+            "Single Triton program (grid (1,), N=128 constexpr, num_warps=4, enable_fp_fusion=False) processes the whole vector in one block.",
+            "One-pass fp32 accumulation: sequential loop sums value and value*value in float32 scalars; variance = max(squares/N - mean^2, 0); denominator = sqrt(var + 1e-5) matching the contract's epsilon.",
+            "Second pass loads all 128 elements via tl.arange(0,128) and stores (values - mean)/denominator to a pre-allocated fp32 (128,) output; x is loaded via .to(tl.float32) (already fp32).",
+            "run(x) allocates the output and launches the kernel; no dtype/shape guard on x (fine within the fixed contract)."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "Catastrophic cancellation in variance: x\u224864\u00b10.125 so squares/N \u2248 4096 while true variance \u2248 0.0156; fp32 one-pass E[x\u00b2]\u2212mean\u00b2 loses ~log2(4096/0.0156)\u224818 significant bits, potentially leaving few accurate bits of variance and amplifying relative error via the small denominator (sqrt(0.0156+1e-5)\u22480.125).",
+            "Sequential fp32 accumulation of 128 values around 64 (sum \u2248 8192, square-sum \u2248 524k): rounding in squares accumulation alone can exceed the true variance's contribution.",
+            "Relative error is measured against a float64 two-pass reference, so kernel-side fp32 one-pass bias may or may not stay within the 2% relative-L2 bound \u2014 this is the central question for Skeptic/Experimenter.",
+            "epsilon placement matches (var + 1e-5), so no epsilon-mismatch bug; denominator never zero due to clamp and epsilon, output finite."
+          ],
+          "scope_notes": [
+            "Only the exact deterministic input from make_inputs is in scope; behavior on other tensors is irrelevant to the verdict.\", \"Tolerance is generous (2% relative L2), which may absorb the cancellation error; a passing allclose does not prove the variance computation is accurate, only that it meets this bound for this input.\", \"Single-block serial reduction means no parallelism/reduction-order concerns beyond fp32 rounding; no boundary masking needed since N=128 exactly.\"]"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Fixed workload: LayerNorm without affine transform on a single float32 vector x of shape (128,) generated deterministically by make_inputs (PCG64 seed 782406, 64.0 + N(0, 0.125, 128)).",
+            "Reference computed in float64 from the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (two-pass, no df correction), output = (x-mean)/sqrt(var+1e-5).",
+            "Acceptance: one finite (128,) output vector with relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) <= 0.02.",
+            "Out of scope: arbitrary alternative tensors; only this exact workload matters."
+          ],
+          "created_at": "2026-09-24T00:10:44Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Single Triton program (grid (1,), N=128 constexpr, num_warps=4, enable_fp_fusion=False) processes the whole vector in one block.",
+            "One-pass fp32 accumulation: sequential loop sums value and value*value in float32 scalars; variance = max(squares/N - mean^2, 0); denominator = sqrt(var + 1e-5) matching the contract's epsilon.",
+            "Second pass loads all 128 elements via tl.arange(0,128) and stores (values - mean)/denominator to a pre-allocated fp32 (128,) output; x is loaded via .to(tl.float32) (already fp32).",
+            "run(x) allocates the output and launches the kernel; no dtype/shape guard on x (fine within the fixed contract)."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "Catastrophic cancellation in variance: x\u224864\u00b10.125 so squares/N \u2248 4096 while true variance \u2248 0.0156; fp32 one-pass E[x\u00b2]\u2212mean\u00b2 loses ~log2(4096/0.0156)\u224818 significant bits, potentially leaving few accurate bits of variance and amplifying relative error via the small denominator (sqrt(0.0156+1e-5)\u22480.125).",
+            "Sequential fp32 accumulation of 128 values around 64 (sum \u2248 8192, square-sum \u2248 524k): rounding in squares accumulation alone can exceed the true variance's contribution.",
+            "Relative error is measured against a float64 two-pass reference, so kernel-side fp32 one-pass bias may or may not stay within the 2% relative-L2 bound \u2014 this is the central question for Skeptic/Experimenter.",
+            "epsilon placement matches (var + 1e-5), so no epsilon-mismatch bug; denominator never zero due to clamp and epsilon, output finite."
+          ],
+          "scope_notes": [
+            "Only the exact deterministic input from make_inputs is in scope; behavior on other tensors is irrelevant to the verdict.\", \"Tolerance is generous (2% relative L2), which may absorb the cancellation error; a passing allclose does not prove the variance computation is accurate, only that it meets this bound for this input.\", \"Single-block serial reduction means no parallelism/reduction-order concerns beyond fp32 rounding; no boundary masking needed since N=128 exactly.\"]"
+          ],
+          "summary": "Described case_j: fixed-workload 128-element LayerNorm (no affine) in one Triton program, one-pass fp32 variance (E[x^2]-mean^2) versus a float64 two-pass reference with 2% relative-L2 tolerance; primary risk is catastrophic cancellation with mean\u224864 and variance\u22480.0156.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "With squares/N\u22484096 and true variance\u22480.0156, the fp32 subtraction cancels ~18 leading bits, and sequential fp32 accumulation of the square-sum (\u2248524k) adds rounding noise comparable to or exceeding the true variance; errors in the denominator \u22480.125 scale every output element, so relative L2 error could exceed 0.02.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is float64 two-pass mean/population-variance with output (x-mean)/sqrt(var+1e-5), and the output's relative L2 error must be <= 0.02 for the exact x from make_inputs (seed 782406, 64.0 + N(0,0.125,128))."
+          }
+        ],
+        "statement": "For the exact in-scope input (make_inputs, PCG64 seed 782406), the kernel's one-pass fp32 variance squares/N - mean^2 suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156) plus fp32 accumulation rounding, producing a denominator error large enough that the relative L2 error versus the float64 two-pass reference exceeds the 0.02 bound."
+      },
+      "created_at": "2026-09-24T00:10:58Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Sequential float32 accumulation of 128 values each \u224864 (total \u22488192, unit-in-last-place \u22482^-10 at that magnitude) can accumulate ~2^-10-scale absolute error in mean; residuals are \u22480.125 so relative residual error ~1e-3 level, small but additive to the variance-cancellation error and worth measuring separately.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The contract fixes the reference mean = sum x[i]/128 in float64 and requires relative L2 error <= 0.02 on this exact workload; any kernel mean bias contributes directly to output error."
+          }
+        ],
+        "statement": "The fp32 sequential accumulation of total (sum of 128 values \u22488192) yields a mean with absolute error of order a few ULPs of 8192 (~1e-3), which, divided by the small denominator \u22480.125, adds a systematic offset of up to ~1% to every output element and contributes measurably to the relative L2 error."
+      },
+      "created_at": "2026-09-24T00:10:58Z",
+      "id": "t7",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t7",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "With squares/N\u22484096 and true variance\u22480.0156, the fp32 subtraction cancels ~18 leading bits, and sequential fp32 accumulation of the square-sum (\u2248524k) adds rounding noise comparable to or exceeding the true variance; errors in the denominator \u22480.125 scale every output element, so relative L2 error could exceed 0.02.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is float64 two-pass mean/population-variance with output (x-mean)/sqrt(var+1e-5), and the output's relative L2 error must be <= 0.02 for the exact x from make_inputs (seed 782406, 64.0 + N(0,0.125,128))."
+          }
+        ],
+        "scope_rationale": "problem.txt defines the exact input (make_inputs, PCG64 seed 782406) and requires relative L2 error <= 0.02 against a float64 two-pass population-variance reference; the one-pass fp32 variance the kernel computes for this exact input may violate that stated numeric bound.",
+        "statement": "For the exact in-scope input (make_inputs, PCG64 seed 782406), the kernel's one-pass fp32 variance squares/N - mean^2 suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156) plus fp32 accumulation rounding, producing a denominator error large enough that the relative L2 error versus the float64 two-pass reference exceeds the 0.02 bound."
+      },
+      "created_at": "2026-09-24T00:11:06Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-24T00:11:06Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "With squares/N\u22484096 and true variance\u22480.0156, the fp32 subtraction cancels ~18 leading bits, and sequential fp32 accumulation of the square-sum (\u2248524k) adds rounding noise comparable to or exceeding the true variance; errors in the denominator \u22480.125 scale every output element, so relative L2 error could exceed 0.02.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference is float64 two-pass mean/population-variance with output (x-mean)/sqrt(var+1e-5), and the output's relative L2 error must be <= 0.02 for the exact x from make_inputs (seed 782406, 64.0 + N(0,0.125,128))."
+          }
+        ],
+        "scope_rationale": "problem.txt defines the exact input (make_inputs, PCG64 seed 782406) and requires relative L2 error <= 0.02 against a float64 two-pass population-variance reference; the one-pass fp32 variance the kernel computes for this exact input may violate that stated numeric bound.",
+        "statement": "For the exact in-scope input (make_inputs, PCG64 seed 782406), the kernel's one-pass fp32 variance squares/N - mean^2 suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156) plus fp32 accumulation rounding, producing a denominator error large enough that the relative L2 error versus the float64 two-pass reference exceeds the 0.02 bound.",
+        "status": "open",
+        "updated_at": "2026-09-24T00:11:06Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Sequential float32 accumulation of 128 values each \u224864 (total \u22488192, ULP \u22482^-10 at that magnitude) can accumulate ~2^-10-scale absolute error in mean; residuals are \u22480.125 so mean error translates into relative residual error at the ~1e-3\u20131% level, additive to the variance-cancellation error and worth measuring separately.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The contract fixes the reference mean = sum x[i]/128 in float64 and requires relative L2 error <= 0.02 on this exact workload; any kernel mean bias contributes directly to output error."
+          }
+        ],
+        "scope_rationale": "problem.txt specifies the reference mean = sum x[i]/128 in float64 for this exact workload and requires relative L2 error <= 0.02; kernel-side fp32 mean bias for that exact input would contribute directly to the stated error metric.",
+        "statement": "The fp32 sequential accumulation of total (sum of 128 values \u22488192) yields a mean with absolute error of order a few ULPs of 8192 (~1e-3), which, divided by the small denominator \u22480.125, adds a systematic offset of up to ~1% to every output element and contributes measurably to the relative L2 error."
+      },
+      "created_at": "2026-09-24T00:11:06Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-24T00:11:06Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "Sequential float32 accumulation of 128 values each \u224864 (total \u22488192, ULP \u22482^-10 at that magnitude) can accumulate ~2^-10-scale absolute error in mean; residuals are \u22480.125 so mean error translates into relative residual error at the ~1e-3\u20131% level, additive to the variance-cancellation error and worth measuring separately.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The contract fixes the reference mean = sum x[i]/128 in float64 and requires relative L2 error <= 0.02 on this exact workload; any kernel mean bias contributes directly to output error."
+          }
+        ],
+        "scope_rationale": "problem.txt specifies the reference mean = sum x[i]/128 in float64 for this exact workload and requires relative L2 error <= 0.02; kernel-side fp32 mean bias for that exact input would contribute directly to the stated error metric.",
+        "statement": "The fp32 sequential accumulation of total (sum of 128 values \u22488192) yields a mean with absolute error of order a few ULPs of 8192 (~1e-3), which, divided by the small denominator \u22480.125, adds a systematic offset of up to ~1% to every output element and contributes measurably to the relative L2 error.",
+        "status": "open",
+        "updated_at": "2026-09-24T00:11:06Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "kernel_model": [
+          "The kernel's variance path is fully deterministic fp32 sequential: total and squares accumulate scalar-by-scalar over i=0..127, so the exact sequence of fp32 roundings is reproducible in a CPU NumPy emulation (np.float32 operations in the same order) without running the GPU kernel.",
+          "tl.maximum(variance, 0.0) means a negative cancellation result silently yields denominator = sqrt(1e-5) \u2248 0.0032, i.e., outputs scaled ~39x larger than the reference denominator \u2248 0.125; a clamped-to-zero variance is an all-or-nothing failure mode, not a gradual one."
+        ],
+        "open_questions": [
+          "Does squares/N - mean^2 evaluate positive or negative for the exact seeded input? The sign determines whether the failure is gradual (inflated variance) or catastrophic (clamp to 0).",
+          "Does the 2% relative-L2 tolerance absorb a worst-order fp32 one-pass variance error for this particular seed, given ||ref||_2 \u2248 sqrt(128)?"
+        ],
+        "risk_map": [
+          "Worst-case magnitude estimate for c1: sequential fp32 sum of squares \u2248 5.24e5 with term-level rounding ~128 * eps_fp32 * partial-sum magnitudes; naive bound gives square-sum absolute error on the order of 1e-2 to 1e-1, which is the same order as (or larger than) the entire true variance 0.0156 after dividing by 128 \u2014 so the computed variance can be anywhere from clamped-to-zero to ~2x the truth, depending on the exact seeded values.",
+          "Clamp interaction: if squares/N - mean^2 rounds to <= 0, denominator degenerates to sqrt(1e-5)\u22480.0032 and every output element is inflated ~39x \u2014 a probe should check the sign of the raw subtraction, not just the final L2 error.",
+          "Mean-error estimate for c2: sequential fp32 sum \u2248 8192 with ULP \u2248 2^-10 \u2248 1e-3; over 128 terms the accumulated mean error is plausibly ~1e-3 to 4e-3, giving a uniform output offset of ~0.8% to 3% of the \u22480.125 denominator scale \u2014 near the 2% bound on its own.",
+          "Recommended evidence decomposition for Experimenter: (a) exact fp32 emulation of the kernel's accumulation order in NumPy to report mean, squares, raw subtraction, clamped variance, denominator, and final relative L2 error; (b) if available, GPU run plus comparison of the emulated vs actual denominator to confirm the emulation models Triton fp32 behavior (e.g., FMA/rounding mode, note enable_fp_fusion=False which disables FMA contraction, making plain IEEE fp32 emulation closer)."
+        ],
+        "scope_notes": [
+          "Only the exact make_inputs tensor (seed 782406) is in scope; probes on other distributions are out of scope for the verdict.",
+          "enable_fp_fusion=False in the launch is relevant evidence context: it disables FMA contraction, so the .to(fp32) multiply-then-add sequence can be modeled by plain fp32 IEEE rounding in an emulation."
+        ],
+        "summary": "Refined risk map for claims c1/c2: quantified the fp32 one-pass variance error scales (square-sum rounding comparable to the entire true variance; possible clamp-to-zero degeneracy where denominator becomes sqrt(1e-5)\u22480.0032) and recommended a deterministic CPU fp32-emulation probe plus denominator sign check to decompose mean vs variance contributions."
+      },
+      "created_at": "2026-09-24T00:11:22Z",
+      "id": "t10",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Fixed workload: LayerNorm without affine transform on a single float32 vector x of shape (128,) generated deterministically by make_inputs (PCG64 seed 782406, 64.0 + N(0, 0.125, 128)).",
+            "Reference computed in float64 from the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (two-pass, no df correction), output = (x-mean)/sqrt(var+1e-5).",
+            "Acceptance: one finite (128,) output vector with relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) <= 0.02.",
+            "Out of scope: arbitrary alternative tensors; only this exact workload matters."
+          ],
+          "kernel_model": [
+            "Single Triton program (grid (1,), N=128 constexpr, num_warps=4, enable_fp_fusion=False) processes the whole vector in one block.",
+            "One-pass fp32 accumulation: sequential loop sums value and value*value in float32 scalars; variance = max(squares/N - mean^2, 0); denominator = sqrt(var + 1e-5) matching the contract's epsilon.",
+            "Second pass loads all 128 elements via tl.arange(0,128) and stores (values - mean)/denominator to a pre-allocated fp32 (128,) output; x is loaded via .to(tl.float32) (already fp32).",
+            "run(x) allocates the output and launches the kernel; no dtype/shape guard on x (fine within the fixed contract).",
+            "The kernel's variance path is fully deterministic fp32 sequential: total and squares accumulate scalar-by-scalar over i=0..127, so the exact sequence of fp32 roundings is reproducible in a CPU NumPy emulation (np.float32 operations in the same order) without running the GPU kernel.",
+            "tl.maximum(variance, 0.0) means a negative cancellation result silently yields denominator = sqrt(1e-5) \u2248 0.0032, i.e., outputs scaled ~39x larger than the reference denominator \u2248 0.125; a clamped-to-zero variance is an all-or-nothing failure mode, not a gradual one."
+          ],
+          "open_questions": [
+            "Does squares/N - mean^2 evaluate positive or negative for the exact seeded input? The sign determines whether the failure is gradual (inflated variance) or catastrophic (clamp to 0).",
+            "Does the 2% relative-L2 tolerance absorb a worst-order fp32 one-pass variance error for this particular seed, given ||ref||_2 \u2248 sqrt(128)?"
+          ],
+          "risk_map": [
+            "Catastrophic cancellation in variance: x\u224864\u00b10.125 so squares/N \u2248 4096 while true variance \u2248 0.0156; fp32 one-pass E[x\u00b2]\u2212mean\u00b2 loses ~log2(4096/0.0156)\u224818 significant bits, potentially leaving few accurate bits of variance and amplifying relative error via the small denominator (sqrt(0.0156+1e-5)\u22480.125).",
+            "Sequential fp32 accumulation of 128 values around 64 (sum \u2248 8192, square-sum \u2248 524k): rounding in squares accumulation alone can exceed the true variance's contribution.",
+            "Relative error is measured against a float64 two-pass reference, so kernel-side fp32 one-pass bias may or may not stay within the 2% relative-L2 bound \u2014 this is the central question for Skeptic/Experimenter.",
+            "epsilon placement matches (var + 1e-5), so no epsilon-mismatch bug; denominator never zero due to clamp and epsilon, output finite.",
+            "Worst-case magnitude estimate for c1: sequential fp32 sum of squares \u2248 5.24e5 with term-level rounding ~128 * eps_fp32 * partial-sum magnitudes; naive bound gives square-sum absolute error on the order of 1e-2 to 1e-1, which is the same order as (or larger than) the entire true variance 0.0156 after dividing by 128 \u2014 so the computed variance can be anywhere from clamped-to-zero to ~2x the truth, depending on the exact seeded values.",
+            "Clamp interaction: if squares/N - mean^2 rounds to <= 0, denominator degenerates to sqrt(1e-5)\u22480.0032 and every output element is inflated ~39x \u2014 a probe should check the sign of the raw subtraction, not just the final L2 error.",
+            "Mean-error estimate for c2: sequential fp32 sum \u2248 8192 with ULP \u2248 2^-10 \u2248 1e-3; over 128 terms the accumulated mean error is plausibly ~1e-3 to 4e-3, giving a uniform output offset of ~0.8% to 3% of the \u22480.125 denominator scale \u2014 near the 2% bound on its own.",
+            "Recommended evidence decomposition for Experimenter: (a) exact fp32 emulation of the kernel's accumulation order in NumPy to report mean, squares, raw subtraction, clamped variance, denominator, and final relative L2 error; (b) if available, GPU run plus comparison of the emulated vs actual denominator to confirm the emulation models Triton fp32 behavior (e.g., FMA/rounding mode, note enable_fp_fusion=False which disables FMA contraction, making plain IEEE fp32 emulation closer)."
+          ],
+          "scope_notes": [
+            "Only the exact deterministic input from make_inputs is in scope; behavior on other tensors is irrelevant to the verdict.\", \"Tolerance is generous (2% relative L2), which may absorb the cancellation error; a passing allclose does not prove the variance computation is accurate, only that it meets this bound for this input.\", \"Single-block serial reduction means no parallelism/reduction-order concerns beyond fp32 rounding; no boundary masking needed since N=128 exactly.\"]",
+            "Only the exact make_inputs tensor (seed 782406) is in scope; probes on other distributions are out of scope for the verdict.",
+            "enable_fp_fusion=False in the launch is relevant evidence context: it disables FMA contraction, so the .to(fp32) multiply-then-add sequence can be modeled by plain fp32 IEEE rounding in an emulation."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [],
+          "created_at": "2026-09-24T00:11:22Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "The kernel's variance path is fully deterministic fp32 sequential: total and squares accumulate scalar-by-scalar over i=0..127, so the exact sequence of fp32 roundings is reproducible in a CPU NumPy emulation (np.float32 operations in the same order) without running the GPU kernel.",
+            "tl.maximum(variance, 0.0) means a negative cancellation result silently yields denominator = sqrt(1e-5) \u2248 0.0032, i.e., outputs scaled ~39x larger than the reference denominator \u2248 0.125; a clamped-to-zero variance is an all-or-nothing failure mode, not a gradual one."
+          ],
+          "open_questions": [
+            "Does squares/N - mean^2 evaluate positive or negative for the exact seeded input? The sign determines whether the failure is gradual (inflated variance) or catastrophic (clamp to 0).",
+            "Does the 2% relative-L2 tolerance absorb a worst-order fp32 one-pass variance error for this particular seed, given ||ref||_2 \u2248 sqrt(128)?"
+          ],
+          "risk_map": [
+            "Worst-case magnitude estimate for c1: sequential fp32 sum of squares \u2248 5.24e5 with term-level rounding ~128 * eps_fp32 * partial-sum magnitudes; naive bound gives square-sum absolute error on the order of 1e-2 to 1e-1, which is the same order as (or larger than) the entire true variance 0.0156 after dividing by 128 \u2014 so the computed variance can be anywhere from clamped-to-zero to ~2x the truth, depending on the exact seeded values.",
+            "Clamp interaction: if squares/N - mean^2 rounds to <= 0, denominator degenerates to sqrt(1e-5)\u22480.0032 and every output element is inflated ~39x \u2014 a probe should check the sign of the raw subtraction, not just the final L2 error.",
+            "Mean-error estimate for c2: sequential fp32 sum \u2248 8192 with ULP \u2248 2^-10 \u2248 1e-3; over 128 terms the accumulated mean error is plausibly ~1e-3 to 4e-3, giving a uniform output offset of ~0.8% to 3% of the \u22480.125 denominator scale \u2014 near the 2% bound on its own.",
+            "Recommended evidence decomposition for Experimenter: (a) exact fp32 emulation of the kernel's accumulation order in NumPy to report mean, squares, raw subtraction, clamped variance, denominator, and final relative L2 error; (b) if available, GPU run plus comparison of the emulated vs actual denominator to confirm the emulation models Triton fp32 behavior (e.g., FMA/rounding mode, note enable_fp_fusion=False which disables FMA contraction, making plain IEEE fp32 emulation closer)."
+          ],
+          "scope_notes": [
+            "Only the exact make_inputs tensor (seed 782406) is in scope; probes on other distributions are out of scope for the verdict.",
+            "enable_fp_fusion=False in the launch is relevant evidence context: it disables FMA contraction, so the .to(fp32) multiply-then-add sequence can be modeled by plain fp32 IEEE rounding in an emulation."
+          ],
+          "summary": "Refined risk map for claims c1/c2: quantified the fp32 one-pass variance error scales (square-sum rounding comparable to the entire true variance; possible clamp-to-zero degeneracy where denominator becomes sqrt(1e-5)\u22480.0032) and recommended a deterministic CPU fp32-emulation probe plus denominator sign check to decompose mean vs variance contributions.",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "The ledger's open claims c1 (fp32 one-pass variance cancellation with possible clamp-to-zero) and c2 (fp32 sequential mean bias) already cover the only material, in-scope risk surfaces for this fixed single-input LayerNorm contract. The kernel is otherwise contract-conformant (correct epsilon placement, population variance, (128,) finite fp32 output, N=128 exact fit), and no new evidence has arrived to expose additional claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T00:11:29Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-09-24T00:11:29Z",
+        "decision": "no_new_claims",
+        "reason": "The ledger's open claims c1 (fp32 one-pass variance cancellation with possible clamp-to-zero) and c2 (fp32 sequential mean bias) already cover the only material, in-scope risk surfaces for this fixed single-input LayerNorm contract. The kernel is otherwise contract-conformant (correct epsilon placement, population variance, (128,) finite fp32 output, N=128 exact fit), and no new evidence has arrived to expose additional claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 10,
+        "tool_event_id": "t11",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport numpy as np, json, torch\nrng = np.random.Generator(np.random.PCG64(782406))\nx = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)\n\n# float64 two-pass reference\nx64 = x.astype(np.float64)\nmean64 = x64.sum()/128\nvar64 = ((x64-mean64)**2).sum()/128\nref = (x64-mean64)/np.sqrt(var64+1e-5)\n\n# fp32 emulation of kernel accumulation order\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in x:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v*v))\nmean32 = np.float32(total/np.float32(128))\nsq_over_n = np.float32(squares/np.float32(128))\nmean_sq = np.float32(mean32*mean32)\nraw_sub = np.float32(sq_over_n - mean_sq)\nvar32 = np.float32(max(raw_sub, np.float32(0.0)))\ndenom32 = np.float32(np.sqrt(np.float32(var32+np.float32(1e-5))))\n\n# actual GPU kernel\nimport sys\nsys.path.insert(0, '/root/numerical_cases/case_j')\nimport kernel as K\nxt = torch.from_numpy(x).to('cuda')\nout = K.run(xt).cpu().numpy()\n\nerr = np.linalg.norm(out-ref)/max(np.linalg.norm(ref), 0.001*np.sqrt(128))\nemul_err = np.linalg.norm(((x.astype(np.float64)-mean32)/denom32)-ref)/max(np.linalg.norm(ref),0.001*np.sqrt(128))\nprint(json.dumps({\n  \"relative_l2_error\": float(err),\n  \"tolerance\": 0.02,\n  \"raw_subtraction\": float(raw_sub),\n  \"raw_subtraction_positive\": bool(raw_sub > 0),\n  \"clamped\": bool(raw_sub <= 0),\n  \"true_var\": float(var64), \"emul_var\": float(var32),\n  \"ref_denom\": float(np.sqrt(var64+1e-5)), \"kernel_denom_emul\": float(denom32),\n  \"denom_ratio\": float(denom32/np.sqrt(var64+1e-5)),\n  \"emul_relative_l2\": float(emul_err),\n  \"gpu_vs_emul_max_abs\": float(np.abs(out-((x.astype(np.float32).astype(np.float64)-mean32)/denom32)).max()),\n  \"finite\": bool(np.isfinite(out).all()), \"shape\": list(out.shape)\n}))\n",
+        "expected_signal": "relative L2 error of the actual GPU kernel output vs the float64 two-pass reference exceeds 0.02, and/or raw fp32 subtraction squares/N - mean^2 clamps to <= 0"
+      },
+      "created_at": "2026-09-24T00:11:49Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "eafa52861fe9259ddaac326453df438e75d56ad9878a32d5c381cd9919fbe442"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "7d67b21e0dcf7ff217d1d1c82db2be2e51a3a3aac2e33e0a27e611634f6dfdda"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "270b494294ef1eb9eda20c18f4944f732931dc23a3ffc22f3a59f8a4be97d706"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For the exact in-scope input (make_inputs, PCG64 seed 782406), the kernel's one-pass fp32 variance squares/N - mean^2 suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156) plus fp32 accumulation rounding, producing a denominator error large enough that the relative L2 error versus the float64 two-pass reference exceeds the 0.02 bound.",
+        "cwd": "/root/numerical_cases/case_j",
+        "duration_s": 6.550114,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "eafa52861fe9259ddaac326453df438e75d56ad9878a32d5c381cd9919fbe442"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "7d67b21e0dcf7ff217d1d1c82db2be2e51a3a3aac2e33e0a27e611634f6dfdda"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "270b494294ef1eb9eda20c18f4944f732931dc23a3ffc22f3a59f8a4be97d706"
+              }
+            ],
+            "duration_s": 6.550114,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of the actual GPU kernel output vs the float64 two-pass reference exceeds 0.02, and/or raw fp32 subtraction squares/N - mean^2 clamps to <= 0",
+            "json_parse_error": null,
+            "json_result": {
+              "clamped": false,
+              "denom_ratio": 0.8735001996810307,
+              "emul_relative_l2": 0.14481951664975762,
+              "emul_var": 0.01123046875,
+              "finite": true,
+              "gpu_vs_emul_max_abs": 3.765802745192559e-07,
+              "kernel_denom_emul": 0.10602107644081116,
+              "raw_subtraction": 0.01123046875,
+              "raw_subtraction_positive": true,
+              "ref_denom": 0.12137498821354141,
+              "relative_l2_error": 0.14481964583989307,
+              "shape": [
+                128
+              ],
+              "tolerance": 0.02,
+              "true_var": 0.014721887763837316
+            },
+            "stderr": "",
+            "stdout": "{\"relative_l2_error\": 0.14481964583989307, \"tolerance\": 0.02, \"raw_subtraction\": 0.01123046875, \"raw_subtraction_positive\": true, \"clamped\": false, \"true_var\": 0.014721887763837316, \"emul_var\": 0.01123046875, \"ref_denom\": 0.12137498821354141, \"kernel_denom_emul\": 0.10602107644081116, \"denom_ratio\": 0.8735001996810307, \"emul_relative_l2\": 0.14481951664975762, \"gpu_vs_emul_max_abs\": 3.765802745192559e-07, \"finite\": true, \"shape\": [128]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "relative L2 error of the actual GPU kernel output vs the float64 two-pass reference exceeds 0.02, and/or raw fp32 subtraction squares/N - mean^2 clamps to <= 0",
+        "json_parse_error": null,
+        "json_result": {
+          "clamped": false,
+          "denom_ratio": 0.8735001996810307,
+          "emul_relative_l2": 0.14481951664975762,
+          "emul_var": 0.01123046875,
+          "finite": true,
+          "gpu_vs_emul_max_abs": 3.765802745192559e-07,
+          "kernel_denom_emul": 0.10602107644081116,
+          "raw_subtraction": 0.01123046875,
+          "raw_subtraction_positive": true,
+          "ref_denom": 0.12137498821354141,
+          "relative_l2_error": 0.14481964583989307,
+          "shape": [
+            128
+          ],
+          "tolerance": 0.02,
+          "true_var": 0.014721887763837316
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"relative_l2_error\": 0.14481964583989307, \"tolerance\": 0.02, \"raw_subtraction\": 0.01123046875, \"raw_subtraction_positive\": true, \"clamped\": false, \"true_var\": 0.014721887763837316, \"emul_var\": 0.01123046875, \"ref_denom\": 0.12137498821354141, \"kernel_denom_emul\": 0.10602107644081116, \"denom_ratio\": 0.8735001996810307, \"emul_relative_l2\": 0.14481951664975762, \"gpu_vs_emul_max_abs\": 3.765802745192559e-07, \"finite\": true, \"shape\": [128]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport numpy as np, json\nrng = np.random.Generator(np.random.PCG64(782406))\nx = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)\nx64 = x.astype(np.float64)\nmean64 = x64.sum()/128\nvar64 = ((x64-mean64)**2).sum()/128\nref = (x64-mean64)/np.sqrt(var64+1e-5)\n\n# kernel fp32 sequential mean\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in x:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v*v))\nmean32 = np.float32(total/np.float32(128))\n\nmean_abs_err = abs(float(mean32) - float(mean64))\nvar32 = np.float32(max(np.float32(np.float32(squares/np.float32(128)) - np.float32(mean32*mean32)), np.float32(0.0)))\ndenom32 = np.float32(np.sqrt(np.float32(var32+np.float32(1e-5))))\nref_denom = np.sqrt(var64+1e-5)\n# output offset contribution from mean bias alone (using exact denominator)\noffset_per_elem = mean_abs_err/ref_denom\nout_mean_only = (x64-mean32)/ref_denom\nerr_mean_only = np.linalg.norm(out_mean_only-ref)/max(np.linalg.norm(ref),0.001*np.sqrt(128))\nprint(json.dumps({\n  \"mean_fp32\": float(mean32), \"mean_f64\": float(mean64),\n  \"mean_abs_err\": mean_abs_err,\n  \"mean_rel_err_vs_denom\": float(mean_abs_err/ref_denom),\n  \"output_offset_fraction_per_element\": float(offset_per_elem),\n  \"rel_l2_from_mean_bias_alone\": float(err_mean_only),\n  \"denominator\": float(ref_denom),\n  \"tolerance\": 0.02\n}))\n",
+        "expected_signal": "fp32 sequential mean absolute error ~1e-3 yielding per-element output offset near or above 1% of the denominator scale and measurable relative L2 contribution"
+      },
+      "created_at": "2026-09-24T00:11:50Z",
+      "id": "t13",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t13_probe.py",
+            "sha256": "f08edae2cf1ef0817cab7add9408993070c5536c26b8a524d44d21ae2c3793c8"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t13_stdout.txt",
+            "sha256": "40113489ceefa6ab820635a6cff093b835b92ca02b9ef888268fa55f3aa7fecb"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t13_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t13_json_result.json",
+            "sha256": "b2fa91c74355c13449b29eb62bfa61880294c1d2e134ce21ea4cab1073aa4be6"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "The fp32 sequential accumulation of total (sum of 128 values \u22488192) yields a mean with absolute error of order a few ULPs of 8192 (~1e-3), which, divided by the small denominator \u22480.125, adds a systematic offset of up to ~1% to every output element and contributes measurably to the relative L2 error.",
+        "cwd": "/root/numerical_cases/case_j",
+        "duration_s": 0.214138,
+        "event_id": "t13",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "f08edae2cf1ef0817cab7add9408993070c5536c26b8a524d44d21ae2c3793c8"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "40113489ceefa6ab820635a6cff093b835b92ca02b9ef888268fa55f3aa7fecb"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "b2fa91c74355c13449b29eb62bfa61880294c1d2e134ce21ea4cab1073aa4be6"
+              }
+            ],
+            "duration_s": 0.214138,
+            "exit_code": 0,
+            "expected_signal": "fp32 sequential mean absolute error ~1e-3 yielding per-element output offset near or above 1% of the denominator scale and measurable relative L2 contribution",
+            "json_parse_error": null,
+            "json_result": {
+              "denominator": 0.12137498821354141,
+              "mean_abs_err": 1.6868114471435547e-05,
+              "mean_f64": 64.00110465288162,
+              "mean_fp32": 64.0011215209961,
+              "mean_rel_err_vs_denom": 0.0001389752099646641,
+              "output_offset_fraction_per_element": 0.0001389752099646641,
+              "rel_l2_from_mean_bias_alone": 0.00013902240215227552,
+              "tolerance": 0.02
+            },
+            "stderr": "",
+            "stdout": "{\"mean_fp32\": 64.0011215209961, \"mean_f64\": 64.00110465288162, \"mean_abs_err\": 1.6868114471435547e-05, \"mean_rel_err_vs_denom\": 0.0001389752099646641, \"output_offset_fraction_per_element\": 0.0001389752099646641, \"rel_l2_from_mean_bias_alone\": 0.00013902240215227552, \"denominator\": 0.12137498821354141, \"tolerance\": 0.02}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t13"
+        },
+        "exit_code": 0,
+        "expected_signal": "fp32 sequential mean absolute error ~1e-3 yielding per-element output offset near or above 1% of the denominator scale and measurable relative L2 contribution",
+        "json_parse_error": null,
+        "json_result": {
+          "denominator": 0.12137498821354141,
+          "mean_abs_err": 1.6868114471435547e-05,
+          "mean_f64": 64.00110465288162,
+          "mean_fp32": 64.0011215209961,
+          "mean_rel_err_vs_denom": 0.0001389752099646641,
+          "output_offset_fraction_per_element": 0.0001389752099646641,
+          "rel_l2_from_mean_bias_alone": 0.00013902240215227552,
+          "tolerance": 0.02
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"mean_fp32\": 64.0011215209961, \"mean_f64\": 64.00110465288162, \"mean_abs_err\": 1.6868114471435547e-05, \"mean_rel_err_vs_denom\": 0.0001389752099646641, \"output_offset_fraction_per_element\": 0.0001389752099646641, \"rel_l2_from_mean_bias_alone\": 0.00013902240215227552, \"denominator\": 0.12137498821354141, \"tolerance\": 0.02}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "denom_ratio": 0.8735001996810307,
+          "emul_var": 0.01123046875,
+          "gpu_vs_emul_max_abs": 3.765802745192559e-07,
+          "kernel_denom_emul": 0.10602107644081116,
+          "raw_subtraction": 0.01123046875,
+          "raw_subtraction_positive": true,
+          "ref_denom": 0.12137498821354141,
+          "relative_l2_error": 0.14481964583989307,
+          "tolerance": 0.02,
+          "true_var": 0.014721887763837316
+        },
+        "event_id": "t12",
+        "status": "confirmed",
+        "summary": "On the exact seeded input, the actual GPU kernel's relative L2 error vs the float64 two-pass reference is 0.1448, far exceeding the 0.02 tolerance. The one-pass fp32 variance underestimates truth (0.01123 vs 0.01472; denominator ratio 0.8735); raw subtraction stayed positive (no clamp). The CPU fp32 emulation matched the GPU kernel to 3.8e-7, confirming the failure mechanism is the one-pass fp32 variance cancellation, as claimed.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-24T00:11:59Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T00:11:06Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T00:11:59Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "eafa52861fe9259ddaac326453df438e75d56ad9878a32d5c381cd9919fbe442"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "7d67b21e0dcf7ff217d1d1c82db2be2e51a3a3aac2e33e0a27e611634f6dfdda"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "270b494294ef1eb9eda20c18f4944f732931dc23a3ffc22f3a59f8a4be97d706"
+                  }
+                ],
+                "denom_ratio": 0.8735001996810307,
+                "duration_s": 6.550114,
+                "emul_var": 0.01123046875,
+                "exit_code": 0,
+                "expected_signal": "relative L2 error of the actual GPU kernel output vs the float64 two-pass reference exceeds 0.02, and/or raw fp32 subtraction squares/N - mean^2 clamps to <= 0",
+                "gpu_vs_emul_max_abs": 3.765802745192559e-07,
+                "json_parse_error": null,
+                "json_result": {
+                  "clamped": false,
+                  "denom_ratio": 0.8735001996810307,
+                  "emul_relative_l2": 0.14481951664975762,
+                  "emul_var": 0.01123046875,
+                  "finite": true,
+                  "gpu_vs_emul_max_abs": 3.765802745192559e-07,
+                  "kernel_denom_emul": 0.10602107644081116,
+                  "raw_subtraction": 0.01123046875,
+                  "raw_subtraction_positive": true,
+                  "ref_denom": 0.12137498821354141,
+                  "relative_l2_error": 0.14481964583989307,
+                  "shape": [
+                    128
+                  ],
+                  "tolerance": 0.02,
+                  "true_var": 0.014721887763837316
+                },
+                "kernel_denom_emul": 0.10602107644081116,
+                "raw_subtraction": 0.01123046875,
+                "raw_subtraction_positive": true,
+                "ref_denom": 0.12137498821354141,
+                "relative_l2_error": 0.14481964583989307,
+                "stderr": "",
+                "stdout": "{\"relative_l2_error\": 0.14481964583989307, \"tolerance\": 0.02, \"raw_subtraction\": 0.01123046875, \"raw_subtraction_positive\": true, \"clamped\": false, \"true_var\": 0.014721887763837316, \"emul_var\": 0.01123046875, \"ref_denom\": 0.12137498821354141, \"kernel_denom_emul\": 0.10602107644081116, \"denom_ratio\": 0.8735001996810307, \"emul_relative_l2\": 0.14481951664975762, \"gpu_vs_emul_max_abs\": 3.765802745192559e-07, \"finite\": true, \"shape\": [128]}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.02,
+                "true_var": 0.014721887763837316
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the exact seeded input, the actual GPU kernel's relative L2 error vs the float64 two-pass reference is 0.1448, far exceeding the 0.02 tolerance. The one-pass fp32 variance underestimates truth (0.01123 vs 0.01472; denominator ratio 0.8735); raw subtraction stayed positive (no clamp). The CPU fp32 emulation matched the GPU kernel to 3.8e-7, confirming the failure mechanism is the one-pass fp32 variance cancellation, as claimed.",
+              "supports": "confirmed",
+              "tool_event_id": "t12"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "With squares/N\u22484096 and true variance\u22480.0156, the fp32 subtraction cancels ~18 leading bits, and sequential fp32 accumulation of the square-sum (\u2248524k) adds rounding noise comparable to or exceeding the true variance; errors in the denominator \u22480.125 scale every output element, so relative L2 error could exceed 0.02.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Reference is float64 two-pass mean/population-variance with output (x-mean)/sqrt(var+1e-5), and the output's relative L2 error must be <= 0.02 for the exact x from make_inputs (seed 782406, 64.0 + N(0,0.125,128))."
+            }
+          ],
+          "scope_rationale": "problem.txt defines the exact input (make_inputs, PCG64 seed 782406) and requires relative L2 error <= 0.02 against a float64 two-pass population-variance reference; the one-pass fp32 variance the kernel computes for this exact input may violate that stated numeric bound.",
+          "statement": "For the exact in-scope input (make_inputs, PCG64 seed 782406), the kernel's one-pass fp32 variance squares/N - mean^2 suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156) plus fp32 accumulation rounding, producing a denominator error large enough that the relative L2 error versus the float64 two-pass reference exceeds the 0.02 bound.",
+          "status": "confirmed",
+          "updated_at": "2026-09-24T00:11:59Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:11:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "eafa52861fe9259ddaac326453df438e75d56ad9878a32d5c381cd9919fbe442"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "7d67b21e0dcf7ff217d1d1c82db2be2e51a3a3aac2e33e0a27e611634f6dfdda"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "270b494294ef1eb9eda20c18f4944f732931dc23a3ffc22f3a59f8a4be97d706"
+              }
+            ],
+            "denom_ratio": 0.8735001996810307,
+            "duration_s": 6.550114,
+            "emul_var": 0.01123046875,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error of the actual GPU kernel output vs the float64 two-pass reference exceeds 0.02, and/or raw fp32 subtraction squares/N - mean^2 clamps to <= 0",
+            "gpu_vs_emul_max_abs": 3.765802745192559e-07,
+            "json_parse_error": null,
+            "json_result": {
+              "clamped": false,
+              "denom_ratio": 0.8735001996810307,
+              "emul_relative_l2": 0.14481951664975762,
+              "emul_var": 0.01123046875,
+              "finite": true,
+              "gpu_vs_emul_max_abs": 3.765802745192559e-07,
+              "kernel_denom_emul": 0.10602107644081116,
+              "raw_subtraction": 0.01123046875,
+              "raw_subtraction_positive": true,
+              "ref_denom": 0.12137498821354141,
+              "relative_l2_error": 0.14481964583989307,
+              "shape": [
+                128
+              ],
+              "tolerance": 0.02,
+              "true_var": 0.014721887763837316
+            },
+            "kernel_denom_emul": 0.10602107644081116,
+            "raw_subtraction": 0.01123046875,
+            "raw_subtraction_positive": true,
+            "ref_denom": 0.12137498821354141,
+            "relative_l2_error": 0.14481964583989307,
+            "stderr": "",
+            "stdout": "{\"relative_l2_error\": 0.14481964583989307, \"tolerance\": 0.02, \"raw_subtraction\": 0.01123046875, \"raw_subtraction_positive\": true, \"clamped\": false, \"true_var\": 0.014721887763837316, \"emul_var\": 0.01123046875, \"ref_denom\": 0.12137498821354141, \"kernel_denom_emul\": 0.10602107644081116, \"denom_ratio\": 0.8735001996810307, \"emul_relative_l2\": 0.14481951664975762, \"gpu_vs_emul_max_abs\": 3.765802745192559e-07, \"finite\": true, \"shape\": [128]}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.02,
+            "true_var": 0.014721887763837316
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact seeded input, the actual GPU kernel's relative L2 error vs the float64 two-pass reference is 0.1448, far exceeding the 0.02 tolerance. The one-pass fp32 variance underestimates truth (0.01123 vs 0.01472; denominator ratio 0.8735); raw subtraction stayed positive (no clamp). The CPU fp32 emulation matched the GPU kernel to 3.8e-7, confirming the failure mechanism is the one-pass fp32 variance cancellation, as claimed.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "mean_abs_err": 1.6868114471435547e-05,
+          "mean_f64": 64.00110465288162,
+          "mean_fp32": 64.0011215209961,
+          "output_offset_fraction_per_element": 0.0001389752099646641,
+          "rel_l2_from_mean_bias_alone": 0.00013902240215227552,
+          "tolerance": 0.02
+        },
+        "event_id": "t13",
+        "status": "rebutted",
+        "summary": "The fp32 sequential mean bias is only 1.69e-5 (not ~1e-3 as claimed), giving a per-element output offset of 0.014% and a mean-bias-only relative L2 contribution of 0.000139 \u2014 negligible versus the 0.02 tolerance. The measured error is dominated by the variance path (c1), not mean accumulation.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-24T00:11:59Z",
+      "id": "t15",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T00:11:06Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T00:11:59Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t13_probe.py",
+                    "sha256": "f08edae2cf1ef0817cab7add9408993070c5536c26b8a524d44d21ae2c3793c8"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t13_stdout.txt",
+                    "sha256": "40113489ceefa6ab820635a6cff093b835b92ca02b9ef888268fa55f3aa7fecb"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t13_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t13_json_result.json",
+                    "sha256": "b2fa91c74355c13449b29eb62bfa61880294c1d2e134ce21ea4cab1073aa4be6"
+                  }
+                ],
+                "duration_s": 0.214138,
+                "exit_code": 0,
+                "expected_signal": "fp32 sequential mean absolute error ~1e-3 yielding per-element output offset near or above 1% of the denominator scale and measurable relative L2 contribution",
+                "json_parse_error": null,
+                "json_result": {
+                  "denominator": 0.12137498821354141,
+                  "mean_abs_err": 1.6868114471435547e-05,
+                  "mean_f64": 64.00110465288162,
+                  "mean_fp32": 64.0011215209961,
+                  "mean_rel_err_vs_denom": 0.0001389752099646641,
+                  "output_offset_fraction_per_element": 0.0001389752099646641,
+                  "rel_l2_from_mean_bias_alone": 0.00013902240215227552,
+                  "tolerance": 0.02
+                },
+                "mean_abs_err": 1.6868114471435547e-05,
+                "mean_f64": 64.00110465288162,
+                "mean_fp32": 64.0011215209961,
+                "output_offset_fraction_per_element": 0.0001389752099646641,
+                "rel_l2_from_mean_bias_alone": 0.00013902240215227552,
+                "stderr": "",
+                "stdout": "{\"mean_fp32\": 64.0011215209961, \"mean_f64\": 64.00110465288162, \"mean_abs_err\": 1.6868114471435547e-05, \"mean_rel_err_vs_denom\": 0.0001389752099646641, \"output_offset_fraction_per_element\": 0.0001389752099646641, \"rel_l2_from_mean_bias_alone\": 0.00013902240215227552, \"denominator\": 0.12137498821354141, \"tolerance\": 0.02}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.02
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "The fp32 sequential mean bias is only 1.69e-5 (not ~1e-3 as claimed), giving a per-element output offset of 0.014% and a mean-bias-only relative L2 contribution of 0.000139 \u2014 negligible versus the 0.02 tolerance. The measured error is dominated by the variance path (c1), not mean accumulation.",
+              "supports": "rebutted",
+              "tool_event_id": "t13"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "Sequential float32 accumulation of 128 values each \u224864 (total \u22488192, ULP \u22482^-10 at that magnitude) can accumulate ~2^-10-scale absolute error in mean; residuals are \u22480.125 so mean error translates into relative residual error at the ~1e-3\u20131% level, additive to the variance-cancellation error and worth measuring separately.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "The contract fixes the reference mean = sum x[i]/128 in float64 and requires relative L2 error <= 0.02 on this exact workload; any kernel mean bias contributes directly to output error."
+            }
+          ],
+          "scope_rationale": "problem.txt specifies the reference mean = sum x[i]/128 in float64 for this exact workload and requires relative L2 error <= 0.02; kernel-side fp32 mean bias for that exact input would contribute directly to the stated error metric.",
+          "statement": "The fp32 sequential accumulation of total (sum of 128 values \u22488192) yields a mean with absolute error of order a few ULPs of 8192 (~1e-3), which, divided by the small denominator \u22480.125, adds a systematic offset of up to ~1% to every output element and contributes measurably to the relative L2 error.",
+          "status": "rebutted",
+          "updated_at": "2026-09-24T00:11:59Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T00:11:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t13_probe.py",
+                "sha256": "f08edae2cf1ef0817cab7add9408993070c5536c26b8a524d44d21ae2c3793c8"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t13_stdout.txt",
+                "sha256": "40113489ceefa6ab820635a6cff093b835b92ca02b9ef888268fa55f3aa7fecb"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t13_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t13_json_result.json",
+                "sha256": "b2fa91c74355c13449b29eb62bfa61880294c1d2e134ce21ea4cab1073aa4be6"
+              }
+            ],
+            "duration_s": 0.214138,
+            "exit_code": 0,
+            "expected_signal": "fp32 sequential mean absolute error ~1e-3 yielding per-element output offset near or above 1% of the denominator scale and measurable relative L2 contribution",
+            "json_parse_error": null,
+            "json_result": {
+              "denominator": 0.12137498821354141,
+              "mean_abs_err": 1.6868114471435547e-05,
+              "mean_f64": 64.00110465288162,
+              "mean_fp32": 64.0011215209961,
+              "mean_rel_err_vs_denom": 0.0001389752099646641,
+              "output_offset_fraction_per_element": 0.0001389752099646641,
+              "rel_l2_from_mean_bias_alone": 0.00013902240215227552,
+              "tolerance": 0.02
+            },
+            "mean_abs_err": 1.6868114471435547e-05,
+            "mean_f64": 64.00110465288162,
+            "mean_fp32": 64.0011215209961,
+            "output_offset_fraction_per_element": 0.0001389752099646641,
+            "rel_l2_from_mean_bias_alone": 0.00013902240215227552,
+            "stderr": "",
+            "stdout": "{\"mean_fp32\": 64.0011215209961, \"mean_f64\": 64.00110465288162, \"mean_abs_err\": 1.6868114471435547e-05, \"mean_rel_err_vs_denom\": 0.0001389752099646641, \"output_offset_fraction_per_element\": 0.0001389752099646641, \"rel_l2_from_mean_bias_alone\": 0.00013902240215227552, \"denominator\": 0.12137498821354141, \"tolerance\": 0.02}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.02
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "The fp32 sequential mean bias is only 1.69e-5 (not ~1e-3 as claimed), giving a per-element output offset of 0.014% and a mean-bias-only relative L2 contribution of 0.000139 \u2014 negligible versus the 0.02 tolerance. The measured error is dominated by the variance path (c1), not mean accumulation.",
+          "supports": "rebutted",
+          "tool_event_id": "t13"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: the only material in-scope failure is fully covered by confirmed claim c1 \u2014 on the exact make_inputs workload, the actual GPU kernel's relative L2 error vs the float64 two-pass reference is 0.1448, far above the 0.02 tolerance, caused by one-pass fp32 variance cancellation (denominator ratio 0.8735, no clamp). Claim c2 (mean bias) was measured and rebutted (contribution ~0.00014). The kernel is otherwise contract-conformant (epsilon placement, population variance, finite (128,) fp32 output). No new evidence exposes additional testable in-scope problems.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T00:12:04Z",
+      "id": "t16",
+      "output": {
+        "created_at": "2026-09-24T00:12:04Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the only material in-scope failure is fully covered by confirmed claim c1 \u2014 on the exact make_inputs workload, the actual GPU kernel's relative L2 error vs the float64 two-pass reference is 0.1448, far above the 0.02 tolerance, caused by one-pass fp32 variance cancellation (denominator ratio 0.8735, no clamp). Claim c2 (mean bias) was measured and rebutted (contribution ~0.00014). The kernel is otherwise contract-conformant (epsilon placement, population variance, finite (128,) fp32 output). No new evidence exposes additional testable in-scope problems.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 15,
+        "tool_event_id": "t16",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.98,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Reject: confirmed in-scope claim c1 shows the kernel violates problem.txt's explicit numeric contract on the exact seeded workload (make_inputs, PCG64 782406). The actual GPU kernel's relative L2 error versus the required float64 two-pass reference is 0.1448, far above the mandated <= 0.02 bound. The mechanism is confirmed: the one-pass fp32 variance squares/N - mean^2 catastrophically cancels (computed variance 0.01123 vs true 0.01472, denominator ratio 0.8735), and a CPU fp32 emulation of the kernel's accumulation order matched the GPU output to 3.8e-7, tying the error directly to the kernel's variance path. This is not a tolerance/format clause the contract absorbs \u2014 problem.txt explicitly requires the <= 0.02 relative-L2 bound and a float64 two-pass reference, and the failure occurs on the exact, only in-scope input. The clamp did not trigger (raw subtraction positive), so the failure is the gradual cancellation mode, not a metric artifact. Claim c2 (fp32 mean bias) was measured and rebutted (contribution ~1.4e-4, negligible). The kernel is otherwise contract-conformant (epsilon placement, population variance, finite (128,) fp32 output), but the numeric bound violation alone is decisive.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-24T00:12:11Z",
+      "id": "t17",
+      "output": {
+        "confidence": 0.98,
+        "created_at": "2026-09-24T00:12:11Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Reject: confirmed in-scope claim c1 shows the kernel violates problem.txt's explicit numeric contract on the exact seeded workload (make_inputs, PCG64 782406). The actual GPU kernel's relative L2 error versus the required float64 two-pass reference is 0.1448, far above the mandated <= 0.02 bound. The mechanism is confirmed: the one-pass fp32 variance squares/N - mean^2 catastrophically cancels (computed variance 0.01123 vs true 0.01472, denominator ratio 0.8735), and a CPU fp32 emulation of the kernel's accumulation order matched the GPU output to 3.8e-7, tying the error directly to the kernel's variance path. This is not a tolerance/format clause the contract absorbs \u2014 problem.txt explicitly requires the <= 0.02 relative-L2 bound and a float64 two-pass reference, and the failure occurs on the exact, only in-scope input. The clamp did not trigger (raw subtraction positive), so the failure is the gradual cancellation mode, not a metric artifact. Claim c2 (fp32 mean bias) was measured and rebutted (contribution ~1.4e-4, negligible). The kernel is otherwise contract-conformant (epsilon placement, population variance, finite (128,) fp32 output), but the numeric bound violation alone is decisive.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.98,
+    "created_at": "2026-09-24T00:12:11Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Reject: confirmed in-scope claim c1 shows the kernel violates problem.txt's explicit numeric contract on the exact seeded workload (make_inputs, PCG64 782406). The actual GPU kernel's relative L2 error versus the required float64 two-pass reference is 0.1448, far above the mandated <= 0.02 bound. The mechanism is confirmed: the one-pass fp32 variance squares/N - mean^2 catastrophically cancels (computed variance 0.01123 vs true 0.01472, denominator ratio 0.8735), and a CPU fp32 emulation of the kernel's accumulation order matched the GPU output to 3.8e-7, tying the error directly to the kernel's variance path. This is not a tolerance/format clause the contract absorbs \u2014 problem.txt explicitly requires the <= 0.02 relative-L2 bound and a float64 two-pass reference, and the failure occurs on the exact, only in-scope input. The clamp did not trigger (raw subtraction positive), so the failure is the gradual cancellation mode, not a metric artifact. Claim c2 (fp32 mean bias) was measured and rebutted (contribution ~1.4e-4, negligible). The kernel is otherwise contract-conformant (epsilon placement, population variance, finite (128,) fp32 output), but the numeric bound violation alone is decisive.",
+    "verdict": "reject"
+  }
+}

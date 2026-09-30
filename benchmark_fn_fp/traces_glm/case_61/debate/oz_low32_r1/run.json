@@ -1,0 +1,1650 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "__pycache__/kernel.cpython-311.pyc",
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_z",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _rbf_kernel(Query, Anchors, Values, Output, N: tl.constexpr, D: tl.constexpr):\n    row = tl.arange(0, N)\n    anchor_norm = tl.full((N,), 0.0, tl.float32)\n    query_norm = tl.full((), 0.0, tl.float32)\n    dot = tl.full((N,), 0.0, tl.float32)\n    for k in tl.static_range(0, D):\n        anchor = tl.load(Anchors + row * D + k).to(tl.float32)\n        query = tl.load(Query + k).to(tl.float32)\n        anchor_square = anchor * anchor\n        query_square = query * query\n        cross = anchor * query\n        anchor_norm = anchor_norm + anchor_square\n        query_norm = query_norm + query_square\n        dot = dot + cross\n    norm_sum = anchor_norm + query_norm\n    twice_dot = 2.0 * dot\n    distance = tl.maximum(norm_sum - twice_dot, 0.0)\n    weight = tl.exp(-16.0 * distance)\n    value = tl.load(Values + row).to(tl.float32)\n    numerator = tl.sum(weight * value, 0)\n    denominator = tl.sum(weight, 0)\n    output = tl.div_rn(numerator, denominator)\n    tl.store(Output, output)\n\n\ndef run(query, anchors, values):\n    output = torch.empty((1,), device=query.device, dtype=torch.float32)\n    _rbf_kernel[(1,)](query, anchors, values, output, N=16, D=32,\n                      num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(119263))\n    query = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)\n    anchors = (query.astype(np.float64)[None, :] +\n               rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)\n    values = rng.normal(0.0, 1.0, 16).astype(np.float32)\n    return query, anchors, values\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "passed": null,
+    "problem_text": "Compute one normalized radial-basis-function regression prediction.\n\nThe only workload in scope is the float32 data returned by make_inputs()\nin kernel.py: query has shape (32,), anchors has shape (16, 32), and values\nhas shape (16,). Define the mathematical reference from these actual stored\nfloat32 values, with all the following arithmetic evaluated in float64:\n  distance[i] = sum_k (anchors[i,k] - query[k])**2\n  weight[i] = exp(-16 * distance[i])\n  reference[0] = sum_i weight[i]*values[i] / sum_i weight[i].\n\nThe output must be a finite vector of shape (1,). Its numerical error is\n  ||output-reference||_2 / max(||reference||_2, 0.05).\nThe implementation satisfies the contract iff this error is <= 0.05.\nThe contract concerns the final normalized prediction. It does not impose\nseparate error requirements on intermediate distances or individual weights.\nAlternative inputs and seeds are outside the scope of this fixed workload.\n\nThe implementation uses the expanded squared-distance identity and clamps\nnegative computed distances to zero before the exponential. Its norm and\ndot-product accumulators round to float32 each step. FP fusion is disabled.\n",
+    "rounds": null,
+    "session_dir": "/root/numerical_cases/case_z",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T01:03:51Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:04:34Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "d651283ef9b082994810876ff304f3c7a99c4554e72ae0c81951589951f61ada"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "c340b2f38bc375d6d58e4137f3f0c38aea1d2b8789f92d528d77afaa713fa003"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "3de7f4fa0d22abeb2d9c1a1b4d1341bc0b43922bef6f0da68a1ab4dcd43b2ebc"
+              }
+            ],
+            "contract_error": 0.2924,
+            "duration_s": 4.729435,
+            "exit_code": 0,
+            "expected_signal": "contract_error > 0.05 confirms c1 (cancellation causes contract violation); otherwise rebutted",
+            "json_parse_error": null,
+            "json_result": {
+              "all_computed_zero": false,
+              "computed_distances_emulated": [
+                0.005859375,
+                0.0078125,
+                0.0078125,
+                0.001953125,
+                0.00390625,
+                0.0078125,
+                0.0078125,
+                0.005859375,
+                0.0078125,
+                0.009765625,
+                0.01171875,
+                0.005859375,
+                0.0078125,
+                0.005859375,
+                0.00390625,
+                0.005859375
+              ],
+              "contract_error": 0.2924063609705521,
+              "finite_output": true,
+              "kernel_output": -0.018536671996116638,
+              "max_distance_abs_err": 0.003886696645167831,
+              "negative_raw_count": 0,
+              "passes_contract": false,
+              "reference": -0.033156990044644244,
+              "tolerance": 0.05,
+              "true_distances": [
+                0.006167953919430147,
+                0.0060504065950226504,
+                0.005881539705114847,
+                0.005839821645167831,
+                0.006260572647079243,
+                0.006970079276470642,
+                0.008146217086505203,
+                0.00689691885963839,
+                0.008893802373677318,
+                0.00969539697325672,
+                0.009803504550291109,
+                0.00655184227071004,
+                0.006844650475613889,
+                0.006139469328445557,
+                0.007174177215347299,
+                0.005533461663617345
+              ]
+            },
+            "kernel_output": -0.018536671996116638,
+            "max_distance_abs_err": 0.003886696645167831,
+            "passes_contract": false,
+            "reference": -0.033156990044644244,
+            "stderr": "",
+            "stdout": "{\"kernel_output\": -0.018536671996116638, \"reference\": -0.033156990044644244, \"contract_error\": 0.2924063609705521, \"tolerance\": 0.05, \"passes_contract\": false, \"true_distances\": [0.006167953919430147, 0.0060504065950226504, 0.005881539705114847, 0.005839821645167831, 0.006260572647079243, 0.006970079276470642, 0.008146217086505203, 0.00689691885963839, 0.008893802373677318, 0.00969539697325672, 0.009803504550291109, 0.00655184227071004, 0.006844650475613889, 0.006139469328445557, 0.007174177215347299, 0.005533461663617345], \"computed_distances_emulated\": [0.005859375, 0.0078125, 0.0078125, 0.001953125, 0.00390625, 0.0078125, 0.0078125, 0.005859375, 0.0078125, 0.009765625, 0.01171875, 0.005859375, 0.0078125, 0.005859375, 0.00390625, 0.005859375], \"max_distance_abs_err\": 0.003886696645167831, \"negative_raw_count\": 0, \"all_computed_zero\": false, \"finite_output\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.05,
+            "true_distance_range": [
+              0.005533,
+              0.009804
+            ]
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the fixed make_inputs() workload, the kernel's fp32 expanded-distance arithmetic yields distances whose absolute error (max 0.00389) is comparable to the true distances (0.0055\u20130.0098), producing a final output of -0.01854 vs the float64 reference -0.03316 \u2014 contract error 0.292, well above the 0.05 bound. Confirms c1.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "True distances are ~32*sigma^2 \u2248 0.008 while norm_sum and twice_dot are ~8192-scale; fp32 ulp at that scale (~0.001) times accumulated rounding over 32 additions yields absolute error comparable to or larger than the true distance, so computed weights exp(-16*d) may be wrong enough to push the normalized prediction past the 5% bound.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Reference defined in float64 from stored float32 values: distance = sum_k (a-q)^2, weight = exp(-16*distance), output = sum(w*v)/sum(w); error must be <= 0.05 for the fixed make_inputs() workload."
+        },
+        {
+          "source": "problem.txt",
+          "summary": "The implementation uses the expanded squared-distance identity and clamps negative computed distances to zero; its accumulators round to float32 each step."
+        }
+      ],
+      "scope_rationale": "The contract requires ||output - reference||/max(||reference||,0.05) <= 0.05 on the fixed make_inputs() workload with the reference computed in float64 from stored float32 values; the kernel's fp32 expanded-distance arithmetic on this same fixed workload may violate that bound, so this case is directly within the stated contract.",
+      "statement": "On the fixed make_inputs() workload (seed 119263), the float32 expanded-distance computation (||a||^2 + ||q||^2 - 2*a.q) suffers catastrophic cancellation whose absolute error is comparable to or larger than the true distances (~0.008), producing weights that deviate enough from the float64 reference that the final normalized prediction's relative error exceeds the 0.05 contract bound.",
+      "status": "confirmed",
+      "updated_at": "2026-09-24T01:04:34Z"
+    },
+    {
+      "created_at": "2026-09-24T01:03:51Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:04:34Z",
+          "data": {
+            "all_computed_zero": false,
+            "computed_distance_min": 0.001953125,
+            "contract_error": 0.2924,
+            "kernel_output": -0.018536671996116638,
+            "negative_or_clamped_distances": 0,
+            "reference": -0.033156990044644244
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "The clamp-collapse scenario did not occur: all 16 emulated fp32 computed distances (exact arithmetic emulation of the kernel) are positive and nonzero (min 0.00195, max 0.01172), so no distance was clamped to zero and weights are not all 1; the output is not mean(values). The observed contract violation (error 0.292) stems from wrong quantized distances (c1), not mass clamping. Rebutts c2's stated mechanism.",
+          "supports": "rebutted",
+          "tool_event_id": "t12"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "tl.maximum(norm_sum - twice_dot, 0.0) turns cancellation-induced negative results into distance 0 (weight 1.0); if many anchors clamp to 0, output collapses to mean(values), which may differ from the reference weighted mean by more than 5%.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Output must be a finite (1,) vector with relative error <= 0.05 against the float64 reference computed from stored float32 values; only the final normalized prediction is judged."
+        },
+        {
+          "source": "problem.txt",
+          "summary": "The implementation clamps negative computed distances to zero before the exponential."
+        }
+      ],
+      "scope_rationale": "The contract explicitly describes the clamping behavior and requires the final normalized prediction to be within 0.05 relative error of the float64 reference on the fixed workload; the clamped-collapse scenario is a direct violation path of that stated requirement.",
+      "statement": "Because cancellation-driven fp32 errors can push norm_sum - twice_dot negative (or far above the true distance), the clamp tl.maximum(...,0.0) may set many or all of the 16 distances to 0, making all weights 1 and output equal to the unweighted mean(values), which may differ from the float64 reference weighted mean by more than 0.05 relative error on the fixed workload.",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T01:04:37Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Compute a single normalized RBF regression prediction for one fixed float32 workload from make_inputs(): query (32,), anchors (16,32), values (16,).",
+      "Reference is defined in float64 from stored float32 values: distance = sum_k (a[i,k]-q[k])^2, weight = exp(-16*distance), output = sum(w*v)/sum(w).",
+      "Error metric: ||output-ref||_2 / max(||ref||_2, 0.05) must be <= 0.05; only the final normalized prediction is judged, not intermediates.",
+      "Alternative inputs and seeds are explicitly out of scope."
+    ],
+    "kernel_model": [
+      "Triton kernel launched as a single program with N=16, D=32, num_warps=1, enable_fp_fusion=False; stores one float32 scalar output.",
+      "Computes expanded squared distance ||a||^2 + ||q||^2 - 2*a.q per anchor, accumulating anchor_norm, query_norm, and dot in float32 sequentially over D=32 (kernel.py lines 10-23).",
+      "Clamps computed distance to 0 via tl.maximum before exp(-16*distance) (lines 24-25); numerator/denominator reduced in float32 with div_rn (lines 27-29).",
+      "Input generation (lines 40-46): fixed PCG64 seed 119263; query entries ~16 with sigma 0.5; anchors = query + N(0, 0.015625) cast to float32; values ~ N(0,1). So true distances ~ D*sigma^2 ~ 0.008 while norm terms are ~8192-scale.",
+      "Output allocated as torch.empty((1,), float32) on the query's device."
+    ],
+    "open_questions": [],
+    "risk_map": [
+      "Catastrophic cancellation in the fp32 expanded-distance form: norm_sum and twice_dot are ~8192-scale (fp32 ulp ~0.001) while the true difference is ~1e-3 to 1e-2, so computed distance error can be comparable to or larger than the true distance.",
+      "The clamp tl.maximum(...,0.0) converts cancellation-induced negative values into distance 0 (weight 1.0); mass clamping collapses output toward mean(values).",
+      "Sequential float32 accumulation over 32 additions adds further rounding; subdominant to cancellation but contributes.",
+      "Normalization may partially mask weight errors: since true distances are tiny, reference weights are near-uniform, so a collapse to mean(values) might still be within the 5% tolerance; the deciding evidence is the final scalar error, not per-weight comparison.",
+      "tl.exp and div_rn in fp32 add small additional error, likely subdominant."
+    ],
+    "scope_notes": [
+      "Only the fixed seed-119263 make_inputs() workload is in scope; robustness to other inputs or seeds is out of scope.",
+      "Contract tolerance is 5% relative error on the final scalar with denominator floored at 0.05; per-distance or per-weight errors are not separately judged.",
+      "The float64 reference must be computed from the stored float32 input values (post-cast), matching make_inputs output, not the pre-cast float64 perturbations.",
+      "No test code is included in the artifact; verification must be via the contract metric directly."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Compute a single normalized RBF regression prediction for one fixed float32 workload from make_inputs(): query (32,), anchors (16,32), values (16,).",
+        "Reference is defined in float64 from stored float32 values: distance = sum_k (a[i,k]-q[k])^2, weight = exp(-16*distance), output = sum(w*v)/sum(w).",
+        "Error metric: ||output-ref||_2 / max(||ref||_2, 0.05) must be <= 0.05; only the final normalized prediction is judged, not intermediates.",
+        "Alternative inputs and seeds are explicitly out of scope."
+      ],
+      "created_at": "2026-09-24T01:04:01Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel launched as a single program with N=16, D=32, num_warps=1, enable_fp_fusion=False; stores one float32 scalar output.",
+        "Computes expanded squared distance ||a||^2 + ||q||^2 - 2*a.q per anchor, accumulating anchor_norm, query_norm, and dot in float32 sequentially over D=32 (kernel.py lines 10-23).",
+        "Clamps computed distance to 0 via tl.maximum before exp(-16*distance) (lines 24-25); numerator/denominator reduced in float32 with div_rn (lines 27-29).",
+        "Input generation (lines 40-46): fixed PCG64 seed 119263; query entries ~16 with sigma 0.5; anchors = query + N(0, 0.015625) cast to float32; values ~ N(0,1). So true distances ~ D*sigma^2 ~ 0.008 while norm terms are ~8192-scale.",
+        "Output allocated as torch.empty((1,), float32) on the query's device."
+      ],
+      "open_questions": [],
+      "risk_map": [
+        "Catastrophic cancellation in the fp32 expanded-distance form: norm_sum and twice_dot are ~8192-scale (fp32 ulp ~0.001) while the true difference is ~1e-3 to 1e-2, so computed distance error can be comparable to or larger than the true distance.",
+        "The clamp tl.maximum(...,0.0) converts cancellation-induced negative values into distance 0 (weight 1.0); mass clamping collapses output toward mean(values).",
+        "Sequential float32 accumulation over 32 additions adds further rounding; subdominant to cancellation but contributes.",
+        "Normalization may partially mask weight errors: since true distances are tiny, reference weights are near-uniform, so a collapse to mean(values) might still be within the 5% tolerance; the deciding evidence is the final scalar error, not per-weight comparison.",
+        "tl.exp and div_rn in fp32 add small additional error, likely subdominant."
+      ],
+      "scope_notes": [
+        "Only the fixed seed-119263 make_inputs() workload is in scope; robustness to other inputs or seeds is out of scope.",
+        "Contract tolerance is 5% relative error on the final scalar with denominator floored at 0.05; per-distance or per-weight errors are not separately judged.",
+        "The float64 reference must be computed from the stored float32 input values (post-cast), matching make_inputs output, not the pre-cast float64 perturbations.",
+        "No test code is included in the artifact; verification must be via the contract metric directly."
+      ],
+      "summary": "Description model for case_z: single-workload normalized RBF regression kernel using the expanded squared-distance identity in fp32 with clamping; primary risk is catastrophic cancellation between ~8192-scale norm/dot terms producing distance errors comparable to the ~0.008 true distances. This re-records a description update that previously failed due to a malformed tool call (event t5).",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_z",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_z"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_z"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_z"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_z",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 9.587945275000038,
+      "role": "describer",
+      "round": 2,
+      "text": "",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": "[\"Compute a single normalized RBF regression prediction for one fixed float32 workload from make_inputs(): query (32,), anchors (16,32), values (16,).\", \"Reference is defined in float64 from stored float32 values: distance = sum_k (a[i,k]-q[k])^2, weight = exp(-16*distance), output = sum(w*v)/sum(w).\", \"Error metric: ||output-ref||_2 / max(||ref||_2, 0.05) must be <= 0.05; only final normalized prediction matters, not intermediates.\", \"Only alternative-input/seed behaviors are out of scope.\"], \"kernel_model</arg_key><arg_value>[\"Triton kernel launched with a single program, N=16, D=32, num_warps=1, enable_fp_fusion=False; writes one float32 output.\", \"Computes expanded squared distance ||a||^2 + ||q||^2 - 2 a.q per anchor, accumulating in float32 (anchor_norm, query_norm, dot) via tl.static_range over D=32.\", \"Clamps computed distance at 0 (tl.maximum) before exp(-16*distance); weights sum to numerator/denominator in float32 with div_rn.\", \"Inputs are near the query (anchors = query + N(0, 0.015625)), query entries ~16, so true distances are tiny (~D*sigma^2 ~ 0.008) but anchor norms ~ 16^2*32 ~ 8192, making the expanded form heavily catastrophic-cancellation prone in float32.\", \"Make_inputs uses a fixed PCG64 seed 119263 and float64 perturbation then cast to float32; same for query and values.\"], \"risk_map</arg_key><arg_value>[\"Catastrophic cancellation in float32 expanded-distance: norm_sum and twice_dot are ~8192-scale while their difference is ~1e-3; fp32 ulp error (~0.001 at 8192) is comparable to or larger than the true distance, so computed distances can be wildly wrong or clamped to 0.\", \"Even though clamping prevents negative distances, wrong (large or zero) distances feed exp(-16*d); if all distances clamp to 0, weights all become 1 and output equals mean(values), which may or may not be within 5% relative tolerance of the true weighted prediction.\", \"Sequential float32 accumulation of dot products over 32 terms adds rounding, but the dominant risk is cancellation, not accumulation.\", \"div_rn and exp in fp32 add small additional error; likely subdominant.\"], \"scope_notes</arg_key><arg_value>[\"Single fixed workload (seed 119263) only; robustness to other inputs/seeds is out of scope.\", \"Contract tolerates up to 5% relative error (denominator floored at 0.05) on the final scalar, so large per-weight errors can still pass if the normalized prediction is close.\", \"Normalization may mask biased distances: if all weights are equal (all d clamped to 0), output = mean(values); reference with true small distances is also near a weighted mean with nearly equal weights, so cancellation may be hidden by normalization.\"], \"summary</arg_key><arg_value>Describe case_z: single-point normalized RBF regression kernel using expanded squared-distance in fp32 with clamping; key risk is catastrophic cancellation between large anchor/query norms and dot product."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.588,
+        "input_tokens": 5138,
+        "output_tokens": 722
+      }
+    },
+    {
+      "duration_s": 11.66280412499998,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The dominant risk here is clear: the kernel computes the squared distance via the cancellation-prone expanded identity in float32, where norm_sum and twice_dot are ~8000-scale while true distances are ~0.008 \u2014 the fp32 rounding error alone is comparable to the entire signal. I'll record testable claims tied to the fixed contract workload.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "True distances are ~32*sigma^2 \u2248 0.008 (anchors within 0.015625 of query, entries ~16), so norm_sum and twice_dot are ~8192-scale with an fp32 ulp of ~0.001 at that scale; accumulated over 32 fp32 additions the absolute error in (norm_sum - twice_dot) can be several ulp, i.e. comparable to or larger than the true distance, so computed distances \u2014 and hence weights exp(-16*d) \u2014 may be wrong by factors near e^(-16*err) \u2248 0.9, biasing the normalized weighted mean away from the float64 reference by more than the allowed 5% relative error.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference defined in float64 from stored float32 values: distance[i] = sum_k (anchors[i,k]-query[k])**2, weight = exp(-16*distance), output = sum(w*v)/sum(w); error must be ||output-ref||/max(||ref||,0.05) <= 0.05 for the fixed make_inputs() workload."
+              },
+              {
+                "source": "problem.txt",
+                "summary": "The implementation uses the expanded squared-distance identity and clamps negative computed distances to zero; norm and dot accumulators round to float32 each step."
+              }
+            ],
+            "statement": "On the fixed make_inputs() workload (seed 119263), the float32 expanded-distance computation (||a||^2 + ||q||^2 - 2*a.q) suffers catastrophic cancellation whose absolute error is comparable to or larger than the true distances (~0.008), producing weights that deviate enough from the float64 reference that the final normalized prediction's relative error exceeds the 0.05 contract bound."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "tl.maximum(norm_sum - twice_dot, 0.0) silently turns cancellation-induced negative results into distance=0, making the corresponding weight 1.0; combined with the same scale cancellation for other anchors, many/all weights may collapse to 1, giving output = mean(values), which the reference (with correctly varying weights 0.7-1.0) may differ from by more than 5%.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Output must be a finite (1,) vector with relative error <= 0.05 against the float64 reference computed from stored float32 values; the contract judges the final normalized prediction only."
+              },
+              {
+                "source": "problem.txt",
+                "summary": "The implementation clamps negative computed distances to zero before the exponential."
+              }
+            ],
+            "statement": "Because cancellation-driven fp32 errors can push norm_sum - twice_dot negative (or far above the true distance), the clamp tl.maximum(...,0.0) may set many or all of the 16 distances to 0, making all weights 1 and output equal to the unweighted mean(values), which may differ from the float64 reference weighted mean by more than 0.05 relative error on the fixed workload."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.663,
+        "input_tokens": 8315,
+        "output_tokens": 1089
+      }
+    },
+    {
+      "duration_s": 8.329607191999969,
+      "role": "skeptic",
+      "round": 4,
+      "text": "Both claim calls failed for missing `scope_rationale`; re-recording them with that field filled in.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "True distances are ~32*sigma^2 \u2248 0.008 while norm_sum and twice_dot are ~8192-scale; fp32 ulp at that scale (~0.001) times accumulated rounding over 32 additions yields absolute error comparable to or larger than the true distance, so computed weights exp(-16*d) may be wrong enough to push the normalized prediction past the 5% bound.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Reference defined in float64 from stored float32 values: distance = sum_k (a-q)^2, weight = exp(-16*distance), output = sum(w*v)/sum(w); error must be <= 0.05 for the fixed make_inputs() workload."
+              },
+              {
+                "source": "problem.txt",
+                "summary": "The implementation uses the expanded squared-distance identity and clamps negative computed distances to zero; its accumulators round to float32 each step."
+              }
+            ],
+            "scope_rationale": "The contract requires ||output - reference||/max(||reference||,0.05) <= 0.05 on the fixed make_inputs() workload with the reference computed in float64 from stored float32 values; the kernel's fp32 expanded-distance arithmetic on this same fixed workload may violate that bound, so this case is directly within the stated contract.",
+            "statement": "On the fixed make_inputs() workload (seed 119263), the float32 expanded-distance computation (||a||^2 + ||q||^2 - 2*a.q) suffers catastrophic cancellation whose absolute error is comparable to or larger than the true distances (~0.008), producing weights that deviate enough from the float64 reference that the final normalized prediction's relative error exceeds the 0.05 contract bound."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "tl.maximum(norm_sum - twice_dot, 0.0) turns cancellation-induced negative results into distance 0 (weight 1.0); if many anchors clamp to 0, output collapses to mean(values), which may differ from the reference weighted mean by more than 5%.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Output must be a finite (1,) vector with relative error <= 0.05 against the float64 reference computed from stored float32 values; only the final normalized prediction is judged."
+              },
+              {
+                "source": "problem.txt",
+                "summary": "The implementation clamps negative computed distances to zero before the exponential."
+              }
+            ],
+            "scope_rationale": "The contract explicitly describes the clamping behavior and requires the final normalized prediction to be within 0.05 relative error of the float64 reference on the fixed workload; the clamped-collapse scenario is a direct violation path of that stated requirement.",
+            "statement": "Because cancellation-driven fp32 errors can push norm_sum - twice_dot negative (or far above the true distance), the clamp tl.maximum(...,0.0) may set many or all of the 16 distances to 0, making all weights 1 and output equal to the unweighted mean(values), which may differ from the float64 reference weighted mean by more than 0.05 relative error on the fixed workload."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.33,
+        "input_tokens": 10267,
+        "output_tokens": 726
+      }
+    },
+    {
+      "duration_s": 10.026425725000024,
+      "role": "describer",
+      "round": 5,
+      "text": "My earlier description update failed due to malformed arguments, so I'm re-recording the structured description model now.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Compute a single normalized RBF regression prediction for one fixed float32 workload from make_inputs(): query (32,), anchors (16,32), values (16,).",
+              "Reference is defined in float64 from stored float32 values: distance = sum_k (a[i,k]-q[k])^2, weight = exp(-16*distance), output = sum(w*v)/sum(w).",
+              "Error metric: ||output-ref||_2 / max(||ref||_2, 0.05) must be <= 0.05; only the final normalized prediction is judged, not intermediates.",
+              "Alternative inputs and seeds are explicitly out of scope."
+            ],
+            "kernel_model": [
+              "Triton kernel launched as a single program with N=16, D=32, num_warps=1, enable_fp_fusion=False; stores one float32 scalar output.",
+              "Computes expanded squared distance ||a||^2 + ||q||^2 - 2*a.q per anchor, accumulating anchor_norm, query_norm, and dot in float32 sequentially over D=32 (kernel.py lines 10-23).",
+              "Clamps computed distance to 0 via tl.maximum before exp(-16*distance) (lines 24-25); numerator/denominator reduced in float32 with div_rn (lines 27-29).",
+              "Input generation (lines 40-46): fixed PCG64 seed 119263; query entries ~16 with sigma 0.5; anchors = query + N(0, 0.015625) cast to float32; values ~ N(0,1). So true distances ~ D*sigma^2 ~ 0.008 while norm terms are ~8192-scale.",
+              "Output allocated as torch.empty((1,), float32) on the query's device."
+            ],
+            "risk_map": [
+              "Catastrophic cancellation in the fp32 expanded-distance form: norm_sum and twice_dot are ~8192-scale (fp32 ulp ~0.001) while the true difference is ~1e-3 to 1e-2, so computed distance error can be comparable to or larger than the true distance.",
+              "The clamp tl.maximum(...,0.0) converts cancellation-induced negative values into distance 0 (weight 1.0); mass clamping collapses output toward mean(values).",
+              "Sequential float32 accumulation over 32 additions adds further rounding; subdominant to cancellation but contributes.",
+              "Normalization may partially mask weight errors: since true distances are tiny, reference weights are near-uniform, so a collapse to mean(values) might still be within the 5% tolerance; the deciding evidence is the final scalar error, not per-weight comparison.",
+              "tl.exp and div_rn in fp32 add small additional error, likely subdominant."
+            ],
+            "scope_notes": [
+              "Only the fixed seed-119263 make_inputs() workload is in scope; robustness to other inputs or seeds is out of scope.",
+              "Contract tolerance is 5% relative error on the final scalar with denominator floored at 0.05; per-distance or per-weight errors are not separately judged.",
+              "The float64 reference must be computed from the stored float32 input values (post-cast), matching make_inputs output, not the pre-cast float64 perturbations.",
+              "No test code is included in the artifact; verification must be via the contract metric directly."
+            ],
+            "summary": "Description model for case_z: single-workload normalized RBF regression kernel using the expanded squared-distance identity in fp32 with clamping; primary risk is catastrophic cancellation between ~8192-scale norm/dot terms producing distance errors comparable to the ~0.008 true distances. This re-records a description update that previously failed due to a malformed tool call (event t5)."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.026,
+        "input_tokens": 11920,
+        "output_tokens": 838
+      }
+    },
+    {
+      "duration_s": 4.060179546000029,
+      "role": "skeptic",
+      "round": 6,
+      "text": "Both existing claims (c1, c2) already capture the dominant risk \u2014 catastrophic fp32 cancellation in the expanded distance on the exact fixed in-scope workload \u2014 with contract scope evidence. No additional distinct, testable in-scope surfaces exist in this single-workload artifact; exp/div_rn rounding is subdominant and already implicit in c1.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The only in-scope workload is the fixed seed-119263 make_inputs() data; the two open in-scope claims c1 and c2 already cover the decisive risk (fp32 catastrophic cancellation in the expanded distance and the clamp-to-zero collapse), and remaining error sources (fp32 exp, div_rn, sequential accumulation) are subdominant contributors to the same final-scalar metric, not distinct testable hypotheses.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.06,
+        "input_tokens": 18638,
+        "output_tokens": 209
+      }
+    },
+    {
+      "duration_s": 8.619493438999996,
+      "role": "experimenter",
+      "round": 7,
+      "text": "I'll run one probe that executes the kernel on the fixed workload, computes the float64 reference, and reports the contract metric plus per-anchor distance diagnostics (clamped-count, computed vs true distances) \u2014 enough to decide both c1 and c2.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_z\")\nimport numpy as np, torch, kernel\n\nq, a, v = kernel.make_inputs()\nout = kernel.run(q, a, v)\n\n# float64 reference from stored float32 values\nq64 = q.cpu().numpy().astype(np.float64)\na64 = a.cpu().numpy().astype(np.float64)\nv64 = v.cpu().numpy().astype(np.float64)\nd_true = ((a64 - q64) ** 2).sum(axis=1)\nw_true = np.exp(-16.0 * d_true)\nref = (w_true * v64).sum() / w_true.sum()\n\n# emulate kernel's fp32 expanded-distance arithmetic exactly\ndef fp32(x): return np.float32(x)\nd_comp = np.zeros(16, dtype=np.float32)\nfor i in range(16):\n    an = np.float32(0.0); qn = np.float32(0.0); dot = np.float32(0.0)\n    for k in range(32):\n        aa = fp32(a64[i, k]); qq = fp32(q64[k])\n        an = fp32(an + fp32(aa * aa))\n        qn = fp32(qn + fp32(qq * qq))\n        dot = fp32(dot + fp32(aa * qq))\n    ns = fp32(an + qn); td = fp32(2.0 * dot)\n    raw = np.float32(ns - td)\n    d_comp[i] = max(raw, np.float32(0.0))\n\nkernel_out = float(out.item())\nerr = abs(kernel_out - ref) / max(abs(ref), 0.05)\nnum_clamped = int(((a64**2).sum(1) + (q64**2).sum() - 2*(a64*q64).sum(1) < 0).sum())\nprint(json.dumps({\n    \"kernel_output\": kernel_out,\n    \"reference\": float(ref),\n    \"contract_error\": float(err),\n    \"tolerance\": 0.05,\n    \"passes_contract\": bool(err <= 0.05),\n    \"true_distances\": [float(x) for x in d_true],\n    \"computed_distances_emulated\": [float(x) for x in d_comp],\n    \"max_distance_abs_err\": float(np.max(np.abs(d_comp - d_true))),\n    \"negative_raw_count\": num_clamped,\n    \"all_computed_zero\": bool(np.all(d_comp == 0)),\n    \"finite_output\": bool(np.isfinite(kernel_out)),\n}))\n",
+            "expected_signal": "contract_error > 0.05 confirms c1 (cancellation causes contract violation); otherwise rebutted"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.619,
+        "input_tokens": 19663,
+        "output_tokens": 643
+      }
+    },
+    {
+      "duration_s": 15.093943906999982,
+      "role": "experimenter",
+      "round": 8,
+      "text": "The t12 probe is decisive: the kernel output (-0.01854) differs from the float64 reference (-0.03316) with contract error 0.292, far above the 0.05 tolerance \u2014 confirming c1's cancellation hypothesis. For c2, the clamped-collapse mechanism did not occur: none of the 16 computed fp32 distances clamped to zero (all values in the emulated list are positive, ranging 0.00195\u20130.01172), and the output is not mean(values); the failure came from wrong distances, not mass clamping. I'll finalize c1 and record the same probe evidence against c2's specific mechanism.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "contract_error": 0.2924,
+              "kernel_output": -0.018536671996116638,
+              "max_distance_abs_err": 0.003886696645167831,
+              "passes_contract": false,
+              "reference": -0.033156990044644244,
+              "tolerance": 0.05,
+              "true_distance_range": [
+                0.005533,
+                0.009804
+              ]
+            },
+            "event_id": "t12",
+            "status": "confirmed",
+            "summary": "On the fixed make_inputs() workload, the kernel's fp32 expanded-distance arithmetic yields distances whose absolute error (max 0.00389) is comparable to the true distances (0.0055\u20130.0098), producing a final output of -0.01854 vs the float64 reference -0.03316 \u2014 contract error 0.292, well above the 0.05 bound. Confirms c1.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "data": {
+              "all_computed_zero": false,
+              "computed_distance_min": 0.001953125,
+              "contract_error": 0.2924,
+              "kernel_output": -0.018536671996116638,
+              "negative_or_clamped_distances": 0,
+              "reference": -0.033156990044644244
+            },
+            "kind": "runtime_probe",
+            "summary": "The clamp-collapse scenario did not occur: all 16 emulated fp32 computed distances (exact arithmetic emulation of the kernel) are positive and nonzero (min 0.00195, max 0.01172), so no distance was clamped to zero and weights are not all 1; the output is not mean(values). The observed contract violation (error 0.292) stems from wrong quantized distances (c1), not mass clamping. Rebutts c2's stated mechanism.",
+            "supports": "rebutted",
+            "tool_event_id": "t12"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.094,
+        "input_tokens": 24219,
+        "output_tokens": 1222
+      }
+    },
+    {
+      "duration_s": 3.336502901000017,
+      "role": "experimenter",
+      "round": 9,
+      "text": "Claim c2 already holds decisive rebutting evidence (t12 emulation shows no clamped distances), so I'll close it out before yielding to the Judge.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "status": "rebutted"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.337,
+        "input_tokens": 29845,
+        "output_tokens": 72
+      }
+    },
+    {
+      "duration_s": 4.311383005000039,
+      "role": "skeptic",
+      "round": 10,
+      "text": "The evidence is decisive: claim c1 is confirmed with in-scope scope evidence \u2014 the kernel's fp32 expanded-distance arithmetic produces contract error 0.292, far exceeding the 0.05 bound on the fixed workload. Claim c2's mechanism was rebutted, but the underlying violation is fully covered by c1. No new claims are warranted.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the t12 probe on the fixed seed-119263 workload decisively confirms c1 (in-scope, contract error 0.292 > 0.05 bound), which fully covers the kernel's correctness failure via fp32 catastrophic cancellation in the expanded distance. c2's specific clamp-collapse mechanism was rebutted and adds no distinct failure. Only the fixed workload is in scope, and no other testable surfaces remain.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.311,
+        "input_tokens": 29235,
+        "output_tokens": 210
+      }
+    },
+    {
+      "duration_s": 6.354793855000025,
+      "role": "judge",
+      "round": 11,
+      "text": "The evidence is decisive: claim c1 is confirmed in-scope with the kernel's actual output on the fixed contract workload showing a contract error of 0.292 \u2014 nearly 6\u00d7 the 0.05 tolerance \u2014 driven by fp32 catastrophic cancellation in the expanded-distance computation. Claim c2's specific mechanism was rebutted (no clamping occurred). Skeptic has signed off, no open claims remain, and the metric used (final scalar relative error per problem.txt) is exactly the contract's own metric.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "On the sole in-scope workload (fixed seed-119263 make_inputs(), which problem.txt declares as the entire contract scope), the t12 probe measured the contract's own metric: kernel output -0.01854 vs float64 reference -0.03316 gives ||output-ref||/max(||ref||,0.05) = 0.292, far above the required <= 0.05 bound. The contract explicitly requires this final normalized prediction to be within tolerance, so this is not an excused rounding/accumulation deviation \u2014 the contract fixes a 0.05 bound that is violated. Root cause is confirmed as fp32 catastrophic cancellation in the expanded squared-distance identity (norm_sum and twice_dot at ~8192 scale, fp32 ulp ~0.001, versus true distances of only 0.0055\u20130.0098), yielding per-anchor distance errors up to 0.00389 \u2014 comparable to the true distances \u2014 which corrupts the exp(-16*d) weights. No test.py/get_inputs exist in the artifact, so problem.txt is the operative contract and this direct violation is a valid basis for reject. Claim c2 (clamp-collapse mechanism) was rebutted \u2014 no distance clamped to zero \u2014 and adds no independent defect. No open claims remain; Skeptic reviewed the final evidence (t16) and recorded no new claims. Unresolved claims: none.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.355,
+        "input_tokens": 28996,
+        "output_tokens": 439
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-24T01:04:42Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the t12 probe on the fixed seed-119263 workload decisively confirms c1 (in-scope, contract error 0.292 > 0.05 bound), which fully covers the kernel's correctness failure via fp32 catastrophic cancellation in the expanded distance. c2's specific clamp-collapse mechanism was rebutted and adds no distinct failure. Only the fixed workload is in scope, and no other testable surfaces remain.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 15,
+    "tool_event_id": "t16",
+    "turn": 10
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_z"
+      },
+      "created_at": "2026-09-24T01:03:22Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "__pycache__/kernel.cpython-311.pyc",
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_z",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _rbf_kernel(Query, Anchors, Values, Output, N: tl.constexpr, D: tl.constexpr):\n    row = tl.arange(0, N)\n    anchor_norm = tl.full((N,), 0.0, tl.float32)\n    query_norm = tl.full((), 0.0, tl.float32)\n    dot = tl.full((N,), 0.0, tl.float32)\n    for k in tl.static_range(0, D):\n        anchor = tl.load(Anchors + row * D + k).to(tl.float32)\n        query = tl.load(Query + k).to(tl.float32)\n        anchor_square = anchor * anchor\n        query_square = query * query\n        cross = anchor * query\n        anchor_norm = anchor_norm + anchor_square\n        query_norm = query_norm + query_square\n        dot = dot + cross\n    norm_sum = anchor_norm + query_norm\n    twice_dot = 2.0 * dot\n    distance = tl.maximum(norm_sum - twice_dot, 0.0)\n    weight = tl.exp(-16.0 * distance)\n    value = tl.load(Values + row).to(tl.float32)\n    numerator = tl.sum(weight * value, 0)\n    denominator = tl.sum(weight, 0)\n    output = tl.div_rn(numerator, denominator)\n    tl.store(Output, output)\n\n\ndef run(query, anchors, values):\n    output = torch.empty((1,), device=query.device, dtype=torch.float32)\n    _rbf_kernel[(1,)](query, anchors, values, output, N=16, D=32,\n                      num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(119263))\n    query = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)\n    anchors = (query.astype(np.float64)[None, :] +\n               rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)\n    values = rng.normal(0.0, 1.0, 16).astype(np.float32)\n    return query, anchors, values\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "passed": null,
+        "problem_text": "Compute one normalized radial-basis-function regression prediction.\n\nThe only workload in scope is the float32 data returned by make_inputs()\nin kernel.py: query has shape (32,), anchors has shape (16, 32), and values\nhas shape (16,). Define the mathematical reference from these actual stored\nfloat32 values, with all the following arithmetic evaluated in float64:\n  distance[i] = sum_k (anchors[i,k] - query[k])**2\n  weight[i] = exp(-16 * distance[i])\n  reference[0] = sum_i weight[i]*values[i] / sum_i weight[i].\n\nThe output must be a finite vector of shape (1,). Its numerical error is\n  ||output-reference||_2 / max(||reference||_2, 0.05).\nThe implementation satisfies the contract iff this error is <= 0.05.\nThe contract concerns the final normalized prediction. It does not impose\nseparate error requirements on intermediate distances or individual weights.\nAlternative inputs and seeds are outside the scope of this fixed workload.\n\nThe implementation uses the expanded squared-distance identity and clamps\nnegative computed distances to zero before the exponential. Its norm and\ndot-product accumulators round to float32 each step. FP fusion is disabled.\n",
+        "rounds": null,
+        "session_dir": "/root/numerical_cases/case_z",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_z"
+      },
+      "created_at": "2026-09-24T01:03:22Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute one normalized radial-basis-function regression prediction.\n\nThe only workload in scope is the float32 data returned by make_inputs()\nin kernel.py: query has shape (32,), anchors has shape (16, 32), and values\nhas shape (16,). Define the mathematical reference from these actual stored\nfloat32 values, with all the following arithmetic evaluated in float64:\n  distance[i] = sum_k (anchors[i,k] - query[k])**2\n  weight[i] = exp(-16 * distance[i])\n  reference[0] = sum_i weight[i]*values[i] / sum_i weight[i].\n\nThe output must be a finite vector of shape (1,). Its numerical error is\n  ||output-reference||_2 / max(||reference||_2, 0.05).\nThe implementation satisfies the contract iff this error is <= 0.05.\nThe contract concerns the final normalized prediction. It does not impose\nseparate error requirements on intermediate distances or individual weights.\nAlternative inputs and seeds are outside the scope of this fixed workload.\n\nThe implementation uses the expanded squared-distance identity and clamps\nnegative computed distances to zero before the exponential. Its norm and\ndot-product accumulators round to float32 each step. FP fusion is disabled.\n",
+        "entry": "case_z",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_z"
+      },
+      "created_at": "2026-09-24T01:03:22Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_z",
+        "files": [
+          {
+            "kind": "other",
+            "path": "__pycache__/kernel.cpython-311.pyc",
+            "size_bytes": 4272
+          },
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1805
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 67
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1164
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_z",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T01:03:22Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_z\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_z",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 67,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": "[\"Compute a single normalized RBF regression prediction for one fixed float32 workload from make_inputs(): query (32,), anchors (16,32), values (16,).\", \"Reference is defined in float64 from stored float32 values: distance = sum_k (a[i,k]-q[k])^2, weight = exp(-16*distance), output = sum(w*v)/sum(w).\", \"Error metric: ||output-ref||_2 / max(||ref||_2, 0.05) must be <= 0.05; only final normalized prediction matters, not intermediates.\", \"Only alternative-input/seed behaviors are out of scope.\"], \"kernel_model</arg_key><arg_value>[\"Triton kernel launched with a single program, N=16, D=32, num_warps=1, enable_fp_fusion=False; writes one float32 output.\", \"Computes expanded squared distance ||a||^2 + ||q||^2 - 2 a.q per anchor, accumulating in float32 (anchor_norm, query_norm, dot) via tl.static_range over D=32.\", \"Clamps computed distance at 0 (tl.maximum) before exp(-16*distance); weights sum to numerator/denominator in float32 with div_rn.\", \"Inputs are near the query (anchors = query + N(0, 0.015625)), query entries ~16, so true distances are tiny (~D*sigma^2 ~ 0.008) but anchor norms ~ 16^2*32 ~ 8192, making the expanded form heavily catastrophic-cancellation prone in float32.\", \"Make_inputs uses a fixed PCG64 seed 119263 and float64 perturbation then cast to float32; same for query and values.\"], \"risk_map</arg_key><arg_value>[\"Catastrophic cancellation in float32 expanded-distance: norm_sum and twice_dot are ~8192-scale while their difference is ~1e-3; fp32 ulp error (~0.001 at 8192) is comparable to or larger than the true distance, so computed distances can be wildly wrong or clamped to 0.\", \"Even though clamping prevents negative distances, wrong (large or zero) distances feed exp(-16*d); if all distances clamp to 0, weights all become 1 and output equals mean(values), which may or may not be within 5% relative tolerance of the true weighted prediction.\", \"Sequential float32 accumulation of dot products over 32 terms adds rounding, but the dominant risk is cancellation, not accumulation.\", \"div_rn and exp in fp32 add small additional error; likely subdominant.\"], \"scope_notes</arg_key><arg_value>[\"Single fixed workload (seed 119263) only; robustness to other inputs/seeds is out of scope.\", \"Contract tolerates up to 5% relative error (denominator floored at 0.05) on the final scalar, so large per-weight errors can still pass if the normalized prediction is close.\", \"Normalization may mask biased distances: if all weights are equal (all d clamped to 0), output = mean(values); reference with true small distances is also near a weighted mean with nearly equal weights, so cancellation may be hidden by normalization.\"], \"summary</arg_key><arg_value>Describe case_z: single-point normalized RBF regression kernel using expanded squared-distance in fp32 with clamping; key risk is catastrophic cancellation between large anchor/query norms and dot product."
+      },
+      "created_at": "2026-09-24T01:03:31Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "tool record_description_update missing required arg: summary",
+          "recoverable": true,
+          "type": "ToolRegistryError"
+        },
+        "error_type": "ToolRegistryError",
+        "event_id": "t5",
+        "message": "tool record_description_update missing required arg: summary",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "True distances are ~32*sigma^2 \u2248 0.008 (anchors within 0.015625 of query, entries ~16), so norm_sum and twice_dot are ~8192-scale with an fp32 ulp of ~0.001 at that scale; accumulated over 32 fp32 additions the absolute error in (norm_sum - twice_dot) can be several ulp, i.e. comparable to or larger than the true distance, so computed distances \u2014 and hence weights exp(-16*d) \u2014 may be wrong by factors near e^(-16*err) \u2248 0.9, biasing the normalized weighted mean away from the float64 reference by more than the allowed 5% relative error.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference defined in float64 from stored float32 values: distance[i] = sum_k (anchors[i,k]-query[k])**2, weight = exp(-16*distance), output = sum(w*v)/sum(w); error must be ||output-ref||/max(||ref||,0.05) <= 0.05 for the fixed make_inputs() workload."
+          },
+          {
+            "source": "problem.txt",
+            "summary": "The implementation uses the expanded squared-distance identity and clamps negative computed distances to zero; norm and dot accumulators round to float32 each step."
+          }
+        ],
+        "statement": "On the fixed make_inputs() workload (seed 119263), the float32 expanded-distance computation (||a||^2 + ||q||^2 - 2*a.q) suffers catastrophic cancellation whose absolute error is comparable to or larger than the true distances (~0.008), producing weights that deviate enough from the float64 reference that the final normalized prediction's relative error exceeds the 0.05 contract bound."
+      },
+      "created_at": "2026-09-24T01:03:43Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "tl.maximum(norm_sum - twice_dot, 0.0) silently turns cancellation-induced negative results into distance=0, making the corresponding weight 1.0; combined with the same scale cancellation for other anchors, many/all weights may collapse to 1, giving output = mean(values), which the reference (with correctly varying weights 0.7-1.0) may differ from by more than 5%.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must be a finite (1,) vector with relative error <= 0.05 against the float64 reference computed from stored float32 values; the contract judges the final normalized prediction only."
+          },
+          {
+            "source": "problem.txt",
+            "summary": "The implementation clamps negative computed distances to zero before the exponential."
+          }
+        ],
+        "statement": "Because cancellation-driven fp32 errors can push norm_sum - twice_dot negative (or far above the true distance), the clamp tl.maximum(...,0.0) may set many or all of the 16 distances to 0, making all weights 1 and output equal to the unweighted mean(values), which may differ from the float64 reference weighted mean by more than 0.05 relative error on the fixed workload."
+      },
+      "created_at": "2026-09-24T01:03:43Z",
+      "id": "t7",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t7",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "True distances are ~32*sigma^2 \u2248 0.008 while norm_sum and twice_dot are ~8192-scale; fp32 ulp at that scale (~0.001) times accumulated rounding over 32 additions yields absolute error comparable to or larger than the true distance, so computed weights exp(-16*d) may be wrong enough to push the normalized prediction past the 5% bound.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference defined in float64 from stored float32 values: distance = sum_k (a-q)^2, weight = exp(-16*distance), output = sum(w*v)/sum(w); error must be <= 0.05 for the fixed make_inputs() workload."
+          },
+          {
+            "source": "problem.txt",
+            "summary": "The implementation uses the expanded squared-distance identity and clamps negative computed distances to zero; its accumulators round to float32 each step."
+          }
+        ],
+        "scope_rationale": "The contract requires ||output - reference||/max(||reference||,0.05) <= 0.05 on the fixed make_inputs() workload with the reference computed in float64 from stored float32 values; the kernel's fp32 expanded-distance arithmetic on this same fixed workload may violate that bound, so this case is directly within the stated contract.",
+        "statement": "On the fixed make_inputs() workload (seed 119263), the float32 expanded-distance computation (||a||^2 + ||q||^2 - 2*a.q) suffers catastrophic cancellation whose absolute error is comparable to or larger than the true distances (~0.008), producing weights that deviate enough from the float64 reference that the final normalized prediction's relative error exceeds the 0.05 contract bound."
+      },
+      "created_at": "2026-09-24T01:03:51Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-24T01:03:51Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "True distances are ~32*sigma^2 \u2248 0.008 while norm_sum and twice_dot are ~8192-scale; fp32 ulp at that scale (~0.001) times accumulated rounding over 32 additions yields absolute error comparable to or larger than the true distance, so computed weights exp(-16*d) may be wrong enough to push the normalized prediction past the 5% bound.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Reference defined in float64 from stored float32 values: distance = sum_k (a-q)^2, weight = exp(-16*distance), output = sum(w*v)/sum(w); error must be <= 0.05 for the fixed make_inputs() workload."
+          },
+          {
+            "source": "problem.txt",
+            "summary": "The implementation uses the expanded squared-distance identity and clamps negative computed distances to zero; its accumulators round to float32 each step."
+          }
+        ],
+        "scope_rationale": "The contract requires ||output - reference||/max(||reference||,0.05) <= 0.05 on the fixed make_inputs() workload with the reference computed in float64 from stored float32 values; the kernel's fp32 expanded-distance arithmetic on this same fixed workload may violate that bound, so this case is directly within the stated contract.",
+        "statement": "On the fixed make_inputs() workload (seed 119263), the float32 expanded-distance computation (||a||^2 + ||q||^2 - 2*a.q) suffers catastrophic cancellation whose absolute error is comparable to or larger than the true distances (~0.008), producing weights that deviate enough from the float64 reference that the final normalized prediction's relative error exceeds the 0.05 contract bound.",
+        "status": "open",
+        "updated_at": "2026-09-24T01:03:51Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "tl.maximum(norm_sum - twice_dot, 0.0) turns cancellation-induced negative results into distance 0 (weight 1.0); if many anchors clamp to 0, output collapses to mean(values), which may differ from the reference weighted mean by more than 5%.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must be a finite (1,) vector with relative error <= 0.05 against the float64 reference computed from stored float32 values; only the final normalized prediction is judged."
+          },
+          {
+            "source": "problem.txt",
+            "summary": "The implementation clamps negative computed distances to zero before the exponential."
+          }
+        ],
+        "scope_rationale": "The contract explicitly describes the clamping behavior and requires the final normalized prediction to be within 0.05 relative error of the float64 reference on the fixed workload; the clamped-collapse scenario is a direct violation path of that stated requirement.",
+        "statement": "Because cancellation-driven fp32 errors can push norm_sum - twice_dot negative (or far above the true distance), the clamp tl.maximum(...,0.0) may set many or all of the 16 distances to 0, making all weights 1 and output equal to the unweighted mean(values), which may differ from the float64 reference weighted mean by more than 0.05 relative error on the fixed workload."
+      },
+      "created_at": "2026-09-24T01:03:51Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-24T01:03:51Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "tl.maximum(norm_sum - twice_dot, 0.0) turns cancellation-induced negative results into distance 0 (weight 1.0); if many anchors clamp to 0, output collapses to mean(values), which may differ from the reference weighted mean by more than 5%.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must be a finite (1,) vector with relative error <= 0.05 against the float64 reference computed from stored float32 values; only the final normalized prediction is judged."
+          },
+          {
+            "source": "problem.txt",
+            "summary": "The implementation clamps negative computed distances to zero before the exponential."
+          }
+        ],
+        "scope_rationale": "The contract explicitly describes the clamping behavior and requires the final normalized prediction to be within 0.05 relative error of the float64 reference on the fixed workload; the clamped-collapse scenario is a direct violation path of that stated requirement.",
+        "statement": "Because cancellation-driven fp32 errors can push norm_sum - twice_dot negative (or far above the true distance), the clamp tl.maximum(...,0.0) may set many or all of the 16 distances to 0, making all weights 1 and output equal to the unweighted mean(values), which may differ from the float64 reference weighted mean by more than 0.05 relative error on the fixed workload.",
+        "status": "open",
+        "updated_at": "2026-09-24T01:03:51Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Compute a single normalized RBF regression prediction for one fixed float32 workload from make_inputs(): query (32,), anchors (16,32), values (16,).",
+          "Reference is defined in float64 from stored float32 values: distance = sum_k (a[i,k]-q[k])^2, weight = exp(-16*distance), output = sum(w*v)/sum(w).",
+          "Error metric: ||output-ref||_2 / max(||ref||_2, 0.05) must be <= 0.05; only the final normalized prediction is judged, not intermediates.",
+          "Alternative inputs and seeds are explicitly out of scope."
+        ],
+        "kernel_model": [
+          "Triton kernel launched as a single program with N=16, D=32, num_warps=1, enable_fp_fusion=False; stores one float32 scalar output.",
+          "Computes expanded squared distance ||a||^2 + ||q||^2 - 2*a.q per anchor, accumulating anchor_norm, query_norm, and dot in float32 sequentially over D=32 (kernel.py lines 10-23).",
+          "Clamps computed distance to 0 via tl.maximum before exp(-16*distance) (lines 24-25); numerator/denominator reduced in float32 with div_rn (lines 27-29).",
+          "Input generation (lines 40-46): fixed PCG64 seed 119263; query entries ~16 with sigma 0.5; anchors = query + N(0, 0.015625) cast to float32; values ~ N(0,1). So true distances ~ D*sigma^2 ~ 0.008 while norm terms are ~8192-scale.",
+          "Output allocated as torch.empty((1,), float32) on the query's device."
+        ],
+        "risk_map": [
+          "Catastrophic cancellation in the fp32 expanded-distance form: norm_sum and twice_dot are ~8192-scale (fp32 ulp ~0.001) while the true difference is ~1e-3 to 1e-2, so computed distance error can be comparable to or larger than the true distance.",
+          "The clamp tl.maximum(...,0.0) converts cancellation-induced negative values into distance 0 (weight 1.0); mass clamping collapses output toward mean(values).",
+          "Sequential float32 accumulation over 32 additions adds further rounding; subdominant to cancellation but contributes.",
+          "Normalization may partially mask weight errors: since true distances are tiny, reference weights are near-uniform, so a collapse to mean(values) might still be within the 5% tolerance; the deciding evidence is the final scalar error, not per-weight comparison.",
+          "tl.exp and div_rn in fp32 add small additional error, likely subdominant."
+        ],
+        "scope_notes": [
+          "Only the fixed seed-119263 make_inputs() workload is in scope; robustness to other inputs or seeds is out of scope.",
+          "Contract tolerance is 5% relative error on the final scalar with denominator floored at 0.05; per-distance or per-weight errors are not separately judged.",
+          "The float64 reference must be computed from the stored float32 input values (post-cast), matching make_inputs output, not the pre-cast float64 perturbations.",
+          "No test code is included in the artifact; verification must be via the contract metric directly."
+        ],
+        "summary": "Description model for case_z: single-workload normalized RBF regression kernel using the expanded squared-distance identity in fp32 with clamping; primary risk is catastrophic cancellation between ~8192-scale norm/dot terms producing distance errors comparable to the ~0.008 true distances. This re-records a description update that previously failed due to a malformed tool call (event t5)."
+      },
+      "created_at": "2026-09-24T01:04:01Z",
+      "id": "t10",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Compute a single normalized RBF regression prediction for one fixed float32 workload from make_inputs(): query (32,), anchors (16,32), values (16,).",
+            "Reference is defined in float64 from stored float32 values: distance = sum_k (a[i,k]-q[k])^2, weight = exp(-16*distance), output = sum(w*v)/sum(w).",
+            "Error metric: ||output-ref||_2 / max(||ref||_2, 0.05) must be <= 0.05; only the final normalized prediction is judged, not intermediates.",
+            "Alternative inputs and seeds are explicitly out of scope."
+          ],
+          "kernel_model": [
+            "Triton kernel launched as a single program with N=16, D=32, num_warps=1, enable_fp_fusion=False; stores one float32 scalar output.",
+            "Computes expanded squared distance ||a||^2 + ||q||^2 - 2*a.q per anchor, accumulating anchor_norm, query_norm, and dot in float32 sequentially over D=32 (kernel.py lines 10-23).",
+            "Clamps computed distance to 0 via tl.maximum before exp(-16*distance) (lines 24-25); numerator/denominator reduced in float32 with div_rn (lines 27-29).",
+            "Input generation (lines 40-46): fixed PCG64 seed 119263; query entries ~16 with sigma 0.5; anchors = query + N(0, 0.015625) cast to float32; values ~ N(0,1). So true distances ~ D*sigma^2 ~ 0.008 while norm terms are ~8192-scale.",
+            "Output allocated as torch.empty((1,), float32) on the query's device."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "Catastrophic cancellation in the fp32 expanded-distance form: norm_sum and twice_dot are ~8192-scale (fp32 ulp ~0.001) while the true difference is ~1e-3 to 1e-2, so computed distance error can be comparable to or larger than the true distance.",
+            "The clamp tl.maximum(...,0.0) converts cancellation-induced negative values into distance 0 (weight 1.0); mass clamping collapses output toward mean(values).",
+            "Sequential float32 accumulation over 32 additions adds further rounding; subdominant to cancellation but contributes.",
+            "Normalization may partially mask weight errors: since true distances are tiny, reference weights are near-uniform, so a collapse to mean(values) might still be within the 5% tolerance; the deciding evidence is the final scalar error, not per-weight comparison.",
+            "tl.exp and div_rn in fp32 add small additional error, likely subdominant."
+          ],
+          "scope_notes": [
+            "Only the fixed seed-119263 make_inputs() workload is in scope; robustness to other inputs or seeds is out of scope.",
+            "Contract tolerance is 5% relative error on the final scalar with denominator floored at 0.05; per-distance or per-weight errors are not separately judged.",
+            "The float64 reference must be computed from the stored float32 input values (post-cast), matching make_inputs output, not the pre-cast float64 perturbations.",
+            "No test code is included in the artifact; verification must be via the contract metric directly."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Compute a single normalized RBF regression prediction for one fixed float32 workload from make_inputs(): query (32,), anchors (16,32), values (16,).",
+            "Reference is defined in float64 from stored float32 values: distance = sum_k (a[i,k]-q[k])^2, weight = exp(-16*distance), output = sum(w*v)/sum(w).",
+            "Error metric: ||output-ref||_2 / max(||ref||_2, 0.05) must be <= 0.05; only the final normalized prediction is judged, not intermediates.",
+            "Alternative inputs and seeds are explicitly out of scope."
+          ],
+          "created_at": "2026-09-24T01:04:01Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel launched as a single program with N=16, D=32, num_warps=1, enable_fp_fusion=False; stores one float32 scalar output.",
+            "Computes expanded squared distance ||a||^2 + ||q||^2 - 2*a.q per anchor, accumulating anchor_norm, query_norm, and dot in float32 sequentially over D=32 (kernel.py lines 10-23).",
+            "Clamps computed distance to 0 via tl.maximum before exp(-16*distance) (lines 24-25); numerator/denominator reduced in float32 with div_rn (lines 27-29).",
+            "Input generation (lines 40-46): fixed PCG64 seed 119263; query entries ~16 with sigma 0.5; anchors = query + N(0, 0.015625) cast to float32; values ~ N(0,1). So true distances ~ D*sigma^2 ~ 0.008 while norm terms are ~8192-scale.",
+            "Output allocated as torch.empty((1,), float32) on the query's device."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "Catastrophic cancellation in the fp32 expanded-distance form: norm_sum and twice_dot are ~8192-scale (fp32 ulp ~0.001) while the true difference is ~1e-3 to 1e-2, so computed distance error can be comparable to or larger than the true distance.",
+            "The clamp tl.maximum(...,0.0) converts cancellation-induced negative values into distance 0 (weight 1.0); mass clamping collapses output toward mean(values).",
+            "Sequential float32 accumulation over 32 additions adds further rounding; subdominant to cancellation but contributes.",
+            "Normalization may partially mask weight errors: since true distances are tiny, reference weights are near-uniform, so a collapse to mean(values) might still be within the 5% tolerance; the deciding evidence is the final scalar error, not per-weight comparison.",
+            "tl.exp and div_rn in fp32 add small additional error, likely subdominant."
+          ],
+          "scope_notes": [
+            "Only the fixed seed-119263 make_inputs() workload is in scope; robustness to other inputs or seeds is out of scope.",
+            "Contract tolerance is 5% relative error on the final scalar with denominator floored at 0.05; per-distance or per-weight errors are not separately judged.",
+            "The float64 reference must be computed from the stored float32 input values (post-cast), matching make_inputs output, not the pre-cast float64 perturbations.",
+            "No test code is included in the artifact; verification must be via the contract metric directly."
+          ],
+          "summary": "Description model for case_z: single-workload normalized RBF regression kernel using the expanded squared-distance identity in fp32 with clamping; primary risk is catastrophic cancellation between ~8192-scale norm/dot terms producing distance errors comparable to the ~0.008 true distances. This re-records a description update that previously failed due to a malformed tool call (event t5).",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "The only in-scope workload is the fixed seed-119263 make_inputs() data; the two open in-scope claims c1 and c2 already cover the decisive risk (fp32 catastrophic cancellation in the expanded distance and the clamp-to-zero collapse), and remaining error sources (fp32 exp, div_rn, sequential accumulation) are subdominant contributors to the same final-scalar metric, not distinct testable hypotheses.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T01:04:05Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-09-24T01:04:05Z",
+        "decision": "no_new_claims",
+        "reason": "The only in-scope workload is the fixed seed-119263 make_inputs() data; the two open in-scope claims c1 and c2 already cover the decisive risk (fp32 catastrophic cancellation in the expanded distance and the clamp-to-zero collapse), and remaining error sources (fp32 exp, div_rn, sequential accumulation) are subdominant contributors to the same final-scalar metric, not distinct testable hypotheses.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 10,
+        "tool_event_id": "t11",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_z\")\nimport numpy as np, torch, kernel\n\nq, a, v = kernel.make_inputs()\nout = kernel.run(q, a, v)\n\n# float64 reference from stored float32 values\nq64 = q.cpu().numpy().astype(np.float64)\na64 = a.cpu().numpy().astype(np.float64)\nv64 = v.cpu().numpy().astype(np.float64)\nd_true = ((a64 - q64) ** 2).sum(axis=1)\nw_true = np.exp(-16.0 * d_true)\nref = (w_true * v64).sum() / w_true.sum()\n\n# emulate kernel's fp32 expanded-distance arithmetic exactly\ndef fp32(x): return np.float32(x)\nd_comp = np.zeros(16, dtype=np.float32)\nfor i in range(16):\n    an = np.float32(0.0); qn = np.float32(0.0); dot = np.float32(0.0)\n    for k in range(32):\n        aa = fp32(a64[i, k]); qq = fp32(q64[k])\n        an = fp32(an + fp32(aa * aa))\n        qn = fp32(qn + fp32(qq * qq))\n        dot = fp32(dot + fp32(aa * qq))\n    ns = fp32(an + qn); td = fp32(2.0 * dot)\n    raw = np.float32(ns - td)\n    d_comp[i] = max(raw, np.float32(0.0))\n\nkernel_out = float(out.item())\nerr = abs(kernel_out - ref) / max(abs(ref), 0.05)\nnum_clamped = int(((a64**2).sum(1) + (q64**2).sum() - 2*(a64*q64).sum(1) < 0).sum())\nprint(json.dumps({\n    \"kernel_output\": kernel_out,\n    \"reference\": float(ref),\n    \"contract_error\": float(err),\n    \"tolerance\": 0.05,\n    \"passes_contract\": bool(err <= 0.05),\n    \"true_distances\": [float(x) for x in d_true],\n    \"computed_distances_emulated\": [float(x) for x in d_comp],\n    \"max_distance_abs_err\": float(np.max(np.abs(d_comp - d_true))),\n    \"negative_raw_count\": num_clamped,\n    \"all_computed_zero\": bool(np.all(d_comp == 0)),\n    \"finite_output\": bool(np.isfinite(kernel_out)),\n}))\n",
+        "expected_signal": "contract_error > 0.05 confirms c1 (cancellation causes contract violation); otherwise rebutted"
+      },
+      "created_at": "2026-09-24T01:04:19Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "d651283ef9b082994810876ff304f3c7a99c4554e72ae0c81951589951f61ada"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "c340b2f38bc375d6d58e4137f3f0c38aea1d2b8789f92d528d77afaa713fa003"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "3de7f4fa0d22abeb2d9c1a1b4d1341bc0b43922bef6f0da68a1ab4dcd43b2ebc"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "On the fixed make_inputs() workload (seed 119263), the float32 expanded-distance computation (||a||^2 + ||q||^2 - 2*a.q) suffers catastrophic cancellation whose absolute error is comparable to or larger than the true distances (~0.008), producing weights that deviate enough from the float64 reference that the final normalized prediction's relative error exceeds the 0.05 contract bound.",
+        "cwd": "/root/numerical_cases/case_z",
+        "duration_s": 4.729435,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "d651283ef9b082994810876ff304f3c7a99c4554e72ae0c81951589951f61ada"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "c340b2f38bc375d6d58e4137f3f0c38aea1d2b8789f92d528d77afaa713fa003"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "3de7f4fa0d22abeb2d9c1a1b4d1341bc0b43922bef6f0da68a1ab4dcd43b2ebc"
+              }
+            ],
+            "duration_s": 4.729435,
+            "exit_code": 0,
+            "expected_signal": "contract_error > 0.05 confirms c1 (cancellation causes contract violation); otherwise rebutted",
+            "json_parse_error": null,
+            "json_result": {
+              "all_computed_zero": false,
+              "computed_distances_emulated": [
+                0.005859375,
+                0.0078125,
+                0.0078125,
+                0.001953125,
+                0.00390625,
+                0.0078125,
+                0.0078125,
+                0.005859375,
+                0.0078125,
+                0.009765625,
+                0.01171875,
+                0.005859375,
+                0.0078125,
+                0.005859375,
+                0.00390625,
+                0.005859375
+              ],
+              "contract_error": 0.2924063609705521,
+              "finite_output": true,
+              "kernel_output": -0.018536671996116638,
+              "max_distance_abs_err": 0.003886696645167831,
+              "negative_raw_count": 0,
+              "passes_contract": false,
+              "reference": -0.033156990044644244,
+              "tolerance": 0.05,
+              "true_distances": [
+                0.006167953919430147,
+                0.0060504065950226504,
+                0.005881539705114847,
+                0.005839821645167831,
+                0.006260572647079243,
+                0.006970079276470642,
+                0.008146217086505203,
+                0.00689691885963839,
+                0.008893802373677318,
+                0.00969539697325672,
+                0.009803504550291109,
+                0.00655184227071004,
+                0.006844650475613889,
+                0.006139469328445557,
+                0.007174177215347299,
+                0.005533461663617345
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"kernel_output\": -0.018536671996116638, \"reference\": -0.033156990044644244, \"contract_error\": 0.2924063609705521, \"tolerance\": 0.05, \"passes_contract\": false, \"true_distances\": [0.006167953919430147, 0.0060504065950226504, 0.005881539705114847, 0.005839821645167831, 0.006260572647079243, 0.006970079276470642, 0.008146217086505203, 0.00689691885963839, 0.008893802373677318, 0.00969539697325672, 0.009803504550291109, 0.00655184227071004, 0.006844650475613889, 0.006139469328445557, 0.007174177215347299, 0.005533461663617345], \"computed_distances_emulated\": [0.005859375, 0.0078125, 0.0078125, 0.001953125, 0.00390625, 0.0078125, 0.0078125, 0.005859375, 0.0078125, 0.009765625, 0.01171875, 0.005859375, 0.0078125, 0.005859375, 0.00390625, 0.005859375], \"max_distance_abs_err\": 0.003886696645167831, \"negative_raw_count\": 0, \"all_computed_zero\": false, \"finite_output\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "contract_error > 0.05 confirms c1 (cancellation causes contract violation); otherwise rebutted",
+        "json_parse_error": null,
+        "json_result": {
+          "all_computed_zero": false,
+          "computed_distances_emulated": [
+            0.005859375,
+            0.0078125,
+            0.0078125,
+            0.001953125,
+            0.00390625,
+            0.0078125,
+            0.0078125,
+            0.005859375,
+            0.0078125,
+            0.009765625,
+            0.01171875,
+            0.005859375,
+            0.0078125,
+            0.005859375,
+            0.00390625,
+            0.005859375
+          ],
+          "contract_error": 0.2924063609705521,
+          "finite_output": true,
+          "kernel_output": -0.018536671996116638,
+          "max_distance_abs_err": 0.003886696645167831,
+          "negative_raw_count": 0,
+          "passes_contract": false,
+          "reference": -0.033156990044644244,
+          "tolerance": 0.05,
+          "true_distances": [
+            0.006167953919430147,
+            0.0060504065950226504,
+            0.005881539705114847,
+            0.005839821645167831,
+            0.006260572647079243,
+            0.006970079276470642,
+            0.008146217086505203,
+            0.00689691885963839,
+            0.008893802373677318,
+            0.00969539697325672,
+            0.009803504550291109,
+            0.00655184227071004,
+            0.006844650475613889,
+            0.006139469328445557,
+            0.007174177215347299,
+            0.005533461663617345
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"kernel_output\": -0.018536671996116638, \"reference\": -0.033156990044644244, \"contract_error\": 0.2924063609705521, \"tolerance\": 0.05, \"passes_contract\": false, \"true_distances\": [0.006167953919430147, 0.0060504065950226504, 0.005881539705114847, 0.005839821645167831, 0.006260572647079243, 0.006970079276470642, 0.008146217086505203, 0.00689691885963839, 0.008893802373677318, 0.00969539697325672, 0.009803504550291109, 0.00655184227071004, 0.006844650475613889, 0.006139469328445557, 0.007174177215347299, 0.005533461663617345], \"computed_distances_emulated\": [0.005859375, 0.0078125, 0.0078125, 0.001953125, 0.00390625, 0.0078125, 0.0078125, 0.005859375, 0.0078125, 0.009765625, 0.01171875, 0.005859375, 0.0078125, 0.005859375, 0.00390625, 0.005859375], \"max_distance_abs_err\": 0.003886696645167831, \"negative_raw_count\": 0, \"all_computed_zero\": false, \"finite_output\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "contract_error": 0.2924,
+          "kernel_output": -0.018536671996116638,
+          "max_distance_abs_err": 0.003886696645167831,
+          "passes_contract": false,
+          "reference": -0.033156990044644244,
+          "tolerance": 0.05,
+          "true_distance_range": [
+            0.005533,
+            0.009804
+          ]
+        },
+        "event_id": "t12",
+        "status": "confirmed",
+        "summary": "On the fixed make_inputs() workload, the kernel's fp32 expanded-distance arithmetic yields distances whose absolute error (max 0.00389) is comparable to the true distances (0.0055\u20130.0098), producing a final output of -0.01854 vs the float64 reference -0.03316 \u2014 contract error 0.292, well above the 0.05 bound. Confirms c1.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-24T01:04:34Z",
+      "id": "t13",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T01:03:51Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T01:04:34Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "d651283ef9b082994810876ff304f3c7a99c4554e72ae0c81951589951f61ada"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "c340b2f38bc375d6d58e4137f3f0c38aea1d2b8789f92d528d77afaa713fa003"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "3de7f4fa0d22abeb2d9c1a1b4d1341bc0b43922bef6f0da68a1ab4dcd43b2ebc"
+                  }
+                ],
+                "contract_error": 0.2924,
+                "duration_s": 4.729435,
+                "exit_code": 0,
+                "expected_signal": "contract_error > 0.05 confirms c1 (cancellation causes contract violation); otherwise rebutted",
+                "json_parse_error": null,
+                "json_result": {
+                  "all_computed_zero": false,
+                  "computed_distances_emulated": [
+                    0.005859375,
+                    0.0078125,
+                    0.0078125,
+                    0.001953125,
+                    0.00390625,
+                    0.0078125,
+                    0.0078125,
+                    0.005859375,
+                    0.0078125,
+                    0.009765625,
+                    0.01171875,
+                    0.005859375,
+                    0.0078125,
+                    0.005859375,
+                    0.00390625,
+                    0.005859375
+                  ],
+                  "contract_error": 0.2924063609705521,
+                  "finite_output": true,
+                  "kernel_output": -0.018536671996116638,
+                  "max_distance_abs_err": 0.003886696645167831,
+                  "negative_raw_count": 0,
+                  "passes_contract": false,
+                  "reference": -0.033156990044644244,
+                  "tolerance": 0.05,
+                  "true_distances": [
+                    0.006167953919430147,
+                    0.0060504065950226504,
+                    0.005881539705114847,
+                    0.005839821645167831,
+                    0.006260572647079243,
+                    0.006970079276470642,
+                    0.008146217086505203,
+                    0.00689691885963839,
+                    0.008893802373677318,
+                    0.00969539697325672,
+                    0.009803504550291109,
+                    0.00655184227071004,
+                    0.006844650475613889,
+                    0.006139469328445557,
+                    0.007174177215347299,
+                    0.005533461663617345
+                  ]
+                },
+                "kernel_output": -0.018536671996116638,
+                "max_distance_abs_err": 0.003886696645167831,
+                "passes_contract": false,
+                "reference": -0.033156990044644244,
+                "stderr": "",
+                "stdout": "{\"kernel_output\": -0.018536671996116638, \"reference\": -0.033156990044644244, \"contract_error\": 0.2924063609705521, \"tolerance\": 0.05, \"passes_contract\": false, \"true_distances\": [0.006167953919430147, 0.0060504065950226504, 0.005881539705114847, 0.005839821645167831, 0.006260572647079243, 0.006970079276470642, 0.008146217086505203, 0.00689691885963839, 0.008893802373677318, 0.00969539697325672, 0.009803504550291109, 0.00655184227071004, 0.006844650475613889, 0.006139469328445557, 0.007174177215347299, 0.005533461663617345], \"computed_distances_emulated\": [0.005859375, 0.0078125, 0.0078125, 0.001953125, 0.00390625, 0.0078125, 0.0078125, 0.005859375, 0.0078125, 0.009765625, 0.01171875, 0.005859375, 0.0078125, 0.005859375, 0.00390625, 0.005859375], \"max_distance_abs_err\": 0.003886696645167831, \"negative_raw_count\": 0, \"all_computed_zero\": false, \"finite_output\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.05,
+                "true_distance_range": [
+                  0.005533,
+                  0.009804
+                ]
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the fixed make_inputs() workload, the kernel's fp32 expanded-distance arithmetic yields distances whose absolute error (max 0.00389) is comparable to the true distances (0.0055\u20130.0098), producing a final output of -0.01854 vs the float64 reference -0.03316 \u2014 contract error 0.292, well above the 0.05 bound. Confirms c1.",
+              "supports": "confirmed",
+              "tool_event_id": "t12"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "True distances are ~32*sigma^2 \u2248 0.008 while norm_sum and twice_dot are ~8192-scale; fp32 ulp at that scale (~0.001) times accumulated rounding over 32 additions yields absolute error comparable to or larger than the true distance, so computed weights exp(-16*d) may be wrong enough to push the normalized prediction past the 5% bound.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Reference defined in float64 from stored float32 values: distance = sum_k (a-q)^2, weight = exp(-16*distance), output = sum(w*v)/sum(w); error must be <= 0.05 for the fixed make_inputs() workload."
+            },
+            {
+              "source": "problem.txt",
+              "summary": "The implementation uses the expanded squared-distance identity and clamps negative computed distances to zero; its accumulators round to float32 each step."
+            }
+          ],
+          "scope_rationale": "The contract requires ||output - reference||/max(||reference||,0.05) <= 0.05 on the fixed make_inputs() workload with the reference computed in float64 from stored float32 values; the kernel's fp32 expanded-distance arithmetic on this same fixed workload may violate that bound, so this case is directly within the stated contract.",
+          "statement": "On the fixed make_inputs() workload (seed 119263), the float32 expanded-distance computation (||a||^2 + ||q||^2 - 2*a.q) suffers catastrophic cancellation whose absolute error is comparable to or larger than the true distances (~0.008), producing weights that deviate enough from the float64 reference that the final normalized prediction's relative error exceeds the 0.05 contract bound.",
+          "status": "confirmed",
+          "updated_at": "2026-09-24T01:04:34Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:04:34Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "d651283ef9b082994810876ff304f3c7a99c4554e72ae0c81951589951f61ada"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "c340b2f38bc375d6d58e4137f3f0c38aea1d2b8789f92d528d77afaa713fa003"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "3de7f4fa0d22abeb2d9c1a1b4d1341bc0b43922bef6f0da68a1ab4dcd43b2ebc"
+              }
+            ],
+            "contract_error": 0.2924,
+            "duration_s": 4.729435,
+            "exit_code": 0,
+            "expected_signal": "contract_error > 0.05 confirms c1 (cancellation causes contract violation); otherwise rebutted",
+            "json_parse_error": null,
+            "json_result": {
+              "all_computed_zero": false,
+              "computed_distances_emulated": [
+                0.005859375,
+                0.0078125,
+                0.0078125,
+                0.001953125,
+                0.00390625,
+                0.0078125,
+                0.0078125,
+                0.005859375,
+                0.0078125,
+                0.009765625,
+                0.01171875,
+                0.005859375,
+                0.0078125,
+                0.005859375,
+                0.00390625,
+                0.005859375
+              ],
+              "contract_error": 0.2924063609705521,
+              "finite_output": true,
+              "kernel_output": -0.018536671996116638,
+              "max_distance_abs_err": 0.003886696645167831,
+              "negative_raw_count": 0,
+              "passes_contract": false,
+              "reference": -0.033156990044644244,
+              "tolerance": 0.05,
+              "true_distances": [
+                0.006167953919430147,
+                0.0060504065950226504,
+                0.005881539705114847,
+                0.005839821645167831,
+                0.006260572647079243,
+                0.006970079276470642,
+                0.008146217086505203,
+                0.00689691885963839,
+                0.008893802373677318,
+                0.00969539697325672,
+                0.009803504550291109,
+                0.00655184227071004,
+                0.006844650475613889,
+                0.006139469328445557,
+                0.007174177215347299,
+                0.005533461663617345
+              ]
+            },
+            "kernel_output": -0.018536671996116638,
+            "max_distance_abs_err": 0.003886696645167831,
+            "passes_contract": false,
+            "reference": -0.033156990044644244,
+            "stderr": "",
+            "stdout": "{\"kernel_output\": -0.018536671996116638, \"reference\": -0.033156990044644244, \"contract_error\": 0.2924063609705521, \"tolerance\": 0.05, \"passes_contract\": false, \"true_distances\": [0.006167953919430147, 0.0060504065950226504, 0.005881539705114847, 0.005839821645167831, 0.006260572647079243, 0.006970079276470642, 0.008146217086505203, 0.00689691885963839, 0.008893802373677318, 0.00969539697325672, 0.009803504550291109, 0.00655184227071004, 0.006844650475613889, 0.006139469328445557, 0.007174177215347299, 0.005533461663617345], \"computed_distances_emulated\": [0.005859375, 0.0078125, 0.0078125, 0.001953125, 0.00390625, 0.0078125, 0.0078125, 0.005859375, 0.0078125, 0.009765625, 0.01171875, 0.005859375, 0.0078125, 0.005859375, 0.00390625, 0.005859375], \"max_distance_abs_err\": 0.003886696645167831, \"negative_raw_count\": 0, \"all_computed_zero\": false, \"finite_output\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.05,
+            "true_distance_range": [
+              0.005533,
+              0.009804
+            ]
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the fixed make_inputs() workload, the kernel's fp32 expanded-distance arithmetic yields distances whose absolute error (max 0.00389) is comparable to the true distances (0.0055\u20130.0098), producing a final output of -0.01854 vs the float64 reference -0.03316 \u2014 contract error 0.292, well above the 0.05 bound. Confirms c1.",
+          "supports": "confirmed",
+          "tool_event_id": "t12"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "data": {
+          "all_computed_zero": false,
+          "computed_distance_min": 0.001953125,
+          "contract_error": 0.2924,
+          "kernel_output": -0.018536671996116638,
+          "negative_or_clamped_distances": 0,
+          "reference": -0.033156990044644244
+        },
+        "kind": "runtime_probe",
+        "summary": "The clamp-collapse scenario did not occur: all 16 emulated fp32 computed distances (exact arithmetic emulation of the kernel) are positive and nonzero (min 0.00195, max 0.01172), so no distance was clamped to zero and weights are not all 1; the output is not mean(values). The observed contract violation (error 0.292) stems from wrong quantized distances (c1), not mass clamping. Rebutts c2's stated mechanism.",
+        "supports": "rebutted",
+        "tool_event_id": "t12"
+      },
+      "created_at": "2026-09-24T01:04:34Z",
+      "id": "t14",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-09-24T01:04:34Z",
+        "data": {
+          "all_computed_zero": false,
+          "computed_distance_min": 0.001953125,
+          "contract_error": 0.2924,
+          "kernel_output": -0.018536671996116638,
+          "negative_or_clamped_distances": 0,
+          "reference": -0.033156990044644244
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "The clamp-collapse scenario did not occur: all 16 emulated fp32 computed distances (exact arithmetic emulation of the kernel) are positive and nonzero (min 0.00195, max 0.01172), so no distance was clamped to zero and weights are not all 1; the output is not mean(values). The observed contract violation (error 0.292) stems from wrong quantized distances (c1), not mass clamping. Rebutts c2's stated mechanism.",
+        "supports": "rebutted",
+        "tool_event_id": "t12"
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "status": "rebutted"
+      },
+      "created_at": "2026-09-24T01:04:37Z",
+      "id": "t15",
+      "output": {
+        "created_at": "2026-09-24T01:03:51Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-09-24T01:04:34Z",
+            "data": {
+              "all_computed_zero": false,
+              "computed_distance_min": 0.001953125,
+              "contract_error": 0.2924,
+              "kernel_output": -0.018536671996116638,
+              "negative_or_clamped_distances": 0,
+              "reference": -0.033156990044644244
+            },
+            "id": "c2.e1",
+            "kind": "runtime_probe",
+            "summary": "The clamp-collapse scenario did not occur: all 16 emulated fp32 computed distances (exact arithmetic emulation of the kernel) are positive and nonzero (min 0.00195, max 0.01172), so no distance was clamped to zero and weights are not all 1; the output is not mean(values). The observed contract violation (error 0.292) stems from wrong quantized distances (c1), not mass clamping. Rebutts c2's stated mechanism.",
+            "supports": "rebutted",
+            "tool_event_id": "t12"
+          }
+        ],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "tl.maximum(norm_sum - twice_dot, 0.0) turns cancellation-induced negative results into distance 0 (weight 1.0); if many anchors clamp to 0, output collapses to mean(values), which may differ from the reference weighted mean by more than 5%.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Output must be a finite (1,) vector with relative error <= 0.05 against the float64 reference computed from stored float32 values; only the final normalized prediction is judged."
+          },
+          {
+            "source": "problem.txt",
+            "summary": "The implementation clamps negative computed distances to zero before the exponential."
+          }
+        ],
+        "scope_rationale": "The contract explicitly describes the clamping behavior and requires the final normalized prediction to be within 0.05 relative error of the float64 reference on the fixed workload; the clamped-collapse scenario is a direct violation path of that stated requirement.",
+        "statement": "Because cancellation-driven fp32 errors can push norm_sum - twice_dot negative (or far above the true distance), the clamp tl.maximum(...,0.0) may set many or all of the 16 distances to 0, making all weights 1 and output equal to the unweighted mean(values), which may differ from the float64 reference weighted mean by more than 0.05 relative error on the fixed workload.",
+        "status": "rebutted",
+        "updated_at": "2026-09-24T01:04:37Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "reason": "Final review: the t12 probe on the fixed seed-119263 workload decisively confirms c1 (in-scope, contract error 0.292 > 0.05 bound), which fully covers the kernel's correctness failure via fp32 catastrophic cancellation in the expanded distance. c2's specific clamp-collapse mechanism was rebutted and adds no distinct failure. Only the fixed workload is in scope, and no other testable surfaces remain.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-24T01:04:42Z",
+      "id": "t16",
+      "output": {
+        "created_at": "2026-09-24T01:04:42Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the t12 probe on the fixed seed-119263 workload decisively confirms c1 (in-scope, contract error 0.292 > 0.05 bound), which fully covers the kernel's correctness failure via fp32 catastrophic cancellation in the expanded distance. c2's specific clamp-collapse mechanism was rebutted and adds no distinct failure. Only the fixed workload is in scope, and no other testable surfaces remain.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 15,
+        "tool_event_id": "t16",
+        "turn": 10
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "On the sole in-scope workload (fixed seed-119263 make_inputs(), which problem.txt declares as the entire contract scope), the t12 probe measured the contract's own metric: kernel output -0.01854 vs float64 reference -0.03316 gives ||output-ref||/max(||ref||,0.05) = 0.292, far above the required <= 0.05 bound. The contract explicitly requires this final normalized prediction to be within tolerance, so this is not an excused rounding/accumulation deviation \u2014 the contract fixes a 0.05 bound that is violated. Root cause is confirmed as fp32 catastrophic cancellation in the expanded squared-distance identity (norm_sum and twice_dot at ~8192 scale, fp32 ulp ~0.001, versus true distances of only 0.0055\u20130.0098), yielding per-anchor distance errors up to 0.00389 \u2014 comparable to the true distances \u2014 which corrupts the exp(-16*d) weights. No test.py/get_inputs exist in the artifact, so problem.txt is the operative contract and this direct violation is a valid basis for reject. Claim c2 (clamp-collapse mechanism) was rebutted \u2014 no distance clamped to zero \u2014 and adds no independent defect. No open claims remain; Skeptic reviewed the final evidence (t16) and recorded no new claims. Unresolved claims: none.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-24T01:04:48Z",
+      "id": "t17",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-09-24T01:04:48Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "On the sole in-scope workload (fixed seed-119263 make_inputs(), which problem.txt declares as the entire contract scope), the t12 probe measured the contract's own metric: kernel output -0.01854 vs float64 reference -0.03316 gives ||output-ref||/max(||ref||,0.05) = 0.292, far above the required <= 0.05 bound. The contract explicitly requires this final normalized prediction to be within tolerance, so this is not an excused rounding/accumulation deviation \u2014 the contract fixes a 0.05 bound that is violated. Root cause is confirmed as fp32 catastrophic cancellation in the expanded squared-distance identity (norm_sum and twice_dot at ~8192 scale, fp32 ulp ~0.001, versus true distances of only 0.0055\u20130.0098), yielding per-anchor distance errors up to 0.00389 \u2014 comparable to the true distances \u2014 which corrupts the exp(-16*d) weights. No test.py/get_inputs exist in the artifact, so problem.txt is the operative contract and this direct violation is a valid basis for reject. Claim c2 (clamp-collapse mechanism) was rebutted \u2014 no distance clamped to zero \u2014 and adds no independent defect. No open claims remain; Skeptic reviewed the final evidence (t16) and recorded no new claims. Unresolved claims: none.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-09-24T01:04:48Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "On the sole in-scope workload (fixed seed-119263 make_inputs(), which problem.txt declares as the entire contract scope), the t12 probe measured the contract's own metric: kernel output -0.01854 vs float64 reference -0.03316 gives ||output-ref||/max(||ref||,0.05) = 0.292, far above the required <= 0.05 bound. The contract explicitly requires this final normalized prediction to be within tolerance, so this is not an excused rounding/accumulation deviation \u2014 the contract fixes a 0.05 bound that is violated. Root cause is confirmed as fp32 catastrophic cancellation in the expanded squared-distance identity (norm_sum and twice_dot at ~8192 scale, fp32 ulp ~0.001, versus true distances of only 0.0055\u20130.0098), yielding per-anchor distance errors up to 0.00389 \u2014 comparable to the true distances \u2014 which corrupts the exp(-16*d) weights. No test.py/get_inputs exist in the artifact, so problem.txt is the operative contract and this direct violation is a valid basis for reject. Claim c2 (clamp-collapse mechanism) was rebutted \u2014 no distance clamped to zero \u2014 and adds no independent defect. No open claims remain; Skeptic reviewed the final evidence (t16) and recorded no new claims. Unresolved claims: none.",
+    "verdict": "reject"
+  }
+}

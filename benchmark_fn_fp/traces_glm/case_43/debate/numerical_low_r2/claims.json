@@ -1,0 +1,101 @@
+[
+  {
+    "created_at": "2026-09-23T21:42:55Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-23T21:43:55Z",
+        "data": {
+          "E_cpu_seq_fp32": 0.0,
+          "E_gpu": 0.0,
+          "E_passes_gpu": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "88f23af4d09e874520d02813edb06131160fa8052ccc92c0cd1a15c78c9fc0bd"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "579efd9bc2b4fc47cfe14015ff8547c84975a35468d89785cad599889850b7dd"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "7a1d7758127cbc7b0ffe19c936e3208e974e15b27c97102fc9a55f0d7a572887"
+            }
+          ],
+          "duration_s": 6.072266,
+          "exit_code": 0,
+          "expected_signal": "E = ||out - float64 ref||_2 / max(||ref||_2,0.008) on the fixed seeded workload; claim predicts E > 0.1",
+          "finite": true,
+          "gpu_matches_sim": true,
+          "json_parse_error": null,
+          "json_result": {
+            "E_cpu_seq_fp32": 0.0,
+            "E_gpu": 0.0,
+            "E_passes_gpu": true,
+            "E_passes_sim": true,
+            "finite": true,
+            "gpu_matches_sim": true,
+            "max_abs_err_gpu": 0.0,
+            "mean_abs_err_gpu": 0.0,
+            "per_row_err_head": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "ref_norm": 257.13274781715376,
+            "tol": 0.1
+          },
+          "max_abs_err_gpu": 0.0,
+          "mean_abs_err_gpu": 0.0,
+          "ref_norm": 257.13274781715376,
+          "stderr": "",
+          "stdout": "{\"E_gpu\": 0.0, \"E_cpu_seq_fp32\": 0.0, \"tol\": 0.1, \"ref_norm\": 257.13274781715376, \"max_abs_err_gpu\": 0.0, \"mean_abs_err_gpu\": 0.0, \"finite\": true, \"E_passes_gpu\": true, \"E_passes_sim\": true, \"gpu_matches_sim\": true, \"per_row_err_head\": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tol": 0.1
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On the exact fixed seeded workload (seed 730119, double permutation), the Triton kernel's output equals the float64 row-sum reference bit-for-bit: E = 0.0 (tol 0.1), max and mean absolute per-row error 0.0, all outputs finite, ||ref||_2 = 257.13. GPU output is bit-identical to a CPU sequential-fp32 simulation of the same column order, confirming no reassociation/fusion on device. The hypothesized small-term absorption breaking E <= 0.1 did not occur on this in-scope workload.",
+        "supports": "rebutted",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The kernel does a plain sequential fp32 accumulation (no compensation, no tree sum) over the fixed permuted column order. Large entries are exact multiples of 2^20 so once the accumulator magnitude is ~2^20-2^30, its ulp (0.0625-64) is comparable to or larger than the small entries (0.25-0.75), which then round away and are permanently lost even after +w and -w cancel; the exact per-row reference equals the sum of those 64 small values (<=48), so lost small terms become pure absolute error. With 64 rows and a reference norm on the order of tens, the L2 error from absorbed small terms may exceed the 0.1 budget.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Reference is the per-row sum of the original float32 entries in real arithmetic; contract requires finite outputs and E = ||output-reference||_2 / max(||reference||_2, 0.008) <= 0.1 on exactly the fixed seeded workload (run(*make_inputs()))."
+      },
+      {
+        "source": "kernel.py",
+        "summary": "Input construction interleaves +/-(integers 1..32)*2^20 columns with small values in {0.25, 0.5, 0.75} under a fixed double permutation; the kernel (lines 6-16) accumulates these sequentially in fp32 with a (64,) accumulator."
+      }
+    ],
+    "scope_rationale": "The contract (problem.txt) requires E <= 0.1 against a float64 real-arithmetic reference on exactly the fixed seeded (64,128) workload produced by make_inputs() in kernel.py; the claim predicts the kernel's sequential fp32 accumulation on this exact input exceeds that bound.",
+    "statement": "On the fixed seeded (64,128) workload, the kernel's sequential fp32 row-sum accumulation absorbs most of the 64 small entries (0.25-0.75) into the large \u00b12^20-scaled running sums, so the output differs from the float64 reference by (nearly) the full sum of lost small terms per row, and E exceeds the required bound of 0.1.",
+    "status": "rebutted",
+    "updated_at": "2026-09-23T21:43:55Z"
+  }
+]

@@ -1,0 +1,9 @@
+The kernel quantizes logits to 8 levels: scale = max|logits|/7, rounded to nearest multiple of scale in [-7scale, 7scale]. Error in logits up to scale/2 ≈ max|logits|/14. Logits std 1.2, max ~ maybe 3.5. So scale ~0.5, quantization error ~0.25 in logits. That changes probabilities by factor exp(±0.25) ≈ ±28%. That seems large — relative error likely exceeds 2%?
+
+Let me estimate. p ∝ exp(l_i). Perturbing l_i by e_i gives relative error exp(e_i)-1. Output error relative ~ weighted average of |e_i| roughly. With error up to 0.25, errors of ~0.1-0.25 typical → relative error maybe 10%+. That exceeds 2%.
+
+Compute max|logits|: 128 samples N(0,1.2), std 1.2, max abs ~ 1.2*2.8 ≈ 3.4. scale ≈ 0.48. Quantization error uniform in [-0.24, 0.24], RMS ≈ 0.14. Errors in logits independent → output error roughly ||p ⊙ e||_1? Actually reference = sum p_i v_i, perturbed p'_i ≈ p_i(1+e_i - sum p_j e_j). Error = sum p_i e_i (v_i - ref). Relative L2 ≈ sqrt(sum_k (sum_i p_i e_i v_ik)^2)/||ref||. Hard to bound precisely but with RMS e ~ 0.14 and values ~1±1, relative error likely ~ 5-15%. Also clamping: values near ±max get error only in one direction up to... codes clamped to [-7,7]; logits near max map to 7 exactly-ish. Fine.
+
+Also note logits std 1.2, so exp of logits themselves vary by factor e^3 ≈ 20; probabilities spread. Rough estimate: relative error ~ E|e| * something. E|e| ≈ 0.12. Error vector components ≈ sum p_i e_i v_ik; treat e_i v_ik random with std 0.14*1=0.14, weighted by p_i (sum p ~ but p concentrated). If one p dominates ~0.3, error ~ 0.3*0.14*1 ≈ 0.04 per component relative to values ~1 → 4%. Likely >2%.
+
+I'll reject. Confidence moderate, maybe 0.7. Could simulate mentally... can't. The quantization is clearly lossy with step ~0.48, half-step 0.24 — softmax with logit perturbation 0.24 gives up to 27% weight change. Definitely exceeds 2% tolerance. Reject.

@@ -1,16 +1,18 @@
 # benchmark_fn_fp
 
-An adversarial benchmark for GPU kernel verification, and the harness that runs
-it.
+GPU kernel verification datasets, evaluation programs, and recorded experiments.
+Start with [CASE_INDEX.md](CASE_INDEX.md) for the meaning and location of every
+case. All datasets and trace directories use the same global `case_<number>` ID;
+`case_map.json` is the single authoritative mapping.
 
 **The question it asks.** Given a kernel's source and its contract, can a
 verifier decide whether the kernel satisfies that contract — catching real
 defects without condemning legitimate implementation differences?
 
-**What it is built against.** Fixed-tolerance `allclose` comparison. Every case
-is constructed so that method fails: either the defect is invisible on ordinary
-inputs (FN cases), or a correct implementation is rejected by the tolerance
-(FP cases).
+The original FN/FP suite targets fixed-tolerance `allclose`. Later datasets test
+numerical judgment without tools and the possible benefit of independent review
+over a single agent with tools. These groups have different protocols and their
+scores must not be pooled as one benchmark result.
 
 ---
 
@@ -19,25 +21,42 @@ inputs (FN cases), or a correct implementation is rejected by the tolerance
 ```
 benchmark_fn_fp/
 │
-├── triton/          32 cases with their answer keys   ← scorer only
-├── eval_cases/      the same 32, answers removed      ← what a verifier sees
-├── case_map.json    the mapping between them          ← lives outside eval_cases
+├── CASE_INDEX.md       all case ranges, purposes, and links
+├── case_map.json       single canonical ID/source/dataset mapping
+├── triton/             original 34 cases, with answers ← scorer only
+├── triton_eval_cases/  answer-free copies, same IDs    ← verifier input
+├── correlation_pair/   case_36–case_37: numerical error correlation
+├── numerical_challenges/ case_38–case_61: tools vs single call
+├── evidence_challenges/  case_62–case_81: solo vs debate exploration
+├── numerical_pilot/    case_82–case_105: early single-call pilot
+├── real_kernel_challenges/ next experiment plan only; no cases yet
 │
-├── eval/            harness and scoreboard
-├── traces_opus5/    every run on claude-opus-5      (see TRACES.md)
-├── traces_glm/      every run on z-ai/glm-5.3-flash
+├── eval_scripts/       evaluation scripts and derived scoreboard
+├── traces_opus5/       every run on claude-opus-5 (see TRACES.md)
+├── traces_glm/         all GLM runs, by case/arm/trial (see INDEX.md)
 │
-├── generation/      design notes and the case builders
-├── numerical_pilot/ early numerical survey (finished, kept for reference)
-└── modal_runner.py  shared Modal GPU execution wrapper
+├── generation/         design notes and the case builders
+└── modal_runner.py     shared Modal GPU execution wrapper
 ```
+
+There are **104 active cases**: 34 original FN/FP cases, 2 correlation cases,
+24 numerical challenges, 20 evidence challenges, and 24 early pilot cases.
+The original suite occupies `case_01`–`case_35`, with `case_03` retired and never
+reused. The global index explains each range and links to the matching traces.
+
+Each additional dataset keeps verifier-visible files under `eval_cases/case_NN/`.
+Numerical and evidence datasets keep answer keys, construction searches and GPU
+freeze records under `private_data/`; these files are not agent inputs. Their
+Markdown reports are readable summaries. Optional JSON scoreboards can be
+regenerated with the report script's `--json` flag under `private_data/reports/`.
 
 ---
 
-## `triton/` — the 32 cases, with answers
+## `triton/` — the 34 original cases, with answers
 
-One directory per case, named for the case. `fn` means a real defect is present;
-`fp` means the kernel is correct.
+One directory per global case ID, matching `triton_eval_cases/` and the traces.
+The historical source names remain in `case_map.json` and private metadata:
+`fn` means a real defect is present; `fp` means the kernel is correct.
 
 | File | Contents |
 |---|---|
@@ -88,13 +107,13 @@ One directory per case, named for the case. `fn` means a real defect is present;
 
 ---
 
-## `eval_cases/` — what a verifier actually sees
+## `triton_eval_cases/` — what a verifier actually sees
 
 Built from `triton/` by
 `benchmark_fn_fp/generation/generators/build_eval_cases.py`.
 
 ```
-eval_cases/case_33/
+triton_eval_cases/case_33/
 ├── kernel.py     (the docstring naming the case is stripped)
 ├── problem.txt
 └── meta.json     {"name","status","passed":null} — no answer
@@ -102,9 +121,9 @@ eval_cases/case_33/
 
 ### The four differences
 
-| | Answer key (`triton/`) | Verifier's copy (`eval_cases/`) |
+| | Answer key (`triton/`) | Verifier's copy (`triton_eval_cases/`) |
 |---|---|---|
-| Directory name | `fn21_gptq_group_count_floor_division` | `case_33` |
+| Directory name | `case_33` | `case_33` |
 | `meta.json` | 2153 bytes, ground truth and mechanism | 68-byte stub |
 | `kernel.py` first line | `"""Triton kernel under test: fn21_..."""` | `import torch` |
 | `test.py` | present | absent |
@@ -116,11 +135,10 @@ copy states `"group": "FN"` (a defect is present), `"mechanism": "...K //
 group_size instead of ceil(...)"` (what the defect is and where), and
 `"correct_verdict": "BUGGY"` (the answer outright). Shipping it ends the case.
 
-**The directory name is not a detail either.** It enters every agent's prompt on
-every turn through `state.entry`, and `list_artifact_files` exposes it again. The
-`fn` prefix announces that a defect exists and the rest of the name announces
-what it is. Hence `case_NN`, assigned in shuffled order — otherwise the numbering
-itself would sort FN before FP.
+**Public names use neutral IDs.** Both copies now use `case_NN`; the historical
+descriptive source name stays in private metadata. The original IDs were assigned
+in shuffled order, so their order does not sort FN before FP. Later datasets also
+use the shared global numbering rather than restarting at 01.
 
 **`kernel.py`'s first line** was `"""Triton kernel under test: <case name>."""`,
 pinning the answer to the top of the source. Removed; the body is untouched.
@@ -139,15 +157,26 @@ its id retired rather than reused; `case_33` replaces it.
 ## `case_map.json`
 
 ```json
-{ "cases": { "case_33": "fn21_gptq_group_count_floor_division", ... } }
+{
+  "cases": { "case_33": "case_33" },
+  "case_details": {
+    "case_33": {
+      "dataset": "benchmark_fn_fp",
+      "source_name": "fn21_gptq_group_count_floor_division",
+      "public_dir": "triton_eval_cases/case_33",
+      "answer_dir": "triton/case_33"
+    }
+  }
+}
 ```
 
-Deliberately outside `eval_cases/`, read only by the scorer. A verifier sees
-`case_26` and cannot tell it is an FP case.
+Illustrative excerpt only. The full registry covers every dataset, previous IDs,
+source names and current paths. It stays outside verifier-visible directories;
+`CASE_INDEX.md` is generated from it. Do not create a second competing case map.
 
 ---
 
-## `eval/` — the harness
+## `eval_scripts/` — evaluation programs and scoreboard
 
 ### The four arms
 
@@ -166,7 +195,7 @@ The last two share one script. They were previously two nearly identical files
 plus a third for single-case capture — 506 lines whose only meaningful
 difference was the agent roster. Keeping three copies in step was the direct
 cause of the worst bug here: `--max-tokens` was added to two and missed on the
-third, and a full 32-case debate run at the 4096 default produced three cases
+third, and a historical full 32-case debate run at the 4096 default produced three cases
 with zero claims and zero probes and about $33 of nothing.
 
 ### Supporting files
@@ -200,19 +229,20 @@ if a runner stops writing a trace or omits `--max-tokens`.
 
 ## `traces_*/` — the record of every run
 
-One tree per model, one directory per case, one per arm inside that:
+GLM runs share one directory, arranged by case, arm and trial:
 
 ```
-benchmark_fn_fp/traces_opus5/case_33/debate/
-benchmark_fn_fp/traces_glm/case_33/debate/     same case, same arm, other model
+benchmark_fn_fp/traces_opus5/case_33/debate/              historical Opus run
+benchmark_fn_fp/traces_glm/case_33/debate/legacy/
+benchmark_fn_fp/traces_glm/case_36/debate/r1/
 ```
 
-The tree comes from the model, via `eval/models.py`, so a $1 run on an open
-model cannot land anywhere near the $88 of Opus runs the current numbers come
-from. `tests/` fails if two models ever name the same tree.
+Both GLM model profiles in `eval_scripts/models.py` write to `traces_glm/`. Metadata
+retains the API model ID and provider for provenance and cost calculation.
+New runs reserve a fresh trial directory and cannot overwrite earlier results.
 
-`TRACES.md` covers what a run directory holds, how to read one, and what the two
-trees show so far.
+[`TRACES.md`](TRACES.md) documents the artifacts and migration.
+[`traces_glm/INDEX.md`](traces_glm/INDEX.md) links to the GLM runs.
 
 ---
 
@@ -223,7 +253,7 @@ trees show so far.
 | `benchmark_design.md` | The original design |
 | `benchmark_design_generalized.md` | The thirteen seeds in full, and every hypothesis measurement has falsified |
 | `generators/batch*.py` | The builders, each responsible for a few seeds |
-| `generators/build_eval_cases.py` | Produces `eval_cases/` from `triton/`, with leak checks |
+| `generators/build_eval_cases.py` | Produces `triton_eval_cases/` from `triton/`, with leak checks |
 | `generators/sanitize_for_eval.py` | The earlier stripping script, superseded by the above |
 
 `benchmark_design_generalized.md` records hypotheses that were **tested and
@@ -234,11 +264,11 @@ harder — so nobody spends the money testing them again.
 
 ## `numerical_pilot/` — early survey (kept for reference)
 
-Measurements taken before the benchmark existed: how large the deviation from a
-*legitimate* implementation difference actually gets, which is what the FP cases'
-tolerances had to be set against. `REPORT.md` has the conclusions,
-`answer_key.json` and `candidate_measurements.json` the raw numbers. Finished;
-not modified further.
+The 24-case exploratory single-call study uses `case_82`–`case_105`: eight
+attention, eight quantization, and eight recurrence cases. It recorded 18 correct
+answers and six missing answers caused by the output-token limit. No solo/debate
+comparison was run in this pilot. `REPORT.md` holds the results; `answer_key.json`
+and `candidate_measurements.json` retain the private construction measurements.
 
 ---
 
@@ -246,35 +276,37 @@ not modified further.
 
 ```bash
 # One case. Run this after changing anything, before running the full set.
-modal run benchmark_fn_fp/eval/run_agentic_modal.py --arm debate --cases case_33
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --arm debate --cases case_33
 
-# Full set
-modal run benchmark_fn_fp/eval/run_agentic_modal.py --arm solo   --all
-modal run benchmark_fn_fp/eval/run_agentic_modal.py --arm debate --all
+# Full set, with a named trial shared by the two arms
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --arm both --all --trial comparison_01
 
 # Resume after an interruption, skipping cases that already have a trace.
 # Only valid when the agents themselves have not changed.
-modal run benchmark_fn_fp/eval/run_agentic_modal.py --arm debate --all --skip-existing
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --arm both --all --trial comparison_01 --skip-existing
+
+# Fireworks case_36/case_37 comparison; use a new trial name for each repeat
+python benchmark_fn_fp/eval_scripts/run_single_fireworks.py --dataset correlation_pair --cases case_36,case_37 --trial pair_01 --max-tokens 65536
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset correlation_pair --arm both --cases case_36,case_37 --provider fireworks --trial pair_01 --max-tokens 65536
 
 # Audit first, score second.
-python benchmark_fn_fp/eval/audit_traces.py
-python benchmark_fn_fp/eval/summarize_traces.py
+python benchmark_fn_fp/eval_scripts/audit_traces.py
+python benchmark_fn_fp/eval_scripts/summarize_traces.py
+python benchmark_fn_fp/eval_scripts/index_traces.py
 ```
 
 `--max-rounds` defaults per arm: 4 for debate, 10 for solo.
 
-`--max-tokens` defaults to 16384. Do not lower it. Adaptive thinking is billed
-against `max_tokens`, and at 4096 a whole turn can be spent inside the thinking
-block and return no text and no tool call — one full run produced three cases
-with zero claims and zero probes, with a Judge writing "the debate produced no
-claims and no evidence" and recording a verdict anyway. Measured peaks per role
-are 6.3k–8.5k tokens, so 16384 leaves about half in reserve.
+`--max-tokens` defaults to the model profile: 16384 for Opus and 32768 for the
+current GLM profiles. Reasoning consumes that budget too. GLM has exhausted
+32768 tokens without a final answer, so a repeat may explicitly use 65536.
+Record the setting and score token exhaustion separately from a wrong verdict.
 
 ---
 
 ## Rules for changing the benchmark
 
-1. **The defect must live in a file the verifier is given.** `eval_cases/` ships
+1. **The defect must live in a file the verifier is given.** `triton_eval_cases/` ships
    `kernel.py`, `problem.txt` and a stub `meta.json`, and nothing else. A case
    whose defect hides in `test.py` is unanswerable, and worse, every verdict of
    "reject" scores correct regardless of reasoning — which is how
@@ -283,7 +315,7 @@ are 6.3k–8.5k tokens, so 16384 leaves about half in reserve.
 
 2. **Rebuild after adding a case**:
    `python benchmark_fn_fp/generation/generators/build_eval_cases.py`
-   It assigns ids to new cases, rebuilds `eval_cases/`, and runs the leak checks
+   It assigns ids to new cases, rebuilds `triton_eval_cases/`, and runs the leak checks
    (banned words, real case names, group-encoding filenames, matched-pair
    indistinguishability). Existing ids are never reshuffled — results are stored
    under them.

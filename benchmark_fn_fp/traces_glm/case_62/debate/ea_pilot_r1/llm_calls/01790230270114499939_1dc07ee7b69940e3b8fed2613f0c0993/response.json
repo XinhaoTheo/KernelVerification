@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-086aff47f7684fe0afb2d414dc0b4511",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll batch two probes: c1 tests the kernel output against the contractual float64 reference, and c2 compares the initial probe's float32 reference against the same float64 reference. Both are independent.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-875777fba45f2f2c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport importlib.util, torch, numpy as np, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/evidence_cases/case_e01/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nx, y, q = k.make_inputs()\\nout = k.run(x, y, q)\\n# float64 reference from stored float32 values\\nxd = x.double(); yd = y.double(); qd = q.double()\\nmu_x = xd.mean(0); mu_y = yd.mean()\\nXc = xd - mu_x; yc = yd - mu_y\\nA = (Xc.T @ Xc) / 32.0 + (1/1024.0) * torch.eye(2, dtype=torch.float64, device=xd.device)\\nrhs = (Xc.T @ yc) / 32.0\\nbeta = torch.linalg.solve(A, rhs)\\npred = mu_y + (qd - mu_x) @ beta\\nrel = (out.double() - pred).norm() / max(pred.norm().item(), 0.1)\\n# float32 second-moment path (kernel-style) vs float64\\nxs = x.float(); ys = y.float()\\nm0 = xs[:,0].sum()/32; m1 = xs[:,1].sum()/32; my = ys.sum()/32\\na = (xs[:,0]**2).sum()/32 - m0*m0 + 1/1024\\nb = (xs[:,0]*xs[:,1]).sum()/32 - m0*m1\\nc = (xs[:,1]**2).sum()/32 - m1*m1 + 1/1024\\nu = (xs[:,0]*ys).sum()/32 - m0*my\\nv = (xs[:,1]*ys).sum()/32 - m1*my\\ncov64 = ((Xc.T @ Xc)/32).flatten(); cross64 = ((Xc.T @ yc)/32).flatten()\\nf32 = torch.stack([a-1/1024,b,c-1/1024,u,v]); ref64 = torch.stack([cov64[0],cov64[1],cov64[3],cross64[0],cross64[1]])\\nrelerr = ((f32.double()-ref64).abs()/ref64.abs()).tolist()\\nprint(json.dumps({\\n \\\"metric\\\":\\\"relative L2 error vs float64 contract reference\\\",\\n \\\"kernel_output\\\": out.cpu().tolist(), \\\"float64_pred\\\": pred.cpu().tolist(),\\n \\\"relative_error\\\": float(rel.item()), \\\"tolerance\\\": 0.05, \\\"passed\\\": bool(rel.item()<=0.05),\\n \\\"beta_f64\\\": beta.cpu().tolist(),\\n \\\"cov_f32_relerr\\\": relerr,\\n \\\"det_f64\\\": float((A[0,0]*A[1,1]-A[0,1]**2).item()),\\n \\\"det_f32\\\": float((a*c-b*b).item()),\\n \\\"all_finite\\\": bool(torch.isfinite(out).all().item()),\\n}))\\n\", \"expected_signal\": \"relative_error vs float64 reference exceeds 0.05 (claim confirmed) or is within tolerance (rebutted)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-8f36d20e25073a88",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport importlib.util, torch, numpy as np, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/evidence_cases/case_e01/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nx, y, q = k.make_inputs()\\n# reproduce initial_probe's float32 reference pipeline exactly (CPU float32 torch ops mirror GPU float32 arithmetic in fp32)\\nstats = torch.zeros((8,), dtype=torch.float32)\\nfor i in range(32):\\n    x0, x1, yi = x[i,0].cpu(), x[i,1].cpu(), y[i].cpu()\\n    stats = stats + torch.stack((x0,x1,yi,x0*x0,x0*x0*0+x0*x1,x1*x1,x0*yi,x1*yi)).float()\\nm0,m1,my,s00,s01,s11,c0,c1 = [float(v) for v in (stats/32)]\\ncov00=s00-m0*m0+1/1024; cov01=s01-m0*m1; cov11=s11-m1*m1+1/1024\\nr0=c0-m0*my; r1=c1-m1*my\\ndet=cov00*cov11-cov01*cov01\\nb0=(cov11*r0-cov01*r1)/det; b1=(cov00*r1-cov01*r0)/det\\nqd = q.double().cpu()\\nfp32_ref = torch.tensor([my+(qq[0]-m0)*b0+(qq[1]-m1)*b1 for qq in qd])\\n# float64 contract reference\\nxd=x.double().cpu(); yd=y.double().cpu()\\nmu_x=xd.mean(0); mu_y=yd.mean(); Xc=xd-mu_x; yc=yd-mu_y\\nA=(Xc.T@Xc)/32+torch.eye(2)/1024; rhs=(Xc.T@yc)/32\\nbeta=torch.linalg.solve(A,rhs); pred=mu_y+(qd-mu_x)@beta\\ndiff=(fp32_ref.double()-pred).norm()/max(pred.norm().item(),0.1)\\nprint(json.dumps({\\n \\\"metric\\\":\\\"relative L2 gap between initial_probe's float32 reference and float64 contract prediction\\\",\\n \\\"fp32_reference\\\": fp32_ref.tolist(), \\\"f64_prediction\\\": pred.tolist(),\\n \\\"relative_gap\\\": float(diff.item()), \\\"tolerance\\\": 0.05,\\n \\\"materially_different\\\": bool(diff.item()>0.05),\\n \\\"note\\\":\\\"fp32 reference pipeline reproduces initial_probe's float32 accumulation path; gap shows whether the probe reference stands in for the float64 target\\\"\\n}))\\n\", \"expected_signal\": \"fp32 reference differs from float64 prediction by more than the tolerance (claim confirmed) or is immaterial (rebutted)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Two claims, both testable by one probe each; but c1 and c2 both need: kernel output vs float64 reference. They're essentially the same probe. Still launch two probes together (independent). Probe needs kernel import — the artifact session dir has kernel.py; load via importlib from /root/evidence_cases/case_e01/kernel.py. Need GPU for Triton; run on GPU.\n\nProbe c1: compute float64 reference from stored float32 inputs, compute kernel output, report relative error, plus covariance float32 vs float64 errors. Probe c2: compute initial_probe's float32 reference (recompute in torch float32) vs float64 reference, report difference — does the probe's reference differ materially?",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790230270,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1499,
+    "prompt_tokens": 22885,
+    "total_tokens": 24384,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 149,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 149
+    }
+  }
+}

@@ -1,0 +1,921 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_q",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _route_kernel(Query, Candidates, Embeddings, Output, N: tl.constexpr,\n                  D: tl.constexpr, E: tl.constexpr):\n    row = tl.arange(0, N)\n    distances = tl.full((N,), 0.0, tl.float32)\n    for j in tl.static_range(0, D):\n        query = tl.load(Query + j).to(tl.float32)\n        candidate = tl.load(Candidates + row * D + j).to(tl.float32)\n        query_q = tl.floor(query * 8.0 + 0.5) * 0.125\n        candidate_q = tl.floor(candidate * 8.0 + 0.5) * 0.125\n        delta = candidate_q - query_q\n        distances = distances + delta * delta\n    minimum = tl.min(distances, axis=0)\n    winner = tl.min(tl.where(distances == minimum, row, 2147483647), axis=0)\n    component = tl.arange(0, E)\n    result = tl.load(Embeddings + winner * E + component)\n    tl.store(Output + component, result)\n\n\ndef run(query, candidates, embeddings):\n    output = torch.empty((8,), device=query.device, dtype=torch.float32)\n    _route_kernel[(1,)](query, candidates, embeddings, output, N=16, D=32, E=8,\n                        num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(840104))\n    query = rng.normal(0.0, 0.3, 32).astype(np.float32)\n    offsets = rng.normal(size=(16, 32))\n    offsets /= np.linalg.norm(offsets, axis=1, keepdims=True)\n    radii = 1.0 + rng.uniform(-0.002, 0.002, 16)\n    candidates = (query.astype(np.float64)[None, :] + offsets * radii[:, None]).astype(np.float32)\n    embeddings = rng.normal(size=(16, 8)).astype(np.float32)\n    return query, candidates, embeddings\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "passed": null,
+    "problem_text": "Select a nearest candidate and return its embedding on a fixed workload.\n\nOnly make_inputs() supplies the inputs in scope: query is float32 of shape\n(32,), candidates is float32 of shape (16, 32), embeddings is float32 of shape\n(16, 8). For the reference, use the original supplied float32 coordinates\nwithout quantization. Compute squared Euclidean distances in float64:\n  d[i] = sum_j (candidates[i,j] - query[j])**2.\nSelect the index with smallest d[i], breaking ties in favour of the smallest\nindex. The reference output is embeddings[index, :].\n\nThe kernel returns a finite vector of shape (8,). It satisfies the contract iff\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.1.\n\nDecide whether this implementation meets the numerical contract for this fixed\ngenerated workload. Alternative queries, candidates and embeddings are outside\nthe scope. The kernel's approximate route quantizes coordinates to a grid\nusing floor(x*8+0.5)/8, then uses float32 squared distances and the same tie rule.\nThe final embedding values are gathered without quantization.\n",
+    "rounds": null,
+    "session_dir": "/root/numerical_cases/case_q",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T01:05:54Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:06:11Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "36f49d6b8c1e8b89006706cc4459be73800cd0a948b577f81c46e52de93e5b5b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "f7a8224a9cdbe138d3664d805589736d0c7aa6c1702269a0f8822dd640f08ace"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "5f70dc2648435d630c9c3b194662b749d1c1f6272f9b3213bf3643e34d892cc6"
+              }
+            ],
+            "duration_s": 6.353487,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error and winner indices on fixed workload",
+            "json_parse_error": null,
+            "json_result": {
+              "kernel_output": [
+                -0.8813729882240295,
+                -2.678633213043213,
+                0.6457722783088684,
+                -0.581386387348175,
+                -1.3800278902053833,
+                -0.9962041974067688,
+                2.245950937271118,
+                0.1266368180513382
+              ],
+              "output_finite": true,
+              "passes_0.1": true,
+              "quant_distances": [
+                1.046875,
+                1.140625,
+                1.0,
+                0.984375,
+                1.09375,
+                0.984375,
+                0.953125,
+                1.140625,
+                1.09375,
+                1.234375,
+                0.984375,
+                1.171875,
+                1.140625,
+                1.09375,
+                1.078125,
+                1.15625
+              ],
+              "quantized_idx": 6,
+              "ref_distances": [
+                0.9991440968245278,
+                1.0027652717625357,
+                1.0030286188136865,
+                1.0008048094954196,
+                1.0018511150943437,
+                1.0017865442216278,
+                0.9967125383238633,
+                1.0031485697277542,
+                0.9999255390296187,
+                1.0002215257196259,
+                1.0034500705612053,
+                1.0030120965947864,
+                0.998942217973445,
+                1.0039043974004187,
+                1.0010962045241691,
+                0.9999336453317453
+              ],
+              "reference_idx": 6,
+              "relative_l2_error": 0.0
+            },
+            "kernel_output_finite": true,
+            "passes_0.1": true,
+            "quantized_idx": 6,
+            "reference_idx": 6,
+            "relative_l2_error": 0.0,
+            "stderr": "",
+            "stdout": "{\"kernel_output\": [-0.8813729882240295, -2.678633213043213, 0.6457722783088684, -0.581386387348175, -1.3800278902053833, -0.9962041974067688, 2.245950937271118, 0.1266368180513382], \"reference_idx\": 6, \"quantized_idx\": 6, \"ref_distances\": [0.9991440968245278, 1.0027652717625357, 1.0030286188136865, 1.0008048094954196, 1.0018511150943437, 1.0017865442216278, 0.9967125383238633, 1.0031485697277542, 0.9999255390296187, 1.0002215257196259, 1.0034500705612053, 1.0030120965947864, 0.998942217973445, 1.0039043974004187, 1.0010962045241691, 0.9999336453317453], \"quant_distances\": [1.046875, 1.140625, 1.0, 0.984375, 1.09375, 0.984375, 0.953125, 1.140625, 1.09375, 1.234375, 0.984375, 1.171875, 1.140625, 1.09375, 1.078125, 1.15625], \"relative_l2_error\": 0.0, \"passes_0.1\": true, \"output_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the fixed make_inputs() workload, kernel output matches the float64 reference embedding exactly: winner index 6 in both cases, relative L2 error 0.0 <= 0.1, output finite of shape (8,). No reorder or error above threshold.",
+          "supports": "rebutted",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Candidates are all query plus unit offsets with radii ~1, so the quantized (1/8 grid) distances may reorder the ranking relative to the float64 reference; if a different embedding is selected, the relative L2 error could exceed the contract's 0.1 threshold.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract fixes the workload from make_inputs(), reference selection via float64 distances with smallest-index tie-break, and requires ||output-reference||_2 / ||reference||_2 <= 0.1."
+        }
+      ],
+      "scope_rationale": "The contract requires relative L2 error <= 0.1 between kernel output and the float64 reference nearest-neighbor embedding on the fixed make_inputs() workload.",
+      "statement": "The kernel's quantized nearest-neighbor selection on the fixed make_inputs() workload returns an embedding whose relative L2 error vs the float64 reference exceeds 0.1 (or the winner index differs).",
+      "status": "rebutted",
+      "updated_at": "2026-09-24T01:06:11Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_q",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_q"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_q"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_q"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_q",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 3.843211738000001,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll record the key claim \u2014 that the quantized route picks a different nearest neighbor than the float64 reference, potentially exceeding the 0.1 relative-error tolerance \u2014 and probe it on the fixed workload.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Candidates are all query plus unit offsets with radii ~1, so the quantized (1/8 grid) distances may reorder the ranking relative to the float64 reference; if a different embedding is selected, the relative L2 error could exceed the contract's 0.1 threshold.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract fixes the workload from make_inputs(), reference selection via float64 distances with smallest-index tie-break, and requires ||output-reference||_2 / ||reference||_2 <= 0.1."
+              }
+            ],
+            "scope_rationale": "The contract requires relative L2 error <= 0.1 between kernel output and the float64 reference nearest-neighbor embedding on the fixed make_inputs() workload.",
+            "statement": "The kernel's quantized nearest-neighbor selection on the fixed make_inputs() workload returns an embedding whose relative L2 error vs the float64 reference exceeds 0.1 (or the winner index differs)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.843,
+        "input_tokens": 7594,
+        "output_tokens": 300
+      }
+    },
+    {
+      "duration_s": 5.463227746000005,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run the fixed workload through the kernel and compare against the float64 reference selection.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json, torch, numpy as np\nsys.path.insert(0, \"/root/numerical_cases/case_q\")\nimport kernel\n\nq, c, e = kernel.make_inputs(\"cuda\")\nout = kernel.run(q, c, e)\n\n# float64 reference\nd = ((c.double() - q.double())**2).sum(dim=1)\nref_idx = int(torch.argmin(d))\nref = e[ref_idx].double()\nrel = ((out.double() - ref).norm() / max(ref.norm().item(), 1e-12)).item()\n\n# quantized winner index (simulate kernel logic)\nqf = q.float(); cf = c.float()\nqq = torch.floor(qf*8+0.5)*0.125\ncq = torch.floor(cf*8+0.5)*0.125\nqd = ((cq-qq)**2).float().sum(dim=1)\nkern_idx = int(torch.argmin(qd))\n\nprint(json.dumps({\n  \"kernel_output\": out.cpu().tolist(),\n  \"reference_idx\": ref_idx, \"quantized_idx\": kern_idx,\n  \"ref_distances\": d.cpu().tolist(),\n  \"quant_distances\": qd.cpu().tolist(),\n  \"relative_l2_error\": rel,\n  \"passes_0.1\": rel <= 0.1,\n  \"output_finite\": bool(torch.isfinite(out).all())\n}))",
+            "expected_signal": "relative L2 error and winner indices on fixed workload"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.463,
+        "input_tokens": 8803,
+        "output_tokens": 344
+      }
+    },
+    {
+      "duration_s": 5.039891155999996,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe on the fixed workload shows the quantized kernel picks the same winner (index 6) as the float64 reference, with relative L2 error 0.0 and a finite output \u2014 the claim is rebutted.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "kernel_output_finite": true,
+              "passes_0.1": true,
+              "quantized_idx": 6,
+              "reference_idx": 6,
+              "relative_l2_error": 0.0
+            },
+            "event_id": "t6",
+            "status": "rebutted",
+            "summary": "On the fixed make_inputs() workload, kernel output matches the float64 reference embedding exactly: winner index 6 in both cases, relative L2 error 0.0 <= 0.1, output finite of shape (8,). No reorder or error above threshold.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.04,
+        "input_tokens": 12839,
+        "output_tokens": 215
+      }
+    },
+    {
+      "duration_s": 3.9563144910000005,
+      "role": "solo",
+      "round": 5,
+      "text": "The single in-scope claim is resolved: the kernel matches the float64 reference exactly on the fixed workload (winner index 6, relative L2 error 0.0, finite output). No further lines of inquiry could change the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.98,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t6 ran the kernel on the fixed make_inputs() workload and compared against the float64 reference (smallest-index tie-break argmin of squared Euclidean distances). Kernel winner index 6 equals reference index 6, output is finite of shape (8,), and relative L2 error is 0.0, well within the contract's 0.1 threshold. Claim c1 (that quantized routing would pick a different neighbor or exceed tolerance) is rebutted by in-scope runtime evidence.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.956,
+        "input_tokens": 18450,
+        "output_tokens": 203
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_q"
+      },
+      "created_at": "2026-09-24T01:05:50Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_q",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _route_kernel(Query, Candidates, Embeddings, Output, N: tl.constexpr,\n                  D: tl.constexpr, E: tl.constexpr):\n    row = tl.arange(0, N)\n    distances = tl.full((N,), 0.0, tl.float32)\n    for j in tl.static_range(0, D):\n        query = tl.load(Query + j).to(tl.float32)\n        candidate = tl.load(Candidates + row * D + j).to(tl.float32)\n        query_q = tl.floor(query * 8.0 + 0.5) * 0.125\n        candidate_q = tl.floor(candidate * 8.0 + 0.5) * 0.125\n        delta = candidate_q - query_q\n        distances = distances + delta * delta\n    minimum = tl.min(distances, axis=0)\n    winner = tl.min(tl.where(distances == minimum, row, 2147483647), axis=0)\n    component = tl.arange(0, E)\n    result = tl.load(Embeddings + winner * E + component)\n    tl.store(Output + component, result)\n\n\ndef run(query, candidates, embeddings):\n    output = torch.empty((8,), device=query.device, dtype=torch.float32)\n    _route_kernel[(1,)](query, candidates, embeddings, output, N=16, D=32, E=8,\n                        num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(840104))\n    query = rng.normal(0.0, 0.3, 32).astype(np.float32)\n    offsets = rng.normal(size=(16, 32))\n    offsets /= np.linalg.norm(offsets, axis=1, keepdims=True)\n    radii = 1.0 + rng.uniform(-0.002, 0.002, 16)\n    candidates = (query.astype(np.float64)[None, :] + offsets * radii[:, None]).astype(np.float32)\n    embeddings = rng.normal(size=(16, 8)).astype(np.float32)\n    return query, candidates, embeddings\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "passed": null,
+        "problem_text": "Select a nearest candidate and return its embedding on a fixed workload.\n\nOnly make_inputs() supplies the inputs in scope: query is float32 of shape\n(32,), candidates is float32 of shape (16, 32), embeddings is float32 of shape\n(16, 8). For the reference, use the original supplied float32 coordinates\nwithout quantization. Compute squared Euclidean distances in float64:\n  d[i] = sum_j (candidates[i,j] - query[j])**2.\nSelect the index with smallest d[i], breaking ties in favour of the smallest\nindex. The reference output is embeddings[index, :].\n\nThe kernel returns a finite vector of shape (8,). It satisfies the contract iff\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.1.\n\nDecide whether this implementation meets the numerical contract for this fixed\ngenerated workload. Alternative queries, candidates and embeddings are outside\nthe scope. The kernel's approximate route quantizes coordinates to a grid\nusing floor(x*8+0.5)/8, then uses float32 squared distances and the same tie rule.\nThe final embedding values are gathered without quantization.\n",
+        "rounds": null,
+        "session_dir": "/root/numerical_cases/case_q",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_q"
+      },
+      "created_at": "2026-09-24T01:05:50Z",
+      "id": "t2",
+      "output": {
+        "content": "Select a nearest candidate and return its embedding on a fixed workload.\n\nOnly make_inputs() supplies the inputs in scope: query is float32 of shape\n(32,), candidates is float32 of shape (16, 32), embeddings is float32 of shape\n(16, 8). For the reference, use the original supplied float32 coordinates\nwithout quantization. Compute squared Euclidean distances in float64:\n  d[i] = sum_j (candidates[i,j] - query[j])**2.\nSelect the index with smallest d[i], breaking ties in favour of the smallest\nindex. The reference output is embeddings[index, :].\n\nThe kernel returns a finite vector of shape (8,). It satisfies the contract iff\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.1.\n\nDecide whether this implementation meets the numerical contract for this fixed\ngenerated workload. Alternative queries, candidates and embeddings are outside\nthe scope. The kernel's approximate route quantizes coordinates to a grid\nusing floor(x*8+0.5)/8, then uses float32 squared distances and the same tie rule.\nThe final embedding values are gathered without quantization.\n",
+        "entry": "case_q",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_q"
+      },
+      "created_at": "2026-09-24T01:05:50Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_q",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1776
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 67
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1072
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_q",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T01:05:50Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_q\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_q",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 67,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Candidates are all query plus unit offsets with radii ~1, so the quantized (1/8 grid) distances may reorder the ranking relative to the float64 reference; if a different embedding is selected, the relative L2 error could exceed the contract's 0.1 threshold.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract fixes the workload from make_inputs(), reference selection via float64 distances with smallest-index tie-break, and requires ||output-reference||_2 / ||reference||_2 <= 0.1."
+          }
+        ],
+        "scope_rationale": "The contract requires relative L2 error <= 0.1 between kernel output and the float64 reference nearest-neighbor embedding on the fixed make_inputs() workload.",
+        "statement": "The kernel's quantized nearest-neighbor selection on the fixed make_inputs() workload returns an embedding whose relative L2 error vs the float64 reference exceeds 0.1 (or the winner index differs)."
+      },
+      "created_at": "2026-09-24T01:05:54Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-24T01:05:54Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Candidates are all query plus unit offsets with radii ~1, so the quantized (1/8 grid) distances may reorder the ranking relative to the float64 reference; if a different embedding is selected, the relative L2 error could exceed the contract's 0.1 threshold.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract fixes the workload from make_inputs(), reference selection via float64 distances with smallest-index tie-break, and requires ||output-reference||_2 / ||reference||_2 <= 0.1."
+          }
+        ],
+        "scope_rationale": "The contract requires relative L2 error <= 0.1 between kernel output and the float64 reference nearest-neighbor embedding on the fixed make_inputs() workload.",
+        "statement": "The kernel's quantized nearest-neighbor selection on the fixed make_inputs() workload returns an embedding whose relative L2 error vs the float64 reference exceeds 0.1 (or the winner index differs).",
+        "status": "open",
+        "updated_at": "2026-09-24T01:05:54Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json, torch, numpy as np\nsys.path.insert(0, \"/root/numerical_cases/case_q\")\nimport kernel\n\nq, c, e = kernel.make_inputs(\"cuda\")\nout = kernel.run(q, c, e)\n\n# float64 reference\nd = ((c.double() - q.double())**2).sum(dim=1)\nref_idx = int(torch.argmin(d))\nref = e[ref_idx].double()\nrel = ((out.double() - ref).norm() / max(ref.norm().item(), 1e-12)).item()\n\n# quantized winner index (simulate kernel logic)\nqf = q.float(); cf = c.float()\nqq = torch.floor(qf*8+0.5)*0.125\ncq = torch.floor(cf*8+0.5)*0.125\nqd = ((cq-qq)**2).float().sum(dim=1)\nkern_idx = int(torch.argmin(qd))\n\nprint(json.dumps({\n  \"kernel_output\": out.cpu().tolist(),\n  \"reference_idx\": ref_idx, \"quantized_idx\": kern_idx,\n  \"ref_distances\": d.cpu().tolist(),\n  \"quant_distances\": qd.cpu().tolist(),\n  \"relative_l2_error\": rel,\n  \"passes_0.1\": rel <= 0.1,\n  \"output_finite\": bool(torch.isfinite(out).all())\n}))",
+        "expected_signal": "relative L2 error and winner indices on fixed workload"
+      },
+      "created_at": "2026-09-24T01:06:06Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "36f49d6b8c1e8b89006706cc4459be73800cd0a948b577f81c46e52de93e5b5b"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "f7a8224a9cdbe138d3664d805589736d0c7aa6c1702269a0f8822dd640f08ace"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "5f70dc2648435d630c9c3b194662b749d1c1f6272f9b3213bf3643e34d892cc6"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's quantized nearest-neighbor selection on the fixed make_inputs() workload returns an embedding whose relative L2 error vs the float64 reference exceeds 0.1 (or the winner index differs).",
+        "cwd": "/root/numerical_cases/case_q",
+        "duration_s": 6.353487,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "36f49d6b8c1e8b89006706cc4459be73800cd0a948b577f81c46e52de93e5b5b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "f7a8224a9cdbe138d3664d805589736d0c7aa6c1702269a0f8822dd640f08ace"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "5f70dc2648435d630c9c3b194662b749d1c1f6272f9b3213bf3643e34d892cc6"
+              }
+            ],
+            "duration_s": 6.353487,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error and winner indices on fixed workload",
+            "json_parse_error": null,
+            "json_result": {
+              "kernel_output": [
+                -0.8813729882240295,
+                -2.678633213043213,
+                0.6457722783088684,
+                -0.581386387348175,
+                -1.3800278902053833,
+                -0.9962041974067688,
+                2.245950937271118,
+                0.1266368180513382
+              ],
+              "output_finite": true,
+              "passes_0.1": true,
+              "quant_distances": [
+                1.046875,
+                1.140625,
+                1.0,
+                0.984375,
+                1.09375,
+                0.984375,
+                0.953125,
+                1.140625,
+                1.09375,
+                1.234375,
+                0.984375,
+                1.171875,
+                1.140625,
+                1.09375,
+                1.078125,
+                1.15625
+              ],
+              "quantized_idx": 6,
+              "ref_distances": [
+                0.9991440968245278,
+                1.0027652717625357,
+                1.0030286188136865,
+                1.0008048094954196,
+                1.0018511150943437,
+                1.0017865442216278,
+                0.9967125383238633,
+                1.0031485697277542,
+                0.9999255390296187,
+                1.0002215257196259,
+                1.0034500705612053,
+                1.0030120965947864,
+                0.998942217973445,
+                1.0039043974004187,
+                1.0010962045241691,
+                0.9999336453317453
+              ],
+              "reference_idx": 6,
+              "relative_l2_error": 0.0
+            },
+            "stderr": "",
+            "stdout": "{\"kernel_output\": [-0.8813729882240295, -2.678633213043213, 0.6457722783088684, -0.581386387348175, -1.3800278902053833, -0.9962041974067688, 2.245950937271118, 0.1266368180513382], \"reference_idx\": 6, \"quantized_idx\": 6, \"ref_distances\": [0.9991440968245278, 1.0027652717625357, 1.0030286188136865, 1.0008048094954196, 1.0018511150943437, 1.0017865442216278, 0.9967125383238633, 1.0031485697277542, 0.9999255390296187, 1.0002215257196259, 1.0034500705612053, 1.0030120965947864, 0.998942217973445, 1.0039043974004187, 1.0010962045241691, 0.9999336453317453], \"quant_distances\": [1.046875, 1.140625, 1.0, 0.984375, 1.09375, 0.984375, 0.953125, 1.140625, 1.09375, 1.234375, 0.984375, 1.171875, 1.140625, 1.09375, 1.078125, 1.15625], \"relative_l2_error\": 0.0, \"passes_0.1\": true, \"output_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": "relative L2 error and winner indices on fixed workload",
+        "json_parse_error": null,
+        "json_result": {
+          "kernel_output": [
+            -0.8813729882240295,
+            -2.678633213043213,
+            0.6457722783088684,
+            -0.581386387348175,
+            -1.3800278902053833,
+            -0.9962041974067688,
+            2.245950937271118,
+            0.1266368180513382
+          ],
+          "output_finite": true,
+          "passes_0.1": true,
+          "quant_distances": [
+            1.046875,
+            1.140625,
+            1.0,
+            0.984375,
+            1.09375,
+            0.984375,
+            0.953125,
+            1.140625,
+            1.09375,
+            1.234375,
+            0.984375,
+            1.171875,
+            1.140625,
+            1.09375,
+            1.078125,
+            1.15625
+          ],
+          "quantized_idx": 6,
+          "ref_distances": [
+            0.9991440968245278,
+            1.0027652717625357,
+            1.0030286188136865,
+            1.0008048094954196,
+            1.0018511150943437,
+            1.0017865442216278,
+            0.9967125383238633,
+            1.0031485697277542,
+            0.9999255390296187,
+            1.0002215257196259,
+            1.0034500705612053,
+            1.0030120965947864,
+            0.998942217973445,
+            1.0039043974004187,
+            1.0010962045241691,
+            0.9999336453317453
+          ],
+          "reference_idx": 6,
+          "relative_l2_error": 0.0
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"kernel_output\": [-0.8813729882240295, -2.678633213043213, 0.6457722783088684, -0.581386387348175, -1.3800278902053833, -0.9962041974067688, 2.245950937271118, 0.1266368180513382], \"reference_idx\": 6, \"quantized_idx\": 6, \"ref_distances\": [0.9991440968245278, 1.0027652717625357, 1.0030286188136865, 1.0008048094954196, 1.0018511150943437, 1.0017865442216278, 0.9967125383238633, 1.0031485697277542, 0.9999255390296187, 1.0002215257196259, 1.0034500705612053, 1.0030120965947864, 0.998942217973445, 1.0039043974004187, 1.0010962045241691, 0.9999336453317453], \"quant_distances\": [1.046875, 1.140625, 1.0, 0.984375, 1.09375, 0.984375, 0.953125, 1.140625, 1.09375, 1.234375, 0.984375, 1.171875, 1.140625, 1.09375, 1.078125, 1.15625], \"relative_l2_error\": 0.0, \"passes_0.1\": true, \"output_finite\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "kernel_output_finite": true,
+          "passes_0.1": true,
+          "quantized_idx": 6,
+          "reference_idx": 6,
+          "relative_l2_error": 0.0
+        },
+        "event_id": "t6",
+        "status": "rebutted",
+        "summary": "On the fixed make_inputs() workload, kernel output matches the float64 reference embedding exactly: winner index 6 in both cases, relative L2 error 0.0 <= 0.1, output finite of shape (8,). No reorder or error above threshold.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-24T01:06:11Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T01:05:54Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T01:06:11Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "36f49d6b8c1e8b89006706cc4459be73800cd0a948b577f81c46e52de93e5b5b"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "f7a8224a9cdbe138d3664d805589736d0c7aa6c1702269a0f8822dd640f08ace"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "5f70dc2648435d630c9c3b194662b749d1c1f6272f9b3213bf3643e34d892cc6"
+                  }
+                ],
+                "duration_s": 6.353487,
+                "exit_code": 0,
+                "expected_signal": "relative L2 error and winner indices on fixed workload",
+                "json_parse_error": null,
+                "json_result": {
+                  "kernel_output": [
+                    -0.8813729882240295,
+                    -2.678633213043213,
+                    0.6457722783088684,
+                    -0.581386387348175,
+                    -1.3800278902053833,
+                    -0.9962041974067688,
+                    2.245950937271118,
+                    0.1266368180513382
+                  ],
+                  "output_finite": true,
+                  "passes_0.1": true,
+                  "quant_distances": [
+                    1.046875,
+                    1.140625,
+                    1.0,
+                    0.984375,
+                    1.09375,
+                    0.984375,
+                    0.953125,
+                    1.140625,
+                    1.09375,
+                    1.234375,
+                    0.984375,
+                    1.171875,
+                    1.140625,
+                    1.09375,
+                    1.078125,
+                    1.15625
+                  ],
+                  "quantized_idx": 6,
+                  "ref_distances": [
+                    0.9991440968245278,
+                    1.0027652717625357,
+                    1.0030286188136865,
+                    1.0008048094954196,
+                    1.0018511150943437,
+                    1.0017865442216278,
+                    0.9967125383238633,
+                    1.0031485697277542,
+                    0.9999255390296187,
+                    1.0002215257196259,
+                    1.0034500705612053,
+                    1.0030120965947864,
+                    0.998942217973445,
+                    1.0039043974004187,
+                    1.0010962045241691,
+                    0.9999336453317453
+                  ],
+                  "reference_idx": 6,
+                  "relative_l2_error": 0.0
+                },
+                "kernel_output_finite": true,
+                "passes_0.1": true,
+                "quantized_idx": 6,
+                "reference_idx": 6,
+                "relative_l2_error": 0.0,
+                "stderr": "",
+                "stdout": "{\"kernel_output\": [-0.8813729882240295, -2.678633213043213, 0.6457722783088684, -0.581386387348175, -1.3800278902053833, -0.9962041974067688, 2.245950937271118, 0.1266368180513382], \"reference_idx\": 6, \"quantized_idx\": 6, \"ref_distances\": [0.9991440968245278, 1.0027652717625357, 1.0030286188136865, 1.0008048094954196, 1.0018511150943437, 1.0017865442216278, 0.9967125383238633, 1.0031485697277542, 0.9999255390296187, 1.0002215257196259, 1.0034500705612053, 1.0030120965947864, 0.998942217973445, 1.0039043974004187, 1.0010962045241691, 0.9999336453317453], \"quant_distances\": [1.046875, 1.140625, 1.0, 0.984375, 1.09375, 0.984375, 0.953125, 1.140625, 1.09375, 1.234375, 0.984375, 1.171875, 1.140625, 1.09375, 1.078125, 1.15625], \"relative_l2_error\": 0.0, \"passes_0.1\": true, \"output_finite\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the fixed make_inputs() workload, kernel output matches the float64 reference embedding exactly: winner index 6 in both cases, relative L2 error 0.0 <= 0.1, output finite of shape (8,). No reorder or error above threshold.",
+              "supports": "rebutted",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Candidates are all query plus unit offsets with radii ~1, so the quantized (1/8 grid) distances may reorder the ranking relative to the float64 reference; if a different embedding is selected, the relative L2 error could exceed the contract's 0.1 threshold.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract fixes the workload from make_inputs(), reference selection via float64 distances with smallest-index tie-break, and requires ||output-reference||_2 / ||reference||_2 <= 0.1."
+            }
+          ],
+          "scope_rationale": "The contract requires relative L2 error <= 0.1 between kernel output and the float64 reference nearest-neighbor embedding on the fixed make_inputs() workload.",
+          "statement": "The kernel's quantized nearest-neighbor selection on the fixed make_inputs() workload returns an embedding whose relative L2 error vs the float64 reference exceeds 0.1 (or the winner index differs).",
+          "status": "rebutted",
+          "updated_at": "2026-09-24T01:06:11Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:06:11Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "36f49d6b8c1e8b89006706cc4459be73800cd0a948b577f81c46e52de93e5b5b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "f7a8224a9cdbe138d3664d805589736d0c7aa6c1702269a0f8822dd640f08ace"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "5f70dc2648435d630c9c3b194662b749d1c1f6272f9b3213bf3643e34d892cc6"
+              }
+            ],
+            "duration_s": 6.353487,
+            "exit_code": 0,
+            "expected_signal": "relative L2 error and winner indices on fixed workload",
+            "json_parse_error": null,
+            "json_result": {
+              "kernel_output": [
+                -0.8813729882240295,
+                -2.678633213043213,
+                0.6457722783088684,
+                -0.581386387348175,
+                -1.3800278902053833,
+                -0.9962041974067688,
+                2.245950937271118,
+                0.1266368180513382
+              ],
+              "output_finite": true,
+              "passes_0.1": true,
+              "quant_distances": [
+                1.046875,
+                1.140625,
+                1.0,
+                0.984375,
+                1.09375,
+                0.984375,
+                0.953125,
+                1.140625,
+                1.09375,
+                1.234375,
+                0.984375,
+                1.171875,
+                1.140625,
+                1.09375,
+                1.078125,
+                1.15625
+              ],
+              "quantized_idx": 6,
+              "ref_distances": [
+                0.9991440968245278,
+                1.0027652717625357,
+                1.0030286188136865,
+                1.0008048094954196,
+                1.0018511150943437,
+                1.0017865442216278,
+                0.9967125383238633,
+                1.0031485697277542,
+                0.9999255390296187,
+                1.0002215257196259,
+                1.0034500705612053,
+                1.0030120965947864,
+                0.998942217973445,
+                1.0039043974004187,
+                1.0010962045241691,
+                0.9999336453317453
+              ],
+              "reference_idx": 6,
+              "relative_l2_error": 0.0
+            },
+            "kernel_output_finite": true,
+            "passes_0.1": true,
+            "quantized_idx": 6,
+            "reference_idx": 6,
+            "relative_l2_error": 0.0,
+            "stderr": "",
+            "stdout": "{\"kernel_output\": [-0.8813729882240295, -2.678633213043213, 0.6457722783088684, -0.581386387348175, -1.3800278902053833, -0.9962041974067688, 2.245950937271118, 0.1266368180513382], \"reference_idx\": 6, \"quantized_idx\": 6, \"ref_distances\": [0.9991440968245278, 1.0027652717625357, 1.0030286188136865, 1.0008048094954196, 1.0018511150943437, 1.0017865442216278, 0.9967125383238633, 1.0031485697277542, 0.9999255390296187, 1.0002215257196259, 1.0034500705612053, 1.0030120965947864, 0.998942217973445, 1.0039043974004187, 1.0010962045241691, 0.9999336453317453], \"quant_distances\": [1.046875, 1.140625, 1.0, 0.984375, 1.09375, 0.984375, 0.953125, 1.140625, 1.09375, 1.234375, 0.984375, 1.171875, 1.140625, 1.09375, 1.078125, 1.15625], \"relative_l2_error\": 0.0, \"passes_0.1\": true, \"output_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the fixed make_inputs() workload, kernel output matches the float64 reference embedding exactly: winner index 6 in both cases, relative L2 error 0.0 <= 0.1, output finite of shape (8,). No reorder or error above threshold.",
+          "supports": "rebutted",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.98,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 ran the kernel on the fixed make_inputs() workload and compared against the float64 reference (smallest-index tie-break argmin of squared Euclidean distances). Kernel winner index 6 equals reference index 6, output is finite of shape (8,), and relative L2 error is 0.0, well within the contract's 0.1 threshold. Claim c1 (that quantized routing would pick a different neighbor or exceed tolerance) is rebutted by in-scope runtime evidence.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-24T01:06:15Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.98,
+        "created_at": "2026-09-24T01:06:15Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 ran the kernel on the fixed make_inputs() workload and compared against the float64 reference (smallest-index tie-break argmin of squared Euclidean distances). Kernel winner index 6 equals reference index 6, output is finite of shape (8,), and relative L2 error is 0.0, well within the contract's 0.1 threshold. Claim c1 (that quantized routing would pick a different neighbor or exceed tolerance) is rebutted by in-scope runtime evidence.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.98,
+    "created_at": "2026-09-24T01:06:15Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t6 ran the kernel on the fixed make_inputs() workload and compared against the float64 reference (smallest-index tie-break argmin of squared Euclidean distances). Kernel winner index 6 equals reference index 6, output is finite of shape (8,), and relative L2 error is 0.0, well within the contract's 0.1 threshold. Claim c1 (that quantized routing would pick a different neighbor or exceed tolerance) is rebutted by in-scope runtime evidence.",
+    "verdict": "trust"
+  }
+}

@@ -1,0 +1,469 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_z\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: import numpy as np\\n2: import torch\\n3: import triton\\n4: import triton.language as tl\\n5: \\n6: \\n7: @triton.jit\\n8: def _rbf_kernel(Query, Anchors, Values, Output, N: tl.constexpr, D: tl.constexpr):\\n9:     row = tl.arange(0, N)\\n10:     anchor_norm = tl.full((N,), 0.0, tl.float32)\\n11:     query_norm = tl.full((), 0.0, tl.float32)\\n12:     dot = tl.full((N,), 0.0, tl.float32)\\n13:     for k in tl.static_range(0, D):\\n14:         anchor = tl.load(Anchors + row * D + k).to(tl.float32)\\n15:         query = tl.load(Query + k).to(tl.float32)\\n16:         anchor_square = anchor * anchor\\n17:         query_square = query * query\\n18:         cross = anchor * query\\n19:         anchor_norm = anchor_norm + anchor_square\\n20:         query_norm = query_norm + query_square\\n21:         dot = dot + cross\\n22:     norm_sum = anchor_norm + query_norm\\n23:     twice_dot = 2.0 * dot\\n24:     distance = tl.maximum(norm_sum - twice_dot, 0.0)\\n25:     weight = tl.exp(-16.0 * distance)\\n26:     value = tl.load(Values + row).to(tl.float32)\\n27:     numerator = tl.sum(weight * value, 0)\\n28:     denominator = tl.sum(weight, 0)\\n29:     output = tl.div_rn(numerator, denominator)\\n30:     tl.store(Output, output)\\n31: \\n32: \\n33: def run(query, anchors, values):\\n34:     output = torch.empty((1,), device=query.device, dtype=torch.float32)\\n35:     _rbf_kernel[(1,)](query, anchors, values, output, N=16, D=32,\\n36:                       num_warps=1, enable_fp_fusion=False)\\n37:     return output\\n38: \\n39: \\n40: def make_inputs_numpy():\\n41:     rng = np.random.Generator(np.random.PCG64(119263))\\n42:     query = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)\\n43:     anchors = (query.astype(np.float64)[None, :] +\\n44:                rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)\\n45:     values = rng.normal(0.0, 1.0, 16).astype(np.float32)\\n46:     return query, anchors, values\\n47: \\n48: \\n49: def make_inputs(device=\\\"cuda\\\"):\\n50:     return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute one normalized radial-basis-function regression prediction.\\n\\nThe only workload in scope is the float32 data returned by make_inputs()\\nin kernel.py: query has shape (32,), anchors has shape (16, 32), and values\\nhas shape (16,). Define the mathematical reference from these actual stored\\nfloat32 values, with all the following arithmetic evaluated in float64:\\n  distance[i] = sum_k (anchors[i,k] - query[k])**2\\n  weight[i] = exp(-16 * distance[i])\\n  reference[0] = sum_i weight[i]*values[i] / sum_i weight[i].\\n\\nThe output must be a finite vector of shape (1,). Its numerical error is\\n  ||output-reference||_2 / max(||reference||_2, 0.05).\\nThe implementation satisfies the contract iff this error is <= 0.05.\\nThe contract concerns the final normalized prediction. It does not impose\\nseparate error requirements on intermediate distances or individual weights.\\nAlternative inputs and seeds are outside the scope of this fixed workload.\\n\\nThe implementation uses the expanded squared-distance identity and clamps\\nnegative computed distances to zero before the exponential. Its norm and\\ndot-product accumulators round to float32 each step. FP fusion is disabled.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/numerical_cases/case_z\",\n    \"status\": \"unverified\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-09-24T01:02:42Z\",\n      \"evidence\": [\n        {\n          \"created_at\": \"2026-09-24T01:03:16Z\",\n          \"data\": {\n            \"abs_diff\": 0.014620318048527606,\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t7_probe.py\",\n                \"sha256\": \"6337dbb6cf668fe7e276c54d2f1e883ec8613051fdbe65a4bb57099c03108091\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t7_stdout.txt\",\n                \"sha256\": \"41abf724cdc2b841a10c6e74afc1f79f0bd3e8c4fa61026e3982a5bc6f3c831e\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t7_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t7_json_result.json\",\n                \"sha256\": \"b145fa023651fe74ae3c64a72000bbda500b86c0ceff3a9fd0f85c96184136d9\"\n              }\n            ],\n            \"bound\": 0.05,\n            \"distances_min_max\": [\n              0.005533461663617345,\n              0.009803504550291109\n            ],\n            \"duration_s\": 4.800115,\n            \"error\": 0.2924063609705521,\n            \"exit_code\": 0,\n            \"expected_signal\": null,\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"abs_diff\": 0.014620318048527606,\n              \"bound\": 0.05,\n              \"distances_min_max\": [\n                0.005533461663617345,\n                0.009803504550291109\n              ],\n              \"error\": 0.2924063609705521,\n              \"finite\": true,\n              \"metric\": \"contract error |output-ref|/max(|ref|,0.05)\",\n              \"output\": -0.018536671996116638,\n              \"passes\": false,\n              \"reference\": -0.033156990044644244,\n              \"shape\": [\n                1\n              ],\n              \"weights_min_max\": [\n                0.8548270828287564,\n                0.9152707218276462\n              ]\n            },\n            \"metric\": \"contract error |output-ref|/max(|ref|,0.05)\",\n            \"output\": -0.018536671996116638,\n            \"passes\": false,\n            \"reference\": -0.033156990044644244,\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"metric\\\": \\\"contract error |output-ref|/max(|ref|,0.05)\\\", \\\"output\\\": -0.018536671996116638, \\\"reference\\\": -0.033156990044644244, \\\"abs_diff\\\": 0.014620318048527606, \\\"error\\\": 0.2924063609705521, \\\"bound\\\": 0.05, \\\"passes\\\": false, \\\"finite\\\": true, \\\"shape\\\": [1], \\\"distances_min_max\\\": [0.005533461663617345, 0.009803504550291109], \\\"weights_min_max\\\": [0.8548270828287564, 0.9152707218276462]}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"id\": \"c1.e1\",\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Ran the kernel on the fixed make_inputs workload and compared against the contract's float64 reference. Output = -0.018536672, reference = -0.033156990, contract error = |out-ref|/max(|ref|,0.05) = 0.2924, which exceeds the required bound of 0.05 by ~6x. Distances are tiny (~0.005-0.010) and weights near-uniform (0.855-0.915), so the float32 expanded-distance cancellation error dominates the weight asymmetry that the reference captures, shifting the normalized prediction toward the plain mean of values. Output is finite with shape (1), but the error bound is violated.\",\n          \"supports\": \"confirmed\",\n          \"tool_event_id\": \"t7\"\n        }\n      ],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Reference is float64 sum_k (anchors[i,k]-query[k])**2; error metric ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs workload.\"\n        }\n      ],\n      \"scope_rationale\": \"problem.txt requires the final normalized prediction to satisfy ||output - reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs() workload, with the reference computed in float64 from stored float32 values.\",\n      \"statement\": \"The kernel's float32 expanded-distance computation causes the final normalized prediction to exceed the contract error bound of 0.05 on the fixed make_inputs workload.\",\n      \"status\": \"confirmed\",\n      \"updated_at\": \"2026-09-24T01:03:16Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_z\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_z\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_z\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_z\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_z\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"The core risk here is catastrophic cancellation: the kernel computes distance as \\u2016a\\u2016\\u00b2+\\u2016q\\u2016\\u00b2\\u22122a\\u00b7q in float32 with values ~16, so norms ~8192 while true distances are ~0.008 \\u2014 relative error could be huge in distance, though weights are near-uniform so the final prediction may still be fine. I'll record that claim and run the actual contract metric.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The expanded-identity form suffers catastrophic cancellation (norms ~8192 vs true distance ~0.008), and float32 step-wise accumulation can add error of a few 1e-3 in distance, perturbing weights exp(-16*d). Whether the normalized prediction stays within the contract's 0.05 relative error must be measured.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Reference is float64 sum_k (anchors[i,k]-query[k])**2; error metric ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs workload.\"\n              }\n            ],\n            \"statement\": \"The kernel's float32 expanded-distance computation causes the final normalized prediction to exceed the contract error bound of 0.05 on the fixed make_inputs workload.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"I need to re-record the claim with a scope_rationale, then run the actual contract metric on the fixed workload.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The expanded-identity form suffers catastrophic cancellation (norms ~8192 vs true distance ~0.008), and float32 step-wise accumulation adds error of order 1e-3 in distance, perturbing weights exp(-16*d). Whether the final normalized prediction stays within the contract's 0.05 bound must be measured.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Reference is float64 sum_k (anchors[i,k]-query[k])**2; error metric ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs workload.\"\n              }\n            ],\n            \"scope_rationale\": \"problem.txt requires the final normalized prediction to satisfy ||output - reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs() workload, with the reference computed in float64 from stored float32 values.\",\n            \"statement\": \"The kernel's float32 expanded-distance computation causes the final normalized prediction to exceed the contract error bound of 0.05 on the fixed make_inputs workload.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 4,\n      \"text\": \"The claim is recorded; now I'll run the kernel on the fixed workload and compute the contract's error metric against the float64 reference.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import numpy as np, torch, json, math, sys\\nsys.path.insert(0, \\\"/root/numerical_cases/case_z\\\")\\nfrom kernel import run, make_inputs_numpy\\n\\nquery_np, anchors_np, values_np = make_inputs_numpy()\\nq = torch.from_numpy(query_np).cuda()\\na = torch.from_numpy(anchors_np).cuda()\\nv = torch.from_numpy(values_np).cuda()\\n\\nout = run(q, a, v)\\nout_val = float(out.cpu().numpy()[0])\\n\\n# float64 reference from stored float32 values\\nq64 = query_np.astype(np.float64); a64 = anchors_np.astype(np.float64); v64 = values_np.astype(np.float64)\\nd = ((a64 - q64)**2).sum(axis=1)\\nw = np.exp(-16.0 * d)\\nref = float((w * v64).sum() / w.sum())\\n\\nerr = abs(out_val - ref) / max(abs(ref), 0.05)\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"contract error |output-ref|/max(|ref|,0.05)\\\",\\n  \\\"output\\\": out_val, \\\"reference\\\": ref,\\n  \\\"abs_diff\\\": abs(out_val - ref),\\n  \\\"error\\\": err, \\\"bound\\\": 0.05, \\\"passes\\\": err <= 0.05,\\n  \\\"finite\\\": math.isfinite(out_val), \\\"shape\\\": list(out.shape),\\n  \\\"distances_min_max\\\": [float(d.min()), float(d.max())],\\n  \\\"weights_min_max\\\": [float(w.min()), float(w.max())]\\n}))\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 5,\n      \"text\": \"The probe shows a contract violation: error 0.292 vs bound 0.05. Before finalizing, I'll do one sanity probe to make sure the reference computation is right and understand the failure source (e.g., distances clamped to zero producing a plain mean of values).\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import numpy as np, torch, json, sys\\nsys.path.insert(0, \\\"/root/numerical_cases/case_z\\\")\\nfrom kernel import run, make_inputs_numpy\\nq,a,v = make_inputs_numpy()\\nq64=q.astype(np.float64); a64=a.astype(np.float64); v64=v.astype(np.float64)\\nd = ((a64-q64)**2).sum(1); w = np.exp(-16*d)\\nref = (w*v64).sum()/w.sum()\\nmean_v = v64.mean()\\nout = float(run(torch.from_numpy(q).cuda(), torch.from_numpy(a).cuda(), torch.from_numpy(v).cuda()).cpu().numpy()[0])\\n# emulate kernel's float32 expanded computation\\nq32=q.astype(np.float32); a32=a.astype(np.float32)\\nan=(a32.astype(np.float64)**2).sum(1); qn=(q32.astype(np.float64)**2).sum(); dot=(a32.astype(np.float64)*q32.astype(np.float64)).sum(1)\\napprox_d = an+qn-2*dot\\nprint(json.dumps({\\\"ref\\\":float(ref),\\\"out\\\":out,\\\"mean_values\\\":float(mean_v),\\n  \\\"true_d_minmax\\\":[float(d.min()),float(d.max())],\\n  \\\"expanded_d_minmax\\\":[float(approx_d.min()),float(approx_d.max())],\\n  \\\"err\\\":abs(out-ref)/max(abs(ref),0.05)}))\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 6,\n      \"text\": \"The probe shows a clear contract violation: error 0.292 vs the 0.05 bound. I'll finalize the evidence, mark the claim confirmed, and record the reject verdict.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"data\": {\n              \"abs_diff\": 0.014620318048527606,\n              \"bound\": 0.05,\n              \"distances_min_max\": [\n                0.005533461663617345,\n                0.009803504550291109\n              ],\n              \"error\": 0.2924063609705521,\n              \"metric\": \"contract error |output-ref|/max(|ref|,0.05)\",\n              \"output\": -0.018536671996116638,\n              \"passes\": false,\n              \"reference\": -0.033156990044644244\n            },\n            \"event_id\": \"t7\",\n            \"summary\": \"Ran the kernel on the fixed make_inputs workload and compared against the contract's float64 reference. Output = -0.018536672, reference = -0.033156990, contract error = |out-ref|/max(|ref|,0.05) = 0.2924, which exceeds the required bound of 0.05 by ~6x. Distances are tiny (~0.005-0.010) and weights near-uniform (0.855-0.915), so the float32 expanded-distance cancellation error dominates the weight asymmetry that the reference captures, shifting the normalized prediction toward the plain mean of values. Output is finite with shape (1), but the error bound is violated.\",\n            \"supports\": \"confirmed\"\n          },\n          \"tool\": \"finalize_probe_evidence\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_z\"\n      },\n      \"created_at\": \"2026-09-24T01:02:27Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_z\",\n        \"has_error\": null,\n        \"kernel_code\": \"import numpy as np\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _rbf_kernel(Query, Anchors, Values, Output, N: tl.constexpr, D: tl.constexpr):\\n    row = tl.arange(0, N)\\n    anchor_norm = tl.full((N,), 0.0, tl.float32)\\n    query_norm = tl.full((), 0.0, tl.float32)\\n    dot = tl.full((N,), 0.0, tl.float32)\\n    for k in tl.static_range(0, D):\\n        anchor = tl.load(Anchors + row * D + k).to(tl.float32)\\n        query = tl.load(Query + k).to(tl.float32)\\n        anchor_square = anchor * anchor\\n        query_square = query * query\\n        cross = anchor * query\\n        anchor_norm = anchor_norm + anchor_square\\n        query_norm = query_norm + query_square\\n        dot = dot + cross\\n    norm_sum = anchor_norm + query_norm\\n    twice_dot = 2.0 * dot\\n    distance = tl.maximum(norm_sum - twice_dot, 0.0)\\n    weight = tl.exp(-16.0 * distance)\\n    value = tl.load(Values + row).to(tl.float32)\\n    numerator = tl.sum(weight * value, 0)\\n    denominator = tl.sum(weight, 0)\\n    output = tl.div_rn(numerator, denominator)\\n    tl.store(Output, output)\\n\\n\\ndef run(query, anchors, values):\\n    output = torch.empty((1,), device=query.device, dtype=torch.float32)\\n    _rbf_kernel[(1,)](query, anchors, values, output, N=16, D=32,\\n                      num_warps=1, enable_fp_fusion=False)\\n    return output\\n\\n\\ndef make_inputs_numpy():\\n    rng = np.random.Generator(np.random.PCG64(119263))\\n    query = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)\\n    anchors = (query.astype(np.float64)[None, :] +\\n               rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)\\n    values = rng.normal(0.0, 1.0, 16).astype(np.float32)\\n    return query, anchors, values\\n\\n\\ndef make_inputs(device=\\\"cuda\\\"):\\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Compute one normalized radial-basis-function regression prediction.\\n\\nThe only workload in scope is the float32 data returned by make_inputs()\\nin kernel.py: query has shape (32,), anchors has shape (16, 32), and values\\nhas shape (16,). Define the mathematical reference from these actual stored\\nfloat32 values, with all the following arithmetic evaluated in float64:\\n  distance[i] = sum_k (anchors[i,k] - query[k])**2\\n  weight[i] = exp(-16 * distance[i])\\n  reference[0] = sum_i weight[i]*values[i] / sum_i weight[i].\\n\\nThe output must be a finite vector of shape (1,). Its numerical error is\\n  ||output-reference||_2 / max(||reference||_2, 0.05).\\nThe implementation satisfies the contract iff this error is <= 0.05.\\nThe contract concerns the final normalized prediction. It does not impose\\nseparate error requirements on intermediate distances or individual weights.\\nAlternative inputs and seeds are outside the scope of this fixed workload.\\n\\nThe implementation uses the expanded squared-distance identity and clamps\\nnegative computed distances to zero before the exponential. Its norm and\\ndot-product accumulators round to float32 each step. FP fusion is disabled.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/numerical_cases/case_z\",\n        \"status\": \"unverified\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_z\"\n      },\n      \"created_at\": \"2026-09-24T01:02:27Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute one normalized radial-basis-function regression prediction.\\n\\nThe only workload in scope is the float32 data returned by make_inputs()\\nin kernel.py: query has shape (32,), anchors has shape (16, 32), and values\\nhas shape (16,). Define the mathematical reference from these actual stored\\nfloat32 values, with all the following arithmetic evaluated in float64:\\n  distance[i] = sum_k (anchors[i,k] - query[k])**2\\n  weight[i] = exp(-16 * distance[i])\\n  reference[0] = sum_i weight[i]*values[i] / sum_i weight[i].\\n\\nThe output must be a finite vector of shape (1,). Its numerical error is\\n  ||output-reference||_2 / max(||reference||_2, 0.05).\\nThe implementation satisfies the contract iff this error is <= 0.05.\\nThe contract concerns the final normalized prediction. It does not impose\\nseparate error requirements on intermediate distances or individual weights.\\nAlternative inputs and seeds are outside the scope of this fixed workload.\\n\\nThe implementation uses the expanded squared-distance identity and clamps\\nnegative computed distances to zero before the exponential. Its norm and\\ndot-product accumulators round to float32 each step. FP fusion is disabled.\\n\",\n        \"entry\": \"case_z\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_z\"\n      },\n      \"created_at\": \"2026-09-24T01:02:27Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_z\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 1805\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 67\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1164\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_z\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-09-24T01:02:27Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{\\n  \\\"name\\\": \\\"case_z\\\",\\n  \\\"passed\\\": null,\\n  \\\"status\\\": \\\"unverified\\\"\\n}\\n\",\n        \"entry\": \"case_z\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 67,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The expanded-identity form suffers catastrophic cancellation (norms ~8192 vs true distance ~0.008), and float32 step-wise accumulation can add error of a few 1e-3 in distance, perturbing weights exp(-16*d). Whether the normalized prediction stays within the contract's 0.05 relative error must be measured.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Reference is float64 sum_k (anchors[i,k]-query[k])**2; error metric ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs workload.\"\n          }\n        ],\n        \"statement\": \"The kernel's float32 expanded-distance computation causes the final normalized prediction to exceed the contract error bound of 0.05 on the fixed make_inputs workload.\"\n      },\n      \"created_at\": \"2026-09-24T01:02:33Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"error\": {\n          \"message\": \"in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.\",\n          \"recoverable\": true,\n          \"type\": \"LedgerError\"\n        },\n        \"error_type\": \"LedgerError\",\n        \"event_id\": \"t5\",\n        \"message\": \"in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.\",\n        \"ok\": false\n      },\n      \"status\": \"error\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The expanded-identity form suffers catastrophic cancellation (norms ~8192 vs true distance ~0.008), and float32 step-wise accumulation adds error of order 1e-3 in distance, perturbing weights exp(-16*d). Whether the final normalized prediction stays within the contract's 0.05 bound must be measured.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Reference is float64 sum_k (anchors[i,k]-query[k])**2; error metric ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs workload.\"\n          }\n        ],\n        \"scope_rationale\": \"problem.txt requires the final normalized prediction to satisfy ||output - reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs() workload, with the reference computed in float64 from stored float32 values.\",\n        \"statement\": \"The kernel's float32 expanded-distance computation causes the final normalized prediction to exceed the contract error bound of 0.05 on the fixed make_inputs workload.\"\n      },\n      \"created_at\": \"2026-09-24T01:02:42Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"created_at\": \"2026-09-24T01:02:42Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"The expanded-identity form suffers catastrophic cancellation (norms ~8192 vs true distance ~0.008), and float32 step-wise accumulation adds error of order 1e-3 in distance, perturbing weights exp(-16*d). Whether the final normalized prediction stays within the contract's 0.05 bound must be measured.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Reference is float64 sum_k (anchors[i,k]-query[k])**2; error metric ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs workload.\"\n          }\n        ],\n        \"scope_rationale\": \"problem.txt requires the final normalized prediction to satisfy ||output - reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs() workload, with the reference computed in float64 from stored float32 values.\",\n        \"statement\": \"The kernel's float32 expanded-distance computation causes the final normalized prediction to exceed the contract error bound of 0.05 on the fixed make_inputs workload.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-09-24T01:02:42Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import numpy as np, torch, json, math, sys\\nsys.path.insert(0, \\\"/root/numerical_cases/case_z\\\")\\nfrom kernel import run, make_inputs_numpy\\n\\nquery_np, anchors_np, values_np = make_inputs_numpy()\\nq = torch.from_numpy(query_np).cuda()\\na = torch.from_numpy(anchors_np).cuda()\\nv = torch.from_numpy(values_np).cuda()\\n\\nout = run(q, a, v)\\nout_val = float(out.cpu().numpy()[0])\\n\\n# float64 reference from stored float32 values\\nq64 = query_np.astype(np.float64); a64 = anchors_np.astype(np.float64); v64 = values_np.astype(np.float64)\\nd = ((a64 - q64)**2).sum(axis=1)\\nw = np.exp(-16.0 * d)\\nref = float((w * v64).sum() / w.sum())\\n\\nerr = abs(out_val - ref) / max(abs(ref), 0.05)\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"contract error |output-ref|/max(|ref|,0.05)\\\",\\n  \\\"output\\\": out_val, \\\"reference\\\": ref,\\n  \\\"abs_diff\\\": abs(out_val - ref),\\n  \\\"error\\\": err, \\\"bound\\\": 0.05, \\\"passes\\\": err <= 0.05,\\n  \\\"finite\\\": math.isfinite(out_val), \\\"shape\\\": list(out.shape),\\n  \\\"distances_min_max\\\": [float(d.min()), float(d.max())],\\n  \\\"weights_min_max\\\": [float(w.min()), float(w.max())]\\n}))\"\n      },\n      \"created_at\": \"2026-09-24T01:02:51Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t7_probe.py\",\n            \"sha256\": \"6337dbb6cf668fe7e276c54d2f1e883ec8613051fdbe65a4bb57099c03108091\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t7_stdout.txt\",\n            \"sha256\": \"41abf724cdc2b841a10c6e74afc1f79f0bd3e8c4fa61026e3982a5bc6f3c831e\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t7_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n            \"kind\": \"json_result\",\n            \"path\": \"probes/t7_json_result.json\",\n            \"sha256\": \"b145fa023651fe74ae3c64a72000bbda500b86c0ceff3a9fd0f85c96184136d9\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"The kernel's float32 expanded-distance computation causes the final normalized prediction to exceed the contract error bound of 0.05 on the fixed make_inputs workload.\",\n        \"cwd\": \"/root/numerical_cases/case_z\",\n        \"duration_s\": 4.800115,\n        \"event_id\": \"t7\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t7_probe.py\",\n                \"sha256\": \"6337dbb6cf668fe7e276c54d2f1e883ec8613051fdbe65a4bb57099c03108091\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t7_stdout.txt\",\n                \"sha256\": \"41abf724cdc2b841a10c6e74afc1f79f0bd3e8c4fa61026e3982a5bc6f3c831e\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t7_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t7_json_result.json\",\n                \"sha256\": \"b145fa023651fe74ae3c64a72000bbda500b86c0ceff3a9fd0f85c96184136d9\"\n              }\n            ],\n            \"duration_s\": 4.800115,\n            \"exit_code\": 0,\n            \"expected_signal\": null,\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"abs_diff\": 0.014620318048527606,\n              \"bound\": 0.05,\n              \"distances_min_max\": [\n                0.005533461663617345,\n                0.009803504550291109\n              ],\n              \"error\": 0.2924063609705521,\n              \"finite\": true,\n              \"metric\": \"contract error |output-ref|/max(|ref|,0.05)\",\n              \"output\": -0.018536671996116638,\n              \"passes\": false,\n              \"reference\": -0.033156990044644244,\n              \"shape\": [\n                1\n              ],\n              \"weights_min_max\": [\n                0.8548270828287564,\n                0.9152707218276462\n              ]\n            },\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"metric\\\": \\\"contract error |output-ref|/max(|ref|,0.05)\\\", \\\"output\\\": -0.018536671996116638, \\\"reference\\\": -0.033156990044644244, \\\"abs_diff\\\": 0.014620318048527606, \\\"error\\\": 0.2924063609705521, \\\"bound\\\": 0.05, \\\"passes\\\": false, \\\"finite\\\": true, \\\"shape\\\": [1], \\\"distances_min_max\\\": [0.005533461663617345, 0.009803504550291109], \\\"weights_min_max\\\": [0.8548270828287564, 0.9152707218276462]}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe produced a JSON result that needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t7\"\n        },\n        \"exit_code\": 0,\n        \"expected_signal\": null,\n        \"json_parse_error\": null,\n        \"json_result\": {\n          \"abs_diff\": 0.014620318048527606,\n          \"bound\": 0.05,\n          \"distances_min_max\": [\n            0.005533461663617345,\n            0.009803504550291109\n          ],\n          \"error\": 0.2924063609705521,\n          \"finite\": true,\n          \"metric\": \"contract error |output-ref|/max(|ref|,0.05)\",\n          \"output\": -0.018536671996116638,\n          \"passes\": false,\n          \"reference\": -0.033156990044644244,\n          \"shape\": [\n            1\n          ],\n          \"weights_min_max\": [\n            0.8548270828287564,\n            0.9152707218276462\n          ]\n        },\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"{\\\"metric\\\": \\\"contract error |output-ref|/max(|ref|,0.05)\\\", \\\"output\\\": -0.018536671996116638, \\\"reference\\\": -0.033156990044644244, \\\"abs_diff\\\": 0.014620318048527606, \\\"error\\\": 0.2924063609705521, \\\"bound\\\": 0.05, \\\"passes\\\": false, \\\"finite\\\": true, \\\"shape\\\": [1], \\\"distances_min_max\\\": [0.005533461663617345, 0.009803504550291109], \\\"weights_min_max\\\": [0.8548270828287564, 0.9152707218276462]}\\n\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import numpy as np, torch, json, sys\\nsys.path.insert(0, \\\"/root/numerical_cases/case_z\\\")\\nfrom kernel import run, make_inputs_numpy\\nq,a,v = make_inputs_numpy()\\nq64=q.astype(np.float64); a64=a.astype(np.float64); v64=v.astype(np.float64)\\nd = ((a64-q64)**2).sum(1); w = np.exp(-16*d)\\nref = (w*v64).sum()/w.sum()\\nmean_v = v64.mean()\\nout = float(run(torch.from_numpy(q).cuda(), torch.from_numpy(a).cuda(), torch.from_numpy(v).cuda()).cpu().numpy()[0])\\n# emulate kernel's float32 expanded computation\\nq32=q.astype(np.float32); a32=a.astype(np.float32)\\nan=(a32.astype(np.float64)**2).sum(1); qn=(q32.astype(np.float64)**2).sum(); dot=(a32.astype(np.float64)*q32.astype(np.float64)).sum(1)\\napprox_d = an+qn-2*dot\\nprint(json.dumps({\\\"ref\\\":float(ref),\\\"out\\\":out,\\\"mean_values\\\":float(mean_v),\\n  \\\"true_d_minmax\\\":[float(d.min()),float(d.max())],\\n  \\\"expanded_d_minmax\\\":[float(approx_d.min()),float(approx_d.max())],\\n  \\\"err\\\":abs(out-ref)/max(abs(ref),0.05)}))\"\n      },\n      \"created_at\": \"2026-09-24T01:03:10Z\",\n      \"id\": \"t8\",\n      \"output\": {\n        \"error\": {\n          \"message\": \"claim c1 already has a successful probe you have not interpreted: event t7. Call finalize_probe_evidence(event_id='t7', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t7 first and then probe again.\",\n          \"recoverable\": true,\n          \"type\": \"LedgerError\"\n        },\n        \"error_type\": \"LedgerError\",\n        \"event_id\": \"t8\",\n        \"message\": \"claim c1 already has a successful probe you have not interpreted: event t7. Call finalize_probe_evidence(event_id='t7', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t7 first and then probe again.\",\n        \"ok\": false\n      },\n      \"status\": \"error\",\n      \"tool\": \"run_claim_probe\"\n    },\n    {\n      \"args\": {\n        \"data\": {\n          \"abs_diff\": 0.014620318048527606,\n          \"bound\": 0.05,\n          \"distances_min_max\": [\n            0.005533461663617345,\n            0.009803504550291109\n          ],\n          \"error\": 0.2924063609705521,\n          \"metric\": \"contract error |output-ref|/max(|ref|,0.05)\",\n          \"output\": -0.018536671996116638,\n          \"passes\": false,\n          \"reference\": -0.033156990044644244\n        },\n        \"event_id\": \"t7\",\n        \"summary\": \"Ran the kernel on the fixed make_inputs workload and compared against the contract's float64 reference. Output = -0.018536672, reference = -0.033156990, contract error = |out-ref|/max(|ref|,0.05) = 0.2924, which exceeds the required bound of 0.05 by ~6x. Distances are tiny (~0.005-0.010) and weights near-uniform (0.855-0.915), so the float32 expanded-distance cancellation error dominates the weight asymmetry that the reference captures, shifting the normalized prediction toward the plain mean of values. Output is finite with shape (1), but the error bound is violated.\",\n        \"supports\": \"confirmed\"\n      },\n      \"created_at\": \"2026-09-24T01:03:16Z\",\n      \"id\": \"t9\",\n      \"output\": {\n        \"claim\": {\n          \"created_at\": \"2026-09-24T01:02:42Z\",\n          \"evidence\": [\n            {\n              \"artifacts\": [],\n              \"created_at\": \"2026-09-24T01:03:16Z\",\n              \"data\": {\n                \"abs_diff\": 0.014620318048527606,\n                \"artifacts\": [\n                  {\n                    \"description\": \"Python probe code executed by local runtime.\",\n                    \"kind\": \"probe_code\",\n                    \"path\": \"probes/t7_probe.py\",\n                    \"sha256\": \"6337dbb6cf668fe7e276c54d2f1e883ec8613051fdbe65a4bb57099c03108091\"\n                  },\n                  {\n                    \"description\": \"Captured stdout from the probe process.\",\n                    \"kind\": \"stdout\",\n                    \"path\": \"probes/t7_stdout.txt\",\n                    \"sha256\": \"41abf724cdc2b841a10c6e74afc1f79f0bd3e8c4fa61026e3982a5bc6f3c831e\"\n                  },\n                  {\n                    \"description\": \"Captured stderr from the probe process.\",\n                    \"kind\": \"stderr\",\n                    \"path\": \"probes/t7_stderr.txt\",\n                    \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n                  },\n                  {\n                    \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                    \"kind\": \"json_result\",\n                    \"path\": \"probes/t7_json_result.json\",\n                    \"sha256\": \"b145fa023651fe74ae3c64a72000bbda500b86c0ceff3a9fd0f85c96184136d9\"\n                  }\n                ],\n                \"bound\": 0.05,\n                \"distances_min_max\": [\n                  0.005533461663617345,\n                  0.009803504550291109\n                ],\n                \"duration_s\": 4.800115,\n                \"error\": 0.2924063609705521,\n                \"exit_code\": 0,\n                \"expected_signal\": null,\n                \"json_parse_error\": null,\n                \"json_result\": {\n                  \"abs_diff\": 0.014620318048527606,\n                  \"bound\": 0.05,\n                  \"distances_min_max\": [\n                    0.005533461663617345,\n                    0.009803504550291109\n                  ],\n                  \"error\": 0.2924063609705521,\n                  \"finite\": true,\n                  \"metric\": \"contract error |output-ref|/max(|ref|,0.05)\",\n                  \"output\": -0.018536671996116638,\n                  \"passes\": false,\n                  \"reference\": -0.033156990044644244,\n                  \"shape\": [\n                    1\n                  ],\n                  \"weights_min_max\": [\n                    0.8548270828287564,\n                    0.9152707218276462\n                  ]\n                },\n                \"metric\": \"contract error |output-ref|/max(|ref|,0.05)\",\n                \"output\": -0.018536671996116638,\n                \"passes\": false,\n                \"reference\": -0.033156990044644244,\n                \"stderr\": \"\",\n                \"stdout\": \"{\\\"metric\\\": \\\"contract error |output-ref|/max(|ref|,0.05)\\\", \\\"output\\\": -0.018536671996116638, \\\"reference\\\": -0.033156990044644244, \\\"abs_diff\\\": 0.014620318048527606, \\\"error\\\": 0.2924063609705521, \\\"bound\\\": 0.05, \\\"passes\\\": false, \\\"finite\\\": true, \\\"shape\\\": [1], \\\"distances_min_max\\\": [0.005533461663617345, 0.009803504550291109], \\\"weights_min_max\\\": [0.8548270828287564, 0.9152707218276462]}\\n\",\n                \"timed_out\": false,\n                \"timeout_s\": 60\n              },\n              \"id\": \"c1.e1\",\n              \"kind\": \"runtime_probe\",\n              \"summary\": \"Ran the kernel on the fixed make_inputs workload and compared against the contract's float64 reference. Output = -0.018536672, reference = -0.033156990, contract error = |out-ref|/max(|ref|,0.05) = 0.2924, which exceeds the required bound of 0.05 by ~6x. Distances are tiny (~0.005-0.010) and weights near-uniform (0.855-0.915), so the float32 expanded-distance cancellation error dominates the weight asymmetry that the reference captures, shifting the normalized prediction toward the plain mean of values. Output is finite with shape (1), but the error bound is violated.\",\n              \"supports\": \"confirmed\",\n              \"tool_event_id\": \"t7\"\n            }\n          ],\n          \"id\": \"c1\",\n          \"raised_by\": \"solo\",\n          \"rationale\": \"The expanded-identity form suffers catastrophic cancellation (norms ~8192 vs true distance ~0.008), and float32 step-wise accumulation adds error of order 1e-3 in distance, perturbing weights exp(-16*d). Whether the final normalized prediction stays within the contract's 0.05 bound must be measured.\",\n          \"scope\": \"in_scope\",\n          \"scope_evidence\": [\n            {\n              \"source\": \"problem.txt\",\n              \"summary\": \"Reference is float64 sum_k (anchors[i,k]-query[k])**2; error metric ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs workload.\"\n            }\n          ],\n          \"scope_rationale\": \"problem.txt requires the final normalized prediction to satisfy ||output - reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs() workload, with the reference computed in float64 from stored float32 values.\",\n          \"statement\": \"The kernel's float32 expanded-distance computation causes the final normalized prediction to exceed the contract error bound of 0.05 on the fixed make_inputs workload.\",\n          \"status\": \"confirmed\",\n          \"updated_at\": \"2026-09-24T01:03:16Z\"\n        },\n        \"evidence\": {\n          \"artifacts\": [],\n          \"created_at\": \"2026-09-24T01:03:16Z\",\n          \"data\": {\n            \"abs_diff\": 0.014620318048527606,\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t7_probe.py\",\n                \"sha256\": \"6337dbb6cf668fe7e276c54d2f1e883ec8613051fdbe65a4bb57099c03108091\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t7_stdout.txt\",\n                \"sha256\": \"41abf724cdc2b841a10c6e74afc1f79f0bd3e8c4fa61026e3982a5bc6f3c831e\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t7_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t7_json_result.json\",\n                \"sha256\": \"b145fa023651fe74ae3c64a72000bbda500b86c0ceff3a9fd0f85c96184136d9\"\n              }\n            ],\n            \"bound\": 0.05,\n            \"distances_min_max\": [\n              0.005533461663617345,\n              0.009803504550291109\n            ],\n            \"duration_s\": 4.800115,\n            \"error\": 0.2924063609705521,\n            \"exit_code\": 0,\n            \"expected_signal\": null,\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"abs_diff\": 0.014620318048527606,\n              \"bound\": 0.05,\n              \"distances_min_max\": [\n                0.005533461663617345,\n                0.009803504550291109\n              ],\n              \"error\": 0.2924063609705521,\n              \"finite\": true,\n              \"metric\": \"contract error |output-ref|/max(|ref|,0.05)\",\n              \"output\": -0.018536671996116638,\n              \"passes\": false,\n              \"reference\": -0.033156990044644244,\n              \"shape\": [\n                1\n              ],\n              \"weights_min_max\": [\n                0.8548270828287564,\n                0.9152707218276462\n              ]\n            },\n            \"metric\": \"contract error |output-ref|/max(|ref|,0.05)\",\n            \"output\": -0.018536671996116638,\n            \"passes\": false,\n            \"reference\": -0.033156990044644244,\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"metric\\\": \\\"contract error |output-ref|/max(|ref|,0.05)\\\", \\\"output\\\": -0.018536671996116638, \\\"reference\\\": -0.033156990044644244, \\\"abs_diff\\\": 0.014620318048527606, \\\"error\\\": 0.2924063609705521, \\\"bound\\\": 0.05, \\\"passes\\\": false, \\\"finite\\\": true, \\\"shape\\\": [1], \\\"distances_min_max\\\": [0.005533461663617345, 0.009803504550291109], \\\"weights_min_max\\\": [0.8548270828287564, 0.9152707218276462]}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"id\": \"c1.e1\",\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Ran the kernel on the fixed make_inputs workload and compared against the contract's float64 reference. Output = -0.018536672, reference = -0.033156990, contract error = |out-ref|/max(|ref|,0.05) = 0.2924, which exceeds the required bound of 0.05 by ~6x. Distances are tiny (~0.005-0.010) and weights near-uniform (0.855-0.915), so the float32 expanded-distance cancellation error dominates the weight asymmetry that the reference captures, shifting the normalized prediction toward the plain mean of values. Output is finite with shape (1), but the error bound is violated.\",\n          \"supports\": \"confirmed\",\n          \"tool_event_id\": \"t7\"\n        }\n      },\n      \"status\": \"ok\",\n      \"tool\": \"finalize_probe_evidence\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 32768,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Leave it unset if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Required when scope is in_scope: which contract requirement this claim would violate."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Required when scope is in_scope: at least one quote from the contract, each with its source."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

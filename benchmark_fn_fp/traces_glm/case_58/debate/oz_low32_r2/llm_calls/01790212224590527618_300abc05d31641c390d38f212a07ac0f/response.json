@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-988b22a3973f4ebfbbe2ca997cc7de54",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two independent probes in one batch: one for c1 (full kernel output vs float64 reference, plus CPU float32 elimination emulation to isolate elimination rounding) and one for c2 (a Triton kernel that records the 8 pivots and their tl.log values, compared against correctly-rounded float64 log of the same pivots).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-abff0853ed719971",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport sys, json\\nimport numpy as np\\nsys.path.insert(0, \\\"/root/numerical_cases/case_w\\\")\\nfrom kernel import make_inputs_numpy, run\\nimport torch\\n\\nm_np = make_inputs_numpy()[0]\\nA = m_np.astype(np.float64)\\n# float64 reference on stored float32 entries\\nsign, logdet_ref = np.linalg.slogdet(A)\\n\\n# run actual kernel\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\nm = torch.from_numpy(m_np).to(dev)\\nout = run(m).cpu().numpy().astype(np.float64)\\nkernel_rel = abs(out[0]-logdet_ref)/max(abs(logdet_ref),1.0)\\n\\n# CPU float32 emulation of the exact kernel arithmetic (RN div, no fusion)\\na = m_np.astype(np.float32).astype(np.float64)\\n# use np.float32 ops\\nm32 = m_np.astype(np.float32)\\npivots32 = []\\nfor k in range(8):\\n    pivot = np.float32(m32[k,k])\\n    column = m32[:,k].astype(np.float32)\\n    row = m32[k,:].astype(np.float32)\\n    mult = (column / pivot).astype(np.float32)\\n    prod = (mult[:,None]*row[None,:]).astype(np.float32)\\n    upd = (m32 - prod).astype(np.float32)\\n    mask = np.zeros((8,8), dtype=bool)\\n    for i in range(8):\\n        for j in range(8):\\n            mask[i,j] = (i>k) and (j>k)\\n    m32 = np.where(mask, upd, m32).astype(np.float32)\\n    pivots32.append(pivot)\\npiv = np.array(pivots32, dtype=np.float32)\\n\\n# elimination-only error: float64 log of float32 pivots vs reference\\nelim_err = abs(np.sum(np.log(piv.astype(np.float64))) - logdet_ref)/max(abs(logdet_ref),1.0)\\n# full emulated float32 accumulation with exact float32 log (correctly rounded)\\nacc32 = np.float32(0.0)\\nfor p in piv:\\n    acc32 = np.float32(acc32 + np.float32(np.log(np.float64(p))))\\nemul_rel = abs(float(acc32)-logdet_ref)/max(abs(logdet_ref),1.0)\\n\\n# pivot-relative errors vs float64 elimination pivots\\nm64 = A.copy()\\npiv64 = []\\nfor k in range(8):\\n    piv64.append(m64[k,k])\\n    m64[k+1:,k+1:] -= np.outer(m64[k+1:,k]/m64[k,k], m64[k,k+1:])\\npiv64 = np.array(piv64)\\npivot_rel_err = np.abs(piv.astype(np.float64)-piv64)/np.abs(piv64)\\n\\nprint(json.dumps({\\n  \\\"reference_logdet_f64\\\": float(logdet_ref),\\n  \\\"kernel_output\\\": float(out[0]),\\n  \\\"kernel_rel_err\\\": float(kernel_rel),\\n  \\\"tolerance\\\": 1e-4,\\n  \\\"elim_only_rel_err_f64log_of_f32_pivots\\\": float(elim_err),\\n  \\\"emulated_full_f32_rel_err\\\": float(emul_rel),\\n  \\\"pivots_f32\\\": [float(p) for p in piv],\\n  \\\"pivot_rel_err_vs_f64\\\": [float(e) for e in pivot_rel_err],\\n  \\\"min_pivot_f32\\\": float(np.min(piv)),\\n  \\\"min_pivot_positive\\\": bool(np.all(piv>0))\\n}))\\n\", \"expected_signal\": \"relative error of kernel output and of emulated float32 elimination vs float64 reference, compared to 1e-4 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-b915a0b96a8427c8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport sys, json\\nimport numpy as np\\nimport torch, triton\\nimport triton.language as tl\\nsys.path.insert(0, \\\"/root/numerical_cases/case_w\\\")\\nfrom kernel import make_inputs_numpy, run\\n\\nm_np = make_inputs_numpy()[0]\\n\\n# Triton kernel: replicate elimination, store pivots and per-pivot tl.log\\n@triton.jit\\ndef _probe(Matrix, Piv, Logs, N: tl.constexpr):\\n    rows = tl.arange(0, N)\\n    columns = tl.arange(0, N)\\n    matrix = tl.load(Matrix + rows[:, None] * N + columns[None, :]).to(tl.float32)\\n    for k in tl.static_range(0, N):\\n        pivot = tl.sum(tl.sum(tl.where((rows[:, None] == k) & (columns[None, :] == k), matrix, 0.0), 0), 0)\\n        column = tl.sum(tl.where(columns[None, :] == k, matrix, 0.0), 1)\\n        pivot_row = tl.sum(tl.where(rows[:, None] == k, matrix, 0.0), 0)\\n        multiplier = tl.div_rn(column, pivot)\\n        product = multiplier[:, None] * pivot_row[None, :]\\n        updated = matrix - product\\n        matrix = tl.where((rows[:, None] > k) & (columns[None, :] > k), updated, matrix)\\n        tl.store(Piv + k, pivot)\\n        tl.store(Logs + k, tl.log(pivot))\\n\\nm = torch.from_numpy(m_np).to(\\\"cuda\\\")\\npiv_t = torch.empty((8,), device=\\\"cuda\\\", dtype=torch.float32)\\nlogs_t = torch.empty((8,), device=\\\"cuda\\\", dtype=torch.float32)\\n_probe[(1,)](m, piv_t, logs_t, N=8, num_warps=1, enable_fp_fusion=False)\\npiv = piv_t.cpu().numpy().astype(np.float64)\\nlogs = logs_t.cpu().numpy().astype(np.float64)\\n\\n# correctly-rounded reference: float64 log rounded to float32\\nref_logs = np.array([np.float32(np.log(np.float64(np.float32(p)))) for p in piv], dtype=np.float32).astype(np.float64)\\n\\nsum_tl = float(np.float32(np.sum(logs_t.cpu().numpy().astype(np.float32), dtype=np.float32)))\\nsum_ref = float(np.sum(ref_logs))\\n\\n# also full kernel output for context\\nref_logdet = np.linalg.slogdet(m_np.astype(np.float64))[1]\\nout = run(m).cpu().numpy().astype(np.float64)\\nkernel_rel = abs(out[0]-ref_logdet)/max(abs(ref_logdet),1.0)\\n\\nlog_only_err = abs(sum_tl - sum_ref)/max(abs(sum_ref),1.0)\\nper_ulp = np.abs(logs - ref_logs)\\nprint(json.dumps({\\n  \\\"pivots_f32\\\": [float(p) for p in piv],\\n  \\\"tl_log_values\\\": [float(x) for x in logs],\\n  \\\"correctly_rounded_log_values\\\": [float(x) for x in ref_logs],\\n  \\\"max_abs_per_pivot_log_diff\\\": float(np.max(per_ulp)),\\n  \\\"sum_tl_log_f32\\\": sum_tl,\\n  \\\"sum_correctly_rounded_f32\\\": sum_ref,\\n  \\\"log_only_rel_err\\\": float(log_only_err),\\n  \\\"tolerance\\\": 1e-4,\\n  \\\"kernel_output_rel_err\\\": float(kernel_rel),\\n  \\\"reference_logdet_f64\\\": float(ref_logdet)\\n}))\\n\", \"expected_signal\": \"tl.log sum vs correctly-rounded float32 log sum on the 8 actual pivots, relative error compared to 1e-4\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "I need to probe c1 and c2. Best: run actual kernel on GPU, compute reference, decompose error. One probe could cover both claims, but run_claim_probe is per claim. I can run one probe that runs the kernel, computes float64 reference, float32-emulated elimination with exact log, and tl.log comparison — issue two run_claim_probe calls (independent) in one response, each producing the needed metrics. Both probes run the kernel; fine.\n\nDesign probe for c1: load kernel module, run, reference logdet in float64 via np.linalg.slogdet on stored float32 entries; also CPU float32 emulation of elimination with exact log to isolate elimination error from log error. Compute relative errors. For c2: tl.log comparison — write a tiny triton kernel applying tl.log to the pivot values (pivots obtained from emulation or... better compute pivots inside kernel? Simpler: emulate elimination in float32 on CPU to get pivots — but c2 needs actual device tl.log on those pivots. But pivots from CPU emulation should match kernel's pivots if emulation correct; safer: run a triton kernel that does the whole elimination and stores pivots. Actually simplest: modify a copy of the kernel to also store pivots. I'll write probe code that defines a triton kernel storing the 8 pivots, plus computes tl.log(pivot) per pivot and sum.\n\nBoth probes need kernel.py source import. Use sys.path to /root/numerical_cases/case_w.\n\nProbe for c1: run kernel.run on make_inputs, reference = np.linalg.slogdet(float64 of stored entries)[1]. rel_err = |out - ref| / max(|ref|,1). Also emulate float32 elimination with correctly-rounded log: sum float64 log of float32 pivots vs reference — that gives elimination-only error. Emulation: pivots via float32 ops. Note kernel's update: matrix = updated for trailing submatrix, using multiplier*row subtracted — standard. Emulate: m32 = a.astype(float32); for k: pivot = m32[k,k]; column = m32[:,k]; row = m32[k,:]; mult = (column/pivot) in float32 RN (numpy float32 division is RN); product = mult[:,None]*row[None,:] float32; updated = m32 - product; only apply trailing. Sum log in float32? Use float64 log of float32 pivots to isolate; and also float32 accumulation. Compare.\n\nProbe for c2: triton kernel storing pivots and per-pivot tl.log values; compare sum tl.log vs float64 sum log of same float32 pivots; and per-pivot ulp error. Also full kernel output error maybe.\n\nLaunch both together.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790212225,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2258,
+    "prompt_tokens": 22529,
+    "total_tokens": 24787,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 575,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 575
+    }
+  }
+}

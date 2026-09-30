@@ -1,0 +1,44 @@
+{
+  "id": "chatcmpl-aa5ea5d6c68b4833b20d73c3dcf71d52",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.7, \"reason\": \"The workload is well-conditioned (distances ~0.008, weights ~0.6–0.95, so the normalized weighted average is stable), and float32 accumulation over 32 terms introduces only small errors in the expanded-distance identity; the clamp only affects negligible cases. Random sign errors in the accumulators largely cancel in the normalized sum, keeping error within the 5% tolerance.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Anchors very close to query (~0.015625 noise), so distances tiny (~32*2.44e-4 ≈ 0.0078), weights ≈ exp(-0.125) ≈ 0.88, well-conditioned. Float32 accumulation of 32 terms error tiny. Catastrophic cancellation: norm_sum - twice_dot — differences anchor-query small (~0.016), but norms ~16²·32=8192, cancellation loses ~ log(8192/0.0078)≈6 bits... float32 has ~7 digits; relative error in distance ~ 1e-7·8192/0.0078 ≈ 0.1? Hmm. Actually distance via identity: computed terms ~sum of squares ~ each ~256, sum 8192. Float32 relative error ~1e-7 → absolute error ~1e-3. True distance ~ 16·(0.0156²·?) wait per-dim diff ~0.0156, squared 2.4e-4, times 32 → 0.0078. Error 1e-3 relative to 0.0078 is 13% error in distance. Then weight = exp(-16·d), d error 1e-3 → weight relative error ~1.6%. That shifts weights but all weights similar (~exp(-0.125±0.016)), error in weighted mean of values... values random N(0,1). Weights vary 16%, prediction shift could be ~ a few percent of std. Tolerance is 5% relative to max(|ref|, 0.05). Hmm, risky.\n\nBut also weight*value and sums in fp32 with tl.sum — fine.\n\nLet me estimate more carefully. distance error sources: accumulation of 32 terms each ~256 in fp32: rounding ~ 32·256·6e-8 ≈ 5e-4 per sum (anchor_norm, query_norm, dot each). Errors ~ up to ~1e-3 in norm_sum - twice_dot (twice dot doubles). So distance error δ ~ 1.5e-3. d ≈ 0.0078, -16d ≈ -0.125, error in exponent 0.024, weight relative error ~2.4%. But errors are correlated: query_norm error cancels? query_norm is common to all i; anchor_norm errors differ per row. Distance error per row δ_i ~ ±1e-3 → exponent error ±0.016 → weights w_i(1±0.016). Prediction = Σ w v / Σ w. Perturbation of numerator weights randomly by ±1.6%: prediction error ≈ sqrt(16)·0.016·std(wv)/Σw ~ small. Reference value magnitude: weighted mean of N(0,1) values, |ref| ~ 0.25 typically. Error maybe ~ 0.02·(spread)/... rough: error ≈ sqrt(Σ(δw_i)²(v_i - ref)²)/Σw ≈ 0.016·4·1/sqrt... ≈ 0.016·~1 ≈ 0.016? Relative to 0.25 → 6%? Hmm borderline.\n\nAlso the reference uses exact fp64 distances from stored values; kernel uses identity with cancellation. Hard to be sure without running. But this is a \"verification\" task; the description says implementation \"clamps negative computed distances to zero\" — hint that distances might be near zero due to cancellation, meaning anchors equal query? No, noise 0.015625 per dim, distance 0.0078.\n\nEstimate more carefully: per-dim diff variance σ²=2.44e-4, expected distance = 32·2.44e-4 = 0.0078, distances vary per row roughly 0.0078±... chi-square-ish. exp(-16·0.0078)=0.88. Weights range exp(-16·d) with d in maybe [0.003,0.014] → weights [0.63,0.95]. Not degenerate.\n\nDistance computation error: anchor_norm sums 32 values each ~256 (query ~16±0.5). fp32 eps 6e-8, per-op rounding ~256·6e-8=1.5e-5, 32 adds random walk → ~8e-5 per norm sum. dot similar. norm_sum - twice_dot: error ~ 2e-4. δ(16d)~3e-3, weight rel err 0.3%. Prediction error then tiny, <1%. So trust.\n\nAlso accumulation: each addition rounds; 32 terms, relative error per sum ~ sqrt(32)·eps ≈ 3.4e-7, times 8192 → 2.8e-3? Hmm, that's absolute error 2.8e-3 worst-ish. Then 16·δ=0.045 exponent error → 4.5% weight error. Still probably OK because random signs. Values random so errors partially cancel in mean.\n\nHonestly, tolerance 5% is loose; I'll say trust with moderate confidence.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790211696,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1225,
+    "prompt_tokens": 1074,
+    "total_tokens": 2299,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1122,
+      "rejected_prediction_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cached_tokens": 1073
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 1122
+    }
+  }
+}

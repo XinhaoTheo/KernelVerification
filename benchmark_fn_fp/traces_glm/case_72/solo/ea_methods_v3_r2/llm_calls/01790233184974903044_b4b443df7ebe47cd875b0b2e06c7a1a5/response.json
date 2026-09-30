@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-09e6e849397441f3b4b4bde2de3aec5b",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The claim c1 is recorded and scoped; now I'll run the decisive probe: enumerate all 2^12 box vertices and compute the omitted residual, plus run the kernel on the worst vertex to measure actual output error.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-998be1c7281d6b69",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport numpy as np, torch, itertools, json\\n\\nrng = np.random.Generator(np.random.PCG64(194001))\\ncenter = rng.choice(np.asarray([-1,1]), size=12)\\nflip_probability = rng.uniform(0.05,0.4)\\nflips = np.where(rng.uniform(size=(6,12)) < flip_probability, -1, 1)\\nmagnitudes = rng.choice(np.asarray([0.5,1.0]), size=(6,12))\\nW = (center[None,:]*flips*magnitudes).astype(np.float32)\\nb = (0.75*np.abs(W).sum(axis=1)).astype(np.float32)\\nc = np.full(6, 0.25, dtype=np.float32)\\n\\n# all 2^12 vertices of [-1,1]^12\\nV = np.array(list(itertools.product([-1.0,1.0], repeat=12)), dtype=np.float64)\\nWd = W.astype(np.float64); bd = b.astype(np.float64); cd = c.astype(np.float64)\\nres = np.maximum(V @ Wd.T - bd, 0.0) @ cd\\nprint(\\\"vertices:\\\", V.shape, \\\"max residual:\\\", res.max(), \\\"argmax vertex idx:\\\", int(res.argmax()))\\nprint(\\\"vertex:\\\", V[res.argmax()].tolist())\\nprint(\\\"num vertices with residual > 1.0:\\\", int((res > 1.0).sum()))\\nprint(\\\"residual > 0.99 count:\\\", int((res > 0.99).sum()))\\n\\n# also random sampling in box\\nXr = np.random.default_rng(0).uniform(-1,1,size=(200000,12))\\nrr = np.maximum(Xr @ Wd.T - bd, 0.0) @ cd\\nprint(\\\"random max residual:\\\", rr.max())\\n\\nworst = V[res.argmax()]\\n# run actual kernel on worst vertex (as float32, n=1) and compare to float64 reference\\nimport importlib.util, os\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/evidence_cases/case_e11/kernel.py\\\")\\nK = importlib.util.module_from_spec(spec); spec.loader.exec_module(K)\\nx = torch.from_numpy(worst.astype(np.float32)).reshape(1,12).cuda()\\nw = torch.from_numpy(W).cuda(); bb = torch.from_numpy(b).cuda(); cc = torch.from_numpy(c).cuda()\\nactual = K.run(x, w, bb, cc)\\nexpected = 0.25*worst[0] + 0.5*worst[1] + res.max()\\nprint(\\\"kernel output at worst vertex:\\\", actual.item(), \\\"reference:\\\", expected, \\\"abs error:\\\", abs(actual.item()-expected))\\nresult = {\\\"max_residual_box_vertex_enumeration\\\": float(res.max()),\\n          \\\"count_vertices_residual_gt_1\\\": int((res>1.0).sum()),\\n          \\\"kernel_abs_error_at_worst_vertex\\\": abs(actual.item()-expected)}\\nprint(json.dumps(result))\\n\", \"expected_signal\": \"max residual over all 2^12 vertices exceeds 1.0\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run vertex enumeration probe for c1.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790233185,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 720,
+    "prompt_tokens": 10881,
+    "total_tokens": 11601,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 8,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 8
+    }
+  }
+}

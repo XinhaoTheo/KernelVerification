@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-167eccfd16df48738af01f3d6a6d5458",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two independent probes on the exact seeded workload: c1 compares the kernel output against the fp64 unquantized reference using the contract's relative L2 metric; c2 isolates fp32 accumulation by comparing an fp32-accumulated unquantized softmax against the fp64 reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8ddfcbc48986066f",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json, numpy as np, torch\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/numerical_cases/case_d/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nlogits_np, values_np = k.make_inputs_numpy()\\nlogits_t, values_t = k.make_inputs(\\\"cuda\\\")\\nout = k.run(logits_t, values_t).cpu().numpy().astype(np.float64)\\n\\nl64 = logits_np.astype(np.float64); v64 = values_np.astype(np.float64)\\nw = np.exp(l64 - l64.max()); p = w / w.sum()\\nref = p @ v64\\n\\nrel = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(16))\\n# probability shift diagnostics\\nscale = np.abs(l64).max()/7.0\\ncodes = np.clip(np.floor(l64/scale + 0.5), -7, 7)\\nrounded = codes*scale\\nwq = np.exp(rounded - rounded.max()); pq = wq/wq.sum()\\nprint(json.dumps({\\n  \\\"max_abs_logits\\\": float(np.abs(l64).max()),\\n  \\\"quant_step\\\": float(scale),\\n  \\\"relative_L2\\\": float(rel),\\n  \\\"tolerance\\\": 0.02,\\n  \\\"violation\\\": bool(rel > 0.02),\\n  \\\"max_prob_shift\\\": float(np.abs(pq-p).max()),\\n  \\\"ref_norm\\\": float(np.linalg.norm(ref)),\\n  \\\"output_finite\\\": bool(np.all(np.isfinite(out))),\\n  \\\"max_abs_out_err\\\": float(np.abs(out-ref).max()),\\n}))\", \"expected_signal\": \"relative_L2 > 0.02 (c1 confirmed) or <= 0.02 (rebutted)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-be06614f5510d13b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import json, numpy as np, torch\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/numerical_cases/case_d/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nlogits_np, values_np = k.make_inputs_numpy()\\nl32 = logits_np.astype(np.float32); v32 = values_np.astype(np.float32)\\n# fp32 pipeline: unquantized softmax + fp32 accumulation (numpy fp32 end-to-end)\\nw32 = np.exp(l32 - l32.max(), dtype=np.float32); p32 = w32 / w32.sum(dtype=np.float32)\\nout32 = (p32[:,None] * v32).sum(axis=0, dtype=np.float32).astype(np.float64)\\n\\nl64 = logits_np.astype(np.float64); v64 = values_np.astype(np.float64)\\nw = np.exp(l64 - l64.max()); p = w / w.sum()\\nref = p @ v64\\n\\nrel = np.linalg.norm(out32 - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(16))\\nprint(json.dumps({\\n  \\\"fp32_only_relative_L2\\\": float(rel),\\n  \\\"tolerance\\\": 0.02,\\n  \\\"negligible\\\": bool(rel < 1e-4),\\n  \\\"max_abs_err\\\": float(np.abs(out32-ref).max()),\\n  \\\"ref_norm\\\": float(np.linalg.norm(ref)),\\n}))\", \"expected_signal\": \"fp32-only residual << 0.02 (c2 rebutted as immaterial)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch two claim probes: c1 kernel output vs fp64 reference; c2 fp32 accumulation isolated. Both independent — batch.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790199692,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 831,
+    "prompt_tokens": 23369,
+    "total_tokens": 24200,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 26,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3925,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 26
+    }
+  }
+}

@@ -1,0 +1,230 @@
+[
+  {
+    "created_at": "2026-09-24T06:56:58Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:57:57Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "40b94202e13e85169efa15b6b8ecdc327d5cf0162eec0b9d5c25f75f40805e85"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "219467e49723a981b0328f8a35ce0f1e0388fbd3e3fad116659a77e106fac02f"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t12_json_result.json",
+              "sha256": "557b558edb77bb601b873330ea48e2236f1421dea0c1ac94d60f15db7f7dc0e5"
+            }
+          ],
+          "computed_exact_target": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "duration_s": 5.064608,
+          "exit_code": 0,
+          "expected_signal": "kernel output 0.0 for all rows while exact target ~4, giving relative error ~1 (failure), or output matching target (benign branch)",
+          "flaw": "numpy pairwise sum absorbed small values into 2^80 magnitudes before -2^80 cancellation",
+          "json_parse_error": null,
+          "json_result": {
+            "X_unmodified": true,
+            "c30_column": 10,
+            "emulated_fp32_chain_output": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "exact_target_fp64": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "kernel_output": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "passes_contract": true,
+            "permutation_order": [
+              8,
+              1,
+              6,
+              7,
+              5,
+              2,
+              3,
+              4,
+              9,
+              0
+            ],
+            "relative_error_vs_exact": 0.0,
+            "small_value_columns": [
+              6,
+              7,
+              8,
+              5,
+              3,
+              4,
+              1,
+              9
+            ],
+            "small_values_before_c30": 8,
+            "tolerance": 1e-05
+          },
+          "kernel_output": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "rel_err_vs_flawed_target": 0.0,
+          "small_values_before_c30": 8,
+          "stderr": "",
+          "stdout": "{\"permutation_order\": [8, 1, 6, 7, 5, 2, 3, 4, 9, 0], \"c30_column\": 10, \"small_value_columns\": [6, 7, 8, 5, 3, 4, 1, 9], \"small_values_before_c30\": 8, \"exact_target_fp64\": [0.0, 0.0, 0.0, 0.0], \"kernel_output\": [0.0, 0.0, 0.0, 0.0], \"emulated_fp32_chain_output\": [0.0, 0.0, 0.0, 0.0], \"relative_error_vs_exact\": 0.0, \"tolerance\": 1e-05, \"X_unmodified\": true, \"passes_contract\": true}\n",
+          "timed_out": false,
+          "timeout_s": 300
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Kernel output is 0.0 and all 8 small values precede the +2^30 term (c30 at column 10, small columns 1-9), which is the loss-condition branch. However, the probe's \"exact target\" was computed with numpy .sum(), whose pairwise summation absorbed the ~4 of small values into the 2^80 magnitudes before -2^80 cancelled, yielding a bogus 0.0 target. The true exact target (~4/row) requires math.fsum; result is not decisive yet, though the 0.0 kernel output is consistent with the claimed failure.",
+        "supports": "inconclusive",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "correction is a plain fp32 accumulator; adding +2^30 (ulp 128) to a correction holding ~4 rounds away the small values, then -2^30 leaves 0. The final total after -2^80 is exactly 0, so output is essentially correction. Whether this fires depends on the permutation order for seed 193602.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The workload is exactly the stored array from make_inputs() (seed 193602, shape (4,12)); the target is the exact real-number row sum (~4 per row, the 8 small values, since \u00b12^80 and \u00b12^30 cancel), with tolerance 1e-5 on final row sums. A fixed-workload output of 0 vs target ~4 would violate this requirement."
+      }
+    ],
+    "scope_rationale": "problem.txt fixes the workload to make_inputs() (seed 193602) and requires the final row sums to match the exact real-number sum (~4) within 1e-5; a permutation-order-dependent loss of the small values in the uncompensated correction accumulator would make the fixed-workload output 0, directly violating this stated requirement.",
+    "statement": "For the fixed workload (seed 193602), if the permutation places any of the 8 small values in the correction accumulator before the +2^30 term, the kernel's output per row is 0 while the exact target is the sum of the 8 small values (~4), giving relative error ~1 and violating the 1e-5 tolerance.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-24T06:57:57Z"
+  },
+  {
+    "created_at": "2026-09-24T06:56:58Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:57:57Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t13_probe.py",
+              "sha256": "f4e67f928ffbfdb419b02fbb51c5e0a52b7094c80b1e47915400c80760952855"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t13_stdout.txt",
+              "sha256": "541ba5809256dd3e70da35b5b52a94e63fde8b4ff811345924a7e7d4f0a1a97b"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t13_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t13_json_result.json",
+              "sha256": "e7fbdbb3a58a44396fe1f9013b398b5c99f38895e57c202cd6d729d419884f33"
+            }
+          ],
+          "duration_s": 0.197429,
+          "exit_code": 0,
+          "expected_signal": "sequential fp64 reference yields exactly 0.0 while exact fp64 target is ~4 per row",
+          "flawed_exact": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "json_parse_error": null,
+          "json_result": {
+            "conclusion": "probe reference equals target",
+            "exact_target_fp64": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max_abs_difference": 0.0,
+            "reference_equals_target": true,
+            "sequential_fp64_reference": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "small_value_sum_per_row": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "max_abs_difference": 0.0,
+          "reference_equals_target": true,
+          "sequential_reference": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "stderr": "",
+          "stdout": "{\"sequential_fp64_reference\": [0.0, 0.0, 0.0, 0.0], \"exact_target_fp64\": [0.0, 0.0, 0.0, 0.0], \"reference_equals_target\": true, \"max_abs_difference\": 0.0, \"small_value_sum_per_row\": [0.0, 0.0, 0.0, 0.0], \"conclusion\": \"probe reference equals target\"}\n",
+          "timed_out": false,
+          "timeout_s": 120
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "The probe's \"exact\" comparison used numpy .sum() (pairwise), which produced 0.0 \u2014 not a mathematically exact sum. numpy's pairwise reduction absorbed the small values into 2^80, so the claim that the sequential reference differs from the exact target was not actually tested. Inconclusive pending a math.fsum-based recomputation.",
+        "supports": "inconclusive",
+        "tool_event_id": "t13"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The recorded initial_probe 'passed' verdict is measured against 0.0 rather than the contract's exact target; an output of exactly 0.0 is itself consistent with the small values being lost, which would be a hard failure against the exact target.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "problem.txt states the metric is against the mathematical exact sum evaluated in float64 or better, and that initial_probe is evidence only, not a specification."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly states initial_probe is evidence, not a specification, and that the acceptance metric is against the exact real-number sum in float64 or better; the probe's 0.0 reference is a sequential order-dependent sum, not that target.",
+    "statement": "The initial probe's sequential fp64 reference (exactly 0.0 per row) is not the contract target: it absorbs the small values into 2^80 (ulp 2^56) before -2^80 cancels, so the probe's 'passed' result does not demonstrate contract compliance even if the kernel output matches it.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-24T06:57:57Z"
+  }
+]

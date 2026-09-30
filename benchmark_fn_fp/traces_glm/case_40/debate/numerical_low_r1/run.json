@@ -1,0 +1,856 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "__pycache__/kernel.cpython-313.pyc",
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_e",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _recurrence_kernel(Matrix, Initial, Drive, Output, N: tl.constexpr, STEPS: tl.constexpr):\n    i = tl.arange(0, N)\n    j = tl.arange(0, N)\n    matrix = tl.load(Matrix + i[:, None] * N + j[None, :])\n    state = tl.load(Initial + i).to(tl.float32)\n    for step in range(STEPS):\n        forcing = tl.load(Drive + step * N + i)\n        next_state = tl.sum(matrix * state[None, :], axis=1) + forcing\n        state = next_state.to(tl.float16).to(tl.float32)\n    tl.store(Output + i, state)\n\n\ndef run(matrix, initial, drive):\n    output = torch.empty((16,), device=matrix.device, dtype=torch.float32)\n    _recurrence_kernel[(1,)](matrix, initial, drive, output, N=16, STEPS=64,\n                            num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    orthogonal = np.array([[1.0]], dtype=np.float64)\n    while len(orthogonal) < 16:\n        orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])\n    orthogonal /= 4.0\n    matrix_rng = np.random.Generator(np.random.PCG64(20260923))\n    diagonal = matrix_rng.choice(np.array([0.875, 0.90625, 0.9375, 0.96875]), size=16)\n    upper = np.diag(diagonal)\n    upper += np.diag(np.full(15, 0.1875), 1)\n    upper += np.diag(matrix_rng.choice([-0.03125, 0.03125], size=14), 2)\n    left = np.sum(orthogonal[:, :, None] * upper[None, :, :], axis=1)\n    matrix = np.sum(left[:, :, None] * orthogonal.T[None, :, :], axis=1).astype(np.float32)\n    rng = np.random.Generator(np.random.PCG64(202009))\n    initial = rng.normal(0.0, 0.1, 16).astype(np.float32)\n    drive = rng.normal(0.0, 0.1, (64, 16)).astype(np.float32)\n    return matrix, initial, drive\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "passed": null,
+    "problem_text": "Evaluate a recurrent linear state update on the fixed workload in kernel.py.\n\nThe only inputs in scope are the float32 tensors returned by make_inputs():\nmatrix has shape (16,16), initial has shape (16,), and drive has shape (64,16).\nThe full input generator and its seeds are public. The desired output is the\nfinal state of this recurrence, evaluated in float64 on those float32 inputs:\n  reference_state = initial\n  for t in range(64):\n      reference_state = matrix @ reference_state + drive[t]\n\nThe implementation may approximate intermediate states. Its final output must\nbe a finite vector of shape (16,), with relative L2 error\n  ||output - reference_state||_2 / max(||reference_state||_2, 0.001*sqrt(16))\nat most 0.002. The target execution device is an NVIDIA T4.\n\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\nspecified workload. Alternative inputs are outside this question's scope.\n",
+    "rounds": null,
+    "session_dir": "/root/numerical_cases/case_e",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-23T21:35:15Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-23T21:35:29Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "7f6b04235952491a07b03a4ea7f627750fdce01cb82357067a6621a9e6aa853f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "a3b1c3b039310b49151edc36b8201d7e596bdc2eb4b5e475bb8fdec0c43624f1"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "4163f1b744b9e6463386b44243c72999f903c73832c51299445b5059930d1d83"
+              }
+            ],
+            "duration_s": 4.854615,
+            "exceeds_tolerance": false,
+            "exit_code": 0,
+            "expected_signal": "rel_l2_error > 0.002 confirms c1; <= 0.002 rebuts it",
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_tolerance": false,
+              "finite": true,
+              "metric": "relative L2 error vs float64 reference",
+              "out_norm": 511.33533749452874,
+              "ref_norm": 511.04669248954303,
+              "rel_l2_error": 0.0007690293621823212,
+              "tolerance": 0.002
+            },
+            "metric": "relative L2 error vs float64 reference",
+            "out_norm": 511.335,
+            "ref_norm": 511.047,
+            "rel_l2_error": 0.0007690293621823212,
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"rel_l2_error\": 0.0007690293621823212, \"tolerance\": 0.002, \"ref_norm\": 511.04669248954303, \"out_norm\": 511.33533749452874, \"finite\": true, \"exceeds_tolerance\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.002
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact fixed seeded workload run(*make_inputs()) (executed on GPU), the kernel output is finite with relative L2 error 7.69e-4 vs the float64 reference \u2014 below the 0.002 tolerance (about 2.6x margin). The claim that accumulated fp16 per-step quantization exceeds 0.002 is contradicted by direct runtime measurement of the contract metric.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "fp16 unit roundoff is ~4.88e-4 relative; error is injected each step and fed back through a matrix with spectral radius up to 0.969, so accumulated relative error plausibly lands near or above the 0.002 budget (naive bound ~64*4.88e-4 \u2248 3%, feedback-saturation estimate ~15x single-step error \u2248 1e-3), and the analytic estimates straddle the tolerance so runtime measurement is required.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract fixes the only in-scope inputs as run(*make_inputs()) (matrix 16x16, initial 16, drive 64x16, float32, seeded) and requires final relative L2 error vs the float64 reference at most 0.002."
+        }
+      ],
+      "scope_rationale": "The contract explicitly judges run(*make_inputs()) on the fixed seeded workload by the relative-L2 metric with threshold 0.002; whether the per-step fp16 rounding keeps the final error within that budget is the exact question the contract poses.",
+      "statement": "For the fixed workload run(*make_inputs()), the per-step float16 quantization of the state (kernel.py line 16) accumulated over 64 steps produces a final relative L2 error exceeding 0.002 versus the float64 reference.",
+      "status": "rebutted",
+      "updated_at": "2026-09-23T21:35:29Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_e",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_e"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_e"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_e"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_e",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 16.174422571,
+      "role": "describer",
+      "round": 2,
+      "text": "I have full context. The kernel evaluates a 64-step linear recurrence in a Triton kernel that deliberately rounds the intermediate state to float16 each step (line 16), against a float64 reference with a tight 0.002 relative-L2 tolerance. The input generator builds an orthogonal-similar matrix with eigenvalues around 0.875\u20130.969, and state magnitudes ~0.1 \u2014 exactly the regime where fp16 rounding (~1e-3 relative) per step can accumulate. I'll record a description update.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Inputs are fixed, public: matrix (16,16) float32 from a Hadamard-similar of an upper-triangular matrix with diagonals in {0.875..0.96875} plus small off-diagonals, initial (16,) ~N(0,0.1) float32, drive (64,16) ~N(0,0.1) float32; seeds PCG64(20260923) and PCG64(202009).",
+              "Reference is the exact float64 recurrence state = matrix @ state + drive[t] over 64 steps on the float32 inputs.",
+              "Output must be a finite float32 vector of shape (16,) with relative L2 error <= 0.002 versus the reference (denominator max(||ref||_2, 0.004)).",
+              "Intermediate approximation is explicitly allowed; only the final vector's error matters. Target device is an NVIDIA T4. Only this fixed workload is in scope.",
+              "Matrix spectral radius ~0.875-0.969 < 1, so the state norm stays moderate (initial O(0.4), drive O(0.1) contributions decay geometrically); the final state norm is likely dominated by early drive terms and is probably O(0.1-1)."
+            ],
+            "kernel_model": [
+              "Single Triton program (grid (1,)) loads the full 16x16 matrix into registers, loads initial state, and runs a 64-step unrolled loop: next = matrix @ state + drive[t], computed as tl.sum of fp32 products with enable_fp_fusion=False.",
+              "After each step, the state is explicitly quantized to float16 and back to float32 (line 16: next_state.to(tl.float16).to(tl.float32)), introducing up to ~2^-11 relative rounding per step.",
+              "The final state is stored as float32 into a (16,) output; the fp16 quantization of step 64 is included before the store.",
+              "Matrix loaded as native float32 (no cast); products and the tl.sum reduction are fp32; the only lossy operation is the per-step fp16 state round-trip.",
+              "run() is hardcoded to N=16, STEPS=64, matching the workload exactly; no shape checks or fallbacks."
+            ],
+            "open_questions": [
+              "Actual final relative L2 error of run(*make_inputs()) vs the float64 reference \u2014 needs an Experimenter probe (the analytic bound straddles the 0.002 threshold, so it cannot be decided from source alone).",
+              "Whether the fp16 round of the last step (before store) plus accumulation across 64 steps lands under or over tolerance for the largest-eigenvalue (0.96875) mode."
+            ],
+            "risk_map</arg_key>[\"Per-step fp16 quantization (unit roundoff 2^-11 ~ 4.88e-4) accumulated over 64 steps: naive bound ~64*4.88e-4 ~ 3% relative error, but error dynamics are matrix-dependent (amplified by modes with eigenvalue near 0.97, damped by smaller ones), so the actual error may or may not stay under 0.002 \u2014 this is the central question and needs a runtime measurement.\", \"fp16 has ~3 decimal digits of mantissa; state components ~O(0.1) get absolute rounding up to ~6e-5 per step; error feeds back through matrix and drive, so error growth is roughly geometric with rate ~0.94 and saturation at (rounding*0.94)/(1-0.94) ~ 15x single-step error for the largest eigenvalue mode \u2014 potentially ~1e-3 relative, near the tolerance boundary.\", \"tl.sum reduction order and fp32 accumulation are deterministic but differ from float64 reference; that alone contributes only ~1e-7-level error, negligible compared to fp16 effect.\", \"Subnormal/overflow: state magnitudes ~0.1 are far from fp16 extremes (max 65504), so no overflow/underflow risk in scope.\", \"Shape/generation mismatch: none expected; run hardcodes the exact workload dimensions.\"]</arg_value><arg_key>scope_notes": "In scope: only run(*make_inputs()) on the fixed seeded workload, on a T4, with the stated relative-L2 metric. Out of scope: alternative inputs, other tolerances, other devices, general recurrence correctness.\", \"The contract permits intermediate approximation, so fp16 per-step rounding is legal per se; the verdict hinges solely on whether the final relative L2 error <= 0.002 for this exact input.\"]",
+            "summary": "Described case_e: a 16x16, 64-step linear recurrence kernel that runs the loop in fp32 but quantizes the state to fp16 at every step, judged against a float64 reference with a 0.002 relative-L2 budget. The fp16-per-step quantization is the dominant risk surface; whether accumulated error stays within 0.002 is close to the tolerance boundary and needs runtime measurement."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 16.174,
+        "input_tokens": 5054,
+        "output_tokens": 1182
+      }
+    },
+    {
+      "duration_s": 5.833782681999999,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The central risk is clear from source: the kernel quantizes the state to fp16 at every one of the 64 steps (line 16), and the analytic error bound straddles the 0.002 tolerance. I'll record that as the decisive in-scope claim for an Experimenter probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "fp16 unit roundoff is ~4.88e-4 relative; error is injected each step and fed back through a matrix with spectral radius up to 0.969, so accumulated relative error plausibly lands near or above the 0.002 budget (naive bound ~64*4.88e-4 \u2248 3%, feedback-saturation estimate ~15x single-step error \u2248 1e-3), and the analytic estimates straddle the tolerance so runtime measurement is required.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract fixes the only in-scope inputs as run(*make_inputs()) (matrix 16x16, initial 16, drive 64x16, float32, seeded) and requires final relative L2 error vs the float64 reference at most 0.002."
+              }
+            ],
+            "scope_rationale": "The contract explicitly judges run(*make_inputs()) on the fixed seeded workload by the relative-L2 metric with threshold 0.002; whether the per-step fp16 rounding keeps the final error within that budget is the exact question the contract poses.",
+            "statement": "For the fixed workload run(*make_inputs()), the per-step float16 quantization of the state (kernel.py line 16) accumulated over 64 steps produces a final relative L2 error exceeding 0.002 versus the float64 reference."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.834,
+        "input_tokens": 9886,
+        "output_tokens": 417
+      }
+    },
+    {
+      "duration_s": 4.735345193000001,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'll run a probe for c1: build the exact seeded workload, compute the float64 reference, run the kernel, and measure the relative L2 error against the 0.002 threshold.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, sys, importlib.util\nimport torch\n\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/numerical_cases/case_e/kernel.py\")\nk = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(k)\n\nmatrix, initial, drive = k.make_inputs(\"cuda\")\n\n# float64 reference on the float32 inputs\nm = matrix.cpu().numpy().astype(\"float64\")\ns = initial.cpu().numpy().astype(\"float64\")\nd = drive.cpu().numpy().astype(\"float64\")\nfor t in range(64):\n    s = m @ s + d[t]\nref = s\n\nout = k.run(matrix, initial, drive).cpu().numpy().astype(\"float64\")\ndenom = max(float((ref**2).sum()**0.5), 0.001*4.0)\nerr = float(((out-ref)**2).sum()**0.5) / denom\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs float64 reference\",\n  \"rel_l2_error\": err,\n  \"tolerance\": 0.002,\n  \"ref_norm\": float((ref**2).sum()**0.5),\n  \"out_norm\": float((out**2).sum()**0.5),\n  \"finite\": bool((out == out).all() and (abs(out) < float(\"inf\")).all()),\n  \"exceeds_tolerance\": err > 0.002,\n}))\n",
+            "expected_signal": "rel_l2_error > 0.002 confirms c1; <= 0.002 rebuts it",
+            "use_gpu": true
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.735,
+        "input_tokens": 11742,
+        "output_tokens": 402
+      }
+    },
+    {
+      "duration_s": 3.869993680999997,
+      "role": "experimenter",
+      "round": 5,
+      "text": "The probe result for c1 is in: relative L2 error is 0.000769, well under the 0.002 tolerance, so the claim is rebutted. I'll finalize that evidence now.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "exceeds_tolerance": false,
+              "finite": true,
+              "metric": "relative L2 error vs float64 reference",
+              "out_norm": 511.335,
+              "ref_norm": 511.047,
+              "rel_l2_error": 0.0007690293621823212,
+              "tolerance": 0.002
+            },
+            "event_id": "t7",
+            "status": "rebutted",
+            "summary": "On the exact fixed seeded workload run(*make_inputs()) (executed on GPU), the kernel output is finite with relative L2 error 7.69e-4 vs the float64 reference \u2014 below the 0.002 tolerance (about 2.6x margin). The claim that accumulated fp16 per-step quantization exceeds 0.002 is contradicted by direct runtime measurement of the contract metric.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.87,
+        "input_tokens": 14199,
+        "output_tokens": 272
+      }
+    },
+    {
+      "duration_s": 3.5489332119999943,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The decisive in-scope claim (c1) was directly measured on the exact fixed workload: relative L2 error 7.69e-4 vs the 0.002 tolerance, finite output. No remaining attack surface within scope \u2014 the contract only covers this seeded workload and permits intermediate approximation.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The sole in-scope question \u2014 whether per-step fp16 quantization pushes the final relative L2 error above 0.002 on the exact fixed workload \u2014 was directly rebutted by runtime measurement (7.69e-4 < 0.002, finite output, ~2.6x margin). The contract explicitly allows intermediate approximation and excludes alternative inputs, so no further testable in-scope claims exist.",
+            "reviewed_claims": [
+              "c1"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.549,
+        "input_tokens": 17453,
+        "output_tokens": 186
+      }
+    },
+    {
+      "duration_s": 6.262736105999991,
+      "role": "judge",
+      "round": 7,
+      "text": "The single in-scope claim (fp16 quantization error exceeding tolerance) was directly rebutted by a runtime probe on the exact fixed seeded workload: finite output, relative L2 error 7.69e-4 vs the 0.002 tolerance (~2.6x margin). The Skeptic reviewed the latest evidence and found no new claims. The contract explicitly permits intermediate approximation, so the per-step fp16 rounding itself is legal \u2014 only the final error matters, and it's comfortably within budget. Recording trust.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.9,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The contract scopes judgment to run(*make_inputs()) on the fixed seeded workload with relative L2 error <= 0.002 vs the float64 reference. The sole in-scope claim c1 \u2014 that per-step fp16 state quantization accumulated over 64 steps exceeds the 0.002 tolerance \u2014 was directly rebutted by a GPU runtime probe on the exact contract inputs: output is finite, shape (16,), with relative L2 error 7.69e-4 (roughly 2.6x margin below tolerance). The contract explicitly allows intermediate approximation, so per-step fp16 rounding is acceptable by design; only the final error matters. No open claims remain and the Skeptic signed off with no new concerns after reviewing the probe evidence.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.263,
+        "input_tokens": 18243,
+        "output_tokens": 328
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-23T21:35:32Z",
+    "decision": "no_new_claims",
+    "reason": "The sole in-scope question \u2014 whether per-step fp16 quantization pushes the final relative L2 error above 0.002 on the exact fixed workload \u2014 was directly rebutted by runtime measurement (7.69e-4 < 0.002, finite output, ~2.6x margin). The contract explicitly allows intermediate approximation and excludes alternative inputs, so no further testable in-scope claims exist.",
+    "reviewed_claims": [
+      "c1"
+    ],
+    "reviewed_tool_event_count": 8,
+    "tool_event_id": "t9",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_e"
+      },
+      "created_at": "2026-09-23T21:34:53Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "__pycache__/kernel.cpython-313.pyc",
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_e",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _recurrence_kernel(Matrix, Initial, Drive, Output, N: tl.constexpr, STEPS: tl.constexpr):\n    i = tl.arange(0, N)\n    j = tl.arange(0, N)\n    matrix = tl.load(Matrix + i[:, None] * N + j[None, :])\n    state = tl.load(Initial + i).to(tl.float32)\n    for step in range(STEPS):\n        forcing = tl.load(Drive + step * N + i)\n        next_state = tl.sum(matrix * state[None, :], axis=1) + forcing\n        state = next_state.to(tl.float16).to(tl.float32)\n    tl.store(Output + i, state)\n\n\ndef run(matrix, initial, drive):\n    output = torch.empty((16,), device=matrix.device, dtype=torch.float32)\n    _recurrence_kernel[(1,)](matrix, initial, drive, output, N=16, STEPS=64,\n                            num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    orthogonal = np.array([[1.0]], dtype=np.float64)\n    while len(orthogonal) < 16:\n        orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])\n    orthogonal /= 4.0\n    matrix_rng = np.random.Generator(np.random.PCG64(20260923))\n    diagonal = matrix_rng.choice(np.array([0.875, 0.90625, 0.9375, 0.96875]), size=16)\n    upper = np.diag(diagonal)\n    upper += np.diag(np.full(15, 0.1875), 1)\n    upper += np.diag(matrix_rng.choice([-0.03125, 0.03125], size=14), 2)\n    left = np.sum(orthogonal[:, :, None] * upper[None, :, :], axis=1)\n    matrix = np.sum(left[:, :, None] * orthogonal.T[None, :, :], axis=1).astype(np.float32)\n    rng = np.random.Generator(np.random.PCG64(202009))\n    initial = rng.normal(0.0, 0.1, 16).astype(np.float32)\n    drive = rng.normal(0.0, 0.1, (64, 16)).astype(np.float32)\n    return matrix, initial, drive\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "passed": null,
+        "problem_text": "Evaluate a recurrent linear state update on the fixed workload in kernel.py.\n\nThe only inputs in scope are the float32 tensors returned by make_inputs():\nmatrix has shape (16,16), initial has shape (16,), and drive has shape (64,16).\nThe full input generator and its seeds are public. The desired output is the\nfinal state of this recurrence, evaluated in float64 on those float32 inputs:\n  reference_state = initial\n  for t in range(64):\n      reference_state = matrix @ reference_state + drive[t]\n\nThe implementation may approximate intermediate states. Its final output must\nbe a finite vector of shape (16,), with relative L2 error\n  ||output - reference_state||_2 / max(||reference_state||_2, 0.001*sqrt(16))\nat most 0.002. The target execution device is an NVIDIA T4.\n\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\nspecified workload. Alternative inputs are outside this question's scope.\n",
+        "rounds": null,
+        "session_dir": "/root/numerical_cases/case_e",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_e"
+      },
+      "created_at": "2026-09-23T21:34:53Z",
+      "id": "t2",
+      "output": {
+        "content": "Evaluate a recurrent linear state update on the fixed workload in kernel.py.\n\nThe only inputs in scope are the float32 tensors returned by make_inputs():\nmatrix has shape (16,16), initial has shape (16,), and drive has shape (64,16).\nThe full input generator and its seeds are public. The desired output is the\nfinal state of this recurrence, evaluated in float64 on those float32 inputs:\n  reference_state = initial\n  for t in range(64):\n      reference_state = matrix @ reference_state + drive[t]\n\nThe implementation may approximate intermediate states. Its final output must\nbe a finite vector of shape (16,), with relative L2 error\n  ||output - reference_state||_2 / max(||reference_state||_2, 0.001*sqrt(16))\nat most 0.002. The target execution device is an NVIDIA T4.\n\nDecide whether run(*make_inputs()) satisfies this numerical contract for the\nspecified workload. Alternative inputs are outside this question's scope.\n",
+        "entry": "case_e",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_e"
+      },
+      "created_at": "2026-09-23T21:34:53Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_e",
+        "files": [
+          {
+            "kind": "other",
+            "path": "__pycache__/kernel.cpython-313.pyc",
+            "size_bytes": 4581
+          },
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1855
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 67
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 926
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_e",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-23T21:34:53Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_e\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_e",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 67,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Inputs are fixed, public: matrix (16,16) float32 from a Hadamard-similar of an upper-triangular matrix with diagonals in {0.875..0.96875} plus small off-diagonals, initial (16,) ~N(0,0.1) float32, drive (64,16) ~N(0,0.1) float32; seeds PCG64(20260923) and PCG64(202009).",
+          "Reference is the exact float64 recurrence state = matrix @ state + drive[t] over 64 steps on the float32 inputs.",
+          "Output must be a finite float32 vector of shape (16,) with relative L2 error <= 0.002 versus the reference (denominator max(||ref||_2, 0.004)).",
+          "Intermediate approximation is explicitly allowed; only the final vector's error matters. Target device is an NVIDIA T4. Only this fixed workload is in scope.",
+          "Matrix spectral radius ~0.875-0.969 < 1, so the state norm stays moderate (initial O(0.4), drive O(0.1) contributions decay geometrically); the final state norm is likely dominated by early drive terms and is probably O(0.1-1)."
+        ],
+        "kernel_model": [
+          "Single Triton program (grid (1,)) loads the full 16x16 matrix into registers, loads initial state, and runs a 64-step unrolled loop: next = matrix @ state + drive[t], computed as tl.sum of fp32 products with enable_fp_fusion=False.",
+          "After each step, the state is explicitly quantized to float16 and back to float32 (line 16: next_state.to(tl.float16).to(tl.float32)), introducing up to ~2^-11 relative rounding per step.",
+          "The final state is stored as float32 into a (16,) output; the fp16 quantization of step 64 is included before the store.",
+          "Matrix loaded as native float32 (no cast); products and the tl.sum reduction are fp32; the only lossy operation is the per-step fp16 state round-trip.",
+          "run() is hardcoded to N=16, STEPS=64, matching the workload exactly; no shape checks or fallbacks."
+        ],
+        "open_questions": [
+          "Actual final relative L2 error of run(*make_inputs()) vs the float64 reference \u2014 needs an Experimenter probe (the analytic bound straddles the 0.002 threshold, so it cannot be decided from source alone).",
+          "Whether the fp16 round of the last step (before store) plus accumulation across 64 steps lands under or over tolerance for the largest-eigenvalue (0.96875) mode."
+        ],
+        "risk_map</arg_key>[\"Per-step fp16 quantization (unit roundoff 2^-11 ~ 4.88e-4) accumulated over 64 steps: naive bound ~64*4.88e-4 ~ 3% relative error, but error dynamics are matrix-dependent (amplified by modes with eigenvalue near 0.97, damped by smaller ones), so the actual error may or may not stay under 0.002 \u2014 this is the central question and needs a runtime measurement.\", \"fp16 has ~3 decimal digits of mantissa; state components ~O(0.1) get absolute rounding up to ~6e-5 per step; error feeds back through matrix and drive, so error growth is roughly geometric with rate ~0.94 and saturation at (rounding*0.94)/(1-0.94) ~ 15x single-step error for the largest eigenvalue mode \u2014 potentially ~1e-3 relative, near the tolerance boundary.\", \"tl.sum reduction order and fp32 accumulation are deterministic but differ from float64 reference; that alone contributes only ~1e-7-level error, negligible compared to fp16 effect.\", \"Subnormal/overflow: state magnitudes ~0.1 are far from fp16 extremes (max 65504), so no overflow/underflow risk in scope.\", \"Shape/generation mismatch: none expected; run hardcodes the exact workload dimensions.\"]</arg_value><arg_key>scope_notes": "In scope: only run(*make_inputs()) on the fixed seeded workload, on a T4, with the stated relative-L2 metric. Out of scope: alternative inputs, other tolerances, other devices, general recurrence correctness.\", \"The contract permits intermediate approximation, so fp16 per-step rounding is legal per se; the verdict hinges solely on whether the final relative L2 error <= 0.002 for this exact input.\"]",
+        "summary": "Described case_e: a 16x16, 64-step linear recurrence kernel that runs the loop in fp32 but quantizes the state to fp16 at every step, judged against a float64 reference with a 0.002 relative-L2 budget. The fp16-per-step quantization is the dominant risk surface; whether accumulated error stays within 0.002 is close to the tolerance boundary and needs runtime measurement."
+      },
+      "created_at": "2026-09-23T21:35:09Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"Per-step fp16 quantization (unit roundoff 2^-11 ~ 4.88e-4) accumulated over 64 steps: naive bound ~64*4.88e-4 ~ 3% relative error, but error dynamics are matrix-dependent (amplified by modes with eigenvalue near 0.97, damped by smaller ones), so the actual error may or may not stay under 0.002 \u2014 this is the central question and needs a runtime measurement.\", \"fp16 has ~3 decimal digits of mantissa; state components ~O(0.1) get absolute rounding up to ~6e-5 per step; error feeds back through matrix and drive, so error growth is roughly geometric with rate ~0.94 and saturation at (rounding*0.94)/(1-0.94) ~ 15x single-step error for the largest eigenvalue mode \u2014 potentially ~1e-3 relative, near the tolerance boundary.\", \"tl.sum reduction order and fp32 accumulation are deterministic but differ from float64 reference; that alone contributes only ~1e-7-level error, negligible compared to fp16 effect.\", \"Subnormal/overflow: state magnitudes ~0.1 are far from fp16 extremes (max 65504), so no overflow/underflow risk in scope.\", \"Shape/generation mismatch: none expected; run hardcodes the exact workload dimensions.\"]</arg_value><arg_key>scope_notes",
+          "recoverable": true,
+          "type": "ToolRegistryError"
+        },
+        "error_type": "ToolRegistryError",
+        "event_id": "t5",
+        "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"Per-step fp16 quantization (unit roundoff 2^-11 ~ 4.88e-4) accumulated over 64 steps: naive bound ~64*4.88e-4 ~ 3% relative error, but error dynamics are matrix-dependent (amplified by modes with eigenvalue near 0.97, damped by smaller ones), so the actual error may or may not stay under 0.002 \u2014 this is the central question and needs a runtime measurement.\", \"fp16 has ~3 decimal digits of mantissa; state components ~O(0.1) get absolute rounding up to ~6e-5 per step; error feeds back through matrix and drive, so error growth is roughly geometric with rate ~0.94 and saturation at (rounding*0.94)/(1-0.94) ~ 15x single-step error for the largest eigenvalue mode \u2014 potentially ~1e-3 relative, near the tolerance boundary.\", \"tl.sum reduction order and fp32 accumulation are deterministic but differ from float64 reference; that alone contributes only ~1e-7-level error, negligible compared to fp16 effect.\", \"Subnormal/overflow: state magnitudes ~0.1 are far from fp16 extremes (max 65504), so no overflow/underflow risk in scope.\", \"Shape/generation mismatch: none expected; run hardcodes the exact workload dimensions.\"]</arg_value><arg_key>scope_notes",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "fp16 unit roundoff is ~4.88e-4 relative; error is injected each step and fed back through a matrix with spectral radius up to 0.969, so accumulated relative error plausibly lands near or above the 0.002 budget (naive bound ~64*4.88e-4 \u2248 3%, feedback-saturation estimate ~15x single-step error \u2248 1e-3), and the analytic estimates straddle the tolerance so runtime measurement is required.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract fixes the only in-scope inputs as run(*make_inputs()) (matrix 16x16, initial 16, drive 64x16, float32, seeded) and requires final relative L2 error vs the float64 reference at most 0.002."
+          }
+        ],
+        "scope_rationale": "The contract explicitly judges run(*make_inputs()) on the fixed seeded workload by the relative-L2 metric with threshold 0.002; whether the per-step fp16 rounding keeps the final error within that budget is the exact question the contract poses.",
+        "statement": "For the fixed workload run(*make_inputs()), the per-step float16 quantization of the state (kernel.py line 16) accumulated over 64 steps produces a final relative L2 error exceeding 0.002 versus the float64 reference."
+      },
+      "created_at": "2026-09-23T21:35:15Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-23T21:35:15Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "fp16 unit roundoff is ~4.88e-4 relative; error is injected each step and fed back through a matrix with spectral radius up to 0.969, so accumulated relative error plausibly lands near or above the 0.002 budget (naive bound ~64*4.88e-4 \u2248 3%, feedback-saturation estimate ~15x single-step error \u2248 1e-3), and the analytic estimates straddle the tolerance so runtime measurement is required.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract fixes the only in-scope inputs as run(*make_inputs()) (matrix 16x16, initial 16, drive 64x16, float32, seeded) and requires final relative L2 error vs the float64 reference at most 0.002."
+          }
+        ],
+        "scope_rationale": "The contract explicitly judges run(*make_inputs()) on the fixed seeded workload by the relative-L2 metric with threshold 0.002; whether the per-step fp16 rounding keeps the final error within that budget is the exact question the contract poses.",
+        "statement": "For the fixed workload run(*make_inputs()), the per-step float16 quantization of the state (kernel.py line 16) accumulated over 64 steps produces a final relative L2 error exceeding 0.002 versus the float64 reference.",
+        "status": "open",
+        "updated_at": "2026-09-23T21:35:15Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, sys, importlib.util\nimport torch\n\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/numerical_cases/case_e/kernel.py\")\nk = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(k)\n\nmatrix, initial, drive = k.make_inputs(\"cuda\")\n\n# float64 reference on the float32 inputs\nm = matrix.cpu().numpy().astype(\"float64\")\ns = initial.cpu().numpy().astype(\"float64\")\nd = drive.cpu().numpy().astype(\"float64\")\nfor t in range(64):\n    s = m @ s + d[t]\nref = s\n\nout = k.run(matrix, initial, drive).cpu().numpy().astype(\"float64\")\ndenom = max(float((ref**2).sum()**0.5), 0.001*4.0)\nerr = float(((out-ref)**2).sum()**0.5) / denom\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs float64 reference\",\n  \"rel_l2_error\": err,\n  \"tolerance\": 0.002,\n  \"ref_norm\": float((ref**2).sum()**0.5),\n  \"out_norm\": float((out**2).sum()**0.5),\n  \"finite\": bool((out == out).all() and (abs(out) < float(\"inf\")).all()),\n  \"exceeds_tolerance\": err > 0.002,\n}))\n",
+        "expected_signal": "rel_l2_error > 0.002 confirms c1; <= 0.002 rebuts it",
+        "use_gpu": true
+      },
+      "created_at": "2026-09-23T21:35:25Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "7f6b04235952491a07b03a4ea7f627750fdce01cb82357067a6621a9e6aa853f"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "a3b1c3b039310b49151edc36b8201d7e596bdc2eb4b5e475bb8fdec0c43624f1"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "4163f1b744b9e6463386b44243c72999f903c73832c51299445b5059930d1d83"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For the fixed workload run(*make_inputs()), the per-step float16 quantization of the state (kernel.py line 16) accumulated over 64 steps produces a final relative L2 error exceeding 0.002 versus the float64 reference.",
+        "cwd": "/root/numerical_cases/case_e",
+        "duration_s": 4.854615,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "7f6b04235952491a07b03a4ea7f627750fdce01cb82357067a6621a9e6aa853f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "a3b1c3b039310b49151edc36b8201d7e596bdc2eb4b5e475bb8fdec0c43624f1"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "4163f1b744b9e6463386b44243c72999f903c73832c51299445b5059930d1d83"
+              }
+            ],
+            "duration_s": 4.854615,
+            "exit_code": 0,
+            "expected_signal": "rel_l2_error > 0.002 confirms c1; <= 0.002 rebuts it",
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_tolerance": false,
+              "finite": true,
+              "metric": "relative L2 error vs float64 reference",
+              "out_norm": 511.33533749452874,
+              "ref_norm": 511.04669248954303,
+              "rel_l2_error": 0.0007690293621823212,
+              "tolerance": 0.002
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"rel_l2_error\": 0.0007690293621823212, \"tolerance\": 0.002, \"ref_norm\": 511.04669248954303, \"out_norm\": 511.33533749452874, \"finite\": true, \"exceeds_tolerance\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "rel_l2_error > 0.002 confirms c1; <= 0.002 rebuts it",
+        "json_parse_error": null,
+        "json_result": {
+          "exceeds_tolerance": false,
+          "finite": true,
+          "metric": "relative L2 error vs float64 reference",
+          "out_norm": 511.33533749452874,
+          "ref_norm": 511.04669248954303,
+          "rel_l2_error": 0.0007690293621823212,
+          "tolerance": 0.002
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"rel_l2_error\": 0.0007690293621823212, \"tolerance\": 0.002, \"ref_norm\": 511.04669248954303, \"out_norm\": 511.33533749452874, \"finite\": true, \"exceeds_tolerance\": false}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "exceeds_tolerance": false,
+          "finite": true,
+          "metric": "relative L2 error vs float64 reference",
+          "out_norm": 511.335,
+          "ref_norm": 511.047,
+          "rel_l2_error": 0.0007690293621823212,
+          "tolerance": 0.002
+        },
+        "event_id": "t7",
+        "status": "rebutted",
+        "summary": "On the exact fixed seeded workload run(*make_inputs()) (executed on GPU), the kernel output is finite with relative L2 error 7.69e-4 vs the float64 reference \u2014 below the 0.002 tolerance (about 2.6x margin). The claim that accumulated fp16 per-step quantization exceeds 0.002 is contradicted by direct runtime measurement of the contract metric.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-09-23T21:35:29Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-23T21:35:15Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-23T21:35:29Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "7f6b04235952491a07b03a4ea7f627750fdce01cb82357067a6621a9e6aa853f"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "a3b1c3b039310b49151edc36b8201d7e596bdc2eb4b5e475bb8fdec0c43624f1"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "4163f1b744b9e6463386b44243c72999f903c73832c51299445b5059930d1d83"
+                  }
+                ],
+                "duration_s": 4.854615,
+                "exceeds_tolerance": false,
+                "exit_code": 0,
+                "expected_signal": "rel_l2_error > 0.002 confirms c1; <= 0.002 rebuts it",
+                "finite": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "exceeds_tolerance": false,
+                  "finite": true,
+                  "metric": "relative L2 error vs float64 reference",
+                  "out_norm": 511.33533749452874,
+                  "ref_norm": 511.04669248954303,
+                  "rel_l2_error": 0.0007690293621823212,
+                  "tolerance": 0.002
+                },
+                "metric": "relative L2 error vs float64 reference",
+                "out_norm": 511.335,
+                "ref_norm": 511.047,
+                "rel_l2_error": 0.0007690293621823212,
+                "stderr": "",
+                "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"rel_l2_error\": 0.0007690293621823212, \"tolerance\": 0.002, \"ref_norm\": 511.04669248954303, \"out_norm\": 511.33533749452874, \"finite\": true, \"exceeds_tolerance\": false}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 0.002
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "On the exact fixed seeded workload run(*make_inputs()) (executed on GPU), the kernel output is finite with relative L2 error 7.69e-4 vs the float64 reference \u2014 below the 0.002 tolerance (about 2.6x margin). The claim that accumulated fp16 per-step quantization exceeds 0.002 is contradicted by direct runtime measurement of the contract metric.",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "fp16 unit roundoff is ~4.88e-4 relative; error is injected each step and fed back through a matrix with spectral radius up to 0.969, so accumulated relative error plausibly lands near or above the 0.002 budget (naive bound ~64*4.88e-4 \u2248 3%, feedback-saturation estimate ~15x single-step error \u2248 1e-3), and the analytic estimates straddle the tolerance so runtime measurement is required.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract fixes the only in-scope inputs as run(*make_inputs()) (matrix 16x16, initial 16, drive 64x16, float32, seeded) and requires final relative L2 error vs the float64 reference at most 0.002."
+            }
+          ],
+          "scope_rationale": "The contract explicitly judges run(*make_inputs()) on the fixed seeded workload by the relative-L2 metric with threshold 0.002; whether the per-step fp16 rounding keeps the final error within that budget is the exact question the contract poses.",
+          "statement": "For the fixed workload run(*make_inputs()), the per-step float16 quantization of the state (kernel.py line 16) accumulated over 64 steps produces a final relative L2 error exceeding 0.002 versus the float64 reference.",
+          "status": "rebutted",
+          "updated_at": "2026-09-23T21:35:29Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-23T21:35:29Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "7f6b04235952491a07b03a4ea7f627750fdce01cb82357067a6621a9e6aa853f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "a3b1c3b039310b49151edc36b8201d7e596bdc2eb4b5e475bb8fdec0c43624f1"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "4163f1b744b9e6463386b44243c72999f903c73832c51299445b5059930d1d83"
+              }
+            ],
+            "duration_s": 4.854615,
+            "exceeds_tolerance": false,
+            "exit_code": 0,
+            "expected_signal": "rel_l2_error > 0.002 confirms c1; <= 0.002 rebuts it",
+            "finite": true,
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_tolerance": false,
+              "finite": true,
+              "metric": "relative L2 error vs float64 reference",
+              "out_norm": 511.33533749452874,
+              "ref_norm": 511.04669248954303,
+              "rel_l2_error": 0.0007690293621823212,
+              "tolerance": 0.002
+            },
+            "metric": "relative L2 error vs float64 reference",
+            "out_norm": 511.335,
+            "ref_norm": 511.047,
+            "rel_l2_error": 0.0007690293621823212,
+            "stderr": "",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"rel_l2_error\": 0.0007690293621823212, \"tolerance\": 0.002, \"ref_norm\": 511.04669248954303, \"out_norm\": 511.33533749452874, \"finite\": true, \"exceeds_tolerance\": false}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 0.002
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "On the exact fixed seeded workload run(*make_inputs()) (executed on GPU), the kernel output is finite with relative L2 error 7.69e-4 vs the float64 reference \u2014 below the 0.002 tolerance (about 2.6x margin). The claim that accumulated fp16 per-step quantization exceeds 0.002 is contradicted by direct runtime measurement of the contract metric.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "The sole in-scope question \u2014 whether per-step fp16 quantization pushes the final relative L2 error above 0.002 on the exact fixed workload \u2014 was directly rebutted by runtime measurement (7.69e-4 < 0.002, finite output, ~2.6x margin). The contract explicitly allows intermediate approximation and excludes alternative inputs, so no further testable in-scope claims exist.",
+        "reviewed_claims": [
+          "c1"
+        ]
+      },
+      "created_at": "2026-09-23T21:35:32Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-09-23T21:35:32Z",
+        "decision": "no_new_claims",
+        "reason": "The sole in-scope question \u2014 whether per-step fp16 quantization pushes the final relative L2 error above 0.002 on the exact fixed workload \u2014 was directly rebutted by runtime measurement (7.69e-4 < 0.002, finite output, ~2.6x margin). The contract explicitly allows intermediate approximation and excludes alternative inputs, so no further testable in-scope claims exist.",
+        "reviewed_claims": [
+          "c1"
+        ],
+        "reviewed_tool_event_count": 8,
+        "tool_event_id": "t9",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.9,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract scopes judgment to run(*make_inputs()) on the fixed seeded workload with relative L2 error <= 0.002 vs the float64 reference. The sole in-scope claim c1 \u2014 that per-step fp16 state quantization accumulated over 64 steps exceeds the 0.002 tolerance \u2014 was directly rebutted by a GPU runtime probe on the exact contract inputs: output is finite, shape (16,), with relative L2 error 7.69e-4 (roughly 2.6x margin below tolerance). The contract explicitly allows intermediate approximation, so per-step fp16 rounding is acceptable by design; only the final error matters. No open claims remain and the Skeptic signed off with no new concerns after reviewing the probe evidence.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-23T21:35:38Z",
+      "id": "t10",
+      "output": {
+        "confidence": 0.9,
+        "created_at": "2026-09-23T21:35:38Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract scopes judgment to run(*make_inputs()) on the fixed seeded workload with relative L2 error <= 0.002 vs the float64 reference. The sole in-scope claim c1 \u2014 that per-step fp16 state quantization accumulated over 64 steps exceeds the 0.002 tolerance \u2014 was directly rebutted by a GPU runtime probe on the exact contract inputs: output is finite, shape (16,), with relative L2 error 7.69e-4 (roughly 2.6x margin below tolerance). The contract explicitly allows intermediate approximation, so per-step fp16 rounding is acceptable by design; only the final error matters. No open claims remain and the Skeptic signed off with no new concerns after reviewing the probe evidence.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.9,
+    "created_at": "2026-09-23T21:35:38Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The contract scopes judgment to run(*make_inputs()) on the fixed seeded workload with relative L2 error <= 0.002 vs the float64 reference. The sole in-scope claim c1 \u2014 that per-step fp16 state quantization accumulated over 64 steps exceeds the 0.002 tolerance \u2014 was directly rebutted by a GPU runtime probe on the exact contract inputs: output is finite, shape (16,), with relative L2 error 7.69e-4 (roughly 2.6x margin below tolerance). The contract explicitly allows intermediate approximation, so per-step fp16 rounding is acceptable by design; only the final error matters. No open claims remain and the Skeptic signed off with no new concerns after reviewing the probe evidence.",
+    "verdict": "trust"
+  }
+}

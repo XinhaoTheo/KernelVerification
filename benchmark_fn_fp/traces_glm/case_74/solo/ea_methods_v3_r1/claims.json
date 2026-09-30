@@ -1,0 +1,118 @@
+[
+  {
+    "created_at": "2026-09-24T06:55:31Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:55:44Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "fb0fe191c35f9503070265f8e9ef36559f8aa735f1fc39263027cb0bf6c2fe53"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "91a6809892896bbedd28a4aaf51136ce58ff7f6e1ac58b42224267fc1d636c06"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t7_json_result.json",
+              "sha256": "ea1441f512484109b48eae75dcef85889abebc6f1d444079f09d2ef3a7043589"
+            }
+          ],
+          "duration_s": 4.628542,
+          "exact_target": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": null,
+          "json_result": {
+            "exact_target": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "metric": "relative L2 vs exact float64 row sums on the fixed make_inputs workload",
+            "output": [
+              6.505321502685547,
+              7.741500377655029,
+              5.556467056274414,
+              7.19061279296875
+            ],
+            "probe_result": {
+              "output": [
+                6.505321502685547,
+                7.741500377655029,
+                5.556467056274414,
+                7.19061279296875
+              ],
+              "passed": false,
+              "reference": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "reference_method": "sequential float64 accumulation in row order",
+              "relative_error": 13595193063594.375,
+              "shape_dtype_finite_and_inputs_unmodified": true,
+              "tolerance": 1e-05
+            },
+            "relative_error_vs_exact": 13595193063594.375,
+            "tolerance": 1e-05
+          },
+          "metric": "relative L2 vs exact float64 row sums on the fixed make_inputs workload",
+          "output": [
+            6.505321502685547,
+            7.741500377655029,
+            5.556467056274414,
+            7.19061279296875
+          ],
+          "relative_error_vs_exact": 13595193063594.375,
+          "stderr": "",
+          "stdout": "{\"probe_result\": {\"reference_method\": \"sequential float64 accumulation in row order\", \"reference\": [0.0, 0.0, 0.0, 0.0], \"output\": [6.505321502685547, 7.741500377655029, 5.556467056274414, 7.19061279296875], \"relative_error\": 13595193063594.375, \"tolerance\": 1e-05, \"shape_dtype_finite_and_inputs_unmodified\": true, \"passed\": false}, \"exact_target\": [0.0, 0.0, 0.0, 0.0], \"output\": [6.505321502685547, 7.741500377655029, 5.556467056274414, 7.19061279296875], \"relative_error_vs_exact\": 13595193063594.375, \"tolerance\": 1e-05, \"metric\": \"relative L2 vs exact float64 row sums on the fixed make_inputs workload\"}\n",
+          "structural_ok": true,
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 1e-05
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On the real GPU, the kernel outputs [6.505, 7.742, 5.556, 7.191] while the exact real-number row sums are [0,0,0,0] (2^80 and -2^80 cancel, \u00b12^30 pair cancels, small terms ~0.25\u20131.75 remain but are lost in fp32 accumulation against 2^80). Relative L2 error vs exact target is ~1.36e13, far above the 1e-5 tolerance. Shape/dtype finite and input unmodified checks pass, so the failure is purely the acceptance metric.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The recorded initial probe shows outputs ~6.5\u20137.7 against a true target of ~0; Kahan-style fp32 compensation cannot recover small terms lost when summing 2^80 and -2^80 plus \u00b12^30 pairs, so the output should remain far outside tolerance.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "run(X) satisfies the fixed workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target is the exact real-number row sum of X from make_inputs(); other arrays are out of contract."
+      }
+    ],
+    "scope_rationale": "The contract requires run(X) on the fixed make_inputs() workload to satisfy the relative-L2 tolerance vs the exact real-number row sum; kernel output differing by far more than 1e-5 relative error on that exact input violates the acceptance metric.",
+    "statement": "The kernel's fp32 compensated summation fails the contract's acceptance metric on the fixed make_inputs() workload: outputs deviate from the exact target by a huge relative error (target rows are ~0).",
+    "status": "confirmed",
+    "updated_at": "2026-09-24T06:55:44Z"
+  }
+]

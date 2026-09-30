@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-d52fcc42901545fe9543bcacbe66b478",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The recorded \"reference\" of 0.0 is itself a float64 accumulation artifact. I'll run a probe computing the exact real-number target (via Fractions) and compare the kernel output against it.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a46c419d20eff55f",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import importlib.util, torch\\nfrom fractions import Fraction\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/evidence_cases/case_e19/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nx, = k.make_inputs()\\nbefore = x.clone()\\nout = k.run(x)\\nvals = before.cpu().numpy().astype(object)\\n# exact real-number sums via Fractions\\ntarget = [float(sum(Fraction(int(v)) for v in row) / Fraction(2**0) if False else sum(Fraction(v) for v in row)) for row in vals]\\nactual = out.cpu().numpy().astype(\\\"float64\\\")\\nimport numpy as np, math\\nnorm_t = math.sqrt(sum(t*t for t in target))\\nerr = math.sqrt(sum((a-t)**2 for a,t in zip(actual,target))) / max(norm_t, 1e-12)\\nprint({ \\\"target\\\": target, \\\"actual\\\": actual.tolist(),\\n        \\\"relative_error\\\": err, \\\"tolerance\\\": 1e-5,\\n        \\\"shape_ok\\\": tuple(out.shape)==(4,) and out.dtype==torch.float32,\\n        \\\"finite\\\": bool(np.isfinite(actual).all()),\\n        \\\"unmodified\\\": bool(torch.equal(x, before)),\\n        \\\"passed\\\": bool(tuple(out.shape)==(4,) and out.dtype==torch.float32 and np.isfinite(actual).all() and torch.equal(x,before) and err<=1e-5)})\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run a probe computing the exact target (float64 exact via fractions or careful ordering) and kernel output.\n\nKey math: exact sum = 2^80 - 2^80 + sum(interior lows + 2^30 - 2^30) = sum of 8 lows (in [0.25,1.75]) ≈ 4-8. Kernel output ~7-9.7 which look plausible as sums of lows! Wait but Kahan in float32 with 2^80 first: total=2^80, then values 2^30: lost = (total-updated)+value ≈ 0? updated = 2^80 exactly (2^30 absorbed). lost = (2^80 - 2^80) + 2^30 = 2^30. Hmm compensated Kahan: yes correction captures 2^30. Then -2^30: updated still 2^80, total abs larger, lost = (2^80-2^80)+(-2^30) = -2^30, correction = 0. Then lows ~1: absorbed, correction accumulates them... but correction + lost may itself lose precision? correction starts ~0, grows to ~1ish while lost values are tiny relative to... Actually correction accumulates the small residuals; total stays 2^80. lost values ~1 each. correction goes 0→~8 in float32 fine. But wait: when adding -2^80: updated = 0, total=0, lost = (0-0)+(-2^80)?? abs(total)=2^80 >= abs(value)=2^80, lost = (total-updated)+value = (2^80-0) + (-2^80) = 0 in fp32? (2^80-0)=2^80 exact, plus -2^80 = 0 exact. So lost=0. Hmm then total=0, correction = ~8ish from earlier? Let's trace: after 2^80 and 2^30/-2^30 and 8 lows (permuted order), correction ≈ sum of lows if ordering... Actually the lows were added while total=2^80, so lost each ≈ low value, correction accumulates them (correction ~ few, exact in fp32-ish, small rounding ~1e-7). Then -2^80 gives updated=0, lost=0. Final: 0 + correction ≈ sum of lows. But order of interior permuted: 2^30 might come after some lows — still total=2^80 dominates all, lost=value captured. Fine. But intermediate 2^30 additions: lost=2^30 then correction = 0+2^30 fine; next -2^30: correction=0 exact. If lows come between 2^30 and -2^30: correction = 2^30 + ~1 → loses low? 2^30+1 in fp32: 2^30 has ulp 128, so low absorbed into correction! Then -2^30: correction = 2^30ish - 2^30 = ~0 (rounds). Depends on permutation order. The recorded output ~7-9.7 shows some rows worked. Exact target: sum of 8 lows per row, computed exactly in float64. Let's just run the probe.\n\nCompute exact target: convert float32 values to exact (float64 exactly represents), sum in order small-first or use Python sum of Fractions. Simple: sort each row by magnitude or just sum lows exactly (float64 sums of 8 values in [0.25,1.75] exact enough). Target = sum of 8 lows exactly (all interior cancels). Just compute with Fraction for exactness.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790234205,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1160,
+    "prompt_tokens": 10665,
+    "total_tokens": 11825,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 791,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4608,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 791
+    }
+  }
+}

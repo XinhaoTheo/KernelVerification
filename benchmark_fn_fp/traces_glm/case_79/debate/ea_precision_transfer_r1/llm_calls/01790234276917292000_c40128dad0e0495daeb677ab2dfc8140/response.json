@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-bb0dd385be214883b6b2baf7f2266794",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two probes in parallel: c1 runs the kernel in the current environment against an exact (Fraction-based) target computed from the stored seeded inputs, and c2 checks the compiled PTX for FMA contraction of the compensation expression and compares the kernel output to a faithful fp32 Neumaier trace.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9e578044fa2d986e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json\\nfrom fractions import Fraction\\nimport numpy as np, torch\\n\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kern\\\", \\\"/root/evidence_cases/case_e18/kernel.py\\\")\\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\\n\\nx, = kern.make_inputs_numpy()  # stored fp32 array (host, CPU)\\n# exact real target per row using Fractions on the stored float32 values\\ntarget = [float(sum(Fraction(int(v.item()) ,1)*0 if False else Fraction(v.item()) for v in x[r])) for r in range(4)]\\ntarget = [float(sum(Fraction(v.item()) for v in x[r])) for r in range(4)]\\n\\nxg, = kern.make_inputs()\\nbefore = xg.clone()\\nout = kern.run(xg)\\nactual = out.detach().cpu().numpy().astype(np.float64)\\nerr = float(np.linalg.norm(actual - np.array(target)) / max(np.linalg.norm(np.array(target)), 1e-12))\\nunmodified = bool(torch.equal(xg, before))\\nstructural = tuple(out.shape)==(4,) and out.dtype==torch.float32 and bool(np.isfinite(actual).all())\\nres = {\\\"stored_row0\\\": [float(v) for v in x[0]],\\n       \\\"exact_target\\\": target, \\\"output\\\": actual.tolist(),\\n       \\\"relative_l2_error\\\": err, \\\"tolerance\\\": 1e-5,\\n       \\\"shape_ok\\\": structural, \\\"inputs_unmodified\\\": unmodified,\\n       \\\"passed_contract\\\": bool(structural and unmodified and err <= 1e-5)}\\nprint(json.dumps(res))\", \"expected_signal\": \"kernel output vs exact Fraction target, relative L2 error vs 1e-5 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-9403316381bda911",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import json\\nimport numpy as np, torch, triton\\nimport triton.language as tl\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kern\\\", \\\"/root/evidence_cases/case_e18/kernel.py\\\")\\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\\n\\nxg, = kern.make_inputs()\\nout = kern.run(xg)\\nactual = out.detach().cpu().numpy().astype(np.float64)\\nxn, = kern.make_inputs_numpy()\\n\\n# faithful fp32 Neumaier trace per row (strict fp32 rounding at each step, no fusion)\\ndef neumaier_fp32(vals):\\n    t = np.float32(0.0); c = np.float32(0.0)\\n    for v in vals:\\n        v = np.float32(v)\\n        u = np.float32(t + v)\\n        lost = (t - u) + v if abs(t) >= abs(v) else (v - u) + t\\n        c = np.float32(c + np.float32(lost))\\n        t = u\\n    return float(np.float32(t + c))\\n\\ntrace = [neumaier_fp32(xn[r]) for r in range(4)]\\n\\n# inspect PTX for fused multiply-add on the compensation path\\nptx = kern._compensated_rows.cache[0] if False else None\\nptx_text = \\\"\\\"\\nfor dev_cache in kern._compensated_rows.device_caches.values():\\n    for k in dev_cache[0].values():\\n        ptx_text = k.asm.get(\\\"ptx\\\", \\\"\\\")\\nn_fma = ptx_text.count(\\\"fma.rn.f32\\\")\\nn_add = ptx_text.count(\\\"add.f32\\\")\\nn_sub = ptx_text.count(\\\"sub.f32\\\")\\nres = {\\\"trace_neumaier_fp32\\\": trace, \\\"kernel_output\\\": actual.tolist(),\\n       \\\"trace_vs_output_max_abs\\\": float(np.max(np.abs(np.array(trace)-actual))),\\n       \\\"ptx_fma_count\\\": n_fma, \\\"ptx_add_f32_count\\\": n_add, \\\"ptx_sub_f32_count\\\": n_sub,\\n       \\\"compensation_contracted_or_lost\\\": bool(np.max(np.abs(np.array(trace)-actual)) > 1e-4 or n_fma > 0)}\\nprint(json.dumps(res))\", \"expected_signal\": \"PTX fma count and kernel output vs faithful fp32 Neumaier trace\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch two probes: c1 — run kernel in current env, compute exact target via Fractions on stored fp32 values. c2 — inspect PTX for FMA contraction, or simulate? c2 is about compilation; can check kernel.asm[\"ptx\"] after launch for fma instructions, plus compare output vs a Python-exact Neumaier trace. Launch both together.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790234277,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1050,
+    "prompt_tokens": 27843,
+    "total_tokens": 28893,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 77,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 77
+    }
+  }
+}

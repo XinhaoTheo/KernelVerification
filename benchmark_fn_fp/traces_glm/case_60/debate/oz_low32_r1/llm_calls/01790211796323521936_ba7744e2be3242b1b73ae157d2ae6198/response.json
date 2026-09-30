@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-49b6f7e3eb43456dafd6d85a80de7398",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Both claims are resolved by the same fixed-workload comparison, but I'll target them with separate probes: c1 via the actual GPU kernel output vs the float64 reference metric, and c2 via per-anchor computed (expanded-identity, fp32, pre-clamp) distance signs vs true distances. They're independent, so I'm launching both together.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a3aba4b7ff9107c7",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport numpy as np, json\\n\\n# Fixed inputs exactly as in kernel.py make_inputs_numpy()\\nrng = np.random.Generator(np.random.PCG64(119130))\\nquery = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)\\nanchors = (query.astype(np.float64)[None, :] +\\n           rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)\\nvalues = rng.normal(0.0, 1.0, 16).astype(np.float32)\\n\\n# float64 reference per contract\\na64 = anchors.astype(np.float64); q64 = query.astype(np.float64); v64 = values.astype(np.float64)\\nd_ref = ((a64 - q64[None, :])**2).sum(axis=1)\\nw_ref = np.exp(-16.0 * d_ref)\\nref = (w_ref * v64).sum() / w_ref.sum()\\n\\nres = {\\\"gpu_used\\\": False, \\\"kernel_output\\\": None, \\\"reference\\\": float(ref), \\\"metric\\\": None, \\\"error\\\": None}\\ntry:\\n    import torch, importlib.util\\n    spec = importlib.util.spec_from_file_location(\\\"kern\\\", \\\"/root/numerical_cases/case_y/kernel.py\\\")\\n    kern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\\n    q, an, va = kern.make_inputs()\\n    out = kern.run(q, an, va)\\n    ko = float(out.item())\\n    denom = max(abs(ref), 0.05)\\n    res.update(gpu_used=True, kernel_output=ko, metric=abs(ko - ref)/denom, device=str(q.device))\\nexcept Exception as e:\\n    res[\\\"error\\\"] = f\\\"{type(e).__name__}: {e}\\\"\\n\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"metric ||out-ref||/max(||ref||,0.05) <= 0.05 or > 0.05 on the fixed seed-119130 workload\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-91b0f52d2b38471b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport numpy as np, json\\n\\nrng = np.random.Generator(np.random.PCG64(119130))\\nquery = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)\\nanchors = (query.astype(np.float64)[None, :] +\\n           rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)\\nvalues = rng.normal(0.0, 1.0, 16).astype(np.float32)\\n\\n# Emulate kernel fp32 accumulation exactly: per-k fp32 adds, fusion disabled\\ndef f32(x): return np.float32(x)\\nN, D = 16, 32\\na32 = anchors.astype(np.float32); q32 = query.astype(np.float32); v32 = values.astype(np.float32)\\nanchor_norm = np.zeros(N, np.float32); query_norm = f32(0.0); dot = np.zeros(N, np.float32)\\nfor k in range(D):\\n    a = a32[:, k].astype(np.float32); q = q32[k].astype(np.float32)\\n    anchor_norm = (anchor_norm + (a*a).astype(np.float32)).astype(np.float32)\\n    query_norm = (query_norm + (q*q).astype(np.float32)).astype(np.float32)\\n    dot = (dot + (a*q).astype(np.float32)).astype(np.float32)\\nnorm_sum = (anchor_norm + query_norm).astype(np.float32)\\ntwice_dot = (f32(2.0)*dot).astype(np.float32)\\npre_clamp = (norm_sum - twice_dot).astype(np.float32)\\nclamped = np.maximum(pre_clamp, f32(0.0))\\n\\n# true distances\\na64 = anchors.astype(np.float64); q64 = query.astype(np.float64)\\nd_true = ((a64 - q64[None, :])**2).sum(axis=1)\\n\\nn_neg = int((pre_clamp < 0).sum())\\nprint(json.dumps({\\n    \\\"n_negative_preclamp\\\": n_neg,\\n    \\\"preclamp_min\\\": float(pre_clamp.min()),\\n    \\\"preclamp_values\\\": [float(x) for x in pre_clamp],\\n    \\\"true_dist_min\\\": float(d_true.min()),\\n    \\\"true_dist_values\\\": [float(x) for x in d_true],\\n    \\\"clamped_mask\\\": [bool(x) for x in (pre_clamp < 0)],\\n}))\\n\", \"expected_signal\": \"whether any pre-clamp computed distance is negative on the fixed workload (clamp bites)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch two claim probes: c1 kernel-vs-reference metric on GPU (fallback CPU emulation), c2 per-anchor distance signs (emulation). Both independent — run together.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790211796,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1114,
+    "prompt_tokens": 27163,
+    "total_tokens": 28277,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 34,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 34
+    }
+  }
+}

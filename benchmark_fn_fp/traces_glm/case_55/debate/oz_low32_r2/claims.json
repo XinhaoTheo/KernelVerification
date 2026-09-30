@@ -1,0 +1,208 @@
+[
+  {
+    "created_at": "2026-09-24T01:08:03Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T01:08:57Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "e1a9625dbd15f8b062fcb2f874c51151140916d71d4513cf037091d55db46b8d"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "847fca8d84884704c143fbd17ed15b9d0994b9fb82ef6331c24acfbea44f6c47"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t12_json_result.json",
+              "sha256": "31c1406d000ff40d4a35080af3e28a987ad5e6df2be358d4144fbc9f680de581"
+            }
+          ],
+          "duration_s": 4.837553,
+          "exceeds": true,
+          "exit_code": 0,
+          "expected_signal": "relative L2 error of the 32-point midpoint kernel vs float64 continuous integral, compared to 0.035 threshold",
+          "freqs_gt_100": 21,
+          "freqs_gt_150": 15,
+          "json_parse_error": null,
+          "json_result": {
+            "dtype_shape_ok": true,
+            "exceeds": true,
+            "finite": true,
+            "freqs_gt_100": 21,
+            "freqs_gt_150": 15,
+            "kernel_output": [
+              1.1304664611816406,
+              0.7976996898651123,
+              0.9610635042190552,
+              0.9959263205528259
+            ],
+            "max_amp": 0.21128395199775696,
+            "per_row_abs_err": [
+              0.11961456700746065,
+              -0.20251898633021437,
+              -0.03782474081449838,
+              -0.001905000850737748
+            ],
+            "reference": [
+              1.01085189417418,
+              1.0002186761953267,
+              0.9988882450335536,
+              0.9978313214035637
+            ],
+            "relative_l2": 0.11888436797488026,
+            "tolerance": 0.035
+          },
+          "kernel_output": [
+            1.1304664611816406,
+            0.7976996898651123,
+            0.9610635042190552,
+            0.9959263205528259
+          ],
+          "max_amp": 0.21128395199775696,
+          "per_row_abs_err": [
+            0.11961456700746065,
+            -0.20251898633021437,
+            -0.03782474081449838,
+            -0.001905000850737748
+          ],
+          "reference": [
+            1.01085189417418,
+            1.0002186761953267,
+            0.9988882450335536,
+            0.9978313214035637
+          ],
+          "relative_l2": 0.11888436797488026,
+          "stderr": "",
+          "stdout": "{\"kernel_output\": [1.1304664611816406, 0.7976996898651123, 0.9610635042190552, 0.9959263205528259], \"reference\": [1.01085189417418, 1.0002186761953267, 0.9988882450335536, 0.9978313214035637], \"relative_l2\": 0.11888436797488026, \"tolerance\": 0.035, \"exceeds\": true, \"per_row_abs_err\": [0.11961456700746065, -0.20251898633021437, -0.03782474081449838, -0.001905000850737748], \"freqs_gt_100\": 21, \"freqs_gt_150\": 15, \"max_amp\": 0.21128395199775696, \"finite\": true, \"dtype_shape_ok\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.035
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Ran the kernel on the fixed seed-711076 workload and compared to the float64 closed-form continuous integral: relative L2 error = 0.11888, far above the 0.035 tolerance (3.4x). 21 of 32 frequencies exceed 100 rad/s (15 exceed 150), confirming high-frequency aliasing as predicted. Output is finite float32 of shape (4,); the error is a quadrature/aliasing failure, not a shape/dtype issue.",
+        "supports": "confirmed",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "Frequencies up to 220 rad/s (~35 cycles over [0,1]) approach the Nyquist limit of a 32-point grid (~1 sample per cycle at f\u22482\u03c0\u00b732\u2248201), so sine terms may be severely aliased; per-term quadrature error can be O(amplitude) with amplitudes ~0.1 and 8 terms per row, potentially pushing relative L2 error past 0.035. Numeric question requiring an experiment.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Reference is the exact float64 continuous integral with closed form (cos p - cos(p+f))/f; the 32-point grid is only an approximation method, and the contract is relative L2 error <= 0.035 for the fixed make_inputs() workload, so discretization error counts against the tolerance."
+      },
+      {
+        "source": "kernel.py make_inputs",
+        "summary": "In-scope inputs draw frequencies from U(0.5, 220) with amplitudes ~N(0, 0.1), exactly the undersampled regime for a 32-point grid."
+      }
+    ],
+    "scope_rationale": "The contract defines the reference as the exact continuous integral in float64 and requires relative L2 error <= 0.035 for the fixed make_inputs() (seed 711076) workload, whose frequencies span up to 220 rad/s; quadrature/aliasing error of the 32-point midpoint rule against that reference is therefore directly in scope.",
+    "statement": "For the fixed make_inputs() workload (seed 711076), the 32-point midpoint-rule quadrature in _integrate produces an output whose relative L2 error against the float64 closed-form continuous integral exceeds 0.035, because high-frequency terms (frequencies up to 220 rad/s) are aliased by the coarse grid.",
+    "status": "confirmed",
+    "updated_at": "2026-09-24T01:08:57Z"
+  },
+  {
+    "created_at": "2026-09-24T01:08:03Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T01:09:16Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t15_probe.py",
+              "sha256": "ffef5968bd7ba14122f090c2fce98e2daf75082db13e1975863a90de00e7fbdf"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t15_stdout.txt",
+              "sha256": "e835ad33f599ca879ab862e44d5c4fcad49ba7d8c39e6a13dfd0078312048714"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t15_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t15_json_result.json",
+              "sha256": "a18f2a23828de1f651b5a9243659d662e86178b69a57e442dbc3d3c7c65b6115"
+            }
+          ],
+          "duration_s": 5.845548,
+          "exit_code": 0,
+          "expected_signal": "float32 arithmetic error (kernel vs float64 midpoint rule) relative to total error vs the 0.035 threshold",
+          "fp32_component_decisive": false,
+          "fp32_component_fraction_of_total": 1.6709175556052667e-06,
+          "json_parse_error": null,
+          "json_result": {
+            "fp32_component_decisive": false,
+            "fp32_component_fraction_of_total": 1.6709175556052667e-06,
+            "kernel_minus_midpoint64": [
+              3.27387229326348e-07,
+              1.9079238944286203e-07,
+              8.46736540882631e-08,
+              1.925153803039592e-08
+            ],
+            "max_abs_fp32_arith_err": 3.27387229326348e-07,
+            "rel_fp32_component": 1.9864597753626398e-07,
+            "rel_quadrature_component": 0.11888437366881217,
+            "rel_total_vs_ref": 0.11888436797488026,
+            "tolerance": 0.035
+          },
+          "max_abs_fp32_arith_err": 3.27387229326348e-07,
+          "rel_fp32_component": 1.9864597753626398e-07,
+          "rel_quadrature_component": 0.11888437366881217,
+          "rel_total_vs_ref": 0.11888436797488026,
+          "stderr": "",
+          "stdout": "{\"kernel_minus_midpoint64\": [3.27387229326348e-07, 1.9079238944286203e-07, 8.46736540882631e-08, 1.925153803039592e-08], \"max_abs_fp32_arith_err\": 3.27387229326348e-07, \"rel_fp32_component\": 1.9864597753626398e-07, \"rel_quadrature_component\": 0.11888437366881217, \"rel_total_vs_ref\": 0.11888436797488026, \"tolerance\": 0.035, \"fp32_component_fraction_of_total\": 1.6709175556052667e-06, \"fp32_component_decisive\": false}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.035
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Isolated float32 arithmetic error by comparing the kernel output to a float64 evaluation of the same 32-point midpoint rule: max absolute discrepancy 3.3e-7, relative fp32 component 2.0e-7 \u2014 only 1.7e-6 of the total relative error (0.1189), which itself is 3.4x the 0.035 tolerance, not near the boundary. Float32/tl.sin rounding therefore cannot shift this workload's result across the tolerance threshold; the failure is entirely quadrature/aliasing error (c1).",
+        "supports": "rebutted",
+        "tool_event_id": "t15"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The kernel evaluates sin at arguments up to ~220+\u03c0 in float32; tl.sin argument reduction and float32 accumulation over 32 samples and 8 terms add rounding error (order 1e-6\u20131e-4 per sample). Small compared to expected quadrature error, but decisive if the quadrature result is near the 0.035 boundary.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract requires finite float32 output within 0.035 relative L2 of a float64 reference for the fixed workload, and the launch disables FP fusion, so the float32 arithmetic path including sin evaluation is fixed and its rounding is part of the measured error."
+      }
+    ],
+    "scope_rationale": "The contract mandates a finite float32 output within 0.035 relative L2 of a float64 reference for the fixed workload, so any float32 rounding contribution that could push a near-boundary result across the threshold is in scope.",
+    "statement": "Float32 evaluation inside the kernel (tl.sin at arguments up to ~220 rad, and float32 accumulation over 32 samples and 8 terms) adds rounding error on top of quadrature error that could shift a near-boundary result across the 0.035 tolerance threshold.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T01:09:16Z"
+  }
+]

@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-9e19189f4e7e4cfb93c970a93b042200",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch a runtime probe for claim c1: run the actual kernel on the exact fixed workload, compute the float64 reference over stored float32 coefficients, and report the contract's relative L2 metric.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b5db9b1b25b4c375",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json, numpy as np, torch, sys\\nsys.path.insert(0, \\\"/root/numerical_cases/case_m\\\")\\nimport kernel as K\\n\\ncoeffs, pts = K.make_inputs(device=\\\"cuda\\\")\\nout = K.run(coeffs, pts)\\ntorch.cuda.synchronize()\\n\\n# float64 reference over stored float32 values, Horner in float64\\nc64 = coeffs.cpu().numpy().astype(np.float64)\\np64 = pts.cpu().numpy().astype(np.float64)\\nref = np.zeros(8, dtype=np.float64)\\nfor i in range(8):\\n    acc = c64[i, 48]\\n    for k in range(47, -1, -1):\\n        acc = acc * p64[i] + c64[i, k]\\n    ref[i] = acc\\n\\no = out.cpu().numpy().astype(np.float64)\\ndiff = o - ref\\nrel_l2 = np.linalg.norm(diff) / max(np.linalg.norm(ref), 0.001*np.sqrt(8))\\nfinite = bool(np.all(np.isfinite(o)))\\n\\n# also emulate pure float32 Horner (separate rounding) on CPU for cross-check\\nc32 = coeffs.cpu().numpy(); p32 = pts.cpu().numpy()\\nemu = np.zeros(8, dtype=np.float32)\\nmax_inter = 0.0\\nfor i in range(8):\\n    acc = np.float32(c32[i,48])\\n    mi = abs(acc)\\n    for k in range(47,-1,-1):\\n        prod = np.float32(np.float32(acc) * np.float32(p32[i]))\\n        acc = np.float32(prod + c32[i,k])\\n        mi = max(mi, abs(acc))\\n    emu[i] = acc\\n    max_inter = max(max_inter, mi)\\n\\nprint(json.dumps({\\n    \\\"kernel_output\\\": o.tolist(),\\n    \\\"reference\\\": ref.tolist(),\\n    \\\"abs_err\\\": diff.tolist(),\\n    \\\"rel_l2\\\": float(rel_l2),\\n    \\\"tolerance\\\": 0.0002,\\n    \\\"passes_contract\\\": bool(rel_l2 <= 0.0002 and finite),\\n    \\\"finite\\\": finite,\\n    \\\"ref_norm\\\": float(np.linalg.norm(ref)),\\n    \\\"floor\\\": 0.001*8**0.5,\\n    \\\"c0_magnitudes\\\": np.abs(c32[:,0]).tolist(),\\n    \\\"max_intermediate_abs\\\": max_inter,\\n    \\\"emu_rel_l2\\\": float(np.linalg.norm(emu.astype(np.float64)-ref)/max(np.linalg.norm(ref),0.001*np.sqrt(8)))\\n}))\\n\", \"expected_signal\": \"relative L2 error of kernel output vs float64 reference compared to 2e-4 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790209047,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 618,
+    "prompt_tokens": 19470,
+    "total_tokens": 20088,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

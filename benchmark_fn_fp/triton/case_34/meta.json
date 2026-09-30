@@ -1,0 +1,37 @@
+{
+  "name": "fn22_fp32_atomic_bitwise",
+  "benchmark_version": "fn_fp_triton_v1",
+  "group": "FN",
+  "seed_class": "FN8",
+  "failure_mode": "false_negative",
+  "kernel_family": "blocked sum with atomic accumulation",
+  "reference": "split-K GEMM in triton-lang/triton tutorials and vLLM; atomic accumulation in all-reduce kernels",
+  "mechanism": "The same kernel as the paired case, on a domain where nothing makes the partial sums exactly representable. Float addition is not associative, the order in which the per-block atomics land is not fixed, and the contract asks for bitwise identical results across calls, so the returned bits move between runs while the value stays well within any reasonable accuracy budget. A check that only compares against a reference within a tolerance reports nothing.",
+  "default_tolerance": {
+    "rtol": 0.0,
+    "atol": 0.0
+  },
+  "expected": {
+    "ground_truth": "the unspecified order of the per-block atomic adds changes the low bits between runs, and the contract asks for bitwise identical results",
+    "naive_allclose_verdict": "PASS",
+    "correct_verdict": "BUGGY"
+  },
+  "pair": {
+    "partner": "fp12_int8_grid_atomic_bitwise",
+    "shared": "kernel.py, byte-identical after the name header is stripped",
+    "differs": "problem.txt declares a different input domain; the contract paragraph is the same",
+    "rationale": "A reader who answers from the presence of tl.atomic_add answers both halves the same way, and the two answers are opposite."
+  },
+  "verification": {
+    "order_dependence_cpu": "64 random summation orders over standard normal fp32, N = 65536: 55 distinct bit patterns, spread 5.22e-03.",
+    "gpu_t4": "20 runs, 11 distinct bit patterns, spread 1.984e-04; every run inside a 5.234e-02 accuracy budget around the float64 value, so an accuracy check reports nothing. Distinct patterns by grid size: 256 blocks -> 10, 64 blocks -> 9, 16 blocks -> 3. The concern that a 64-block grid might land in a stable order did not hold."
+  },
+  "gate": {
+    "baseline2_single_llm": "not run",
+    "provisional": "The case is only doing its job if one model call with no tools answers it wrongly. Until that is measured it is a candidate, not a result."
+  },
+  "status": "seed_v3_gate_pending",
+  "source": "constructed",
+  "requires_gpu": true,
+  "passed": null
+}

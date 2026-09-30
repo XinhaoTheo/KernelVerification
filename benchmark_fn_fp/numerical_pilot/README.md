@@ -43,6 +43,8 @@ families. Numeric generation parameters can still be informative shortcuts.
 The candidate search is driven by measured error, never LLM answers. All
 candidate measurements remain available, including unsuccessful candidates.
 
+Current global IDs are `case_82`–`case_105`; see the [case index](../CASE_INDEX.md).
+
 ## Files and execution
 
 * `kernels.py`: kernel templates and verifier-visible input generator.
@@ -82,4 +84,4 @@ multi-agent evaluation to attribute an advantage to debate.
 Unlike the original FN/FP seed suite, these cases may be decided by a simple
 script once the correct reference and metric have been supplied. They test
 numeric compliance, not superiority to a correctly configured numerical test.
-Do not merge their accuracy into the original 32-case result.
+The original comparison used 32 cases at that time; the current original suite has 34. Do not pool this pilot with that historical result.

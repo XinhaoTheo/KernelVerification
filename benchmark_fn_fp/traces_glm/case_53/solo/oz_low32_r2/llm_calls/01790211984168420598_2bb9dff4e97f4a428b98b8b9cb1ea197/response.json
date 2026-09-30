@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-3e413991438f4fc3a8a69c85c5dd78ec",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the actual kernel against the float64 reference on the fixed workload to test claim c1.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-acf0b80f5762483e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json, numpy as np, torch\\nsys.path.insert(0, \\\"/root/numerical_cases/case_r\\\")\\nimport kernel\\n\\nquery, candidates, embeddings = kernel.make_inputs(\\\"cuda\\\")\\n\\n# reference: float64 exact distances, tie-break smallest index\\nq64 = query.double().cpu().numpy()\\nc64 = candidates.double().cpu().numpy()\\nd = ((c64 - q64[None, :])**2).sum(axis=1)\\nref_idx = int(np.argmin(d))  # argmin picks first occurrence = smallest index on ties\\nref = embeddings[ref_idx].float()\\n\\nout = kernel.run(query, candidates, embeddings)\\n# kernel winner index: replicate quantized routing in numpy\\nq8 = np.floor(q64*8.0+0.5)*0.125\\nc8 = np.floor(c64*8.0+0.5)*0.125\\ndq = ((c8 - q8[None, :])**2).astype(np.float32).sum(axis=1, dtype=np.float32)\\nkernel_idx_sim = int(np.argmin(dq))\\n\\n# also extract actual kernel winner: compare output to each embedding row\\ndiffs = [float((embeddings[i].float()-out).norm().item()) for i in range(16)]\\nkernel_idx = int(np.argmin(diffs))\\n\\nrel = float((out - ref.cuda()).norm().item()) / max(float(ref.norm().item()), 1e-12)\\nprint(json.dumps({\\n  \\\"ref_idx\\\": ref_idx, \\\"kernel_idx\\\": kernel_idx, \\\"kernel_idx_sim\\\": kernel_idx_sim,\\n  \\\"rel_l2\\\": rel, \\\"pass\\\": rel <= 0.1,\\n  \\\"ref_dist_min\\\": float(d.min()), \\\"ref_dist_sorted_head\\\": [float(x) for x in np.sort(d)[:4]],\\n  \\\"quant_dist_sorted_head\\\": [float(x) for x in np.sort(dq)[:4]],\\n  \\\"finite\\\": bool(torch.isfinite(out).all().item()),\\n}))\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790211984,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 457,
+    "prompt_tokens": 9469,
+    "total_tokens": 9926,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4607,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

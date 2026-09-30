@@ -10,12 +10,16 @@ from typing import Any, Protocol
 
 from dotenv import load_dotenv
 
+from .llm_trace import capture_chat_completion
+
 load_dotenv()
 
 _DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 _DEFAULT_OPENAI_MODEL = "gpt-5"
 _DEFAULT_OPENROUTER_MODEL = "z-ai/glm-5.3-flash"
 _OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+_DEFAULT_FIREWORKS_MODEL = "accounts/fireworks/models/glm-5p3"
+_FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1"
 _DEFAULT_PROVIDER = "anthropic"
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _DEFAULT_OPENAI_REASONING_EFFORT = "minimal"
@@ -23,6 +27,63 @@ _DEFAULT_OPENAI_REASONING_EFFORT = "minimal"
 # slow round (a probe run can put minutes between two turns of the same role);
 # "5m" is cheaper to write but misses across those gaps. "off" disables caching.
 _DEFAULT_PROMPT_CACHE_TTL = "1h"
+
+
+class OutputTokenBudgetExhausted(RuntimeError):
+    """The run's shared output-token allowance is used up; no request was sent."""
+
+
+class OutputTokenBudgetAccountingError(RuntimeError):
+    """Provider usage cannot support an honest shared-budget measurement."""
+
+
+@dataclass(slots=True)
+class _OutputTokenBudget:
+    """One allowance per client, shared by all roles in a sequential run.
+
+    Output usage includes provider-reported reasoning tokens. This is neither
+    a dollar budget nor an input-token budget, and reserves nothing for a judge.
+    """
+
+    total: int
+    used: int = 0
+    accounting_error: str | None = None
+
+    def limit(self, requested: int) -> int:
+        if self.accounting_error:
+            raise OutputTokenBudgetAccountingError(self.accounting_error)
+        remaining = self.total - self.used
+        if remaining <= 0:
+            raise OutputTokenBudgetExhausted(
+                f"Shared output-token budget exhausted: used={self.used}, total={self.total}; "
+                "no additional API request was sent"
+            )
+        return min(requested, remaining)
+
+    def record(self, output_tokens: Any) -> None:
+        if not isinstance(output_tokens, int) or isinstance(output_tokens, bool) or output_tokens < 0:
+            self.accounting_error = "Provider did not return valid output-token usage; budget accounting stopped"
+        else:
+            self.used += output_tokens
+            if self.used > self.total:
+                self.accounting_error = (
+                    f"Provider exceeded shared output-token budget: used={self.used}, total={self.total}"
+                )
+        if self.accounting_error:
+            raise OutputTokenBudgetAccountingError(self.accounting_error)
+
+
+def _output_token_budget_from_env() -> _OutputTokenBudget | None:
+    raw = os.getenv("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET")
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET must be a positive integer") from None
+    if value <= 0:
+        raise ValueError("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET must be a positive integer")
+    return _OutputTokenBudget(value)
 
 
 @dataclass(slots=True)
@@ -75,11 +136,17 @@ class AnthropicLLMClient:
     model: str | None = None
     last_metrics: CallMetrics | None = field(default=None, init=False)
     _client: Any = field(init=False, repr=False)
+    _output_budget: _OutputTokenBudget | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         from anthropic import Anthropic
 
-        self._client = Anthropic(timeout=default_timeout_seconds())
+        self._output_budget = _output_token_budget_from_env()
+        kwargs: dict[str, Any] = {"timeout": default_timeout_seconds()}
+        if self._output_budget is not None:
+            # SDK retries would be additional, unrecorded model requests.
+            kwargs["max_retries"] = 0
+        self._client = Anthropic(**kwargs)
 
     def call(
         self,
@@ -89,6 +156,9 @@ class AnthropicLLMClient:
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = 4096,
     ) -> str:
+        self.last_metrics = None
+        if self._output_budget is not None:
+            max_tokens = self._output_budget.limit(max_tokens)
         kwargs: dict[str, Any] = {
             "model": self.model or default_model("anthropic"),
             "max_tokens": max_tokens,
@@ -102,6 +172,8 @@ class AnthropicLLMClient:
         started = time.monotonic()
         response = self._client.messages.create(**kwargs)
         self.last_metrics = _anthropic_call_metrics(response, duration_s=time.monotonic() - started)
+        if self._output_budget is not None:
+            self._output_budget.record(getattr(getattr(response, "usage", None), "output_tokens", None))
 
         if tools:
             return _serialize_tool_response(
@@ -122,17 +194,21 @@ class AnthropicLLMClient:
 @dataclass(slots=True)
 class OpenAILLMClient:
     model: str | None = None
-    # OpenRouter speaks the OpenAI chat-completions protocol, so it reuses this
-    # client entirely; only the endpoint and the key differ.
+    # OpenAI-compatible providers reuse the tool serialization and metrics.
     base_url: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
+    use_responses: bool = True
     last_metrics: CallMetrics | None = field(default=None, init=False)
     _client: Any = field(init=False, repr=False)
+    _output_budget: _OutputTokenBudget | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         from openai import OpenAI
 
+        self._output_budget = _output_token_budget_from_env()
         kwargs: dict[str, Any] = {"timeout": default_timeout_seconds()}
+        if self._output_budget is not None:
+            kwargs["max_retries"] = 0
         if self.base_url:
             kwargs["base_url"] = self.base_url
         key = os.getenv(self.api_key_env)
@@ -152,7 +228,10 @@ class OpenAILLMClient:
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = 4096,
     ) -> str:
-        if not hasattr(self._client, "responses"):
+        self.last_metrics = None
+        if self._output_budget is not None:
+            max_tokens = self._output_budget.limit(max_tokens)
+        if not self.use_responses or not hasattr(self._client, "responses"):
             return self._call_chat_completions(system=system, user=user, tools=tools, max_tokens=max_tokens)
         return self._call_responses(system=system, user=user, tools=tools, max_tokens=max_tokens)
 
@@ -172,21 +251,30 @@ class OpenAILLMClient:
             kwargs["tool_choice"] = "auto"
         else:
             kwargs["response_format"] = {"type": "json_object"}
+        reasoning_effort = os.getenv("AGENTIC_OPENAI_REASONING_EFFORT")
+        if reasoning_effort:
+            kwargs["reasoning_effort"] = reasoning_effort
 
-        started = time.monotonic()
-        response = self._client.chat.completions.create(**kwargs)
-        self.last_metrics = _openai_chat_call_metrics(response, duration_s=time.monotonic() - started)
-        message = response.choices[0].message
-        if not tools:
-            return message.content or ""
+        with capture_chat_completion(kwargs) as trace:
+            started = time.monotonic()
+            response = self._client.chat.completions.create(**kwargs)
+            self.last_metrics = _openai_chat_call_metrics(response, duration_s=time.monotonic() - started)
+            if trace is not None:
+                trace.record_response(response)
+            if self._output_budget is not None:
+                self._output_budget.record(getattr(getattr(response, "usage", None), "completion_tokens", None))
+            message = response.choices[0].message
+            text = _chat_message_text(message)
+            if not tools:
+                return text
 
-        return _serialize_tool_response(
-            message=message.content or "",
-            tool_calls=[
-                {"tool": call.function.name, "args": json.loads(call.function.arguments or "{}")}
-                for call in (message.tool_calls or [])
-            ],
-        )
+            return _serialize_tool_response(
+                message=text,
+                tool_calls=[
+                    {"tool": call.function.name, "args": json.loads(call.function.arguments or "{}")}
+                    for call in (message.tool_calls or [])
+                ],
+            )
 
     def _call_responses(
         self, *, system: str, user: str, tools: list[dict[str, Any]] | None, max_tokens: int
@@ -207,6 +295,8 @@ class OpenAILLMClient:
         started = time.monotonic()
         response = self._client.responses.create(**kwargs)
         self.last_metrics = _openai_responses_call_metrics(response, duration_s=time.monotonic() - started)
+        if self._output_budget is not None:
+            self._output_budget.record(getattr(getattr(response, "usage", None), "output_tokens", None))
 
         if tools:
             return _serialize_tool_response(
@@ -239,6 +329,14 @@ def build_llm_client(*, provider: str | None = None, model: str | None = None) -
             model=model,
             base_url=_OPENROUTER_BASE_URL,
             api_key_env="OPENROUTER_API_KEY",
+        )
+    if selected == "fireworks":
+        return OpenAILLMClient(
+            model=model or default_model("fireworks"),
+            base_url=_FIREWORKS_BASE_URL,
+            api_key_env="FIREWORKS_API_KEY",
+            # SDK support for Responses does not imply endpoint/model support.
+            use_responses=False,
         )
     raise ValueError(f"unsupported LLM provider: {provider}")
 
@@ -280,6 +378,8 @@ def default_model(provider: str | None = None) -> str:
     if explicit:
         return explicit
     selected = (provider or default_provider()).lower()
+    if selected == "fireworks":
+        return os.getenv("AGENTIC_FIREWORKS_MODEL") or _DEFAULT_FIREWORKS_MODEL
     if selected == "openrouter":
         return os.getenv("AGENTIC_OPENROUTER_MODEL") or _DEFAULT_OPENROUTER_MODEL
     if selected in {"openai", "chatgpt"}:
@@ -314,6 +414,26 @@ def _openai_responses_call_metrics(response, *, duration_s: float) -> CallMetric
         input_tokens=getattr(usage, "input_tokens", 0) or 0,
         output_tokens=getattr(usage, "output_tokens", 0) or 0,
     )
+
+
+
+def _chat_message_text(message: Any) -> str:
+    """The assistant's prose, wherever this provider decided to put it.
+
+    Some OpenAI-compatible endpoints return a reasoning model's prose in a
+    separate `reasoning_content` field and leave `content` empty. GLM-5.3 on
+    Fireworks does exactly that: a turn that calls a tool comes back with
+    content='', reasoning_content holding the entire analysis, and the tool call
+    itself intact. Reading only `content` there loses every word the agent
+    wrote while keeping the actions it took -- runs still complete, and their
+    transcripts are blank.
+
+    Preferring `content` keeps providers that populate it unchanged.
+    """
+    content = (getattr(message, "content", None) or "").strip()
+    if content:
+        return content
+    return (getattr(message, "reasoning_content", None) or "").strip()
 
 
 def _serialize_tool_response(*, message: str, tool_calls: list[dict[str, Any]]) -> str:

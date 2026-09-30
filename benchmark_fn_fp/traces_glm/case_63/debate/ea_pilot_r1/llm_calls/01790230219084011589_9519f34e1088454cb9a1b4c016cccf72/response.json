@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-28f517b8fbb14b96a826b27d768a8ebc",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The contract and kernel source are fully available. I'll record a structured description of the model, noting the key numerical-precision risk: the kernel computes means/covariances in float32 from raw (uncentered) moments with large offsets (~32, -24), so catastrophic cancellation is the main bug surface; the math itself matches the ridge formulation.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8f725b3c990f5a88",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Fixed workload: only the float32 arrays from make_inputs() (seed 130653) are in contract: X (32,2), y (32,), Q (4,2).\", \"Target: centered ridge regression, beta = argmin ||Xc b - yc||^2/32 + (1/1024)||b||^2; prediction = mu_y + (Q-mu_x)@beta, evaluated in float64 or more accurately over the stored float32 inputs.\", \"Acceptance: run(X,y,Q) returns finite float32 (4,) vector with ||out-pred||_2 / max(||pred||_2, 0.1) <= 0.05.\", \"No thresholds on intermediates (means, covariance, betas); inputs from other seeds are out of scope.\", \"initial_probe() and its recorded T4 result (relative_error 0.0, passed) are evidence, not the spec; its reference is computed in float32, not the float64-or-better contract reference.\"], \"kernel_model\": [\"Single Triton program (grid (1,), N=32 constexpr, num_warps=1, enable_fp_fusion=False) sequentially accumulates 8 raw moments in float32 via tl.static_range (kernel.py lines 17-28).\", \"Means and covariance-style quantities computed from raw moments: a = E[x0^2]-m0^2+1/1024, b = E[x0x1]-m0m1, c = E[x1^2]-m1^2+1/1024, u,v = cross moments with y minus m*my (lines 29-36).\", \"2x2 solve via explicit Cramer's rule with tl.div_rn (lines 37-39); prediction for 4 queries via vectorized tl.arange(0,4) loads and stores (lines 40-44).\", \"run() allocates float32 (4,) output and launches the kernel; mathematically the estimator matches the ridge normal equations (Xc^T Xc/32 + lambda I) beta = Xc^T yc/32.\", \"All arithmetic (loads, sums, products, divisions) is float32; only div_rn forces round-to-nearest division.\"], \"risk_map\": [\"Catastrophic cancellation in raw-moment covariance: features have large means (~32, -24) with tiny deviations (sigma 0.0625), so E[x^2]-m^2 loses ~7-9 significant digits in float32; the computed covariance is dominated by rounding noise relative to the true variance (~0.0039). This can make fitted betas and predictions wrong by far more than the 5% tolerance even though the algorithm is mathematically correct.\", \"Cancellation also affects u,v (E[x*y]-m*my with |my| ~0.03, product ~1), potentially similar magnitude loss.\", \"The initial_probe reference uses the same float32 raw-moment scheme (initial_probe lines 73-85), so its 0.0 error only shows kernel-vs-float32-raw-moment agreement, NOT agreement with the float64 contract reference; it cannot rule out the cancellation failure.\", \"tl.div_rn and det computed in fp32: even with correct covariances, fp32 2x2 solve precision should be checked against the 5% relative tolerance.\", \"Loads assume contiguous row-major layouts (X stride 2, Y stride 1, Q stride 2) - matches make_inputs output, low risk in scope.\"], \"scope_notes\": [\"Only the seeded make_inputs() workload is in contract; no other seeds/shapes.\", \"Tolerance is 5% relative on the final 4-vector with denominator floor 0.1.\", \"Intermediates have no separate acceptance thresholds; only the final prediction error decides.\", \"Problem explicitly requires the reference to be evaluated in float64 or more accurately, distinguishing the contract oracle from the float32 initial_probe reference.\"], \"summary\": \"case_e02: centered two-feature ridge regression (lambda=1/1024) fit on fixed seeded workload (X 32x2, y 32, Q 4x2), predicting 4 queries; mathematically the kernel implements the correct normal-equation ridge solve in a single Triton program, but all statistics are accumulated in float32 from raw (uncentered) moments despite large feature offsets (~32, -24).\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Record description update.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790230219,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1083,
+    "prompt_tokens": 7380,
+    "total_tokens": 8463,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 4,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 347,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 4
+    }
+  }
+}

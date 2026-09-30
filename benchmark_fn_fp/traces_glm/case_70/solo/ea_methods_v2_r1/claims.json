@@ -1,0 +1,105 @@
+[
+  {
+    "created_at": "2026-09-24T06:39:55Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:40:17Z",
+        "data": {
+          "alias": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "7c20fe82139be8ddd55299072c475903202db7fbf9b14ae8f0e455c8139975e0"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "f38a05d617c61b452ebafa1e6e52e42dcf263518081ca59f87ef6a8b447de009"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t7_json_result.json",
+              "sha256": "8fc51a411e22faace524e551e3012905c3122ed94a4d76632e2cff74dc881829"
+            }
+          ],
+          "duration_s": 7.382012,
+          "exit_code": 0,
+          "expected_signal": "history_relative_error > 0.025 with every history row equal to final weights",
+          "history_relative_error": 0.005744695547110313,
+          "history_rows_equal_final_weights": true,
+          "json_parse_error": null,
+          "json_result": {
+            "G_unchanged": true,
+            "acceptance_pass": true,
+            "final_velocity_relative_error": 4.515252231425856e-08,
+            "final_weights_relative_error": 6.918851822104447e-08,
+            "finite": true,
+            "history_relative_error": 0.005744695547110313,
+            "history_rows_equal_final_weights": [
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ],
+            "metric": "Frobenius/relative l2 vs float64 reference, plus aliasing ptr check",
+            "returned_tensors_alias_weights_storage": [
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ],
+            "shapes_ok": [
+              true,
+              true,
+              true
+            ],
+            "tolerances": [
+              0.025,
+              1e-05,
+              1e-05
+            ]
+          },
+          "stderr": "",
+          "stdout": "{\"metric\": \"Frobenius/relative l2 vs float64 reference, plus aliasing ptr check\", \"history_relative_error\": 0.005744695547110313, \"final_weights_relative_error\": 6.918851822104447e-08, \"final_velocity_relative_error\": 4.515252231425856e-08, \"tolerances\": [0.025, 1e-05, 1e-05], \"history_rows_equal_final_weights\": [true, true, true, true, true, true], \"returned_tensors_alias_weights_storage\": [true, true, true, true, true, true], \"G_unchanged\": true, \"shapes_ok\": [true, true, true], \"finite\": true, \"acceptance_pass\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.025
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "All six returned tensors alias weights storage (data_ptr identical, every row equals final weights at observation time), confirming aliasing exists. However history_relative_error = 0.00574 <= 0.025 tolerance, and state errors ~7e-8 <= 1e-5; G unchanged; acceptance_pass=true. The tolerance criterion the contract states is satisfied, so the claimed failure (>0.025) is rebutted.",
+        "supports": "rebutted",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "step() returns weights.view(N), which aliases the in-place mutated state. The contract requires H (values of the six returned tensors observed after the full sequence) to equal w[1..6]; aliased views would all hold w[6], a large history error, even though initial_probe passed because its reference aliased identically.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]. Acceptance requires: ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025\" and \"Storage aliasing itself is neither forbidden nor a failure: only the stated numerical values at the stated observation time ... determine acceptance.\""
+      }
+    ],
+    "scope_rationale": "The contract requires H \u2014 the values of the six retained returned tensors, observed only after the full six-step sequence \u2014 to equal w[1..6] within the 0.025 Frobenius-relative tolerance. If the returned tensors alias the mutated weights storage, each retained row shows w[6] at observation time, violating that acceptance criterion.",
+    "statement": "The history tensors returned by run_sequence alias the weights storage, so at final observation time every retained history row equals w[6] and H fails the 0.025 history tolerance against w[1..6].",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T06:40:17Z"
+  }
+]

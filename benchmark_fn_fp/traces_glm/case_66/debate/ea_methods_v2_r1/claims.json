@@ -1,0 +1,1283 @@
+[
+  {
+    "created_at": "2026-09-24T06:38:43Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:40:56Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t16_probe.py",
+              "sha256": "4027d5a6388fb6ea150af71376fe81813610062fc6b7e8bb42d4265b01de3954"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t16_stdout.txt",
+              "sha256": "0e9845590e2c8e5d087a5d9cdcbb485010dac6914b56b958f8ed9990b5792e92"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t16_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t16_json_result.json",
+              "sha256": "ad3a32e6e3127db90e50933a44438f3b7014173c92efb74952d908d3085f5031"
+            }
+          ],
+          "distinct_keep_vectors": 256,
+          "duration_s": 4.328735,
+          "exit_code": 0,
+          "expected_signal": "if claim true: some 4-subset pattern count is 0/32/128 (deviation > 1 from 64); if false: all 70x16 counts are 64 (or within [63,65])",
+          "fold_sim_matches_output": true,
+          "json_parse_error": null,
+          "json_result": {
+            "contract_holds": true,
+            "distinct_keep_vectors": 256,
+            "fold_sim_matches_output": true,
+            "max_abs_prob_deviation": 0.0,
+            "max_pattern_count": 64,
+            "min_pattern_count": 64,
+            "patterns_violating_tolerance": 0,
+            "structure": {
+              "allowed_values": true,
+              "dtype": "float32",
+              "finite": true,
+              "shape": [
+                1024,
+                8
+              ]
+            },
+            "total_patterns_checked": 1120,
+            "worst_subset": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "worst_subset_count": 64,
+            "worst_subset_pattern": 0
+          },
+          "max_abs_prob_deviation": 0.0,
+          "max_pattern_count": 64,
+          "min_pattern_count": 64,
+          "patterns_violating_tolerance": 0,
+          "stderr": "",
+          "stdout": "{\"structure\": {\"shape\": [1024, 8], \"dtype\": \"float32\", \"finite\": true, \"allowed_values\": true}, \"fold_sim_matches_output\": true, \"distinct_keep_vectors\": 256, \"total_patterns_checked\": 1120, \"patterns_violating_tolerance\": 0, \"min_pattern_count\": 64, \"max_pattern_count\": 64, \"max_abs_prob_deviation\": 0.0, \"worst_subset\": [0, 1, 2, 3], \"worst_subset_pattern\": 0, \"worst_subset_count\": 64, \"contract_holds\": true}\n",
+          "structure": {
+            "allowed_values": true,
+            "dtype": "float32",
+            "finite": true,
+            "shape": [
+              1024,
+              8
+            ]
+          },
+          "timed_out": false,
+          "timeout_s": 60,
+          "total_patterns_checked": 1120
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Exhaustive order-4 histogram of run() output over all 70 4-subsets x 16 patterns (1120 counts): every count is exactly 64, max probability deviation 0.0, zero patterns violating tolerance. The fold simulation matches the kernel output exactly. The claim's premise (fold is not full 10-bit parity) holds, but the predicted contract failure (a count deviating from 64 by more than 1) does not occur. Structural requirements (shape 1024x8, float32, finite, values in {0, 2*X[j]}) also pass.",
+        "supports": "rebutted",
+        "tool_event_id": "t16"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The chain x^(x>>8)^(x>>4)^(x>>2)^(x>>1)&1 is a correct parity fold only for inputs of at most 8 bits; a 10-bit masked value drops bits 3,5,6,7,9 (bit0 of the fold = XOR of input bits 0,1,2,4,8). Since masks range over 1..1023, keep_j depends only on seed bits {0,1,2,4,8} via mask_j's bits at those positions. The 8 keep bits are thus functionals on a 5-dimensional seed subspace: only 32 distinct keep-vectors occur over the 1024 seeds, and every 4-channel pattern count is a multiple of 32. If any 4-subset of the restricted functionals is rank-deficient (rank<4), some pattern counts will be 0/128/256 instead of 64. The initial probe checked only marginals and pairs (rank 1 and 2 conditions), which can hold while order-4 fails.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract requires: for every four distinct channel indices and every binary pattern b, abs(count_s[(B[s,j0],...,B[s,j3]) == b]/1024 - 1/16) <= 1/1024 \u2014 an exact finite-domain requirement over the fixed workload (seeds 0..1023, generated masks/offsets)."
+      },
+      {
+        "source": "kernel.py lines 19-24",
+        "summary": "folded = seed & mask; folded ^= folded>>8; >>4; >>2; >>1; keep = (folded & 1) ^ offset \u2014 the reduction is not full 10-bit parity, restricting each keep bit to seed bits {0,1,2,4,8}."
+      }
+    ],
+    "scope_rationale": "The problem.txt contract explicitly requires order-4 joint uniformity: for every four distinct channels and every binary pattern b, |count/1024 - 1/16| <= 1/1024 over the fixed workload (seeds 0..1023 with generated masks). If the fold chain drops seed bits so that a 4-channel pattern count deviates from 64 by more than 1, that directly violates this stated requirement.",
+    "statement": "The XOR-fold chain (shifts 8,4,2,1) is not a full 10-bit parity, so each keep bit depends only on seed bits {0,1,2,4,8}; as a result some 4-channel joint pattern count may deviate from 64 by more than 1 (e.g. be 0, 32, or 128), violating the order-4 uniformity contract.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T06:40:56Z"
+  },
+  {
+    "created_at": "2026-09-24T06:38:43Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:40:36Z",
+        "data": {
+          "all_deficient_subset_pattern_counts": "all exactly 64 for all 16 patterns",
+          "any_count_outside_63_65": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t13_probe.py",
+              "sha256": "d27604a9b7669f44e6c15451f2f7f648a8cf20030e443a9965604a2578e95d5b"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t13_stdout.txt",
+              "sha256": "66c8fadfbda22be8808922ad1fdf8f9b7eabd6872c159ee71ccdf432920bda2f"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t13_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t13_json_result.json",
+              "sha256": "de5f42da5bbef4d4ccc626bc93ad1d443275b521a6755c8d6b11c6bc849fb793"
+            }
+          ],
+          "duration_s": 4.235027,
+          "exit_code": 0,
+          "expected_signal": "at least one 4-subset of restricted mask rows has GF(2) rank < 4, with corresponding pattern counts 0/128",
+          "full_restricted_matrix_rank": 4,
+          "json_parse_error": null,
+          "json_result": {
+            "any_count_outside_63_65": false,
+            "full_matrix_rank": 4,
+            "hist_of_deficient_subsets": {
+              "[0, 1, 2, 4]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[0, 1, 2, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[0, 1, 4, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[0, 1, 5, 6]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[0, 2, 3, 5]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[0, 2, 4, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[0, 3, 4, 6]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[0, 3, 4, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[0, 3, 6, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[0, 4, 5, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[0, 4, 6, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[1, 2, 3, 5]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[1, 2, 4, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[1, 3, 4, 6]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[1, 3, 4, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[1, 3, 6, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[1, 4, 5, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[1, 4, 6, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[2, 3, 4, 5]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[2, 3, 4, 6]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[2, 3, 4, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[2, 3, 5, 6]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[2, 3, 5, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[2, 3, 6, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[2, 4, 5, 6]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[2, 4, 5, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[2, 4, 6, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[2, 5, 6, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[3, 4, 5, 6]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[3, 4, 5, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[3, 4, 6, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 2
+              },
+              "[3, 5, 6, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              },
+              "[4, 5, 6, 7]": {
+                "counts": [
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64,
+                  64
+                ],
+                "rank": 3
+              }
+            },
+            "keep_vector_count_of_first_32_seeds": 16,
+            "mask_rows": [
+              [
+                1,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                1,
+                1,
+                1,
+                0
+              ],
+              [
+                1,
+                1,
+                0,
+                0,
+                1
+              ],
+              [
+                1,
+                0,
+                0,
+                0,
+                1
+              ],
+              [
+                0,
+                0,
+                1,
+                1,
+                1
+              ],
+              [
+                0,
+                1,
+                0,
+                0,
+                0
+              ],
+              [
+                1,
+                0,
+                1,
+                1,
+                0
+              ],
+              [
+                0,
+                0,
+                1,
+                1,
+                1
+              ]
+            ],
+            "masks": [
+              649,
+              30,
+              259,
+              449,
+              1020,
+              202,
+              53,
+              284
+            ],
+            "min_4subset_rank": 2,
+            "num_4subsets_below_rank4": 33,
+            "offsets": [
+              0,
+              1,
+              1,
+              0,
+              0,
+              0,
+              1,
+              1
+            ],
+            "restricted_positions": [
+              0,
+              1,
+              2,
+              4,
+              8
+            ],
+            "subsets_with_rank_lt4": [
+              [
+                0,
+                1,
+                2,
+                4
+              ],
+              [
+                0,
+                1,
+                2,
+                7
+              ],
+              [
+                0,
+                1,
+                4,
+                7
+              ],
+              [
+                0,
+                1,
+                5,
+                6
+              ],
+              [
+                0,
+                2,
+                3,
+                5
+              ],
+              [
+                0,
+                2,
+                4,
+                7
+              ],
+              [
+                0,
+                3,
+                4,
+                6
+              ],
+              [
+                0,
+                3,
+                4,
+                7
+              ],
+              [
+                0,
+                3,
+                6,
+                7
+              ],
+              [
+                0,
+                4,
+                5,
+                7
+              ],
+              [
+                0,
+                4,
+                6,
+                7
+              ],
+              [
+                1,
+                2,
+                3,
+                5
+              ],
+              [
+                1,
+                2,
+                4,
+                7
+              ],
+              [
+                1,
+                3,
+                4,
+                6
+              ],
+              [
+                1,
+                3,
+                4,
+                7
+              ],
+              [
+                1,
+                3,
+                6,
+                7
+              ],
+              [
+                1,
+                4,
+                5,
+                7
+              ],
+              [
+                1,
+                4,
+                6,
+                7
+              ],
+              [
+                2,
+                3,
+                4,
+                5
+              ],
+              [
+                2,
+                3,
+                4,
+                6
+              ],
+              [
+                2,
+                3,
+                4,
+                7
+              ],
+              [
+                2,
+                3,
+                5,
+                6
+              ],
+              [
+                2,
+                3,
+                5,
+                7
+              ],
+              [
+                2,
+                3,
+                6,
+                7
+              ],
+              [
+                2,
+                4,
+                5,
+                6
+              ],
+              [
+                2,
+                4,
+                5,
+                7
+              ],
+              [
+                2,
+                4,
+                6,
+                7
+              ],
+              [
+                2,
+                5,
+                6,
+                7
+              ],
+              [
+                3,
+                4,
+                5,
+                6
+              ],
+              [
+                3,
+                4,
+                5,
+                7
+              ],
+              [
+                3,
+                4,
+                6,
+                7
+              ],
+              [
+                3,
+                5,
+                6,
+                7
+              ],
+              [
+                4,
+                5,
+                6,
+                7
+              ]
+            ]
+          },
+          "masks": [
+            649,
+            30,
+            259,
+            449,
+            1020,
+            202,
+            53,
+            284
+          ],
+          "min_4subset_rank": 2,
+          "num_4subsets_below_rank4": 33,
+          "num_deficient_subset_histograms_checked": 33,
+          "restricted_positions": [
+            0,
+            1,
+            2,
+            4,
+            8
+          ],
+          "stderr": "",
+          "stdout": "{\"restricted_positions\": [0, 1, 2, 4, 8], \"mask_rows\": [[1, 0, 0, 0, 0], [0, 1, 1, 1, 0], [1, 1, 0, 0, 1], [1, 0, 0, 0, 1], [0, 0, 1, 1, 1], [0, 1, 0, 0, 0], [1, 0, 1, 1, 0], [0, 0, 1, 1, 1]], \"masks\": [649, 30, 259, 449, 1020, 202, 53, 284], \"offsets\": [0, 1, 1, 0, 0, 0, 1, 1], \"full_matrix_rank\": 4, \"min_4subset_rank\": 2, \"num_4subsets_below_rank4\": 33, \"subsets_with_rank_lt4\": [[0, 1, 2, 4], [0, 1, 2, 7], [0, 1, 4, 7], [0, 1, 5, 6], [0, 2, 3, 5], [0, 2, 4, 7], [0, 3, 4, 6], [0, 3, 4, 7], [0, 3, 6, 7], [0, 4, 5, 7], [0, 4, 6, 7], [1, 2, 3, 5], [1, 2, 4, 7], [1, 3, 4, 6], [1, 3, 4, 7], [1, 3, 6, 7], [1, 4, 5, 7], [1, 4, 6, 7], [2, 3, 4, 5], [2, 3, 4, 6], [2, 3, 4, 7], [2, 3, 5, 6], [2, 3, 5, 7], [2, 3, 6, 7], [2, 4, 5, 6], [2, 4, 5, 7], [2, 4, 6, 7], [2, 5, 6, 7], [3, 4, 5, 6], [3, 4, 5, 7], [3, 4, 6, 7], [3, 5, 6, 7], [4, 5, 6, 7]], \"hist_of_deficient_subsets\": {\"[0, 1, 2, 4]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[0, 1, 2, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[0, 1, 4, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[0, 1, 5, 6]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[0, 2, 3, 5]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[0, 2, 4, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[0, 3, 4, 6]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[0, 3, 4, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[0, 3, 6, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[0, 4, 5, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[0, 4, 6, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[1, 2, 3, 5]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[1, 2, 4, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[1, 3, 4, 6]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[1, 3, 4, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[1, 3, 6, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[1, 4, 5, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[1, 4, 6, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[2, 3, 4, 5]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[2, 3, 4, 6]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[2, 3, 4, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[2, 3, 5, 6]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[2, 3, 5, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[2, 3, 6, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[2, 4, 5, 6]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[2, 4, 5, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[2, 4, 6, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[2, 5, 6, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[3, 4, 5, 6]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[3, 4, 5, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[3, 4, 6, 7]\": {\"rank\": 2, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[3, 5, 6, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}, \"[4, 5, 6, 7]\": {\"rank\": 3, \"counts\": [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]}}, \"any_count_outside_63_65\": false, \"keep_vector_count_of_first_32_seeds\": 16}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "The restricted 8x5 mask matrix indeed has rank deficiency (full rank 4, min 4-subset rank 2, 33/70 subsets rank<4), but the exhaustive histograms of run() output for every deficient subset show all 16 pattern counts are exactly 64 \u2014 no pattern is 0 or 128. The rank-deficiency premise of the claim holds, but the predicted non-uniform counts do not: the affine offset constants (dependent forms flip with odd constants) make all 16 patterns achievable with exactly 64 seeds each. The claimed contract failure does not occur.",
+        "supports": "rebutted",
+        "tool_event_id": "t13"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "Eight functionals each selecting a subset of the same five seed bits live in GF(2)^5; with 8 vectors in a 5-dimensional space, some 4-subset can be linearly dependent (rank<4). Marginal exact 0.5 (probe evidence) implies each restricted mask row has odd weight on {0,1,2,4,8}, and exact pairwise uniformity implies pairwise independence, but neither implies 4-wise independence \u2014 8 vectors in GF(2)^5 with all pairs independent yet some dependent quadruple is entirely possible. A concrete computation of the rank of the 8x5 matrix (mask bits at positions 0,1,2,4,8) over GF(2), or an exhaustive 70-subset x 16-pattern histogram of the actual output, decides it.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract mandates order-4 joint uniformity for ALL 4-subsets (C(8,4)=70) and all 16 patterns within tolerance 1/1024 (counts in [63,65]) on the fixed generated tables from make_inputs_numpy."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "initial_probe's recorded result covers only 'eight marginal and 28 pair histograms' \u2014 order-4 is explicitly the contract requirement the prior evidence does not test."
+      }
+    ],
+    "scope_rationale": "problem.txt requires order-4 joint uniformity for every 4-subset of the eight channels on the fixed generated tables; a rank-deficient 4-subset of the restricted mask functionals would produce pattern counts of 0 or 128 instead of 64, failing the stated contract even though the marginal/pair evidence passes.",
+    "statement": "The 8 restricted mask rows (each mask's bits at positions 0,1,2,4,8) may have GF(2) rank < 4 for at least one 4-subset of channels, making that subset's joint pattern counts non-uniform (some pattern 0 or 128 seeds instead of 64) and failing the order-4 contract even though marginals and pairs are exactly uniform.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T06:40:36Z"
+  },
+  {
+    "created_at": "2026-09-24T06:39:19Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:40:56Z",
+        "data": {
+          "all_70_subsets_all_16_patterns_equal_64": true,
+          "all_counts_multiple_of_32": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t17_probe.py",
+              "sha256": "a264e0a5f1dda73e958b1d59165088022b21fc26abbd2e72f03fc167b475e605"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t17_stdout.txt",
+              "sha256": "a55aa4271382d904b170b6ad989e831d6c27aae459f2efc5ece01c2cb2b814ef"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t17_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t17_json_result.json",
+              "sha256": "5a67011fce8bd31c8a614b068e9b62a3fd8f98597cce684e214fb9c2e828a9d5"
+            }
+          ],
+          "duration_s": 4.137563,
+          "exit_code": 0,
+          "expected_signal": "if claim true: at least one 4-subset has a pattern count 0 or 128 (contract violated); if false: all counts exactly 64 despite rank deficiency (affine offsets rescue uniformity)",
+          "json_parse_error": null,
+          "json_result": {
+            "all_70_subsets_all_16_patterns_equal_64": true,
+            "all_counts_multiple_of_32": true,
+            "max_count": 64,
+            "min_count": 64,
+            "necessarily_violates_order4": false,
+            "num_rank_deficient_4subsets": 33,
+            "num_subsets_violating_contract": 0,
+            "worst_count": 64,
+            "worst_pattern": 0,
+            "worst_subset": [
+              0,
+              1,
+              2,
+              3
+            ]
+          },
+          "max_count": 64,
+          "min_count": 64,
+          "necessarily_violates_order4": false,
+          "num_rank_deficient_4subsets": 33,
+          "num_subsets_violating_contract": 0,
+          "stderr": "",
+          "stdout": "{\"all_counts_multiple_of_32\": true, \"num_subsets_violating_contract\": 0, \"min_count\": 64, \"max_count\": 64, \"worst_subset\": [0, 1, 2, 3], \"worst_pattern\": 0, \"worst_count\": 64, \"num_rank_deficient_4subsets\": 33, \"necessarily_violates_order4\": false, \"all_70_subsets_all_16_patterns_equal_64\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "The Griesmer premise is confirmed (33 of 70 4-subsets of the restricted mask rows have GF(2) rank < 4, all counts are multiples of 32), but the claim's necessary-violation conclusion is false: all 70 subsets x 16 pattern counts are exactly 64, zero contract violations. The keep bits are affine (not purely linear) functionals \u2014 the offset constants make each dependent quadruple's linear dependency inhomogeneous, so all 16 patterns remain achievable with exactly 64 seeds. The Griesmer/GF(2)-linear argument doesn't apply to the affine system.",
+        "supports": "rebutted",
+        "tool_event_id": "t17"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "By the Griesmer bound, a binary linear code with length 8, dimension 3, and distance 5 cannot exist (Griesmer sum 5+3+1=9 > 8). 8 vectors in GF(2)^5 with every 4-subset linearly independent would be the parity-check column set of such a code, so it is impossible: some 4-subset of the restricted mask functionals must have rank < 4 (with rank 3, two of the 16 patterns get 0 seeds and two get 128). Since the XOR-fold chain in kernel.py lines 19-24 provably restricts each keep bit to a linear functional on seed bits {0,1,2,4,8}, the order-4 uniformity contract cannot be satisfied by any generated mask table, including the fixed PCG64(150400) table. This is a purely structural proof requiring no runtime run, subsuming and strengthening c1/c2.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: for every four distinct channels and every binary pattern b, abs(count/1024 - 1/16) <= 1/1024, i.e. counts in [63,65]; with the multiples-of-32 structure only exactly 64 passes."
+      },
+      {
+        "source": "kernel.py lines 19-24",
+        "summary": "keep = ((seed & mask) ^ ((seed&mask)>>8) ^ (>>4) ^ (>>2) ^ (>>1)) & 1 ^ offset \u2014 bit 0 of the fold is XOR of input bits {0,1,2,4,8} only, so each keep bit is a functional in GF(2)^5."
+      }
+    ],
+    "scope_rationale": "problem.txt requires order-4 joint uniformity (counts within [63,65], effectively exactly 64 given the 32-multiple structure) for all 70 4-subsets on the fixed workload. The Griesmer-bound argument shows at least one 4-subset must be rank-deficient, forcing a pattern count of 0 or 128 for the actual generated masks \u2014 a guaranteed, in-scope contract violation.",
+    "statement": "By the Griesmer bound (no binary [8,3,5] code exists), any 8 vectors in GF(2)^5 contain a 4-subset of rank < 4; hence for the actual generated masks there necessarily exists at least one 4-channel subset whose joint pattern counts include 0 or 128 instead of 64, so run() necessarily violates the order-4 uniformity contract for the fixed workload.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T06:40:56Z"
+  }
+]

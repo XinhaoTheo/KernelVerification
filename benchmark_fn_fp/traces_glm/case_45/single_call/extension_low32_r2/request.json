@@ -1,0 +1,18 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are verifying whether a GPU (Triton) kernel implementation is correct.\n\nYou will be given:\n1. A problem statement describing the operation's contract and its reference behavior.\n2. The kernel implementation under test.\n\nDecide one of:\n- \"reject\": the implementation has a real defect / violates the stated contract.\n- \"trust\": the implementation is correct, or is an equally valid alternative implementation.\n- \"needs_more_evidence\": you genuinely cannot tell.\n\nAnswer with the JSON object required by the output schema.\nOutput schema:\n{\"type\": \"object\", \"required\": [\"verdict\", \"confidence\", \"reason\"], \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": [\"trust\", \"reject\", \"needs_more_evidence\"], \"description\": \"'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell.\"}, \"confidence\": {\"type\": \"number\", \"description\": \"0.0 to 1.0.\"}, \"reason\": {\"type\": \"string\", \"description\": \"One or two sentences.\"}}, \"additionalProperties\": false}"
+    },
+    {
+      "role": "user",
+      "content": "## Problem statement (contract + reference behavior)\n\nImplement LayerNorm without an affine transform for this fixed workload.\n\nThe only input in scope is the float32 vector x returned by make_inputs() in\nkernel.py. Its shape is (128,), and its complete contents and element order are\nspecified by that public deterministic generator.\n\nThe reference uses the original float32 input values, evaluated in float64:\n  mean = sum_i x[i] / 128\n  variance = sum_i (x[i] - mean)**2 / 128\n  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)\nUse population variance, with no degrees-of-freedom correction.\n\nThe output must be one finite vector with shape (128,). Its relative L2 error is\n  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).\nThe numerical contract requires this error to be <= 0.02.\n\nDecide whether this implementation satisfies that contract for this fixed\nworkload. Arbitrary alternative tensors are outside this question's scope.\n\n\n## Kernel implementation under test (kernel.py)\n\n```python\nimport numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _layer_norm_kernel(X, Output, N: tl.constexpr):\n    total = tl.full((), 0.0, tl.float32)\n    squares = tl.full((), 0.0, tl.float32)\n    for i in range(0, N):\n        value = tl.load(X + i).to(tl.float32)\n        total = total + value\n        squares = squares + value * value\n    mean = total / N\n    variance = tl.maximum(squares / N - mean * mean, 0.0)\n    denominator = tl.sqrt(variance + 0.00001)\n    offsets = tl.arange(0, N)\n    values = tl.load(X + offsets).to(tl.float32)\n    tl.store(Output + offsets, (values - mean) / denominator)\n\n\ndef run(x):\n    output = torch.empty((128,), device=x.device, dtype=torch.float32)\n    _layer_norm_kernel[(1,)](x, output, N=128, num_warps=4,\n                            enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(782406))\n    x = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)\n    return (x,)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n\n```\n\nIs this implementation correct?"
+    }
+  ],
+  "response_format": {
+    "type": "json_object"
+  },
+  "reasoning_effort": "low"
+}

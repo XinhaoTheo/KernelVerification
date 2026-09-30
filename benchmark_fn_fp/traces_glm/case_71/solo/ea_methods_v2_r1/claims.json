@@ -1,0 +1,99 @@
+[
+  {
+    "created_at": "2026-09-24T06:40:37Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:41:06Z",
+        "data": {
+          "alias_all_rows_share_weights_storage": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "8a067f58100db1b93763ad998ff2ad951610abf1f975ab52a4b4160e916f1ac3"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "739420647ddb2ee430f7ce43f4394dcdb8c7781e864d8957204636002ac924c4"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "8b1f90595d134993d9b1bf91db333297577c9e3ad7c6658ea587b02227f6b9d0"
+            }
+          ],
+          "duration_s": 4.879239,
+          "exit_code": 0,
+          "expected_signal": "history_relative_error > 0.025 with aliasing true",
+          "final_state_rel_err": 5.05e-08,
+          "gradients_unchanged": true,
+          "history_relative_error": 0.8989803703905964,
+          "json_parse_error": null,
+          "json_result": {
+            "H_row0_norm_diff_from_target": 33.89453323631001,
+            "alias_all_rows_share_weights_storage": true,
+            "all_finite": true,
+            "final_v_rel_err": 4.510977036715875e-08,
+            "final_w_rel_err": 5.051213701513941e-08,
+            "gradients_unchanged": true,
+            "history_relative_error": 0.8989803703905964,
+            "rows_equal_final_weights": true,
+            "shapes": [
+              [
+                6,
+                128
+              ],
+              [
+                128
+              ],
+              [
+                128
+              ]
+            ],
+            "tolerance": 0.025
+          },
+          "rows_equal_final_weights": true,
+          "stderr": "",
+          "stdout": "{\"alias_all_rows_share_weights_storage\": true, \"history_relative_error\": 0.8989803703905964, \"tolerance\": 0.025, \"rows_equal_final_weights\": true, \"gradients_unchanged\": true, \"final_w_rel_err\": 5.051213701513941e-08, \"final_v_rel_err\": 4.510977036715875e-08, \"all_finite\": true, \"shapes\": [[6, 128], [128], [128]], \"H_row0_norm_diff_from_target\": 33.89453323631001}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.025
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "All six retained history tensors returned by run_sequence share the weights tensor's storage (alias_all_rows_share_weights_storage=true, rows_equal_final_weights=true). Observed after all six updates, H equals w[6] in every row; relative Frobenius error vs the per-step w[t+1] float64 reference is 0.8990, exceeding the 0.025 tolerance by ~36x. Final weights/velocity states match targets (~5e-08 relative error) and gradients are unchanged, so only the retained-history contract is violated.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "step() returns weights.view(N), a view aliasing the in-place-mutated state; the caller retains the six returned tensors and observes them only after all six updates, so H would read as w[6] replicated six times, not the per-step w[t+1].",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Acceptance requires ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025."
+      }
+    ],
+    "scope_rationale": "The contract requires H (values of the six retained returned tensors observed after all six updates) to match the per-step w[t+1] targets within relative Frobenius error 0.025; if the returned tensors alias the mutated weights storage, H cannot satisfy that.",
+    "statement": "run_sequence's retained history tensors alias weights storage, so H observed after all six steps equals w[6] in every row and violates ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025.",
+    "status": "confirmed",
+    "updated_at": "2026-09-24T06:41:06Z"
+  }
+]
