@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 
-SOURCE = Path(__file__).resolve().parents[1] / "benchmark_fn_fp/numerical_challenges/report_extension.py"
+SOURCE = Path(__file__).resolve().parents[1] / "benchmark_fn_fp/eval_scripts/single_call_vs_tools_challenges/report_extension.py"
 SPEC = importlib.util.spec_from_file_location("numerical_extension_report_test", SOURCE)
 report = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(report)
@@ -101,3 +101,43 @@ def test_new_case_range_has_independent_fixed_trial_windows():
     assert result["qualifying_cases"] == ["case_50"]
     assert not report.replication_gate(new_rows, labels, cases=("case_50",),
                                        low_trials=trials, required_families=2)["passed"]
+
+
+def test_generated_results_preserve_other_blocks_and_manual_text(tmp_path):
+    from generated_results import replace_results
+
+    before = "手工说明\n<!-- BEGIN GENERATED MAIN RESULTS -->\nmain\n<!-- END GENERATED MAIN RESULTS -->\n"
+    after = "\n<!-- BEGIN GENERATED OZ RESULTS -->\noz\n<!-- END GENERATED OZ RESULTS -->\n尾部说明\n"
+    path = tmp_path / "README.md"
+    path.write_text(before + "<!-- BEGIN GENERATED EXTENSION RESULTS -->\nold\n<!-- END GENERATED EXTENSION RESULTS -->" + after)
+    replace_results(tmp_path, "EXTENSION RESULTS", "new summary")
+    assert path.read_text() == (before + "<!-- BEGIN GENERATED EXTENSION RESULTS -->\n\nnew summary\n\n<!-- END GENERATED EXTENSION RESULTS -->" + after)
+    assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("content", [
+    "manual only",
+    "<!-- BEGIN GENERATED EXTENSION RESULTS --><!-- BEGIN GENERATED EXTENSION RESULTS --><!-- END GENERATED EXTENSION RESULTS -->",
+    "<!-- END GENERATED EXTENSION RESULTS --><!-- BEGIN GENERATED EXTENSION RESULTS -->",
+])
+def test_generated_results_refuse_missing_duplicate_or_reversed_markers(tmp_path, content):
+    from generated_results import replace_results
+
+    path = tmp_path / "README.md"
+    path.write_text(content)
+    with pytest.raises(ValueError, match="markers|marker pair"):
+        replace_results(tmp_path, "EXTENSION RESULTS", "replacement")
+    assert path.read_text() == content
+
+
+def test_compact_summary_keeps_per_call_and_total_budgets_separate():
+    from generated_results import compact_results
+
+    row = {"trial": "r1", "original_trial": "initial", "provider": "fireworks",
+           "model": "glm", "arm": "solo", "outcome": "correct", "usd": 0.1,
+           "protocol": {"max_tokens": 32768, "total_output_token_budget": None}}
+    capped = {**row, "protocol": {"max_tokens": 32768, "total_output_token_budget": 32768}}
+    text = compact_results([row, capped])
+    assert text.count("| initial |") == 2
+    assert "每次 32768 / 总 unknown" in text
+    assert "每次 32768 / 总 32768" in text

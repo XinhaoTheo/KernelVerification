@@ -70,6 +70,54 @@ def response(content, finish_reason):
     }
 
 
+@pytest.mark.parametrize("dataset,expected", [
+    ("benchmark_fn_fp", "case_tiny"), ("correlation_pair", "case_pair"),
+])
+def test_all_selects_dataset_from_registry_not_shared_directory(isolated_runner, monkeypatch, dataset, expected):
+    benchmark, code, problem = isolated_runner
+    pair = benchmark / "triton_eval_cases/case_pair"
+    pair.mkdir()
+    (pair / "kernel.py").write_text(code)
+    (pair / "problem.txt").write_text(problem)
+    (benchmark / "case_map.json").write_text(json.dumps({"case_details": {
+        "case_tiny": {"dataset": "benchmark_fn_fp"}, "case_pair": {"dataset": "correlation_pair"}}}))
+    private = benchmark / "correlation_pair/private_data"
+    private.mkdir(parents=True)
+    (private / "validation_gpu.json").write_text(json.dumps({"cases": {"case_pair": {
+        "ground_truth": "trust", "kernel_sha256": hashlib.sha256(code.encode()).hexdigest(),
+        "problem_sha256": hashlib.sha256(problem.encode()).hexdigest()}}}))
+    requests, _ = fake_openai(monkeypatch, response('{"verdict":"trust"}', "stop"))
+    runner.main(["--all", "--dataset", dataset, "--trial", "shared_directory"])
+    assert len(requests) == 1
+    records = list((benchmark / "traces_glm").glob("*/*/*/trace_meta.json"))
+    assert len(records) == 1
+    assert read(records[0])["case"] == expected
+    assert read(records[0])["dataset"] == dataset
+
+
+def test_original_baseline_loader_excludes_pair_in_shared_directory(isolated_runner, monkeypatch):
+    from benchmark_fn_fp.eval_scripts import common
+    benchmark, code, problem = isolated_runner
+    pair = benchmark / "triton_eval_cases/case_pair"
+    pair.mkdir()
+    (pair / "kernel.py").write_text(code)
+    (pair / "problem.txt").write_text(problem)
+    for name in ("case_tiny", "case_pair"):
+        (benchmark / "triton_eval_cases" / name / "meta.json").write_text("{}")
+    key = benchmark / "triton/case_tiny"
+    key.mkdir(parents=True)
+    (key / "meta.json").write_text(json.dumps({
+        "group": "FP", "seed_class": "FP1", "kernel_family": "add",
+        "reference": "fixture", "expected": {"correct_verdict": "CORRECT"}}))
+    case_map = benchmark / "case_map.json"
+    case_map.write_text(json.dumps({"cases": {"case_tiny": "case_tiny"}, "case_details": {
+        "case_tiny": {"dataset": "benchmark_fn_fp"}, "case_pair": {"dataset": "correlation_pair"}}}))
+    monkeypatch.setattr(common, "CASE_MAP_PATH", case_map)
+    monkeypatch.setattr(common, "CASES_DIR", benchmark / "triton_eval_cases")
+    monkeypatch.setattr(common, "ANSWER_KEY_DIR", benchmark / "triton")
+    assert [case.name for case in common.load_cases()] == ["case_tiny"]
+
+
 def test_run_one_saves_complete_trace_and_refuses_duplicate_before_api(isolated_runner, monkeypatch):
     benchmark, code, problem = isolated_runner
     trial = "test_completed"
@@ -172,11 +220,10 @@ def test_provider_default_omits_reasoning_setting_and_records_configuration(isol
 
 
 def test_numerical_single_checks_freeze_before_client_creation(isolated_runner, monkeypatch):
-    import shutil
     benchmark, _, _ = isolated_runner
-    root = benchmark / "numerical_challenges"
-    shutil.copytree(benchmark / "triton_eval_cases", root / "eval_cases")
-    case = root / "eval_cases/case_tiny"
+    root = benchmark / "single_call_vs_tools_challenges"
+    root.mkdir()
+    case = benchmark / "triton_eval_cases/case_tiny"
     hashes = {f"{kind}_sha256": hashlib.sha256((case / filename).read_bytes()).hexdigest()
               for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt"))}
     (root / "validation_gpu.json").write_text(json.dumps({"cases": {
@@ -186,11 +233,11 @@ def test_numerical_single_checks_freeze_before_client_creation(isolated_runner, 
     code = (case / "kernel.py").read_text()
     (case / "kernel.py").write_text(code + "# changed\n")
     with pytest.raises(ValueError, match="Frozen case changed"):
-        runner.run_one("case_tiny", dataset="numerical_challenges", trial="challenge", max_tokens=1000)
+        runner.run_one("case_tiny", dataset="single_call_vs_tools_challenges", trial="challenge", max_tokens=1000)
     assert requests == constructors == []
     assert not (benchmark / "traces_glm").exists()
     (case / "kernel.py").write_text(code)
-    result = runner.run_one("case_tiny", dataset="numerical_challenges", trial="challenge", max_tokens=1000)
+    result = runner.run_one("case_tiny", dataset="single_call_vs_tools_challenges", trial="challenge", max_tokens=1000)
     assert result["response"]["verdict"] == "trust"
     assert len(requests) == len(constructors) == 1
     meta = read(benchmark / "traces_glm/case_tiny/single_call/challenge/trace_meta.json")

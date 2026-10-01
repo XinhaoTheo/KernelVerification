@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 
-SOURCE = Path(__file__).resolve().parents[1] / "benchmark_fn_fp/evidence_challenges/report.py"
+SOURCE = Path(__file__).resolve().parents[1] / "benchmark_fn_fp/eval_scripts/solo_vs_debate_challenges/report.py"
 SPEC = importlib.util.spec_from_file_location("evidence_report_test", SOURCE)
 report = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(report)
@@ -210,8 +210,8 @@ def test_new_cohort_cannot_borrow_old_case_or_repeat_slots():
 
 
 def test_derive_filters_dataset_and_keeps_failure_coverage(tmp_path, monkeypatch):
-    root = tmp_path / "evidence_challenges"
-    case = root / "eval_cases" / "case_62"
+    root = tmp_path / "solo_vs_debate_challenges"
+    case = root.parent / "triton_eval_cases" / "case_62"
     case.mkdir(parents=True)
     frozen = {"case_62": {"ground_truth": "trust"}}
     for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt")):

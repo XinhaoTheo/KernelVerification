@@ -60,9 +60,6 @@ def _make_image(numpy_version: str):
                      "anthropic", "openai", "python-dotenv")
         .add_local_dir(str(REPO_ROOT / "verifier"), "/root/verifier")
         .add_local_dir(str(CASES_DIR), "/root/cases")
-        .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/correlation_pair/eval_cases"), "/root/correlation_cases")
-        .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/numerical_challenges/eval_cases"), "/root/numerical_cases")
-        .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/evidence_challenges/eval_cases"), "/root/evidence_cases")
         .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/numerical_pilot/eval_cases"), "/root/pilot_cases")
     )
 
@@ -111,9 +108,9 @@ def _run_one_impl(entry: str, arm: str, max_rounds: int, model: str, max_tokens:
     from verifier.agentic.llm_trace import _exception_details
 
     agents = ARMS[arm]
-    dataset_dir = {"benchmark_fn_fp": "/root/cases", "correlation_pair": "/root/correlation_cases",
-                   "numerical_challenges": "/root/numerical_cases",
-                   "evidence_challenges": "/root/evidence_cases",
+    dataset_dir = {"benchmark_fn_fp": "/root/cases", "correlation_pair": "/root/cases",
+                   "numerical_challenges": "/root/cases",
+                   "evidence_challenges": "/root/cases",
                    "numerical_pilot": "/root/pilot_cases"}[dataset]
     if expected_hashes is not None:
         import hashlib
@@ -221,6 +218,9 @@ def existing_valid_slots(benchmark_dir: pathlib.Path, traces_dir: str, dataset: 
     """
     from traces import iter_trace_records
     from summarize_traces import build_report
+    from datasets import canonical_dataset
+
+    dataset = canonical_dataset(dataset)
 
     benchmark = pathlib.Path(benchmark_dir).resolve()
     target = benchmark / traces_dir
@@ -284,7 +284,8 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     from traces import write_trace, trace_path, reserve_trace, new_trial_id, next_trial_id, experiment_trial_id
     from models import DEFAULT_MODEL_FOR_PROVIDER, profile_for
-    from datasets import cases_dir as dataset_cases_dir, checked_case_hashes
+    from datasets import canonical_dataset, case_names, cases_dir as dataset_cases_dir, checked_case_hashes
+    dataset = canonical_dataset(dataset)
     # The debate reaches a verdict in 7 turns; the solo agent needs more rounds
     # because one agent does every role's work in sequence.
     selected_arms = list(ARMS) if arm == "both" else [arm]
@@ -314,8 +315,7 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
         print("pass --cases a,b or --all", file=sys.stderr)
         raise SystemExit(1)
     if not names:
-        names = sorted(d.name for d in cases_dir.iterdir()
-                       if d.is_dir() and (d / "meta.json").exists())
+        names = case_names(REPO_ROOT, dataset)
     if len(names) != len(set(names)):
         raise ValueError("Duplicate case names")
     original_trial = experiment_trial_id(trial)

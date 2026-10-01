@@ -128,9 +128,20 @@ def main() -> int:
         source_names[case_id] = (details.get(case_id, {}).get("source_name")
                                  or source_meta.get("name") or name)
 
-    if EVAL_DIR.exists():
-        shutil.rmtree(EVAL_DIR)
-    EVAL_DIR.mkdir(parents=True)
+    # The public directory is shared with independently frozen datasets. Rebuild
+    # only this generator's registered cases, including its retired outputs.
+    owned_ids = set(mapping) | set(dropped)
+    for case_id in owned_ids:
+        owner = details.get(case_id, {}).get("dataset", "benchmark_fn_fp")
+        if owner != "benchmark_fn_fp":
+            raise ValueError(f"Refusing to rebuild another dataset's case: {case_id} ({owner})")
+        if (EVAL_DIR / case_id).is_symlink():
+            raise ValueError(f"Refusing a symlink in generated cases: {case_id}")
+    EVAL_DIR.mkdir(parents=True, exist_ok=True)
+    for case_id in owned_ids:
+        output = EVAL_DIR / case_id
+        if output.exists():
+            shutil.rmtree(output)
 
     problems: dict[str, str] = {}
     failures: list[str] = []
@@ -166,7 +177,8 @@ def main() -> int:
     MAP_PATH.write_text(json.dumps(registry, indent=2) + "\n")
 
     # --- leak checks -------------------------------------------------------
-    for path in sorted(EVAL_DIR.rglob("*")):
+    generated_paths = [path for case_id in mapping for path in (EVAL_DIR / case_id).rglob("*")]
+    for path in sorted(generated_paths):
         if not path.is_file():
             continue
         text = path.read_text(errors="replace")

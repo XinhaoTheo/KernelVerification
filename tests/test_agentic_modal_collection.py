@@ -97,6 +97,60 @@ def read(path):
     return json.loads(path.read_text())
 
 
+@pytest.mark.parametrize("dataset,expected", [
+    ("benchmark_fn_fp", ["case_a", "case_c"]),
+    ("correlation_pair", ["case_b"]),
+])
+def test_all_keeps_logical_datasets_separate_in_shared_public_directory(runner, monkeypatch, dataset, expected):
+    import hashlib
+    module, _, benchmark = runner
+    (benchmark / "case_map.json").write_text(json.dumps({"case_details": {
+        name: {"dataset": "correlation_pair" if name == "case_b" else "benchmark_fn_fp"}
+        for name in ("case_a", "case_b", "case_c")}}))
+    pair = benchmark / "triton_eval_cases/case_b"
+    private = benchmark / "correlation_pair/private_data"
+    private.mkdir(parents=True)
+    (private / "validation_gpu.json").write_text(json.dumps({"cases": {"case_b": {
+        "ground_truth": "trust", **{
+            f"{kind}_sha256": hashlib.sha256((pair / filename).read_bytes()).hexdigest()
+            for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt"))}}}}))
+    calls = []
+    monkeypatch.setattr(module, "run_one", SimpleNamespace(
+        remote=lambda *job: calls.append(job) or make_result(*job[:2])))
+    module.main(arm="solo", all=True, dataset=dataset, provider="fireworks", trial="shared_directory")
+    assert sorted(job[0] for job in calls) == expected
+    for job in calls:
+        assert job[7] == dataset
+        assert read(trace_dir(benchmark, job[0], "shared_directory") / "trace_meta.json")["dataset"] == dataset
+    assert all("correlation_pair/eval_cases" not in local and remote != "/root/correlation_cases"
+               for local, remote in module.image.mounts)
+
+
+@pytest.mark.parametrize("dataset", ["correlation_pair", "numerical_challenges", "evidence_challenges"])
+def test_frozen_remote_worker_uses_shared_public_mount(runner, monkeypatch, dataset):
+    import os
+    from verifier import agentic_run
+    module, _, _ = runner
+    monkeypatch.setattr(os, "chdir", lambda path: None)
+    for key in ("AGENTIC_MODEL", "AGENTIC_PROVIDER", "AGENTIC_PROBE_SANDBOX",
+                "AGENTIC_LLM_TIMEOUT_SECONDS", "AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET",
+                "AGENTIC_OPENAI_REASONING_EFFORT", "AGENTIC_LLM_TRACE_DIR", "AGENTIC_LLM_TRACE_PROGRESS"):
+        monkeypatch.setenv(key, os.environ.get(key, ""))
+
+    def fake_main(argv):
+        assert argv[argv.index("--dataset-dir") + 1] == "/root/cases"
+        dest = Path(argv[argv.index("--run-dir") + 1])
+        assert dest.parts[-3:] == (dataset, "case_b", "solo")
+        dest.mkdir(parents=True)
+        (dest / "verdict.json").write_text('{"verdict":"trust"}')
+        return 0
+
+    monkeypatch.setattr(agentic_run, "main", fake_main)
+    result = module.run_one("case_b", "solo", 10, "accounts/fireworks/models/glm-5p3",
+                            32768, "fireworks", 1800, dataset=dataset, trial="shared")
+    assert result["ok"] is True
+
+
 def test_remote_failure_does_not_stop_other_submitted_jobs(runner, monkeypatch):
     module, _, benchmark = runner
     barrier = threading.Barrier(3)
@@ -222,17 +276,16 @@ def test_remote_error_preserves_existing_archive(runner, monkeypatch, failure):
 
 def test_numerical_batch_checks_all_frozen_cases_before_submitting(runner, monkeypatch):
     import hashlib
-    import shutil
     module, _, benchmark = runner
-    root = benchmark / "numerical_challenges"
-    shutil.copytree(benchmark / "triton_eval_cases", root / "eval_cases")
+    root = benchmark / "single_call_vs_tools_challenges"
+    root.mkdir()
     validated = {}
     for name in ("case_a", "case_b", "case_c"):
         validated[name] = {"ground_truth": "trust", **{
-            f"{kind}_sha256": hashlib.sha256((root / "eval_cases" / name / filename).read_bytes()).hexdigest()
+            f"{kind}_sha256": hashlib.sha256((benchmark / "triton_eval_cases" / name / filename).read_bytes()).hexdigest()
             for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt"))}}
     (root / "validation_gpu.json").write_text(json.dumps({"cases": validated}))
-    edited = root / "eval_cases/case_b/problem.txt"
+    edited = benchmark / "triton_eval_cases/case_b/problem.txt"
     original = edited.read_text()
     edited.write_text("Changed contract")
     calls = []
@@ -244,12 +297,12 @@ def test_numerical_batch_checks_all_frozen_cases_before_submitting(runner, monke
     monkeypatch.setattr(module, "run_one", SimpleNamespace(remote=remote))
     with pytest.raises(ValueError, match="Frozen case changed"):
         module.main(arm="both", cases="case_a,case_b", provider="fireworks", trial="challenge",
-                    dataset="numerical_challenges")
+                    dataset="single_call_vs_tools_challenges")
     assert calls == []
     assert not (benchmark / "traces_glm").exists()
     edited.write_text(original)
     module.main(arm="both", cases="case_a,case_b", provider="fireworks", trial="challenge",
-                dataset="numerical_challenges")
+                dataset="single_call_vs_tools_challenges")
     assert len(calls) == 4
     for job in calls:
         assert job[7] == "numerical_challenges"

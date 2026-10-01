@@ -13,7 +13,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from baseline2_single_llm import SYSTEM_PROMPT, USER_TEMPLATE, VERDICT_SCHEMA
 from models import profile_for, profile_for_trace, pricing_snapshot
-from datasets import DATASETS, cases_dir as dataset_cases_dir, checked_case_hashes
+from datasets import DATASETS, canonical_dataset, case_names, cases_dir as dataset_cases_dir, checked_case_hashes
 from traces import (reserve_trace, write_trace, next_trial_id, single_call_readable_files,
                     trace_path, update_trace_metadata, experiment_trial_id)
 from verifier.agentic.llm_trace import LLMCallTrace
@@ -22,6 +22,7 @@ MODEL = "accounts/fireworks/models/glm-5p3"
 
 
 def run_one(name, *, dataset, trial, max_tokens, timeout_s=1800, reasoning_effort="low", original_trial=None):
+    dataset = canonical_dataset(dataset)
     if reasoning_effort not in {"default", "low", "medium", "high"}:
         raise ValueError("Unsupported reasoning effort")
     from openai import OpenAI
@@ -101,12 +102,12 @@ def main(argv=None):
                         help="default omits the API field and uses the provider's default")
     parser.add_argument('--concurrency',type=int,default=2)
     args=parser.parse_args(argv)
+    args.dataset=canonical_dataset(args.dataset)
     load_dotenv(REPO/'.env')
     if not os.getenv('FIREWORKS_API_KEY'):raise RuntimeError('FIREWORKS_API_KEY is not set')
     if args.max_tokens<1 or args.concurrency<1 or args.timeout<1:parser.error('Budgets and timeout must be positive')
-    cases_dir=dataset_cases_dir(REPO,args.dataset)
     names=[n.strip() for n in args.cases.split(',') if n.strip()]
-    if not names and args.all:names=sorted(p.name for p in cases_dir.iterdir() if (p/'kernel.py').exists())
+    if not names and args.all:names=case_names(REPO,args.dataset)
     if not names:parser.error('pass --cases or --all')
     if len(names)!=len(set(names)):parser.error('duplicate cases')
     trial=args.trial or next_trial_id(names, ['single_call'], traces_dir=profile_for(MODEL).traces_dir)

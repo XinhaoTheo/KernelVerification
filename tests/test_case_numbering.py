@@ -48,9 +48,11 @@ def test_moved_trace_rejects_another_case_or_dataset(metadata, match):
         resolve_trace_case("case_36", metadata, registry())
 
 
-def test_private_validation_takes_precedence_over_stale_legacy_copy(tmp_path):
-    dataset = tmp_path / "benchmark_fn_fp/numerical_challenges"
-    case = dataset / "eval_cases/case_38"
+@pytest.mark.parametrize("dataset_name", ["correlation_pair", "numerical_challenges", "evidence_challenges"])
+def test_private_validation_takes_precedence_over_stale_legacy_copy(tmp_path, dataset_name):
+    dataset = tmp_path / "benchmark_fn_fp" / dataset_name
+    directory = tmp_path / "benchmark_fn_fp/triton_eval_cases"
+    case = directory / "case_38"
     case.mkdir(parents=True)
     hashes = {}
     for kind, filename, text in (("kernel", "kernel.py", "def run(): return 1\n"),
@@ -61,7 +63,23 @@ def test_private_validation_takes_precedence_over_stale_legacy_copy(tmp_path):
         "case_38": {"ground_truth": "trust", **hashes}}})
     write(dataset / "validation_gpu.json", {"cases": {
         "case_38": {"ground_truth": "trust", "kernel_sha256": "stale"}}})
-    assert checked_case_hashes(tmp_path, "numerical_challenges", "case_38") == hashes
+    assert checked_case_hashes(tmp_path, dataset_name, "case_38") == hashes
+
+
+@pytest.mark.parametrize("existing_case", ["case_36", "case_37"])
+def test_pair_builder_cannot_overwrite_cases_after_trace_cleanup(tmp_path, monkeypatch, existing_case):
+    from benchmark_fn_fp.eval_scripts.correlation_pair import build
+    dataset = tmp_path / "benchmark_fn_fp/correlation_pair"
+    monkeypatch.setattr(build, "ROOT", dataset)
+    case = dataset.parent / "triton_eval_cases" / existing_case
+    case.mkdir(parents=True)
+    source = case / "kernel.py"
+    source.write_text("frozen kernel")
+    assert not (dataset / "traces").exists()
+    with pytest.raises(RuntimeError, match="overwriting frozen cases"):
+        build.main()
+    assert source.read_text() == "frozen kernel"
+    assert not (dataset / "private_data").exists()
 
 
 def test_numeric_sort_handles_three_digit_cases():
@@ -87,7 +105,14 @@ def test_original_builder_allocates_globally_and_preserves_source_names(tmp_path
     initial = {"cases": {"case_01": "case_01"}, "retired_ids": ["case_03"],
         "next_case_number": 106, "custom_provenance": {"keep": True}, "case_details": {
             "case_01": {"dataset": "benchmark_fn_fp", "previous_id": "case_01", "source_name": "fn1_existing_source"},
+            "case_36": {"dataset": "correlation_pair", "public_dir": "triton_eval_cases/case_36"},
             "case_105": {"dataset": "numerical_pilot", "previous_id": "case_24"}}}
+    pair = root / "triton_eval_cases/case_36"
+    pair.mkdir(parents=True)
+    (pair / "kernel.py").write_text("# Another frozen dataset: buggy is ordinary text here.\n")
+    (pair / "problem.txt").write_text("Frozen correlation contract.\n")
+    write(pair / "meta.json", {"name": "case_36"})
+    frozen_pair = {p.name: p.read_bytes() for p in pair.iterdir()}
     write(root / "case_map.json", initial)
     assert builder.main() == 0
     result = json.loads((root / "case_map.json").read_text())
@@ -96,6 +121,8 @@ def test_original_builder_allocates_globally_and_preserves_source_names(tmp_path
     assert result["retired_ids"] == ["case_03"]
     assert result["custom_provenance"] == {"keep": True}
     assert result["case_details"]["case_105"] == initial["case_details"]["case_105"]
+    assert result["case_details"]["case_36"] == initial["case_details"]["case_36"]
+    assert {p.name: p.read_bytes() for p in pair.iterdir()} == frozen_pair
     assert result["case_details"]["case_106"]["source_name"] == "fn2_new_source"
     assert not (root / "triton/fn2_new_source").exists()
     for case in ("case_01", "case_106"):

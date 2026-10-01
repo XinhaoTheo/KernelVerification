@@ -8,12 +8,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from benchmark_fn_fp.eval_scripts.datasets import cases_dir, checked_case_hashes
+from benchmark_fn_fp.eval_scripts.datasets import case_names, cases_dir, checked_case_hashes
+from benchmark_fn_fp.eval_scripts.case_registry import DATASET_DIRECTORIES, canonical_dataset, dataset_root, validation_path
 
 
 def frozen_case(tmp_path, dataset="numerical_challenges"):
-    root = tmp_path / "benchmark_fn_fp" / dataset
-    case = root / "eval_cases" / "case_38"
+    root = dataset_root(tmp_path / "benchmark_fn_fp", dataset)
+    directory = (tmp_path / "benchmark_fn_fp/triton_eval_cases"
+                 if dataset != "numerical_pilot" else root / "eval_cases")
+    case = directory / "case_38"
     case.mkdir(parents=True)
     (case / "kernel.py").write_text("def run(x): return x\n")
     (case / "problem.txt").write_text("Return x unchanged.\n")
@@ -21,12 +24,13 @@ def frozen_case(tmp_path, dataset="numerical_challenges"):
         f"{kind}_sha256": hashlib.sha256((case / filename).read_bytes()).hexdigest()
         for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt"))}}
     filename = "answer_key.json" if dataset == "numerical_pilot" else "validation_gpu.json"
+    root.mkdir(parents=True, exist_ok=True)
     (root / filename).write_text(json.dumps({"cases": {"case_38": row}}))
     return case, row
 
 
 @pytest.mark.parametrize("dataset", ["correlation_pair", "numerical_challenges", "evidence_challenges",
-                                    "numerical_pilot"])
+                                    "numerical_pilot", "single_call_vs_tools_challenges", "solo_vs_debate_challenges"])
 def test_frozen_sources_checked_without_releasing_labels(tmp_path, dataset):
     case, row = frozen_case(tmp_path, dataset)
     hashes = checked_case_hashes(tmp_path, dataset, "case_38")
@@ -37,9 +41,28 @@ def test_frozen_sources_checked_without_releasing_labels(tmp_path, dataset):
         checked_case_hashes(tmp_path, dataset, "case_38")
 
 
+@pytest.mark.parametrize("identity,directory", DATASET_DIRECTORIES.items())
+def test_renamed_dataset_filters_shared_cases_and_preserves_trace_identity(tmp_path, identity, directory):
+    case, row = frozen_case(tmp_path, identity)
+    benchmark = tmp_path / "benchmark_fn_fp"
+    unrelated = case.parent / "case_01"
+    unrelated.mkdir()
+    (unrelated / "kernel.py").write_text("original benchmark case")
+    (benchmark / "case_map.json").write_text(json.dumps({"case_details": {
+        "case_38": {"dataset": identity}, "case_01": {"dataset": "benchmark_fn_fp"}}}))
+    assert canonical_dataset(directory) == identity
+    assert case_names(tmp_path, identity) == case_names(tmp_path, directory) == ["case_38"]
+    assert dataset_root(benchmark, identity) == benchmark / directory
+    assert validation_path(benchmark, directory) == validation_path(benchmark, identity)
+    assert checked_case_hashes(tmp_path, directory, "case_38") == {
+        k: v for k, v in row.items() if k.endswith("sha256")}
+    with pytest.raises(ValueError, match="belongs to"):
+        checked_case_hashes(tmp_path, directory, "case_01")
+
+
 def test_missing_or_invalid_validation_is_not_silently_accepted(tmp_path):
     case, _ = frozen_case(tmp_path)
-    validation = case.parent.parent / "validation_gpu.json"
+    validation = validation_path(tmp_path / "benchmark_fn_fp", "single_call_vs_tools_challenges")
     validation.unlink()
     with pytest.raises(FileNotFoundError):
         checked_case_hashes(tmp_path, "numerical_challenges", "case_38")
@@ -79,7 +102,7 @@ def test_validator_refuses_cpu_gpu_disagreements(monkeypatch):
         def local_entrypoint(self): return lambda function: function
 
     monkeypatch.setitem(sys.modules, "modal", SimpleNamespace(App=App, Image=Image))
-    path = Path(__file__).resolve().parents[1] / "benchmark_fn_fp/numerical_challenges/validate_modal.py"
+    path = Path(__file__).resolve().parents[1] / "benchmark_fn_fp/eval_scripts/single_call_vs_tools_challenges/validate_modal.py"
     spec = importlib.util.spec_from_file_location("offline_numerical_validator", path)
     validator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(validator)

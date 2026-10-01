@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-SOURCE = Path(__file__).resolve().parents[1] / "benchmark_fn_fp/evidence_challenges/report_precision_transfer.py"
+SOURCE = Path(__file__).resolve().parents[1] / "benchmark_fn_fp/eval_scripts/solo_vs_debate_challenges/report_precision_transfer.py"
 SPEC = importlib.util.spec_from_file_location("precision_transfer_report_test", SOURCE)
 report = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(report)

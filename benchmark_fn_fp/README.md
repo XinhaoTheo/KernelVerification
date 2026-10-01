@@ -1,5 +1,15 @@
 # benchmark_fn_fp
 
+快速导航：
+
+| 看什么 | 入口 | 案例 |
+|---|---|---|
+| 固定输入的数值误差能否达标 | [single_call_vs_tools_challenges：无工具单次调用 vs 带工具验证](single_call_vs_tools_challenges/README.md) | case_38–case_61，24题 |
+| 初始参考是否可靠、合同是否被完整覆盖 | [solo_vs_debate_challenges：单 agent＋工具 vs 多角色 debate＋工具](solo_vs_debate_challenges/README.md) | case_62–case_81，20题 |
+| kernel、输入生成器与合同 | [统一公开题目录](triton_eval_cases/) / [题目索引](CASE_INDEX.md) | case_01–case_81除退役03，共80题 |
+| 早期24题pilot | [numerical_pilot](numerical_pilot/README.md) | case_82–case_105，公开文件仍在该组eval_cases |
+| 每次调用、失败和probe | [GLM traces](traces_glm/INDEX.md) | 全部批次，按case/arm/rN |
+
 GPU kernel verification datasets, evaluation programs, and recorded experiments.
 Start with [CASE_INDEX.md](CASE_INDEX.md) for the meaning and location of every
 case. All datasets and trace directories use the same global `case_<number>` ID;
@@ -24,10 +34,10 @@ benchmark_fn_fp/
 ├── CASE_INDEX.md       all case ranges, purposes, and links
 ├── case_map.json       single canonical ID/source/dataset mapping
 ├── triton/             original 34 cases, with answers ← scorer only
-├── triton_eval_cases/  answer-free copies, same IDs    ← verifier input
-├── correlation_pair/   case_36–case_37: numerical error correlation
-├── numerical_challenges/ case_38–case_61: tools vs single call
-├── evidence_challenges/  case_62–case_81: solo vs debate exploration
+├── triton_eval_cases/  80 public cases: case_01–case_81, except retired 03
+├── correlation_pair/   pair README and private_data only
+├── single_call_vs_tools_challenges/  case_38–case_61: README and private_data
+├── solo_vs_debate_challenges/ case_62–case_81: README and private_data
 ├── numerical_pilot/    case_82–case_105: early single-call pilot
 ├── real_kernel_challenges/ next experiment plan only; no cases yet
 │
@@ -40,15 +50,25 @@ benchmark_fn_fp/
 ```
 
 There are **104 active cases**: 34 original FN/FP cases, 2 correlation cases,
-24 numerical challenges, 20 evidence challenges, and 24 early pilot cases.
+24 numerical-accuracy cases, 20 reference/coverage cases, and 24 early pilot cases.
 The original suite occupies `case_01`–`case_35`, with `case_03` retired and never
 reused. The global index explains each range and links to the matching traces.
 
-Each additional dataset keeps verifier-visible files under `eval_cases/case_NN/`.
-Numerical and evidence datasets keep answer keys, construction searches and GPU
-freeze records under `private_data/`; these files are not agent inputs. Their
-Markdown reports are readable summaries. Optional JSON scoreboards can be
-regenerated with the report script's `--json` flag under `private_data/reports/`.
+The original suite, correlation pair and both later groups share
+`triton_eval_cases/`: 80 active cases in `case_01`–`case_81`, excluding retired
+`case_03`. Only the early pilot retains its separate `eval_cases/case_NN/` tree.
+Runner `--all` selects the requested dataset's registered cases, not every folder
+in the shared directory. Current CLI aliases use the new descriptive names;
+historical dataset IDs remain in trace metadata for compatibility.
+
+The correlation pair, numerical-accuracy and reference/coverage groups keep answer
+keys, construction searches and GPU freeze records under their `private_data/`;
+these files are not agent inputs.
+Each group has one README containing generated results, protocol and necessary
+audit findings. Construction, CPU/GPU validation and reporting programs live
+under the matching `eval_scripts/<group>/` directory.
+Optional JSON scoreboards can be regenerated with the report script's `--json`
+flag under `private_data/reports/`.
 
 ---
 
@@ -109,8 +129,11 @@ The historical source names remain in `case_map.json` and private metadata:
 
 ## `triton_eval_cases/` — what a verifier actually sees
 
-Built from `triton/` by
-`benchmark_fn_fp/generation/generators/build_eval_cases.py`.
+The original 34 public copies are built from `triton/` by
+`benchmark_fn_fp/generation/generators/build_eval_cases.py`. The same directory
+also holds frozen cases `case_36`–`case_81`; their private measurements and study
+notes remain in their respective group directories. The example
+and source-to-public comparison below describe an original-suite case.
 
 ```
 triton_eval_cases/case_33/
@@ -258,7 +281,7 @@ model settings or budgets.
 | `benchmark_design.md` | The original design |
 | `benchmark_design_generalized.md` | The thirteen seeds in full, and every hypothesis measurement has falsified |
 | `generators/batch*.py` | The builders, each responsible for a few seeds |
-| `generators/build_eval_cases.py` | Produces `triton_eval_cases/` from `triton/`, with leak checks |
+| `generators/build_eval_cases.py` | Produces the original-suite copies in `triton_eval_cases/` from `triton/`, with leak checks |
 | `generators/sanitize_for_eval.py` | The earlier stripping script, superseded by the above |
 
 `benchmark_design_generalized.md` records hypotheses that were **tested and
@@ -319,9 +342,9 @@ Record the setting and score token exhaustion separately from a wrong verdict.
    `fn3_gptq_dequant_group_div_coverage` was withdrawn. A defect in a host
    wrapper is fine **provided the wrapper ships alongside `kernel.py`**.
 
-2. **Rebuild after adding a case**:
+2. **Rebuild after adding an original-suite case**:
    `python benchmark_fn_fp/generation/generators/build_eval_cases.py`
-   It assigns ids to new cases, rebuilds `triton_eval_cases/`, and runs the leak checks
+   It assigns ids to new cases, rebuilds the original-suite public copies, and runs the leak checks
    (banned words, real case names, group-encoding filenames, matched-pair
    indistinguishability). Existing ids are never reshuffled — results are stored
    under them.

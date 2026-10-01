@@ -16,6 +16,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from .datasets import case_names
+except ImportError:
+    from datasets import case_names
+
 # What a verifier is allowed to see: answer-free problem.txt + kernel.py only,
 # under opaque `case_NN` directory names. The descriptive names live only in the
 # answer key: `fn7_liger_rmsnorm_eps_placement` states both the group (fn = a
@@ -54,7 +59,10 @@ def load_cases(cases_dir: Path | None = None) -> list[Case]:
     root = cases_dir or CASES_DIR
     case_map = json.loads(CASE_MAP_PATH.read_text())["cases"]
     cases: list[Case] = []
-    for d in sorted(root.iterdir()):
+    # The public directory also holds correlation_pair; the original baselines
+    # select their logical dataset from the registry rather than its location.
+    for name in case_names(CASE_MAP_PATH.parent.parent, "benchmark_fn_fp"):
+        d = root / name
         if not d.is_dir() or not (d / "meta.json").exists():
             continue
         real_name = case_map.get(d.name)

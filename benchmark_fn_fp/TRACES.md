@@ -15,9 +15,9 @@ benchmark_fn_fp/
 
 All GLM runs use `<case>/<arm>/rN/`, with `r1`, `r2`, and so on numbering attempts within each case/arm, including failed or incomplete attempts. The same number across arms does not imply the same model, budget or experimental configuration. `trace_meta.json` retains the former label in `original_trial`, the former location in `original_trace_path`, and historical selection order in `selection_sort_key`. Provider and exact API model remain provenance fields alongside dataset, case, arm and current trial. They do not create separate directories or sections in the GLM index. The finite-workload case_36/case_37 pair is dataset `correlation_pair`.
 
-The 2026-09-23 migration combined 12 main GLM runs and 8 case_36/case_37 runs. The initial provider subdirectories were flattened into `traces_glm/<case>/<arm>/<trial>/`; `traces_glm_fireworks` is no longer a separate tree. Every original file was checked by SHA-256, and migration manifests retain the inventories and path changes. Historical case_36/case_37 source archives remain under `correlation_pair/traces_fireworks` so old reports/links still work; the canonical index and scorer use the unified copies, once each.
+The 2026-09-23 migration combined 12 main GLM runs and 8 case_36/case_37 runs. The initial provider subdirectories were flattened into `traces_glm/<case>/<arm>/<trial>/`; `traces_glm_fireworks` is no longer a separate tree. Every original file was checked by SHA-256, and migration manifests retain the inventories and path changes. The later [correlation-pair cleanup](traces_opus5/migration_20260930_correlation_cleanup.json) relocated its nine Opus attempts to `traces_opus5/case_36/` and `case_37/` and removed eight duplicate GLM source archives after verification. The canonical model trees now hold the pair's records once each; [its consolidated audit](correlation_pair/README.md#evidence-audit) preserves the separate Opus, GLM 32K and GLM 64K findings.
 
-The later `rN` normalization changes directory names and metadata identity/provenance fields, while preserving raw requests, responses, transcripts and probe payloads. Its [migration manifest](traces_glm/migration_20260930_trial_names.json) retains the original metadata bytes and path mapping. Earlier migration manifests and historical source archives remain unchanged.
+The later `rN` normalization changes directory names and metadata identity/provenance fields, while preserving raw requests, responses, transcripts and probe payloads. Its [migration manifest](traces_glm/migration_20260930_trial_names.json) retains the original metadata bytes and path mapping. Earlier migration manifests remain unchanged; the subsequent correlation-pair cleanup separately records source-archive relocation and deduplication.
 
 Start with [the GLM index](traces_glm/INDEX.md): its first table covers all 104
 active cases and three arms, and its lower section retains every historical
@@ -26,6 +26,13 @@ answers and valid abstentions. Running, failed and missing slots remain visible.
 The [2026-09-30 completion report](traces_glm/COMPLETION_20260930.md)
 records the completed 312/312 coverage, new results and costs. In general, the
 presence of a reserved directory does not mean that its experiment is complete.
+
+Study settings and reviewed evidence are consolidated in
+[numerical accuracy](single_call_vs_tools_challenges/README.md) for case_38–case_61 and
+[reference and coverage](solo_vs_debate_challenges/README.md) for case_62–case_81.
+Their public inputs now share `triton_eval_cases/` with the original suite and
+correlation pair (80 active cases); the 24 early pilot cases remain separate.
+These directory changes preserve historical trace dataset IDs and raw payloads.
 
 ## A tool-enabled run
 

@@ -5,6 +5,24 @@ import json
 from pathlib import Path
 import re
 
+DATASET_DIRECTORIES = {
+    "numerical_challenges": "single_call_vs_tools_challenges",
+    "evidence_challenges": "solo_vs_debate_challenges",
+}
+
+
+def canonical_dataset(dataset: str) -> str:
+    """Keep trace identities stable while accepting readable directory names."""
+    return {directory: identity for identity, directory in DATASET_DIRECTORIES.items()}.get(dataset, dataset)
+
+
+def dataset_root(benchmark: Path, dataset: str) -> Path:
+    identity = canonical_dataset(dataset)
+    root = Path(benchmark) / DATASET_DIRECTORIES.get(identity, identity)
+    legacy = Path(benchmark) / identity
+    # Historical checkouts and test fixtures can still use their original layout.
+    return legacy if not root.exists() and legacy.exists() else root
+
 
 def case_sort_key(name: str):
     match = re.fullmatch(r"case_(\d+)", name)
@@ -17,12 +35,13 @@ def load_registry(benchmark: Path) -> dict:
 
 
 def validation_path(benchmark: Path, dataset: str) -> Path:
-    root = Path(benchmark) / dataset
+    dataset = canonical_dataset(dataset)
+    root = dataset_root(benchmark, dataset)
     if dataset == "numerical_pilot":
         # The pilot's answer key already contains its T4 measurements and
         # frozen public-file hashes; no new GPU result is implied by this route.
         return root / "answer_key.json"
-    if dataset in {"numerical_challenges", "evidence_challenges"}:
+    if dataset in {"correlation_pair", "numerical_challenges", "evidence_challenges"}:
         private = root / "private_data" / "validation_gpu.json"
         if private.exists():
             return private

@@ -434,10 +434,10 @@ kernel_verification/
 │   ├── CASE_INDEX.md         # all case IDs, dataset groups, and links
 │   ├── case_map.json         # single canonical registry
 │   ├── triton/              # original cases with private answers
-│   ├── triton_eval_cases/   # answer-free copies with the same IDs
-│   ├── correlation_pair/    # case_36–case_37
-│   ├── numerical_challenges/ # case_38–case_61
-│   ├── evidence_challenges/ # case_62–case_81
+│   ├── triton_eval_cases/   # 80 public cases: case_01–case_81 except retired 03
+│   ├── correlation_pair/    # pair README and private_data only
+│   ├── single_call_vs_tools_challenges/ # case_38–case_61: README + private_data
+│   ├── solo_vs_debate_challenges/ # case_62–case_81: README + private_data
 │   ├── numerical_pilot/     # case_82–case_105
 │   ├── real_kernel_challenges/ # plan only
 │   ├── eval_scripts/        # evaluation programs
