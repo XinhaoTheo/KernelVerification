@@ -1,0 +1,206 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Describer agent in an agentic kernel verification system.\nYour job is to explain what the kernel appears to implement and what assumptions\nare visible in the source or problem statement.\n\nRules:\n- Maintain the shared description model. Your useful output should be structured, not just prose.\n- When enough context is available, call record_description_update with concise entries for contract_model, kernel_model, risk_map, scope_notes, and open_questions. Each of those five takes a JSON array of strings, exactly this shape:\n    {\"summary\": \"...\", \"contract_model\": [\"first point\", \"second point\"], \"risk_map\": [\"...\"]}\n  Do not pass a paragraph, and do not number the points or wrap them in an object -- the array itself is the ordering.\n- contract_model: what the problem/test/benchmark appears to require.\n- kernel_model: what the kernel source appears to implement and assume.\n- risk_map: specific bug surfaces Skeptic should consider, without recording claims yourself.\n- scope_notes: benchmark/test-domain boundaries that matter for in-scope vs out-of-scope reasoning.\n- open_questions: unresolved facts that need more context or later experiments.\n- If open_description_tasks are present, answer the task directly and include task_id or resolved_task_ids in record_description_update.\n- Cite concrete source, problem, test, metadata, or tool-event context when available.\n- Use inspect_problem, inspect_kernel_source, list_artifact_files, or read_artifact_file when more context is needed.\n- Do not record claims. That is the Skeptic agent's job.\n- Do not run experiments. That is the Experimenter agent's job.\n- Do not output a final correctness verdict.\n- If you cannot resolve a description task, record an update explaining what remains unknown in open_questions.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"LICENSE\",\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_114\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: # SPDX-License-Identifier: Apache-2.0\\n2: # SPDX-FileCopyrightText: Copyright contributors to the vLLM project\\n3: # Adapted 2026: standalone FP16 paged-attention interface and bounded domain.\\n4: # See LICENSE for upstream attribution and the license text.\\n5: import math\\n6: \\n7: import torch\\n8: import triton\\n9: import triton.language as tl\\n10: \\n11: \\n12: @triton.jit\\n13: def _paged_attention(Q_PTR, K_PTR, V_PTR, TABLE, LENGTHS, OUT,\\n14:                      QT: tl.constexpr, HQ: tl.constexpr, HK: tl.constexpr,\\n15:                      D: tl.constexpr, PAGE: tl.constexpr, TABLE_WIDTH: tl.constexpr,\\n16:                      GROUP: tl.constexpr, WINDOW: tl.constexpr,\\n17:                      SCALE: tl.constexpr, BQ: tl.constexpr,\\n18:                      BM: tl.constexpr = 16, TILE: tl.constexpr = 64):\\n19:     qb = tl.program_id(0)\\n20:     kv_head = tl.program_id(1)\\n21:     batch = tl.program_id(2)\\n22:     rows = tl.arange(0, BM)\\n23:     dims = tl.arange(0, D)\\n24:     tokens = tl.arange(0, TILE)\\n25:     qpos = qb * BQ + rows // GROUP\\n26:     head = kv_head * GROUP + rows % GROUP\\n27:     qo = ((batch * QT + qpos[:, None]) * HQ + head[:, None]) * D + dims[None, :]\\n28:     q = tl.load(Q_PTR + qo, mask=qpos[:, None] < QT, other=0.0)\\n29:     length = tl.load(LENGTHS + batch)\\n30:     context = length - QT\\n31:     max_prefix = tl.minimum(context + qb * BQ + BQ, length)\\n32:     num_tiles = tl.cdiv(max_prefix, TILE)\\n33:     tile_start = 0\\n34:     tile_end = num_tiles\\n35:     if WINDOW > 0:\\n36:         first_key = context + qb * BQ - WINDOW + 1\\n37:         last_key = context + tl.minimum(qb * BQ + BQ - 1, QT - 1)\\n38:         tile_start = tl.maximum(0, first_key // TILE)\\n39:         tile_end = tl.minimum(last_key // TILE + 1, num_tiles)\\n40: \\n41:     maximum = tl.full((BM,), float(\\\"-inf\\\"), tl.float32)\\n42:     denominator = tl.full((BM,), 1.0, tl.float32)\\n43:     accumulator = tl.zeros((BM, D), tl.float32)\\n44:     for tile in range(tile_start, tile_end):\\n45:         logical = tile * TILE + tokens\\n46:         tile_mask = logical < max_prefix\\n47:         physical = tl.load(TABLE + batch * TABLE_WIDTH + logical // PAGE,\\n48:                            mask=tile_mask, other=0).to(tl.int64)\\n49:         base = ((physical * PAGE + logical % PAGE) * HK + kv_head) * D\\n50:         k = tl.load(K_PTR + base[None, :] + dims[:, None],\\n51:                     mask=tile_mask[None, :], other=0.0)\\n52:         v = tl.load(V_PTR + base[:, None] + dims[None, :],\\n53:                     mask=tile_mask[:, None], other=0.0)\\n54:         absolute_q = context + qpos[:, None]\\n55:         allowed = logical[None, :] <= absolute_q\\n56:         if WINDOW > 0:\\n57:             allowed = allowed & ((absolute_q - logical[None, :]) < WINDOW)\\n58:         scores = SCALE * tl.dot(q, k)\\n59:         scores = tl.where((qpos[:, None] < QT) & allowed & tile_mask[None, :],\\n60:                           scores, float(\\\"-inf\\\"))\\n61:         updated_maximum = tl.maximum(maximum, tl.max(scores, 1))\\n62:         updated_maximum = tl.where(updated_maximum > float(\\\"-inf\\\"), updated_maximum, 0.0)\\n63:         probabilities = tl.exp(scores - updated_maximum[:, None])\\n64:         alpha = tl.exp(maximum - updated_maximum)\\n65:         accumulator = accumulator * alpha[:, None]\\n66:         denominator = denominator * alpha + tl.sum(probabilities, 1)\\n67:         maximum = updated_maximum\\n68:         accumulator += tl.dot(probabilities.to(v.dtype), v)\\n69:     result = accumulator / denominator[:, None]\\n70:     tl.store(OUT + qo, result, mask=qpos[:, None] < QT)\\n71: \\n72: \\n73: def validate_inputs(q, k, v, block_table, lengths, window, *, require_cuda=True):\\n74:     \\\"\\\"\\\"Check the complete public input domain; also usable on CPU by oracles.\\\"\\\"\\\"\\n75:     values = (q, k, v, block_table, lengths)\\n76:     assert all(type(t) is torch.Tensor for t in values)\\n77:     assert all(t.layout == torch.strided and t.is_contiguous() for t in values)\\n78:     assert all(not t.requires_grad and not t.is_inference() and\\n79:                not t.is_neg() and not t.is_conj() for t in values)\\n80:     assert all(t.device == q.device for t in values)\\n81:     if require_cuda:\\n82:         assert q.is_cuda\\n83:     assert q.dtype == k.dtype == v.dtype == torch.float16\\n84:     assert block_table.dtype == lengths.dtype == torch.int32\\n85:     assert q.ndim == k.ndim == v.ndim == 4 and block_table.ndim == 2 and lengths.ndim == 1\\n86:     b, qt, hq, d = q.shape\\n87:     pages, page, hk, kd = k.shape\\n88:     assert 1 <= b <= 4 and 1 <= qt <= 33 and d in (32, 64, 128)\\n89:     assert 1 <= hk <= 4 and hq % hk == 0 and hq // hk in (1, 2, 4, 8) and hq <= 16\\n90:     assert 1 <= pages <= 256 and page in (16, 32, 64) and kd == d and v.shape == k.shape\\n91:     assert lengths.shape == (b,) and block_table.shape[0] == b\\n92:     assert 1 <= block_table.shape[1] <= 512 // page\\n93:     assert type(window) is int and 0 <= window <= 256\\n94:     # Inputs own disjoint storage. No alias or framework metadata semantics are part of this interface.\\n95:     pointers = [t.untyped_storage().data_ptr() for t in values]\\n96:     assert len(set(pointers)) == len(pointers)\\n97:     assert bool(torch.isfinite(q).all()) and float(q.abs().max()) <= 1.0\\n98:     for batch in range(b):\\n99:         length = int(lengths[batch])\\n100:         assert qt <= length <= 512 and triton.cdiv(length, page) <= block_table.shape[1]\\n101:         entries = block_table[batch, :triton.cdiv(length, page)]\\n102:         assert bool(((entries >= 0) & (entries < pages)).all())\\n103:         lo = max(0, length - qt - window + 1) if window else 0\\n104:         positions = torch.arange(lo, length, device=q.device)\\n105:         mapped = block_table[batch, positions // page].long()\\n106:         for cache in (k, v):\\n107:             live = cache[mapped, positions % page]\\n108:             assert bool(torch.isfinite(live).all()) and float(live.abs().max()) <= 1.0\\n109:     return True\\n110: \\n111: \\n112: def run(q, k, v, block_table, lengths, window):\\n113:     \\\"\\\"\\\"Return FP16[B,Q,Hq,D] paged causal attention; preserve every input.\\\"\\\"\\\"\\n114:     validate_inputs(q, k, v, block_table, lengths, window)\\n115:     b, qt, hq, d = q.shape\\n116:     page, hk = k.shape[1:3]\\n117:     group = hq // hk\\n118:     bq = 16 // group\\n119:     output = torch.empty_like(q)\\n120:     _paged_attention[(triton.cdiv(qt, bq), hk, b)](\\n121:         q, k, v, block_table, lengths, output,\\n122:         QT=qt, HQ=hq, HK=hk, D=d, PAGE=page, TABLE_WIDTH=block_table.shape[1],\\n123:         GROUP=group, WINDOW=window, SCALE=1.0 / math.sqrt(d), BQ=bq,\\n124:         num_warps=4, enable_fp_fusion=False,\\n125:     )\\n126:     return output\\n127: \\n128: \\n129: def reference(q, k, v, block_table, lengths, window):\\n130:     \\\"\\\"\\\"FP64 logical-position reference, independent of tile processing.\\\"\\\"\\\"\\n131:     validate_inputs(q, k, v, block_table, lengths, window, require_cuda=False)\\n132:     b, qt, hq, d = q.shape\\n133:     page, hk = k.shape[1:3]\\n134:     output = torch.empty(q.shape, dtype=torch.float64, device=q.device)\\n135:     head_map = torch.arange(hq, device=q.device) // (hq // hk)\\n136:     for batch in range(b):\\n137:         context = int(lengths[batch]) - qt\\n138:         for row in range(qt):\\n139:             end = context + row + 1\\n140:             begin = max(0, end - window) if window else 0\\n141:             positions = torch.arange(begin, end, device=q.device)\\n142:             mapped = block_table[batch, positions // page].long()\\n143:             keys = k[mapped, positions % page][:, head_map].double()\\n144:             vals = v[mapped, positions % page][:, head_map].double()\\n145:             scores = (keys * q[batch, row].double()[None]).sum(-1) / math.sqrt(d)\\n146:             probabilities = torch.softmax(scores, dim=0)\\n147:             output[batch, row] = (probabilities[:, :, None] * vals).sum(0)\\n148:     return output\\n149: \\n150: \\n151: def error_ratio(output, inputs):\\n152:     target = reference(*inputs)\\n153:     return float(((output.double() - target).abs() / (0.003 + 0.003 * target.abs())).max())\\n154: \\n155: \\n156: def make_inputs(device=\\\"cuda\\\", seed=0):\\n157:     \\\"\\\"\\\"An ordinary example, not a restriction of the supported input domain.\\\"\\\"\\\"\\n158:     generator = torch.Generator().manual_seed(seed)\\n159:     q = (2 * torch.rand((2, 9, 4, 64), generator=generator) - 1).half()\\n160:     k = (2 * torch.rand((16, 16, 2, 64), generator=generator) - 1).half()\\n161:     v = (2 * torch.rand(k.shape, generator=generator) - 1).half()\\n162:     table = torch.randperm(16, generator=generator).reshape(2, 8).to(torch.int32)\\n163:     lengths = torch.tensor([97, 113], dtype=torch.int32)\\n164:     return tuple(t.to(device) for t in (q, k, v, table, lengths)) + (41,)\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Verify run(q, k, v, block_table, lengths, window), a paged causal attention forward operator with grouped query heads and an optional sliding window.\\n\\nThis is a CUDA forward-only interface. All five tensors are ordinary, fully materialized, contiguous torch.Tensor objects with disjoint underlying storage on one CUDA device. They have strided layout, require no gradients, are not inference tensors, and have neither a lazy negative nor conjugate flag. Autograd behavior, tensor subclasses, asynchronous changes to the inputs, and aliasing among inputs are outside this interface.\\n\\nq has FP16 shape [B,Q,Hq,D]; k and v have FP16 shape [P,S,Hkv,D]. Their last two axes are KV head and head dimension. block_table has INT32 shape [B,C]; lengths has INT32 shape [B]. Domains: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, Hq/Hkv in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, 1<=C<=512/S. For each batch item, Q<=lengths[b]<=512 and ceil(lengths[b]/S)<=C. window is a Python int in [0,256]; zero means full causal attention.\\n\\nFor logical position t in [0,lengths[b]), its physical cache position is k[block_table[b,t//S], t%S, ...], and similarly for v. All referenced page IDs are in [0,P); page order is arbitrary, and repeated page IDs are allowed. Entries of block_table beyond ceil(lengths[b]/S) are not part of the mapping and may contain arbitrary INT32 values. No assumption may be made that adjacent logical pages are adjacent physically.\\n\\nThe Q query rows are the final Q positions of that sequence. Query row r has absolute position a=lengths[b]-Q+r. It attends only to positions t satisfying 0<=t<=a and, if window>0, a-window+1<=t. Query head h uses KV head floor(h/(Hq/Hkv)). Compute s[t]=sum_d(q[b,r,h,d]*k_at(t,kv_head,d))/sqrt(D), p=softmax(s) over exactly those allowed positions, and output[b,r,h,:]=sum_t p[t]*v_at(t,kv_head,:). These equations use real arithmetic on the represented FP16 input values.\\n\\nEvery q element is finite with abs(value)<=1. Cache locations reachable by at least one allowed position of at least one query in this call are finite with abs(value)<=1. All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output. Valid input values are not restricted to the make_inputs example or a random seed.\\n\\nReturn one contiguous FP16 tensor of shape [B,Q,Hq,D] on the same CUDA device, with finite values. For every element, abs(output-target)<=0.003+0.003*abs(target). Inputs, including block_table and lengths, must be bit-for-bit unchanged. This contract applies to every admitted shape, page mapping, window length and value assignment. reference() gives an FP64 implementation of the target; validate_inputs() checks the full input domain, with an optional CPU mode for independent validation.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_114\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_114\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_114\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_114\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_114\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_114\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_114\"\n      },\n      \"created_at\": \"2026-10-03T07:44:44Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"LICENSE\",\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_114\",\n        \"has_error\": null,\n        \"kernel_code\": \"# SPDX-License-Identifier: Apache-2.0\\n# SPDX-FileCopyrightText: Copyright contributors to the vLLM project\\n# Adapted 2026: standalone FP16 paged-attention interface and bounded domain.\\n# See LICENSE for upstream attribution and the license text.\\nimport math\\n\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _paged_attention(Q_PTR, K_PTR, V_PTR, TABLE, LENGTHS, OUT,\\n                     QT: tl.constexpr, HQ: tl.constexpr, HK: tl.constexpr,\\n                     D: tl.constexpr, PAGE: tl.constexpr, TABLE_WIDTH: tl.constexpr,\\n                     GROUP: tl.constexpr, WINDOW: tl.constexpr,\\n                     SCALE: tl.constexpr, BQ: tl.constexpr,\\n                     BM: tl.constexpr = 16, TILE: tl.constexpr = 64):\\n    qb = tl.program_id(0)\\n    kv_head = tl.program_id(1)\\n    batch = tl.program_id(2)\\n    rows = tl.arange(0, BM)\\n    dims = tl.arange(0, D)\\n    tokens = tl.arange(0, TILE)\\n    qpos = qb * BQ + rows // GROUP\\n    head = kv_head * GROUP + rows % GROUP\\n    qo = ((batch * QT + qpos[:, None]) * HQ + head[:, None]) * D + dims[None, :]\\n    q = tl.load(Q_PTR + qo, mask=qpos[:, None] < QT, other=0.0)\\n    length = tl.load(LENGTHS + batch)\\n    context = length - QT\\n    max_prefix = tl.minimum(context + qb * BQ + BQ, length)\\n    num_tiles = tl.cdiv(max_prefix, TILE)\\n    tile_start = 0\\n    tile_end = num_tiles\\n    if WINDOW > 0:\\n        first_key = context + qb * BQ - WINDOW + 1\\n        last_key = context + tl.minimum(qb * BQ + BQ - 1, QT - 1)\\n        tile_start = tl.maximum(0, first_key // TILE)\\n        tile_end = tl.minimum(last_key // TILE + 1, num_tiles)\\n\\n    maximum = tl.full((BM,), float(\\\"-inf\\\"), tl.float32)\\n    denominator = tl.full((BM,), 1.0, tl.float32)\\n    accumulator = tl.zeros((BM, D), tl.float32)\\n    for tile in range(tile_start, tile_end):\\n        logical = tile * TILE + tokens\\n        tile_mask = logical < max_prefix\\n        physical = tl.load(TABLE + batch * TABLE_WIDTH + logical // PAGE,\\n                           mask=tile_mask, other=0).to(tl.int64)\\n        base = ((physical * PAGE + logical % PAGE) * HK + kv_head) * D\\n        k = tl.load(K_PTR + base[None, :] + dims[:, None],\\n                    mask=tile_mask[None, :], other=0.0)\\n        v = tl.load(V_PTR + base[:, None] + dims[None, :],\\n                    mask=tile_mask[:, None], other=0.0)\\n        absolute_q = context + qpos[:, None]\\n        allowed = logical[None, :] <= absolute_q\\n        if WINDOW > 0:\\n            allowed = allowed & ((absolute_q - logical[None, :]) < WINDOW)\\n        scores = SCALE * tl.dot(q, k)\\n        scores = tl.where((qpos[:, None] < QT) & allowed & tile_mask[None, :],\\n                          scores, float(\\\"-inf\\\"))\\n        updated_maximum = tl.maximum(maximum, tl.max(scores, 1))\\n        updated_maximum = tl.where(updated_maximum > float(\\\"-inf\\\"), updated_maximum, 0.0)\\n        probabilities = tl.exp(scores - updated_maximum[:, None])\\n        alpha = tl.exp(maximum - updated_maximum)\\n        accumulator = accumulator * alpha[:, None]\\n        denominator = denominator * alpha + tl.sum(probabilities, 1)\\n        maximum = updated_maximum\\n        accumulator += tl.dot(probabilities.to(v.dtype), v)\\n    result = accumulator / denominator[:, None]\\n    tl.store(OUT + qo, result, mask=qpos[:, None] < QT)\\n\\n\\ndef validate_inputs(q, k, v, block_table, lengths, window, *, require_cuda=True):\\n    \\\"\\\"\\\"Check the complete public input domain; also usable on CPU by oracles.\\\"\\\"\\\"\\n    values = (q, k, v, block_table, lengths)\\n    assert all(type(t) is torch.Tensor for t in values)\\n    assert all(t.layout == torch.strided and t.is_contiguous() for t in values)\\n    assert all(not t.requires_grad and not t.is_inference() and\\n               not t.is_neg() and not t.is_conj() for t in values)\\n    assert all(t.device == q.device for t in values)\\n    if require_cuda:\\n        assert q.is_cuda\\n    assert q.dtype == k.dtype == v.dtype == torch.float16\\n    assert block_table.dtype == lengths.dtype == torch.int32\\n...[truncated, 3985 more chars]\",\n        \"passed\": null,\n        \"problem_text\": \"Verify run(q, k, v, block_table, lengths, window), a paged causal attention forward operator with grouped query heads and an optional sliding window.\\n\\nThis is a CUDA forward-only interface. All five tensors are ordinary, fully materialized, contiguous torch.Tensor objects with disjoint underlying storage on one CUDA device. They have strided layout, require no gradients, are not inference tensors, and have neither a lazy negative nor conjugate flag. Autograd behavior, tensor subclasses, asynchronous changes to the inputs, and aliasing among inputs are outside this interface.\\n\\nq has FP16 shape [B,Q,Hq,D]; k and v have FP16 shape [P,S,Hkv,D]. Their last two axes are KV head and head dimension. block_table has INT32 shape [B,C]; lengths has INT32 shape [B]. Domains: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, Hq/Hkv in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, 1<=C<=512/S. For each batch item, Q<=lengths[b]<=512 and ceil(lengths[b]/S)<=C. window is a Python int in [0,256]; zero means full causal attention.\\n\\nFor logical position t in [0,lengths[b]), its physical cache position is k[block_table[b,t//S], t%S, ...], and similarly for v. All referenced page IDs are in [0,P); page order is arbitrary, and repeated page IDs are allowed. Entries of block_table beyond ceil(lengths[b]/S) are not part of the mapping and may contain arbitrary INT32 values. No assumption may be made that adjacent logical pages are adjacent physically.\\n\\nThe Q query rows are the final Q positions of that sequence. Query row r has absolute position a=lengths[b]-Q+r. It attends only to positions t satisfying 0<=t<=a and, if window>0, a-window+1<=t. Query head h uses KV head floor(h/(Hq/Hkv)). Compute s[t]=sum_d(q[b,r,h,d]*k_at(t,kv_head,d))/sqrt(D), p=softmax(s) over exactly those allowed positions, and output[b,r,h,:]=sum_t p[t]*v_at(t,kv_head,:). These equations use real arithmetic on the represented FP16 input values.\\n\\nEvery q element is finite with abs(value)<=1. Cache locations reachable by at least one allowed position of at least one query in this call are finite with abs(value)<=1. All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output. Valid input values are not restricted to the make_inputs example or a random seed.\\n\\nReturn one contiguous FP16 tensor of shape [B,Q,Hq,D] on the same CUDA device, with finite values. For every element, abs(output-target)<=0.003+0.003*abs(target). Inputs, including block_table and lengths, must be bit-for-bit unchanged. This contract applies to every admitted shape, page mapping, window length and value assignment. reference() gives an FP64 implementation of the target; validate_inputs() checks the full input domain, with an optional CPU mode for independent validation.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_114\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_114\"\n      },\n      \"created_at\": \"2026-10-03T07:44:44Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Verify run(q, k, v, block_table, lengths, window), a paged causal attention forward operator with grouped query heads and an optional sliding window.\\n\\nThis is a CUDA forward-only interface. All five tensors are ordinary, fully materialized, contiguous torch.Tensor objects with disjoint underlying storage on one CUDA device. They have strided layout, require no gradients, are not inference tensors, and have neither a lazy negative nor conjugate flag. Autograd behavior, tensor subclasses, asynchronous changes to the inputs, and aliasing among inputs are outside this interface.\\n\\nq has FP16 shape [B,Q,Hq,D]; k and v have FP16 shape [P,S,Hkv,D]. Their last two axes are KV head and head dimension. block_table has INT32 shape [B,C]; lengths has INT32 shape [B]. Domains: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, Hq/Hkv in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, 1<=C<=512/S. For each batch item, Q<=lengths[b]<=512 and ceil(lengths[b]/S)<=C. window is a Python int in [0,256]; zero means full causal attention.\\n\\nFor logical position t in [0,lengths[b]), its physical cache position is k[block_table[b,t//S], t%S, ...], and similarly for v. All referenced page IDs are in [0,P); page order is arbitrary, and repeated page IDs are allowed. Entries of block_table beyond ceil(lengths[b]/S) are not part of the mapping and may contain arbitrary INT32 values. No assumption may be made that adjacent logical pages are adjacent physically.\\n\\nThe Q query rows are the final Q positions of that sequence. Query row r has absolute position a=lengths[b]-Q+r. It attends only to positions t satisfying 0<=t<=a and, if window>0, a-window+1<=t. Query head h uses KV head floor(h/(Hq/Hkv)). Compute s[t]=sum_d(q[b,r,h,d]*k_at(t,kv_head,d))/sqrt(D), p=softmax(s) over exactly those allowed positions, and output[b,r,h,:]=sum_t p[t]*v_at(t,kv_head,:). These equations use real arithmetic on the represented FP16 input values.\\n\\nEvery q element is finite with abs(value)<=1. Cache locations reachable by at least one allowed position of at least one query in this call are finite with abs(value)<=1. All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output. Valid input values are not restricted to the make_inputs example or a random seed.\\n\\nReturn one contiguous FP16 tensor of shape [B,Q,Hq,D] on the same CUDA device, with finite values. For every element, abs(output-target)<=0.003+0.003*abs(target). Inputs, including block_table and lengths, must be bit-for-bit unchanged. This contract applies to every admitted shape, page mapping, window length and value assignment. reference() gives an FP64 implementation of the target; validate_inputs() checks the full input domain, with an optional CPU mode for independent validation.\\n\",\n        \"entry\": \"case_114\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_114\"\n      },\n      \"created_at\": \"2026-10-03T07:44:44Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_114\",\n        \"files\": [\n          {\n            \"kind\": \"other\",\n            \"path\": \"LICENSE\",\n            \"size_bytes\": 11695\n          },\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 7950\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 2913\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_114\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-03T07:44:44Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_114\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol.\n\n=== Output budget ===\n{\"total_output_tokens\": 32768, \"used_output_tokens\": 0, \"remaining_output_tokens\": 32768, \"debate_phase\": \"normal\", \"normal_turn_cap\": 8192, \"closeout_reserve\": 8192}\nOutput usage includes reasoning. Keep this turn focused; do not spend the entire allowance planning a large probe before obtaining evidence."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_description_update",
+        "description": "Record a structured Describer update to the shared description model.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resolved_task_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "contract_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "kernel_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "risk_map": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "scope_notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "impact_on_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

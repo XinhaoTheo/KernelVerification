@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-a8d0569a864e4639bd0b73ddd0d6da1c",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a comprehensive probe over the declared domain: both kernel branches (block ≤256 & M≥512, and row kernel for non-power-of-two N>256 or small M), comparing against an independent FP64 contract computation, plus input mutation checks.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-993efaae3399889a",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, sys, os\\nsys.path.insert(0, \\\"/root/cases/case_109\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ndef contract(x, weight, dy, rstd):\\n    # independent FP64 implementation of problem.txt formulas\\n    x64 = x.double(); w64 = weight.double(); d64 = dy.double(); r64 = rstd.double()[:, None]\\n    m = (dy.float() * weight.float()).half().double()          # H16(dy*w)\\n    h = (x.float() * rstd[:, None]).half().double()            # H16(F32(F32(x)*rstd))\\n    t = (dy.float() * h.half().float()).half().double()        # H16(dy*h)\\n    dx = r64 * (m - x64 * r64.square() * (m * x64).sum(1, keepdim=True) / x.shape[1])\\n    dw = t.sum(0)\\n    return dx, dw, t\\n\\ndef check(m, n, seed, extreme=False):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    if extreme:\\n        # push values to domain extremes, rows with RMS near 0.25 and 4\\n        x = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\\n        # scale rows so RMS hits ~0.25 or ~4\\n        for i in range(m):\\n            rms = x[i].float().square().mean().sqrt()\\n            target = 4.0 if i % 2 else 0.25\\n            x[i] = (x[i].float() * (target / (rms + 1e-9))).clamp(-4, 4).half()\\n        # rescale slightly below 4 to keep |x|<=4 after rounding\\n        x = (x.float() * 0.99).half()\\n        weight = (2.0 * torch.ones(n)).half()\\n        dy = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\\n    else:\\n        x = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\\n        weight = (torch.empty(n).uniform_(0.05, 2.0, generator=g)).half()\\n        dy = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\\n    # verify row RMS in [0.25,4]; rescale otherwise\\n    rms = x.float().square().mean(1).sqrt()\\n    lo, hi = rms.min().item(), rms.max().item()\\n    if lo < 0.24 or hi > 4.01:\\n        # scale rows into band\\n        sc = torch.where(rms < 0.25, 0.25/(rms+1e-9), torch.where(rms > 4.0, 4.0/(rms+1e-9), torch.ones_like(rms)))\\n        x = (x.float() * sc[:, None]).clamp(-4, 4).half()\\n        rms = x.float().square().mean(1).sqrt()\\n        lo, hi = rms.min().item(), rms.max().item()\\n    eps = 1e-5\\n    rstd = (1.0 / torch.sqrt(x.float().square().mean(1) + eps)).float()\\n    x0, w0, d0, r0 = (t.clone() for t in (x, weight, dy, rstd))\\n    x, weight, dy, rstd = (t.to(dev) for t in (x, weight, dy, rstd))\\n    dx, dw = K.run(x, weight, dy, rstd)\\n    inputs = (x, weight, dy, rstd)\\n    rdx, rdw, t = contract(x, weight, dy, rstd)\\n    # error bounds\\n    dx_lim = 0.002 + 0.002 * rdx.abs()\\n    dw_lim = 1e-5 + 1e-5 * t.abs().sum(0)\\n    dxr = ((dx.double() - rdx).abs() / dx_lim)\\n    dwr = ((dw.double() - rdw).abs() / dw_lim)\\n    # also use kernel's own error_ratios\\n    ratios = K.error_ratios((dx, dw), inputs)\\n    mutated = any(not torch.equal(a.cpu(), b) for a, b in zip((x, weight, dy, rstd), (x0, w0, d0, r0)))\\n    finite = torch.isfinite(dx.float()).all().item() and torch.isfinite(dw).all().item()\\n    return dict(m=m, n=n, rms_band=(round(lo,4), round(hi,4)),\\n                dx_ratio=float(dxr.max().item()), dw_ratio=float(dwr.max().item()),\\n                kernel_error_ratios=ratios, finite=bool(finite), mutated=mutated)\\n\\nresults = []\\n# shapes: exercise block kernel (block<=256, m>=512) and row kernel (block>256 i.e. n>256, or m<512)\\nfor (m, n, ex) in [(512,128,False),(512,64,False),(768,128,False),(4096,512,False),(4096,256,False),\\n                   (512,128,True),(4096,512,True),\\n                   (511,100,False),(513,300,False),(4095,511,False),(1,16,False),(17,31,False),\\n                   (127,257,False),(1000,129,False),(2048,100,False),(300,400,False),(2,512,False)]:\\n    results.append(check(m, n, seed=m*7+n, extreme=ex))\\n\\nprint(json.dumps(results, indent=1))\\nworst_dx = max(r[\\\"dx_ratio\\\"] for r in results)\\nworst_dw = max(r[\\\"dw_ratio\\\"] for r in results)\\nprint(json.dumps({\\\"worst_dx_ratio\\\": worst_dx, \\\"worst_dw_ratio\\\": worst_dw,\\n                  \\\"all_finite\\\": all(r[\\\"finite\\\"] for r in results),\\n                  \\\"any_mutation\\\": any(r[\\\"mutated\\\"] for r in results)}))\\n\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run probes testing both kernels across shapes, comparing to contract formulas. Key suspicion: in _row_backward, dw += dy * (x*r).to(fp16) — dy is fp16, product of fp16*fp16 in Triton... likely fp16 multiply, which matches t=H16(dy*h). h = x*r computed in fp32 then cast to fp16 — matches. m = (dy*weight) in fp16 then cast to f32 — dy*weight fp16 product... Triton fp16*fp16 gives fp16 (no promotion by default in recent Triton? actually Triton promotes fp16 arithmetic? I believe Triton keeps fp16*fp16 as fp16). Test numerically.\n\nAlso note dx formula kernel: dx = r*m + r*(-(1/N)*r*r*sum(m*x)*x). Contract: dx = r*(m - x*r^2 * sum(m*x)/N). Same. But m in kernel may be fp32 (not H16 rounded). With fp16*fp16 → fp16, matches.\n\nAlso _row_backward partitioning: pid*ROWS..min(start+ROWS,M) — ROWS=cdiv(m,programs); coverage fine since programs*ROWS>=M. Fine.\n\nWrite probe sweeping shapes exercising both branches and error_ratios + independent fp64 contract check.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791003463,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1684,
+    "prompt_tokens": 14567,
+    "total_tokens": 16251,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 277,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 277
+    }
+  }
+}

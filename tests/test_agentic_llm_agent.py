@@ -956,15 +956,36 @@ def test_agentic_cli_judge_can_request_another_debate_round(tmp_path, monkeypatc
             ),
             json.dumps(
                 {
+                    "message": "Follow-up investigation resolves the reopened claim.",
+                    "tool_calls": [
+                        {"tool": "append_evidence", "args": {
+                            "claim_id": "c1", "kind": "source_inspection",
+                            "summary": "The complete wrapper explicitly handles the boundary.",
+                            "supports": "rebutted", "data": {},
+                        }},
+                        {"tool": "update_claim_status", "args": {"claim_id": "c1", "status": "rebutted"}},
+                    ],
+                }
+            ),
+            json.dumps(
+                {
+                    "message": "Review the new follow-up evidence.",
+                    "tool_calls": [{"tool": "record_no_new_claims", "args": {
+                        "reason": "The reopened claim has now been resolved.", "reviewed_claims": ["c1"],
+                    }}],
+                }
+            ),
+            json.dumps(
+                {
                     "message": "Final verdict after requested debate.",
                     "tool_calls": [
                         {
                             "tool": "record_verdict",
                             "args": {
-                                "verdict": "needs_more_evidence",
-                                "confidence": 0.4,
+                                "verdict": "trust",
+                                "confidence": 0.9,
                                 "decisive_claims": ["c1"],
-                                "reason": "The extra debate produced no resolving evidence.",
+                                "reason": "The extra investigation resolved the outstanding claim.",
                             },
                         }
                     ],
@@ -1001,14 +1022,18 @@ def test_agentic_cli_judge_can_request_another_debate_round(tmp_path, monkeypatc
         "judge",
         "describer",
         "skeptic",
+        "experimenter",
+        "skeptic",
         "judge",
     ]
     assert [event["tool"] for event in run_data["tool_events"]][-3:] == [
-        "request_more_debate",
+        "update_claim_status",
         "record_no_new_claims",
         "record_verdict",
     ]
-    assert run_data["verdict"]["verdict"] == "needs_more_evidence"
+    assert run_data["verdict"]["verdict"] == "trust"
+    assert run_data["claims"][0]["status"] == "rebutted"
+    assert len(run_data["claims"][0]["evidence"]) == 2
 
 def test_agentic_cli_replays_existing_run_and_continues_with_judge(tmp_path, monkeypatch) -> None:
     _write_artifact(tmp_path / "dataset")

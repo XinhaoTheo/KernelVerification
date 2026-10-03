@@ -1,0 +1,472 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"LICENSE\",\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_112\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Standalone packed state-space recurrence, adapted from Mamba state passing.\\n2: \\n3: Copyright (c) 2024, Tri Dao, Albert Gu. Apache-2.0; see LICENSE.\\n4: 2026 adaptation: bounded FP32 recurrence, explicit chunk-local and output stages,\\n5: fixed launch configuration, standalone validation and reference.\\n6: \\\"\\\"\\\"\\n7: import torch\\n8: import triton\\n9: import triton.language as tl\\n10: \\n11: \\n12: @triton.jit\\n13: def _local_chunks(U, A, IDS, LOCAL, PREFIX, SUMMARY, SCALE,\\n14:                   L: tl.constexpr, H: tl.constexpr, D: tl.constexpr,\\n15:                   C: tl.constexpr, K: tl.constexpr, BD: tl.constexpr):\\n16:     chunk = tl.program_id(0)\\n17:     batch = tl.program_id(1)\\n18:     head = tl.program_id(2)\\n19:     cols = tl.arange(0, BD)\\n20:     state = tl.zeros((BD,), tl.float32)\\n21:     prefix = tl.full((), 1.0, tl.float32)\\n22:     begin = chunk * K\\n23:     previous = tl.load(IDS + batch * L + begin)\\n24:     for j in range(K):\\n25:         token = begin + j\\n26:         valid = token < L\\n27:         current = tl.load(IDS + batch * L + token, mask=valid, other=-1)\\n28:         alpha = tl.load(A + (batch * L + token) * H + head, mask=valid, other=1.0)\\n29:         offset = ((batch * L + token) * H + head) * D + cols\\n30:         value = tl.load(U + offset, mask=valid & (cols < D), other=0.0)\\n31:         prior = tl.where(current == previous, state, 0.0)\\n32:         updated = alpha * prior + value\\n33:         state = tl.where(valid, updated, state)\\n34:         prefix *= alpha\\n35:         tl.store(LOCAL + offset, state, mask=valid & (cols < D))\\n36:         tl.store(PREFIX + (batch * L + token) * H + head, prefix, mask=valid)\\n37:         previous = current\\n38:     summary_offset = ((batch * C + chunk) * H + head) * D + cols\\n39:     tl.store(SUMMARY + summary_offset, state, mask=cols < D)\\n40:     tl.store(SCALE + (batch * C + chunk) * H + head, prefix)\\n41: \\n42: \\n43: @triton.jit\\n44: def _pass_states(SUMMARY, SCALE, IDS, INITIAL, CARRY, FINAL,\\n45:                  L: tl.constexpr, H: tl.constexpr, D: tl.constexpr,\\n46:                  C: tl.constexpr, K: tl.constexpr, BD: tl.constexpr):\\n47:     batch = tl.program_id(0)\\n48:     head = tl.program_id(1)\\n49:     cols = tl.arange(0, BD)\\n50:     state = tl.load(INITIAL + (batch * H + head) * D + cols,\\n51:                     mask=cols < D, other=0.0)\\n52:     sequence = tl.full((), 0, tl.int32)\\n53:     for chunk in range(C):\\n54:         offset = ((batch * C + chunk) * H + head) * D + cols\\n55:         tl.store(CARRY + offset, state, mask=cols < D)\\n56:         new_state = tl.load(SUMMARY + offset, mask=cols < D, other=0.0)\\n57:         factor = tl.load(SCALE + (batch * C + chunk) * H + head)\\n58:         representative = tl.minimum((chunk + 1) * K, L) - 1\\n59:         next_sequence = tl.load(IDS + batch * L + representative)\\n60:         factor = tl.where(next_sequence == sequence, factor, 0.0)\\n61:         state = factor * state + new_state\\n62:         sequence = next_sequence\\n63:     tl.store(FINAL + (batch * H + head) * D + cols, state, mask=cols < D)\\n64: \\n65: \\n66: @triton.jit\\n67: def _combine(LOCAL, PREFIX, IDS, CARRY, OUT,\\n68:              L: tl.constexpr, H: tl.constexpr, D: tl.constexpr,\\n69:              C: tl.constexpr, K: tl.constexpr, BD: tl.constexpr):\\n70:     chunk = tl.program_id(0)\\n71:     batch = tl.program_id(1)\\n72:     head = tl.program_id(2)\\n73:     rows = chunk * K + tl.arange(0, K)\\n74:     cols = tl.arange(0, BD)\\n75:     previous = tl.load(IDS + batch * L + chunk * K - 1, mask=chunk > 0, other=0)\\n76:     current = tl.load(IDS + batch * L + rows, mask=rows < L, other=-1)\\n77:     prefix = tl.load(PREFIX + (batch * L + rows) * H + head, mask=rows < L, other=0.0)\\n78:     prefix = tl.where(current == previous, prefix, 0.0)\\n79:     incoming = tl.load(CARRY + ((batch * C + chunk) * H + head) * D + cols,\\n80:                        mask=cols < D, other=0.0)\\n81:     offset = ((batch * L + rows[:, None]) * H + head) * D + cols[None, :]\\n82:     valid = (rows[:, None] < L) & (cols[None, :] < D)\\n83:     local = tl.load(LOCAL + offset, mask=valid, other=0.0)\\n84:     result = local + prefix[:, None] * incoming[None, :]\\n85:     tl.store(OUT + offset, result, mask=valid)\\n86: \\n87: \\n88: def validate_inputs(u, decay, seq_idx, initial_state, chunk_size, require_cuda=True):\\n89:     \\\"\\\"\\\"Raise ValueError for inputs outside the public domain; usable on CPU too.\\\"\\\"\\\"\\n90:     values = (u, decay, seq_idx, initial_state)\\n91:     def require(condition, message):\\n92:         if not condition:\\n93:             raise ValueError(message)\\n94:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n95:     for tensor in values:\\n96:         require(type(tensor) is torch.Tensor, \\\"standard torch.Tensor required\\\")\\n97:         require(tensor.layout == torch.strided and tensor.is_contiguous(), \\\"contiguous strided tensor required\\\")\\n98:         require(not tensor.requires_grad and not tensor.is_inference(), \\\"materialized non-gradient ordinary tensors required\\\")\\n99:         require(not tensor.is_neg() and not tensor.is_conj(), \\\"logical view flags are outside this domain\\\")\\n100:     require(all(t.device == u.device for t in values), \\\"all inputs must share a device\\\")\\n101:     require(not require_cuda or u.is_cuda, \\\"CUDA tensors required by run\\\")\\n102:     require(u.ndim == 4, \\\"u must have shape [B,L,H,D]\\\")\\n103:     batch, length, heads, width = u.shape\\n104:     require(1 <= batch <= 2 and 1 <= length <= 257 and 1 <= heads <= 4 and 1 <= width <= 96, \\\"shape outside supported domain\\\")\\n105:     require(type(chunk_size) is int and chunk_size in (16, 32, 64), \\\"chunk_size must be 16, 32 or 64\\\")\\n106:     require(u.dtype == decay.dtype == initial_state.dtype == torch.float32, \\\"numeric inputs must be FP32\\\")\\n107:     require(seq_idx.dtype == torch.int32, \\\"seq_idx must be int32\\\")\\n108:     require(decay.shape == (batch, length, heads), \\\"decay shape mismatch\\\")\\n109:     require(seq_idx.shape == (batch, length), \\\"seq_idx shape mismatch\\\")\\n110:     require(initial_state.shape == (batch, heads, width), \\\"initial_state shape mismatch\\\")\\n111:     for tensor in (u, decay, initial_state):\\n112:         require(bool(torch.isfinite(tensor).all().item()), \\\"numeric values must be finite\\\")\\n113:     require(bool((u.abs() <= 1).all().item()), \\\"u magnitude exceeds one\\\")\\n114:     require(bool((initial_state.abs() <= 1).all().item()), \\\"initial state magnitude exceeds one\\\")\\n115:     require(bool(((decay >= .5) & (decay <= .96875)).all().item()), \\\"decay outside [0.5,0.96875]\\\")\\n116:     require(bool((seq_idx[:, 0] == 0).all().item()), \\\"each packed row must begin at sequence zero\\\")\\n117:     require(bool(((seq_idx >= 0) & (seq_idx < length)).all().item()), \\\"sequence labels outside range\\\")\\n118:     require(bool((seq_idx[:, 1:] >= seq_idx[:, :-1]).all().item()), \\\"sequence labels must be nondecreasing\\\")\\n119:     intervals = [(t.data_ptr(), t.data_ptr() + t.numel() * t.element_size()) for t in values]\\n120:     require(all(a1 <= b0 or b1 <= a0 for i, (a0, a1) in enumerate(intervals)\\n121:                 for b0, b1 in intervals[i + 1:]), \\\"input storage ranges must be disjoint\\\")\\n122:     return {\\\"valid\\\": True, \\\"batch\\\": batch, \\\"length\\\": length,\\n123:             \\\"heads\\\": heads, \\\"width\\\": width, \\\"chunk_size\\\": chunk_size}\\n124: \\n125: \\n126: def run(u, decay, seq_idx, initial_state, chunk_size):\\n127:     \\\"\\\"\\\"Return per-token states and the last state; preserve all inputs.\\\"\\\"\\\"\\n128:     validate_inputs(u, decay, seq_idx, initial_state, chunk_size)\\n129:     batch, length, heads, width = u.shape\\n130:     chunks = triton.cdiv(length, chunk_size)\\n131:     local = torch.empty_like(u)\\n132:     prefix = torch.empty_like(decay)\\n133:     summary = torch.empty((batch, chunks, heads, width), device=u.device, dtype=torch.float32)\\n134:     scale = torch.empty((batch, chunks, heads), device=u.device, dtype=torch.float32)\\n135:     carry = torch.empty_like(summary)\\n136:     output = torch.empty_like(u)\\n137:     final = torch.empty_like(initial_state)\\n138:     meta = dict(L=length, H=heads, D=width, C=chunks, K=chunk_size,\\n139:                 BD=triton.next_power_of_2(width), num_warps=4, enable_fp_fusion=False)\\n140:     with torch.cuda.device(u.device):\\n141:         _local_chunks[(chunks, batch, heads)](u, decay, seq_idx, local, prefix, summary, scale, **meta)\\n142:         _pass_states[(batch, heads)](summary, scale, seq_idx, initial_state, carry, final, **meta)\\n143:         _combine[(chunks, batch, heads)](local, prefix, seq_idx, carry, output, **meta)\\n144:     return output, final\\n145: \\n146: \\n147: def reference(u, decay, seq_idx, initial_state, chunk_size):\\n148:     \\\"\\\"\\\"FP64 serial recurrence, independent of the implementation's chunk layout.\\\"\\\"\\\"\\n149:     validate_inputs(u, decay, seq_idx, initial_state, chunk_size, require_cuda=False)\\n150:     u64, a64 = u.double(), decay.double()\\n151:     state = initial_state.double().clone()\\n152:     result = []\\n153:     for token in range(u.shape[1]):\\n154:         if token:\\n155:             keep = (seq_idx[:, token] == seq_idx[:, token - 1])[:, None, None]\\n156:             state = torch.where(keep, state, torch.zeros_like(state))\\n157:         state = a64[:, token, :, None] * state + u64[:, token]\\n158:         result.append(state.clone())\\n159:     return torch.stack(result, dim=1), state\\n160: \\n161: \\n162: def make_inputs(device=\\\"cuda\\\", length=97, chunk_size=32, seed=0):\\n163:     \\\"\\\"\\\"Convenience inputs; legal inputs are not restricted to this generator.\\\"\\\"\\\"\\n164:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n165:     u = (2 * torch.rand((1, length, 2, 33), generator=generator) - 1).float()\\n166:     decay = (.90 + .06 * torch.rand((1, length, 2), generator=generator)).float()\\n167:     initial = (2 * torch.rand((1, 2, 33), generator=generator) - 1).float()\\n168:     seq_idx = torch.zeros((1, length), dtype=torch.int32)\\n169:     if length >= 3:\\n170:         seq_idx[:, length // 3:] += 1\\n171:         seq_idx[:, 2 * length // 3:] += 1\\n172:     return u.to(device), decay.to(device), seq_idx.to(device), initial.to(device), chunk_size\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute a packed collection of independent state-space recurrences. This is\\nforward state propagation, with one decay shared by all state coordinates of\\none head. The implementation may partition computation into chunks.\\n\\nInputs:\\n- u: FP32 [B,L,H,D], with |u| <= 1.\\n- decay: FP32 [B,L,H], every value in [0.5,0.96875].\\n- seq_idx: int32 [B,L], identifying contiguous independent sequences.\\n  Each row starts at label zero, labels are nondecreasing, and 0 <= label < L.\\n  A larger label starts a new sequence; labels need not be consecutive.\\n- initial_state: FP32 [B,H,D], with magnitude <= 1, used only for the first\\n  sequence in each packed batch row. Subsequent sequences start from zero.\\n- chunk_size: Python int, one of 16, 32, 64; it is an implementation partition\\n  parameter and does not change the required mathematical result.\\n- 1 <= B <= 2, 1 <= L <= 257, 1 <= H <= 4, 1 <= D <= 96.\\n\\nAll tensors must be ordinary torch.Tensor objects (not subclasses), dense,\\nstrided, contiguous, on one CUDA device, with disjoint storage ranges. Floating\\nvalues must be finite. Inputs must have requires_grad=False, is_inference=False,\\nis_neg=False and is_conj=False. This interface concerns materialized numerical\\nbuffers and does not provide autograd. Calls run in ordinary non-inference\\nexecution mode without concurrent external writes to the inputs.\\n\\nDefine a separate state vector for each batch b and head h. At token t:\\n  prior = initial_state[b,h,:]                 if t == 0\\n          output[b,t-1,h,:]                   if seq_idx[b,t] == seq_idx[b,t-1]\\n          0                                  otherwise\\n  output[b,t,h,:] = decay[b,t,h] * prior + u[b,t,h,:]\\nThese equations specify real arithmetic on the provided FP32 input values.\\nReturn (output, final_state), both FP32 CUDA tensors, with shapes [B,L,H,D]\\nand [B,H,D], where final_state equals the last required state of each batch/head.\\nPreserve every input. All output elements must be finite, and each must satisfy:\\n  abs(actual - target) <= 0.002 + 0.0001 * abs(target).\\nThe stable decay and input bounds imply the exact state's magnitude is at most\\n32; the tolerance allows ordinary FP32 evaluation and regrouping.\\n\\nThe public validate_inputs() checks the input domain and is called by run().\\nThe public reference() independently evaluates the serial recurrence in FP64\\nand also accepts CPU inputs. make_inputs() supplies only an example; any legal\\nvalues, shapes and sequence lengths may be tested. Correctness covers the full\\nstated domain. Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_112\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-10-03T07:42:42Z\",\n      \"evidence\": [\n        {\n          \"created_at\": \"2026-10-03T07:43:36Z\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"30e29f6babd1e6d52d3ce0b089517c59c503923c6416934c719c3f6eaeb991e5\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"704740884aeb33b3d8e6e7cb59c962f6fe0b63c1e706f3c848444da99cf4a1b1\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t6_json_result.json\",\n                \"sha256\": \"60eb2402a64ce79a93ed38602c80ed8d4db0817141ef174e8f48717934f5e30f\"\n              }\n            ],\n            \"boundaries\": [\n              10,\n              40\n            ],\n            \"duration_s\": 7.386471,\n            \"exit_code\": 0,\n            \"expected_signal\": null,\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"final_state_max_err\": 1.1920928955078125e-07,\n              \"max_abs_err\": 2.384185791015625e-07,\n              \"max_err_token10_31\": 2.384185791015625e-07,\n              \"max_err_token32_39\": 1.1920928955078125e-07,\n              \"metric\": \"elementwise |actual-target| vs contract tolerance\",\n              \"num_violations\": 0,\n              \"seq_boundaries\": [\n                10,\n                40\n              ],\n              \"tokens_with_violations\": []\n            },\n            \"max_abs_err\": 2.384185791015625e-07,\n            \"num_violations\": 0,\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"metric\\\": \\\"elementwise |actual-target| vs contract tolerance\\\", \\\"max_abs_err\\\": 2.384185791015625e-07, \\\"num_violations\\\": 0, \\\"tokens_with_violations\\\": [], \\\"max_err_token10_31\\\": 2.384185791015625e-07, \\\"max_err_token32_39\\\": 1.1920928955078125e-07, \\\"final_state_max_err\\\": 1.1920928955078125e-07, \\\"seq_boundaries\\\": [10, 40]}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"id\": \"c1.e1\",\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Mid-chunk sequence reset (token 10 inside chunk 0 of 32, and boundary at 40) produced max absolute error 2.4e-7 vs FP64 reference, zero tolerance violations, final-state error 1.2e-7. The kernel handles mid-chunk resets correctly; the suspected prefix*carry injection does not occur at runtime.\",\n          \"supports\": \"rebutted\",\n          \"tool_event_id\": \"t6\"\n        }\n      ],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"scope\": \"in_scope\",\n      \"statement\": \"When a sequence boundary (seq_idx increase) falls strictly inside a chunk, outputs for tokens after the reset incorrectly include the previous sequence's carry state multiplied by the full chunk prefix product, violating the required recurrence.\",\n      \"status\": \"rebutted\",\n      \"updated_at\": \"2026-10-03T07:43:36Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_112\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_112\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_112\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_112\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_112\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"The kernel partitions the recurrence into chunks. Reviewing the source, I see a likely defect: in `_combine`, the intra-chunk cumulative decay product (`prefix`) is only zeroed at the exact token where a new sequence begins (`current == previous`), but for tokens *after* a mid-chunk sequence reset, `prefix` still contains the full chunk product including alphas from *before* the reset. That would incorrectly propagate the previous sequence's carry into the new sequence's outputs. Notably, `make_inputs` places resets exactly at chunk boundaries (97//3=32, 64//3=64), which would hide this bug. Let me record the claim and test it.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"In _combine, prefix is zeroed only where current != previous (the reset token itself); tokens after the reset keep the full chunk product, so prefix*carry injects the old sequence's carry state into the new sequence's output.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"\\\"A larger label starts a new sequence... Subsequent sequences start from zero\\\", and \\\"output[b,t,h,:] = decay[b,t,h] * prior + u[b,t,h,:]\\\" with prior=0 when labels differ; tolerance \\\"abs(actual-target) <= 0.002 + 0.0001*abs(target)\\\" applies to any legal seq_idx within the stated domain.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires that when seq_idx[b,t] != seq_idx[b,t-1] the recurrence restarts from zero state; outputs after a mid-chunk reset must not include the old sequence's state. The kernel must satisfy the stated tolerance for any legal nondecreasing seq_idx labels.\",\n            \"statement\": \"When a sequence boundary (seq_idx increase) falls strictly inside a chunk, outputs for tokens after the reset incorrectly include the previous sequence's carry state multiplied by the full chunk prefix product, violating the required recurrence.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"The claim c1 is recorded and analytically plausible. I'll run a runtime probe with a mid-chunk sequence reset to confirm whether outputs after the reset incorrectly include the carry term.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_112\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ntorch.manual_seed(1)\\nB, L, H, D = 1, 64, 2, 8\\nchunk = 32\\nu = (2*torch.rand(B,L,H,D)-1).float().to(dev)\\ndec = (0.5 + 0.46*torch.rand(B,L,H)).float().to(dev)\\ninit = (2*torch.rand(B,H,D)-1).float().to(dev)\\nseq = torch.zeros(B,L, dtype=torch.int32)\\n# mid-chunk reset at token 10 (inside chunk 0), another at token 40 (chunk boundary of chunk 1)\\nseq[:, 10:] += 1\\nseq[:, 40:] += 1\\nseq = seq.to(dev)\\n\\nout, final = K.run(u, dec, seq, init, chunk)\\nref_out, ref_final = K.reference(u, dec, seq, init, chunk)\\nref_out = ref_out.float(); ref_final = ref_final.float()\\n\\ndiff = (out - ref_out).abs()\\ntol = 0.002 + 0.0001*ref_out.abs()\\nviol = diff > tol\\n# examine tokens 10..31 (after first reset, still chunk 0)\\nbad = viol[0,:,0,:]\\ntok_bad = bad.any(dim=1).nonzero().flatten().tolist()\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"elementwise |actual-target| vs contract tolerance\\\",\\n  \\\"max_abs_err\\\": diff.max().item(),\\n  \\\"num_violations\\\": int(viol.sum().item()),\\n  \\\"tokens_with_violations\\\": tok_bad[:40],\\n  \\\"max_err_token10_31\\\": diff[0,10:32].max().item(),\\n  \\\"max_err_token32_39\\\": diff[0,32:40].max().item(),\\n  \\\"final_state_max_err\\\": (final-ref_final).abs().max().item(),\\n  \\\"seq_boundaries\\\": [10,40],\\n}))\\n\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 4,\n      \"text\": \"The probe (t6) with mid-chunk resets at tokens 10 and 40 showed max error 2.4e-7 and zero tolerance violations \\u2014 contradicting my source-level hypothesis. I'll finalize that evidence as a rebuttal, then run one broader randomized probe across more of the domain to confirm before trusting.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"data\": {\n              \"boundaries\": [\n                10,\n                40\n              ],\n              \"max_abs_err\": 2.384185791015625e-07,\n              \"num_violations\": 0\n            },\n            \"event_id\": \"t6\",\n            \"status\": \"rebutted\",\n            \"summary\": \"Mid-chunk sequence reset (token 10 inside chunk 0 of 32, and boundary at 40) produced max absolute error 2.4e-7 vs FP64 reference, zero tolerance violations, final-state error 1.2e-7. The kernel handles mid-chunk resets correctly; the suspected prefix*carry injection does not occur at runtime.\",\n            \"supports\": \"rebutted\"\n          },\n          \"tool\": \"finalize_probe_evidence\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_112\"\n      },\n      \"created_at\": \"2026-10-03T07:41:55Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"LICENSE\",\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_112\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Standalone packed state-space recurrence, adapted from Mamba state passing.\\n\\nCopyright (c) 2024, Tri Dao, Albert Gu. Apache-2.0; see LICENSE.\\n2026 adaptation: bounded FP32 recurrence, explicit chunk-local and output stages,\\nfixed launch configuration, standalone validation and reference.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _local_chunks(U, A, IDS, LOCAL, PREFIX, SUMMARY, SCALE,\\n                  L: tl.constexpr, H: tl.constexpr, D: tl.constexpr,\\n                  C: tl.constexpr, K: tl.constexpr, BD: tl.constexpr):\\n    chunk = tl.program_id(0)\\n    batch = tl.program_id(1)\\n    head = tl.program_id(2)\\n    cols = tl.arange(0, BD)\\n    state = tl.zeros((BD,), tl.float32)\\n    prefix = tl.full((), 1.0, tl.float32)\\n    begin = chunk * K\\n    previous = tl.load(IDS + batch * L + begin)\\n    for j in range(K):\\n        token = begin + j\\n        valid = token < L\\n        current = tl.load(IDS + batch * L + token, mask=valid, other=-1)\\n        alpha = tl.load(A + (batch * L + token) * H + head, mask=valid, other=1.0)\\n        offset = ((batch * L + token) * H + head) * D + cols\\n        value = tl.load(U + offset, mask=valid & (cols < D), other=0.0)\\n        prior = tl.where(current == previous, state, 0.0)\\n        updated = alpha * prior + value\\n        state = tl.where(valid, updated, state)\\n        prefix *= alpha\\n        tl.store(LOCAL + offset, state, mask=valid & (cols < D))\\n        tl.store(PREFIX + (batch * L + token) * H + head, prefix, mask=valid)\\n        previous = current\\n    summary_offset = ((batch * C + chunk) * H + head) * D + cols\\n    tl.store(SUMMARY + summary_offset, state, mask=cols < D)\\n    tl.store(SCALE + (batch * C + chunk) * H + head, prefix)\\n\\n\\n@triton.jit\\ndef _pass_states(SUMMARY, SCALE, IDS, INITIAL, CARRY, FINAL,\\n                 L: tl.constexpr, H: tl.constexpr, D: tl.constexpr,\\n                 C: tl.constexpr, K: tl.constexpr, BD: tl.constexpr):\\n    batch = tl.program_id(0)\\n    head = tl.program_id(1)\\n    cols = tl.arange(0, BD)\\n    state = tl.load(INITIAL + (batch * H + head) * D + cols,\\n                    mask=cols < D, other=0.0)\\n    sequence = tl.full((), 0, tl.int32)\\n    for chunk in range(C):\\n        offset = ((batch * C + chunk) * H + head) * D + cols\\n        tl.store(CARRY + offset, state, mask=cols < D)\\n        new_state = tl.load(SUMMARY + offset, mask=cols < D, other=0.0)\\n        factor = tl.load(SCALE + (batch * C + chunk) * H + head)\\n        representative = tl.minimum((chunk + 1) * K, L) - 1\\n        next_sequence = tl.load(IDS + batch * L + representative)\\n        factor = tl.where(next_sequence == sequence, factor, 0.0)\\n        state = factor * state + new_state\\n        sequence = next_sequence\\n    tl.store(FINAL + (batch * H + head) * D + cols, state, mask=cols < D)\\n\\n\\n@triton.jit\\ndef _combine(LOCAL, PREFIX, IDS, CARRY, OUT,\\n             L: tl.constexpr, H: tl.constexpr, D: tl.constexpr,\\n             C: tl.constexpr, K: tl.constexpr, BD: tl.constexpr):\\n    chunk = tl.program_id(0)\\n    batch = tl.program_id(1)\\n    head = tl.program_id(2)\\n    rows = chunk * K + tl.arange(0, K)\\n    cols = tl.arange(0, BD)\\n    previous = tl.load(IDS + batch * L + chunk * K - 1, mask=chunk > 0, other=0)\\n    current = tl.load(IDS + batch * L + rows, mask=rows < L, other=-1)\\n    prefix = tl.load(PREFIX + (batch * L + rows) * H + head, mask=rows < L, other=0.0)\\n    prefix = tl.where(current == previous, prefix, 0.0)\\n    incoming = tl.load(CARRY + ((batch * C + chunk) * H + head) * D + cols,\\n                       mask=cols < D, other=0.0)\\n    offset = ((batch * L + rows[:, None]) * H + head) * D + cols[None, :]\\n    valid = (rows[:, None] < L) & (cols[None, :] < D)\\n    local = tl.load(LOCAL + offset, mask=valid, other=0.0)\\n    result = local + prefix[:, None] * incoming[None, :]\\n    tl.store(OUT + offset, result, mask=valid)\\n\\n\\ndef validate_inputs(u, decay, seq_idx, initial_state, chunk_size, require_cuda=True):\\n...[truncated, 5333 more chars]\",\n        \"passed\": null,\n        \"problem_text\": \"Compute a packed collection of independent state-space recurrences. This is\\nforward state propagation, with one decay shared by all state coordinates of\\none head. The implementation may partition computation into chunks.\\n\\nInputs:\\n- u: FP32 [B,L,H,D], with |u| <= 1.\\n- decay: FP32 [B,L,H], every value in [0.5,0.96875].\\n- seq_idx: int32 [B,L], identifying contiguous independent sequences.\\n  Each row starts at label zero, labels are nondecreasing, and 0 <= label < L.\\n  A larger label starts a new sequence; labels need not be consecutive.\\n- initial_state: FP32 [B,H,D], with magnitude <= 1, used only for the first\\n  sequence in each packed batch row. Subsequent sequences start from zero.\\n- chunk_size: Python int, one of 16, 32, 64; it is an implementation partition\\n  parameter and does not change the required mathematical result.\\n- 1 <= B <= 2, 1 <= L <= 257, 1 <= H <= 4, 1 <= D <= 96.\\n\\nAll tensors must be ordinary torch.Tensor objects (not subclasses), dense,\\nstrided, contiguous, on one CUDA device, with disjoint storage ranges. Floating\\nvalues must be finite. Inputs must have requires_grad=False, is_inference=False,\\nis_neg=False and is_conj=False. This interface concerns materialized numerical\\nbuffers and does not provide autograd. Calls run in ordinary non-inference\\nexecution mode without concurrent external writes to the inputs.\\n\\nDefine a separate state vector for each batch b and head h. At token t:\\n  prior = initial_state[b,h,:]                 if t == 0\\n          output[b,t-1,h,:]                   if seq_idx[b,t] == seq_idx[b,t-1]\\n          0                                  otherwise\\n  output[b,t,h,:] = decay[b,t,h] * prior + u[b,t,h,:]\\nThese equations specify real arithmetic on the provided FP32 input values.\\nReturn (output, final_state), both FP32 CUDA tensors, with shapes [B,L,H,D]\\nand [B,H,D], where final_state equals the last required state of each batch/head.\\nPreserve every input. All output elements must be finite, and each must satisfy:\\n  abs(actual - target) <= 0.002 + 0.0001 * abs(target).\\nThe stable decay and input bounds imply the exact state's magnitude is at most\\n32; the tolerance allows ordinary FP32 evaluation and regrouping.\\n\\nThe public validate_inputs() checks the input domain and is called by run().\\nThe public reference() independently evaluates the serial recurrence in FP64\\nand also accepts CPU inputs. make_inputs() supplies only an example; any legal\\nvalues, shapes and sequence lengths may be tested. Correctness covers the full\\nstated domain. Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_112\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_112\"\n      },\n      \"created_at\": \"2026-10-03T07:41:55Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute a packed collection of independent state-space recurrences. This is\\nforward state propagation, with one decay shared by all state coordinates of\\none head. The implementation may partition computation into chunks.\\n\\nInputs:\\n- u: FP32 [B,L,H,D], with |u| <= 1.\\n- decay: FP32 [B,L,H], every value in [0.5,0.96875].\\n- seq_idx: int32 [B,L], identifying contiguous independent sequences.\\n  Each row starts at label zero, labels are nondecreasing, and 0 <= label < L.\\n  A larger label starts a new sequence; labels need not be consecutive.\\n- initial_state: FP32 [B,H,D], with magnitude <= 1, used only for the first\\n  sequence in each packed batch row. Subsequent sequences start from zero.\\n- chunk_size: Python int, one of 16, 32, 64; it is an implementation partition\\n  parameter and does not change the required mathematical result.\\n- 1 <= B <= 2, 1 <= L <= 257, 1 <= H <= 4, 1 <= D <= 96.\\n\\nAll tensors must be ordinary torch.Tensor objects (not subclasses), dense,\\nstrided, contiguous, on one CUDA device, with disjoint storage ranges. Floating\\nvalues must be finite. Inputs must have requires_grad=False, is_inference=False,\\nis_neg=False and is_conj=False. This interface concerns materialized numerical\\nbuffers and does not provide autograd. Calls run in ordinary non-inference\\nexecution mode without concurrent external writes to the inputs.\\n\\nDefine a separate state vector for each batch b and head h. At token t:\\n  prior = initial_state[b,h,:]                 if t == 0\\n          output[b,t-1,h,:]                   if seq_idx[b,t] == seq_idx[b,t-1]\\n          0                                  otherwise\\n  output[b,t,h,:] = decay[b,t,h] * prior + u[b,t,h,:]\\nThese equations specify real arithmetic on the provided FP32 input values.\\nReturn (output, final_state), both FP32 CUDA tensors, with shapes [B,L,H,D]\\nand [B,H,D], where final_state equals the last required state of each batch/head.\\nPreserve every input. All output elements must be finite, and each must satisfy:\\n  abs(actual - target) <= 0.002 + 0.0001 * abs(target).\\nThe stable decay and input bounds imply the exact state's magnitude is at most\\n32; the tolerance allows ordinary FP32 evaluation and regrouping.\\n\\nThe public validate_inputs() checks the input domain and is called by run().\\nThe public reference() independently evaluates the serial recurrence in FP64\\nand also accepts CPU inputs. make_inputs() supplies only an example; any legal\\nvalues, shapes and sequence lengths may be tested. Correctness covers the full\\nstated domain. Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\\n\",\n        \"entry\": \"case_112\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_112\"\n      },\n      \"created_at\": \"2026-10-03T07:41:55Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_112\",\n        \"files\": [\n          {\n            \"kind\": \"other\",\n            \"path\": \"LICENSE\",\n            \"size_bytes\": 11348\n          },\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 9263\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 2571\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_112\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-03T07:41:55Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_112\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"In _combine, prefix is zeroed only where current != previous (the reset token itself); tokens after the reset keep the full chunk product, so prefix*carry injects the old sequence's carry state into the new sequence's output.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"\\\"A larger label starts a new sequence... Subsequent sequences start from zero\\\", and \\\"output[b,t,h,:] = decay[b,t,h] * prior + u[b,t,h,:]\\\" with prior=0 when labels differ; tolerance \\\"abs(actual-target) <= 0.002 + 0.0001*abs(target)\\\" applies to any legal seq_idx within the stated domain.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires that when seq_idx[b,t] != seq_idx[b,t-1] the recurrence restarts from zero state; outputs after a mid-chunk reset must not include the old sequence's state. The kernel must satisfy the stated tolerance for any legal nondecreasing seq_idx labels.\",\n        \"statement\": \"When a sequence boundary (seq_idx increase) falls strictly inside a chunk, outputs for tokens after the reset incorrectly include the previous sequence's carry state multiplied by the full chunk prefix product, violating the required recurrence.\"\n      },\n      \"created_at\": \"2026-10-03T07:42:42Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"created_at\": \"2026-10-03T07:42:42Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"In _combine, prefix is zeroed only where current != previous (the reset token itself); tokens after the reset keep the full chunk product, so prefix*carry injects the old sequence's carry state into the new sequence's output.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"\\\"A larger label starts a new sequence... Subsequent sequences start from zero\\\", and \\\"output[b,t,h,:] = decay[b,t,h] * prior + u[b,t,h,:]\\\" with prior=0 when labels differ; tolerance \\\"abs(actual-target) <= 0.002 + 0.0001*abs(target)\\\" applies to any legal seq_idx within the stated domain.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires that when seq_idx[b,t] != seq_idx[b,t-1] the recurrence restarts from zero state; outputs after a mid-chunk reset must not include the old sequence's state. The kernel must satisfy the stated tolerance for any legal nondecreasing seq_idx labels.\",\n        \"statement\": \"When a sequence boundary (seq_idx increase) falls strictly inside a chunk, outputs for tokens after the reset incorrectly include the previous sequence's carry state multiplied by the full chunk prefix product, violating the required recurrence.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-03T07:42:42Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_112\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ntorch.manual_seed(1)\\nB, L, H, D = 1, 64, 2, 8\\nchunk = 32\\nu = (2*torch.rand(B,L,H,D)-1).float().to(dev)\\ndec = (0.5 + 0.46*torch.rand(B,L,H)).float().to(dev)\\ninit = (2*torch.rand(B,H,D)-1).float().to(dev)\\nseq = torch.zeros(B,L, dtype=torch.int32)\\n# mid-chunk reset at token 10 (inside chunk 0), another at token 40 (chunk boundary of chunk 1)\\nseq[:, 10:] += 1\\nseq[:, 40:] += 1\\nseq = seq.to(dev)\\n\\nout, final = K.run(u, dec, seq, init, chunk)\\nref_out, ref_final = K.reference(u, dec, seq, init, chunk)\\nref_out = ref_out.float(); ref_final = ref_final.float()\\n\\ndiff = (out - ref_out).abs()\\ntol = 0.002 + 0.0001*ref_out.abs()\\nviol = diff > tol\\n# examine tokens 10..31 (after first reset, still chunk 0)\\nbad = viol[0,:,0,:]\\ntok_bad = bad.any(dim=1).nonzero().flatten().tolist()\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"elementwise |actual-target| vs contract tolerance\\\",\\n  \\\"max_abs_err\\\": diff.max().item(),\\n  \\\"num_violations\\\": int(viol.sum().item()),\\n  \\\"tokens_with_violations\\\": tok_bad[:40],\\n  \\\"max_err_token10_31\\\": diff[0,10:32].max().item(),\\n  \\\"max_err_token32_39\\\": diff[0,32:40].max().item(),\\n  \\\"final_state_max_err\\\": (final-ref_final).abs().max().item(),\\n  \\\"seq_boundaries\\\": [10,40],\\n}))\\n\"\n      },\n      \"created_at\": \"2026-10-03T07:43:06Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t6_probe.py\",\n            \"sha256\": \"30e29f6babd1e6d52d3ce0b089517c59c503923c6416934c719c3f6eaeb991e5\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t6_stdout.txt\",\n            \"sha256\": \"704740884aeb33b3d8e6e7cb59c962f6fe0b63c1e706f3c848444da99cf4a1b1\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t6_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n            \"kind\": \"json_result\",\n            \"path\": \"probes/t6_json_result.json\",\n            \"sha256\": \"60eb2402a64ce79a93ed38602c80ed8d4db0817141ef174e8f48717934f5e30f\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"When a sequence boundary (seq_idx increase) falls strictly inside a chunk, outputs for tokens after the reset incorrectly include the previous sequence's carry state multiplied by the full chunk prefix product, violating the required recurrence.\",\n        \"cwd\": \"/root/cases/case_112\",\n        \"duration_s\": 7.386471,\n        \"event_id\": \"t6\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"30e29f6babd1e6d52d3ce0b089517c59c503923c6416934c719c3f6eaeb991e5\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"704740884aeb33b3d8e6e7cb59c962f6fe0b63c1e706f3c848444da99cf4a1b1\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t6_json_result.json\",\n                \"sha256\": \"60eb2402a64ce79a93ed38602c80ed8d4db0817141ef174e8f48717934f5e30f\"\n              }\n            ],\n            \"duration_s\": 7.386471,\n            \"exit_code\": 0,\n            \"expected_signal\": null,\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"final_state_max_err\": 1.1920928955078125e-07,\n              \"max_abs_err\": 2.384185791015625e-07,\n              \"max_err_token10_31\": 2.384185791015625e-07,\n              \"max_err_token32_39\": 1.1920928955078125e-07,\n              \"metric\": \"elementwise |actual-target| vs contract tolerance\",\n              \"num_violations\": 0,\n              \"seq_boundaries\": [\n                10,\n                40\n              ],\n              \"tokens_with_violations\": []\n            },\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"metric\\\": \\\"elementwise |actual-target| vs contract tolerance\\\", \\\"max_abs_err\\\": 2.384185791015625e-07, \\\"num_violations\\\": 0, \\\"tokens_with_violations\\\": [], \\\"max_err_token10_31\\\": 2.384185791015625e-07, \\\"max_err_token32_39\\\": 1.1920928955078125e-07, \\\"final_state_max_err\\\": 1.1920928955078125e-07, \\\"seq_boundaries\\\": [10, 40]}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe produced a JSON result that needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t6\"\n        },\n        \"exit_code\": 0,\n        \"expected_signal\": null,\n        \"json_parse_error\": null,\n        \"json_result\": {\n          \"final_state_max_err\": 1.1920928955078125e-07,\n          \"max_abs_err\": 2.384185791015625e-07,\n          \"max_err_token10_31\": 2.384185791015625e-07,\n          \"max_err_token32_39\": 1.1920928955078125e-07,\n          \"metric\": \"elementwise |actual-target| vs contract tolerance\",\n          \"num_violations\": 0,\n          \"seq_boundaries\": [\n            10,\n            40\n          ],\n          \"tokens_with_violations\": []\n        },\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"{\\\"metric\\\": \\\"elementwise |actual-target| vs contract tolerance\\\", \\\"max_abs_err\\\": 2.384185791015625e-07, \\\"num_violations\\\": 0, \\\"tokens_with_violations\\\": [], \\\"max_err_token10_31\\\": 2.384185791015625e-07, \\\"max_err_token32_39\\\": 1.1920928955078125e-07, \\\"final_state_max_err\\\": 1.1920928955078125e-07, \\\"seq_boundaries\\\": [10, 40]}\\n\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    },\n    {\n      \"args\": {\n        \"data\": {\n          \"boundaries\": [\n            10,\n            40\n          ],\n          \"max_abs_err\": 2.384185791015625e-07,\n          \"num_violations\": 0\n        },\n        \"event_id\": \"t6\",\n        \"status\": \"rebutted\",\n        \"summary\": \"Mid-chunk sequence reset (token 10 inside chunk 0 of 32, and boundary at 40) produced max absolute error 2.4e-7 vs FP64 reference, zero tolerance violations, final-state error 1.2e-7. The kernel handles mid-chunk resets correctly; the suspected prefix*carry injection does not occur at runtime.\",\n        \"supports\": \"rebutted\"\n      },\n      \"created_at\": \"2026-10-03T07:43:36Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"claim\": {\n          \"created_at\": \"2026-10-03T07:42:42Z\",\n          \"evidence\": [\n            {\n              \"artifacts\": [],\n              \"created_at\": \"2026-10-03T07:43:36Z\",\n              \"data\": {\n                \"artifacts\": [\n                  {\n                    \"description\": \"Python probe code executed by local runtime.\",\n                    \"kind\": \"probe_code\",\n                    \"path\": \"probes/t6_probe.py\",\n                    \"sha256\": \"30e29f6babd1e6d52d3ce0b089517c59c503923c6416934c719c3f6eaeb991e5\"\n                  },\n                  {\n                    \"description\": \"Captured stdout from the probe process.\",\n                    \"kind\": \"stdout\",\n                    \"path\": \"probes/t6_stdout.txt\",\n                    \"sha256\": \"704740884aeb33b3d8e6e7cb59c962f6fe0b63c1e706f3c848444da99cf4a1b1\"\n                  },\n                  {\n                    \"description\": \"Captured stderr from the probe process.\",\n                    \"kind\": \"stderr\",\n                    \"path\": \"probes/t6_stderr.txt\",\n                    \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n                  },\n                  {\n                    \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                    \"kind\": \"json_result\",\n                    \"path\": \"probes/t6_json_result.json\",\n                    \"sha256\": \"60eb2402a64ce79a93ed38602c80ed8d4db0817141ef174e8f48717934f5e30f\"\n                  }\n                ],\n                \"boundaries\": [\n                  10,\n                  40\n                ],\n                \"duration_s\": 7.386471,\n                \"exit_code\": 0,\n                \"expected_signal\": null,\n                \"json_parse_error\": null,\n                \"json_result\": {\n                  \"final_state_max_err\": 1.1920928955078125e-07,\n                  \"max_abs_err\": 2.384185791015625e-07,\n                  \"max_err_token10_31\": 2.384185791015625e-07,\n                  \"max_err_token32_39\": 1.1920928955078125e-07,\n                  \"metric\": \"elementwise |actual-target| vs contract tolerance\",\n                  \"num_violations\": 0,\n                  \"seq_boundaries\": [\n                    10,\n                    40\n                  ],\n                  \"tokens_with_violations\": []\n                },\n                \"max_abs_err\": 2.384185791015625e-07,\n                \"num_violations\": 0,\n                \"stderr\": \"\",\n                \"stdout\": \"{\\\"metric\\\": \\\"elementwise |actual-target| vs contract tolerance\\\", \\\"max_abs_err\\\": 2.384185791015625e-07, \\\"num_violations\\\": 0, \\\"tokens_with_violations\\\": [], \\\"max_err_token10_31\\\": 2.384185791015625e-07, \\\"max_err_token32_39\\\": 1.1920928955078125e-07, \\\"final_state_max_err\\\": 1.1920928955078125e-07, \\\"seq_boundaries\\\": [10, 40]}\\n\",\n                \"timed_out\": false,\n                \"timeout_s\": 60\n              },\n              \"id\": \"c1.e1\",\n              \"kind\": \"runtime_probe\",\n              \"summary\": \"Mid-chunk sequence reset (token 10 inside chunk 0 of 32, and boundary at 40) produced max absolute error 2.4e-7 vs FP64 reference, zero tolerance violations, final-state error 1.2e-7. The kernel handles mid-chunk resets correctly; the suspected prefix*carry injection does not occur at runtime.\",\n              \"supports\": \"rebutted\",\n              \"tool_event_id\": \"t6\"\n            }\n          ],\n          \"id\": \"c1\",\n          \"raised_by\": \"solo\",\n          \"rationale\": \"In _combine, prefix is zeroed only where current != previous (the reset token itself); tokens after the reset keep the full chunk product, so prefix*carry injects the old sequence's carry state into the new sequence's output.\",\n          \"scope\": \"in_scope\",\n          \"scope_evidence\": [\n            {\n              \"source\": \"problem.txt\",\n              \"summary\": \"\\\"A larger label starts a new sequence... Subsequent sequences start from zero\\\", and \\\"output[b,t,h,:] = decay[b,t,h] * prior + u[b,t,h,:]\\\" with prior=0 when labels differ; tolerance \\\"abs(actual-target) <= 0.002 + 0.0001*abs(target)\\\" applies to any legal seq_idx within the stated domain.\"\n            }\n          ],\n          \"scope_rationale\": \"The contract requires that when seq_idx[b,t] != seq_idx[b,t-1] the recurrence restarts from zero state; outputs after a mid-chunk reset must not include the old sequence's state. The kernel must satisfy the stated tolerance for any legal nondecreasing seq_idx labels.\",\n          \"statement\": \"When a sequence boundary (seq_idx increase) falls strictly inside a chunk, outputs for tokens after the reset incorrectly include the previous sequence's carry state multiplied by the full chunk prefix product, violating the required recurrence.\",\n          \"status\": \"rebutted\",\n          \"updated_at\": \"2026-10-03T07:43:36Z\"\n        },\n        \"evidence\": {\n          \"artifacts\": [],\n          \"created_at\": \"2026-10-03T07:43:36Z\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"30e29f6babd1e6d52d3ce0b089517c59c503923c6416934c719c3f6eaeb991e5\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"704740884aeb33b3d8e6e7cb59c962f6fe0b63c1e706f3c848444da99cf4a1b1\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t6_json_result.json\",\n                \"sha256\": \"60eb2402a64ce79a93ed38602c80ed8d4db0817141ef174e8f48717934f5e30f\"\n              }\n            ],\n            \"boundaries\": [\n              10,\n              40\n            ],\n            \"duration_s\": 7.386471,\n            \"exit_code\": 0,\n            \"expected_signal\": null,\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"final_state_max_err\": 1.1920928955078125e-07,\n              \"max_abs_err\": 2.384185791015625e-07,\n              \"max_err_token10_31\": 2.384185791015625e-07,\n              \"max_err_token32_39\": 1.1920928955078125e-07,\n              \"metric\": \"elementwise |actual-target| vs contract tolerance\",\n              \"num_violations\": 0,\n              \"seq_boundaries\": [\n                10,\n                40\n              ],\n              \"tokens_with_violations\": []\n            },\n            \"max_abs_err\": 2.384185791015625e-07,\n            \"num_violations\": 0,\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"metric\\\": \\\"elementwise |actual-target| vs contract tolerance\\\", \\\"max_abs_err\\\": 2.384185791015625e-07, \\\"num_violations\\\": 0, \\\"tokens_with_violations\\\": [], \\\"max_err_token10_31\\\": 2.384185791015625e-07, \\\"max_err_token32_39\\\": 1.1920928955078125e-07, \\\"final_state_max_err\\\": 1.1920928955078125e-07, \\\"seq_boundaries\\\": [10, 40]}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"id\": \"c1.e1\",\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Mid-chunk sequence reset (token 10 inside chunk 0 of 32, and boundary at 40) produced max absolute error 2.4e-7 vs FP64 reference, zero tolerance violations, final-state error 1.2e-7. The kernel handles mid-chunk resets correctly; the suspected prefix*carry injection does not occur at runtime.\",\n          \"supports\": \"rebutted\",\n          \"tool_event_id\": \"t6\"\n        }\n      },\n      \"status\": \"ok\",\n      \"tool\": \"finalize_probe_evidence\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale",
+            "scope",
+            "scope_rationale",
+            "scope_evidence"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Use unknown if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Always include this field. For in_scope it must explain which contract requirement this claim would violate. For unknown scope an empty string is allowed."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Always include this field. For in_scope supply at least one quote from the contract, each with its source. For unknown scope an empty array is allowed."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

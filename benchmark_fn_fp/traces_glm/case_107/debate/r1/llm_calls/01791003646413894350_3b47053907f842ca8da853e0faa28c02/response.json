@@ -1,0 +1,81 @@
+{
+  "id": "chatcmpl-abc281c1ac2a4285b431fc8cb223e527",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'm launching three independent probes: c1 (signed-zero bit preservation), c2 (K==L boundary), and c3 (in-place storage identity, new_events preservation, chained calls). None depends on another's outcome.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9628f556bacbdc09",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_107/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndef bits(t): return t.view(torch.int32).cpu()\\n\\nresults = {}\\nfor (B,L,D,K) in [(2,8,4,2),(1,64,7,3),(3,5,16,5),(2,129,3,1)]:\\n    g = torch.Generator(\\\"cpu\\\").manual_seed(42)\\n    st = torch.randn((B,L,D), generator=g).to(\\\"cuda\\\")\\n    ev = torch.randn((B,K,D), generator=g).to(\\\"cuda\\\")\\n    # plant signed zeros in both sources at known positions\\n    n_st = st.numel()\\n    stf = st.cpu().flatten(); evf = ev.cpu().flatten()\\n    for i in range(0, n_st, 7): stf[i] = -0.0\\n    for i in range(0, evf.numel(), 3): evf[i] = 0.0 if i%2 else -0.0\\n    st.copy_(stf.view_as(st)); ev.copy_(evf.view_as(ev))\\n    neg_zero_in_state = int((bits(st)==0x80000000).sum())\\n    neg_zero_in_ev = int((bits(ev)==0x80000000).sum())\\n    pre_state = st.clone(); pre_ev = ev.clone()\\n    ref = k.reference(pre_state, pre_ev)\\n    out = k.run(st, ev)\\n    torch.cuda.synchronize()\\n    exact = bool(torch.equal(bits(out.cpu()), bits(ref.cpu())))\\n    # check specifically that planted -0.0 survived\\n    nz_out_state_region = int((bits(out.cpu())==0x80000000).sum())\\n    results[f\\\"B{B}L{L}D{D}K{K}\\\"] = {\\n        \\\"bitwise_equal_reference\\\": exact,\\n        \\\"neg_zero_planted_state\\\": neg_zero_in_state,\\n        \\\"neg_zero_planted_events\\\": neg_zero_in_ev,\\n        \\\"neg_zero_in_output\\\": nz_out_state_region,\\n    }\\nprint(json.dumps(results))\", \"expected_signal\": \"run() output bitwise-equal to reference() when inputs contain -0.0 in both sources\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-ba2f399ab4623305",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_107/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nresults = {}\\n# K == L configs (L <= 128), plus edge K=1, L=2, D=1\\nfor (B,L,D,K) in [(2,8,4,8),(1,128,7,128),(3,2,1,2),(4,3,1024,3),(1,128,1024,64)]:\\n    g = torch.Generator(\\\"cpu\\\").manual_seed(7)\\n    st = torch.randn((B,L,D), generator=g).to(\\\"cuda\\\")\\n    ev = torch.randn((B,K,D), generator=g).to(\\\"cuda\\\")\\n    ref = k.reference(st.clone(), ev.clone())\\n    out = k.run(st, ev)\\n    torch.cuda.synchronize()\\n    results[f\\\"B{B}L{L}D{D}K{K}\\\"] = {\\n        \\\"bitwise_equal_reference\\\": bool(torch.equal(out.cpu().view(torch.int32), ref.cpu().view(torch.int32))),\\n        \\\"max_abs_err\\\": float((out.cpu()-ref.cpu()).abs().max()),\\n        \\\"L_minus_K\\\": L-K,\\n    }\\nprint(json.dumps(results))\", \"expected_signal\": \"at K==L all output rows come from new_events bitwise-equal to reference; mismatch indicates boundary bug\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-890462cd2cec327a",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_107/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ng = torch.Generator(\\\"cpu\\\").manual_seed(1)\\nB,L,D = 2,16,8\\nst = torch.randn((B,L,D), generator=g).to(\\\"cuda\\\")\\nevents_seq = [torch.randn((B,Kk,D), generator=g).to(\\\"cuda\\\") for Kk in (3,2,5)]\\nptr_before = st.data_ptr()\\nret = k.run(st, events_seq[0])\\ntorch.cuda.synchronize()\\nsame_ptr = (ret.data_ptr() == ptr_before) and (st.data_ptr() == ptr_before) and (ret is st or ret.data_ptr() == st.data_ptr())\\nev_snap = [e.clone() for e in events_seq]\\n# chained calls on mutated state, tracking reference manually\\ncur = st.clone()\\nok_chain = True\\nrefs = [None]\\nfor i, ev in enumerate(events_seq):\\n    e_snap = ev.clone()\\n    r = k.reference(cur.clone(), e_snap)\\n    ret = k.run(st, ev)\\n    torch.cuda.synchronize()\\n    refs.append((bool(torch.equal(st.cpu().view(torch.int32), r.cpu().view(torch.int32))),\\n                 bool(torch.equal(ev.cpu().view(torch.int32), e_snap.cpu().view(torch.int32)))))\\n    cur = r.clone()\\nevents_untouched = all(x[1] for x in refs[1:])\\ndata_ptr_kept = same_ptr\\nprint(json.dumps({\\n  \\\"data_ptr_preserved\\\": data_ptr_kept,\\n  \\\"events_preserved_bitwise_each_call\\\": events_untouched,\\n  \\\"chain_results\\\": refs[1:],\\n}))\", \"expected_signal\": \"returned tensor shares input state storage (data_ptr unchanged), new_events bit-identical, chained calls bitwise match reference\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791003647,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1313,
+    "prompt_tokens": 21734,
+    "total_tokens": 23047,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

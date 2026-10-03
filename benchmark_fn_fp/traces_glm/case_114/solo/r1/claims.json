@@ -1,0 +1,193 @@
+[
+  {
+    "created_at": "2026-10-03T07:45:29Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T07:48:58Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "4bfbf970dff1bc5dcfbf587cc4a22e19eba03fd4dad61758e764ec00fef9cc1e"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "e8bc5711eb427a50721dcd64b065d47a2de38933b7dde70e2fe7060af5982f7a"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "1333172a176ec3e1e0e31c7d35d61a73b236dcb336cc62d69dd2f28ac3ea149b"
+            }
+          ],
+          "cases": {
+            "finite_garbage_0": {
+              "n_nonfinite": 0,
+              "nan_output": false
+            },
+            "finite_garbage_1000": {
+              "n_nonfinite": 0,
+              "nan_output": false
+            },
+            "window1_qt1_expiredNaN": {
+              "n_nonfinite": 64,
+              "nan_output": true
+            },
+            "window41_qt9_len97_expiredNaN": {
+              "n_nonfinite": 2304,
+              "nan_output": true
+            }
+          },
+          "duration_s": 7.340522,
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": null,
+          "json_result": {
+            "metric": "error ratio + nonfinite count (contract: <=1 and finite)",
+            "results": [
+              {
+                "maxerr": NaN,
+                "n_nonfinite": 64,
+                "name": "window=1,qt=1,len=64,expired=NaN",
+                "nan_output": true
+              },
+              {
+                "maxerr": 0.0,
+                "n_nonfinite": 0,
+                "name": "window=1,expired=1000.0",
+                "nan_output": false
+              },
+              {
+                "maxerr": 0.0,
+                "n_nonfinite": 0,
+                "name": "window=1,expired=0.0 (sanity)",
+                "nan_output": false
+              },
+              {
+                "maxerr": NaN,
+                "n_nonfinite": 2304,
+                "name": "window=41,qt=9,len=97,expired=NaN",
+                "nan_output": true
+              }
+            ],
+            "verdict_hint": "NaN in expired-window slots (semantically irrelevant per contract) corrupts output"
+          },
+          "mechanism": "tl.dot(probabilities, v) multiplies zero probabilities (masked positions) by NaN v entries, 0*NaN=NaN, corrupting the accumulator; k-side is masked via tl.where on scores, but v is not masked by allowed-ness.",
+          "stderr": "",
+          "stdout": "{\"metric\": \"error ratio + nonfinite count (contract: <=1 and finite)\", \"results\": [{\"name\": \"window=1,qt=1,len=64,expired=NaN\", \"nan_output\": true, \"n_nonfinite\": 64, \"maxerr\": NaN}, {\"name\": \"window=1,expired=1000.0\", \"nan_output\": false, \"n_nonfinite\": 0, \"maxerr\": 0.0}, {\"name\": \"window=1,expired=0.0 (sanity)\", \"nan_output\": false, \"n_nonfinite\": 0, \"maxerr\": 0.0}, {\"name\": \"window=41,qt=9,len=97,expired=NaN\", \"nan_output\": true, \"n_nonfinite\": 2304, \"maxerr\": NaN}], \"verdict_hint\": \"NaN in expired-window slots (semantically irrelevant per contract) corrupts output\"}\n",
+          "timed_out": false,
+          "timeout_s": 300
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Confirmed: with NaN in expired-window / unreachable cache slots (permitted by contract and semantically irrelevant), the kernel returns non-finite output. Minimal case window=1, qt=1, len=64, page=32: 64/64 output elements NaN. Larger case (window=41, qt=9, len=97): 2304 nonfinite elements. Identical cases with finite garbage (1000.0 or 0.0) produce exact output (maxerr 0.0), proving the corruption comes from NaN propagation through semantically irrelevant slots, not indexing. Contract requires finite output for every admitted value assignment.",
+        "supports": "confirmed",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The tile-skipping and online-softmax logic with window/GQA has many interacting index computations (context, first_key/last_key, GROUP row mapping); an off-by-one or an unmasked load of a NaN garbage cache slot could break the output.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract requires output within abs(output-target)<=0.003+0.003*abs(target) for every admitted shape, page mapping, window length and value assignment, and says unreachable cache slots may contain NaN/Inf and must not change the output."
+      }
+    ],
+    "scope_rationale": "The contract requires output within 0.003+0.003*abs(target) for every admitted shape, page mapping, window length and value assignment, and that NaN/Inf in unreachable cache slots must not change the output.",
+    "statement": "The kernel output deviates from the reference beyond the contract tolerance (abs diff <= 0.003+0.003*abs(target)) on some admitted inputs (window>0, GQA grouping, arbitrary page mapping, garbage NaN in unreachable cache slots).",
+    "status": "confirmed",
+    "updated_at": "2026-10-03T07:48:58Z"
+  },
+  {
+    "created_at": "2026-10-03T07:45:29Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T07:48:58Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "b5f85b6637a296f2ff18dce38f2aecee888eaf7da6dec2e31925687b1d83e4c2"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "47a6528af68cf0bb279c2ad996dbed216c9cc099e06021ead69fd698d2c30308"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "9d3a62dd01f9c409f2f78e1b0e2ab94dbeb717e18fb9f38b5bdc5052bbad1840"
+            }
+          ],
+          "duration_s": 5.452354,
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": null,
+          "json_result": {
+            "bit_unchanged": true,
+            "metric": "bit-for-bit input equality after run()",
+            "out_contiguous": true,
+            "out_dtype": "torch.float16",
+            "out_finite": true,
+            "out_shape": [
+              2,
+              9,
+              4,
+              64
+            ],
+            "unchanged": true
+          },
+          "stderr": "",
+          "stdout": "{\"metric\": \"bit-for-bit input equality after run()\", \"unchanged\": true, \"bit_unchanged\": true, \"out_shape\": [2, 9, 4, 64], \"out_dtype\": \"torch.float16\", \"out_contiguous\": true, \"out_finite\": true}\n",
+          "timed_out": false,
+          "timeout_s": 300
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "On the make_inputs example, run() leaves all five inputs bit-for-bit unchanged (uint8-view equality true), and returns a contiguous FP16 [2,9,4,64] finite output. No input mutation detected.",
+        "supports": "rebutted",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "solo",
+    "rationale": "The kernel writes only to a freshly allocated output tensor, but verifying bit-for-bit input preservation is an explicit contract requirement.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Inputs, including block_table and lengths, must be bit-for-bit unchanged."
+      }
+    ],
+    "scope_rationale": "Contract explicitly requires inputs to be bit-for-bit unchanged.",
+    "statement": "run() mutates one or more inputs (q, k, v, block_table, lengths) so they are not bit-for-bit unchanged after the call.",
+    "status": "rebutted",
+    "updated_at": "2026-10-03T07:48:58Z"
+  }
+]

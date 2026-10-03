@@ -1,0 +1,1003 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "LICENSE",
+      "__pycache__/kernel.cpython-313.pyc",
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_109",
+    "has_error": null,
+    "kernel_code": "\"\"\"Standalone RMSNorm backward kernels adapted from Liger Kernel.\n\nCopyright 2024 LinkedIn Corporation. See LICENSE for license and attribution.\n2026 adaptation: standalone CUDA interface, FP16 activations and FP32 weight\naccumulation buffer. The public contract defines the supported casting policy.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _row_backward(DY, DX, X, W, RSTD, PARTIAL, M: tl.constexpr,\n                  N: tl.constexpr, ROWS: tl.constexpr, B: tl.constexpr):\n    pid = tl.program_id(0).to(tl.int64)\n    cols = tl.arange(0, B)\n    mask = cols < N\n    weight = tl.load(W + cols, mask=mask, other=0.0)\n    dw = tl.zeros((B,), tl.float32)\n    start = pid * ROWS\n    stop = tl.minimum(start + ROWS, M)\n    for row in range(start, stop):\n        dy = tl.load(DY + row * N + cols, mask=mask, other=0.0)\n        x = tl.load(X + row * N + cols, mask=mask, other=0.0).to(tl.float32)\n        r = tl.load(RSTD + row)\n        m = (dy * weight).to(tl.float32)\n        dx = r * m\n        dx += r * (-(1.0 / N) * r * r * tl.sum(m * x, 0) * x)\n        dw += dy * (x * r).to(tl.float16)\n        tl.store(DX + row * N + cols, dx, mask=mask)\n    tl.store(PARTIAL + pid * N + cols, dw, mask=mask)\n\n\n@triton.jit\ndef _block_backward(DY, DX, X, W, RSTD, PARTIAL, M: tl.constexpr,\n                    N: tl.constexpr, B: tl.constexpr, BR: tl.constexpr):\n    pid = tl.program_id(0).to(tl.int64)\n    programs = tl.num_programs(0)\n    cols = tl.arange(0, B)\n    col_mask = cols < N\n    weight = tl.load(W + cols, mask=col_mask, other=0.0)\n    dw = tl.zeros((B,), tl.float32)\n    for start in range(pid * BR, M, programs * BR):\n        rows = start + tl.arange(0, BR)\n        mask = (rows[:, None] < M) & col_mask[None, :]\n        dy = tl.load(DY + rows[:, None] * N + cols[None, :], mask=mask, other=0.0)\n        x = tl.load(X + rows[:, None] * N + cols[None, :], mask=mask, other=0.0).to(tl.float32)\n        r = tl.load(RSTD + rows, mask=rows < M, other=0.0)\n        m = (dy * weight[None, :]).to(tl.float32)\n        dx = r[:, None] * m\n        dx += r[:, None] * (\n            -(1.0 / N) * (r * r * tl.sum(m * x, 1))[:, None] * x\n        )\n        dw += tl.sum(dy * (x * r[:, None]).to(tl.float16), 0)\n        tl.store(DX + rows[:, None] * N + cols[None, :], dx, mask=mask)\n    tl.store(PARTIAL + pid * N + cols, dw, mask=col_mask)\n\n\ndef run(x, weight, dy, rstd):\n    \"\"\"Return (dx: FP16[M,N], dw: FP32[N]); preserve all inputs.\"\"\"\n    m, n = x.shape\n    assert x.is_cuda and x.is_contiguous() and dy.is_contiguous()\n    assert weight.is_contiguous() and rstd.is_contiguous()\n    assert x.dtype == dy.dtype == weight.dtype == torch.float16\n    assert rstd.dtype == torch.float32\n    assert dy.shape == x.shape and weight.shape == (n,) and rstd.shape == (m,)\n    assert x.device == weight.device == dy.device == rstd.device\n    assert 1 <= m <= 4096 and 16 <= n <= 512\n    block = triton.next_power_of_2(n)\n    programs = min(torch.cuda.get_device_properties(x.device).multi_processor_count, m)\n    partial = torch.empty((programs, n), dtype=torch.float32, device=x.device)\n    dx = torch.empty_like(dy)\n    if block > 256 or m < 512:\n        _row_backward[(programs,)](\n            dy, dx, x, weight, rstd, partial, m, n,\n            ROWS=triton.cdiv(m, programs), B=block,\n            num_warps=4, enable_fp_fusion=False,\n        )\n    else:\n        _block_backward[(programs,)](\n            dy, dx, x, weight, rstd, partial, m, n,\n            B=block, BR=16, num_warps=4, enable_fp_fusion=False,\n        )\n    dw = partial.sum(dim=0)\n    return dx, dw\n\n\ndef reference(x, weight, dy, rstd):\n    \"\"\"Independent tensor reference for the public mixed-precision contract.\n\n    FP64 evaluates the analytic dx formula and accumulates the individually\n    rounded weight-gradient terms. This function can also run on CPU.\n    \"\"\"\n    x64 = x.to(torch.float64)\n    r64 = rstd.to(torch.float64)[:, None]\n    m64 = (dy * weight).to(torch.float64)\n    dx64 = r64 * (m64 - x64 * r64.square() * (m64 * x64).mean(dim=1, keepdim=True))\n    h = (x.float() * rstd[:, None]).to(torch.float16)\n    terms64 = (dy * h).to(torch.float64)\n    return dx64, terms64.sum(dim=0)\n\n\ndef error_ratios(outputs, inputs):\n    \"\"\"A value <= 1 for each output satisfies the numerical contract.\"\"\"\n    dx, dw = outputs\n    x, weight, dy, rstd = inputs\n    ref_dx, ref_dw = reference(*inputs)\n    h = (x.float() * rstd[:, None]).to(torch.float16)\n    abs_terms = (dy * h).to(torch.float64).abs().sum(dim=0)\n    dx_limit = 0.002 + 0.002 * ref_dx.abs()\n    dw_limit = 0.00001 + 0.00001 * abs_terms\n    return {\n        \"dx\": float(((dx.double() - ref_dx).abs() / dx_limit).max().item()),\n        \"dw\": float(((dw.double() - ref_dw).abs() / dw_limit).max().item()),\n    }\n\n\ndef make_inputs(device=\"cuda\", rows=768, cols=128, seed=0):\n    \"\"\"An ordinary example, not a restriction of the supported input domain.\"\"\"\n    g = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2 * torch.rand((rows, cols), generator=g) - 1).half()\n    weight = (0.5 + torch.rand((cols,), generator=g)).half()\n    dy = (2 * torch.rand((rows, cols), generator=g) - 1).half()\n    rstd = torch.rsqrt(x.float().square().mean(dim=1) + 1e-5)\n    return tuple(t.to(device) for t in (x, weight, dy, rstd))\n",
+    "passed": null,
+    "problem_text": "Verify a CUDA RMSNorm backward implementation with the stated mixed-precision\ncasting policy. The task concerns this implementation over the entire domain\nbelow, not only the example returned by make_inputs().\n\nInputs (all contiguous, non-overlapping, on the same CUDA device):\n- x and dy: FP16 tensors of shape [M, N]; weight: FP16 tensor of shape [N].\n- rstd: FP32 tensor of shape [M], the saved reciprocal RMS from the forward pass.\n- 1 <= M <= 4096; 16 <= N <= 512. Non-powers of two are included.\n- All values are finite; |x| <= 4, |dy| <= 4, |weight| <= 2.\n- The RMS of each row of x lies in [0.25, 4]. For epsilon = 1e-5,\n  rstd agrees with 1/sqrt(mean_j(x[i,j]^2) + epsilon) to relative error <= 1e-6.\n\nLet H16 denote rounding to IEEE FP16, and F32 rounding to IEEE FP32.\nAs in the Llama mixed-precision backward policy, define:\n  m[i,j] = H16(dy[i,j] * weight[j])\n  h[i,j] = H16(F32(F32(x[i,j]) * rstd[i]))\n  t[i,j] = H16(dy[i,j] * h[i,j])\nThe target outputs, with sums below evaluated in real arithmetic, are:\n  dx[i,j] = rstd[i] * (m[i,j] - x[i,j] * rstd[i]^2\n                        * sum_k(m[i,k] * x[i,k]) / N)\n  dw[j] = sum_i t[i,j]\nThe rounded per-element products are intentional parts of the casting policy;\nthey are not themselves implementation errors. The dw result is an FP32 main\ngradient buffer, as used for stable parameter-gradient accumulation.\n\nReturn a pair: dx of shape [M,N] and dtype FP16, dw of shape [N] and dtype FP32.\nAll outputs must be finite. For every element:\n  abs(dx_output - dx_target) <= 0.002 + 0.002 * abs(dx_target)\n  abs(dw_output - dw_target) <= 1e-5 + 1e-5 * sum_i abs(t[i,j])\nThe absolute-sum scale permits cancellation without demanding relative accuracy\non a near-zero gradient. These bounds apply to all legal input values and shapes.\n\nDo not modify any input. The public reference() and error_ratios() in kernel.py\nimplement these formulas independently of the Triton kernels. You may create any\nlegal test inputs; make_inputs() is only a convenient example. Run on the frozen\nNVIDIA T4 / PyTorch 2.8.0 / Triton 3.4.0 CUDA environment.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_109",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-03T04:57:42Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-03T04:59:10Z",
+          "data": {
+            "all_finite": true,
+            "any_mutation": false,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "e4856e18f87a9dbd53c3c909c3e6dd5b426de724b33fed08d5038077164db275"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "66b90849a5a34e85e6a98e33153d47d0401c68fe9ae8d163d4acebe0c7e18d37"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "572958968687c8780f118a0ab24bee320abe298d60bcc6de614081e5539161df"
+              }
+            ],
+            "duration_s": 10.719702,
+            "dw_violations": "(512,128):8.94; (512,64):6.54; (768,128):5.20; (4096,256):3.28; (1000,129):8.21; (2048,100):4.12; extreme (512,128):6.73",
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "all_finite": true,
+              "any_mutation": false,
+              "worst_dw_ratio": 8.944566960058348,
+              "worst_dx_ratio": 0.23646312197982228
+            },
+            "kernel_own_error_ratios_agree": true,
+            "metric": "error ratio = abs(err)/(contract bound); >1 means contract violation",
+            "row_kernel_dw_ratios": "<0.01 (n>256 or m<512 cases)",
+            "stderr": "",
+            "stdout": "[\n {\n  \"m\": 512,\n  \"n\": 128,\n  \"rms_band\": [\n   2.0202,\n   2.6293\n  ],\n  \"dx_ratio\": 0.1601462734524127,\n  \"dw_ratio\": 8.944566960058348,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1601462734524127,\n   \"dw\": 8.944566960058348\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 512,\n  \"n\": 64,\n  \"rms_band\": [\n   1.9609,\n   2.6583\n  ],\n  \"dx_ratio\": 0.16147115894974592,\n  \"dw_ratio\": 6.536592118712277,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16147115894974592,\n   \"dw\": 6.536592118712277\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 768,\n  \"n\": 128,\n  \"rms_band\": [\n   2.0126,\n   2.6111\n  ],\n  \"dx_ratio\": 0.16124799011217436,\n  \"dw_ratio\": 5.198156853254795,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16124799011217436,\n   \"dw\": 5.198156853254795\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 512,\n  \"rms_band\": [\n   2.1375,\n   2.4735\n  ],\n  \"dx_ratio\": 0.16264743188642378,\n  \"dw_ratio\": 0.0005838789920648959,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16264743188642378,\n   \"dw\": 0.0005838789920648959\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 256,\n  \"rms_band\": [\n   2.069,\n   2.5405\n  ],\n  \"dx_ratio\": 0.1625221768500764,\n  \"dw_ratio\": 3.2837103581920473,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1625221768500764,\n   \"dw\": 3.2837103581920473\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 512,\n  \"n\": 128,\n  \"rms_band\": [\n   0.2475,\n   3.2509\n  ],\n  \"dx_ratio\": 0.23545445774791787,\n  \"dw_ratio\": 6.7271252498056455,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.23545445774791787,\n   \"dw\": 6.7271252498056455\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 512,\n  \"rms_band\": [\n   0.2475,\n   3.2208\n  ],\n  \"dx_ratio\": 0.23646312197982228,\n  \"dw_ratio\": 0.0005818394984539614,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.23646312197982228,\n   \"dw\": 0.0005818394984539614\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 511,\n  \"n\": 100,\n  \"rms_band\": [\n   2.0518,\n   2.691\n  ],\n  \"dx_ratio\": 0.16000088699144127,\n  \"dw_ratio\": 0.0005413462731510172,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16000088699144127,\n   \"dw\": 0.0005413462731510172\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 513,\n  \"n\": 300,\n  \"rms_band\": [\n   2.1315,\n   2.4759\n  ],\n  \"dx_ratio\": 0.16173278173064104,\n  \"dw_ratio\": 0.0009076250248335051,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16173278173064104,\n   \"dw\": 0.0009076250248335051\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4095,\n  \"n\": 511,\n  \"rms_band\": [\n   2.132,\n   2.47\n  ],\n  \"dx_ratio\": 0.1625860967383,\n  \"dw_ratio\": 0.000604249272007537,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1625860967383,\n   \"dw\": 0.000604249272007537\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 1,\n  \"n\": 16,\n  \"rms_band\": [\n   2.144,\n   2.144\n  ],\n  \"dx_ratio\": 0.10177206476797097,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.10177206476797097,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 17,\n  \"n\": 31,\n  \"rms_band\": [\n   1.9596,\n   2.61\n  ],\n  \"dx_ratio\": 0.15821282703025327,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.15821282703025327,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 127,\n  \"n\": 257,\n  \"rms_band\": [\n   2.1295,\n   2.4913\n  ],\n  \"dx_ratio\": 0.16106923622379724,\n  \"dw_ratio\": 0.0009054053578104479,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16106923622379724,\n   \"dw\": 0.0009054053578104479\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 1000,\n  \"n\": 129,\n  \"rms_band\": [\n   2.0173,\n   2.61\n  ],\n  \"dx_ratio\": 0.16271820813820806,\n  \"dw_ratio\": 8.20543196174477,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16271820813820806,\n   \"dw\": 8.20543196174477\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 2048,\n  \"n\": 100,\n  \"rms_band\": [\n   1.9568,\n   2.6569\n  ],\n  \"dx_ratio\": 0.16209313684801302,\n  \"dw_ratio\": 4.1238979102638975,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16209313684801302,\n   \"dw\": 4.1238979102638975\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 300,\n  \"n\": 400,\n  \"rms_band\": [\n   2.1089,\n   2.4339\n  ],\n  \"dx_ratio\": 0.1617867782851786,\n  \"dw_ratio\": 0.001692023940934043,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1617867782851786,\n   \"dw\": 0.001692023940934043\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 2,\n  \"n\": 512,\n  \"rms_band\": [\n   2.3498,\n   2.378\n  ],\n  \"dx_ratio\": 0.14484880122769792,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.14484880122769792,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n }\n]\n{\"worst_dx_ratio\": 0.23646312197982228, \"worst_dw_ratio\": 8.944566960058348, \"all_finite\": true, \"any_mutation\": false}\n",
+            "timed_out": false,
+            "timeout_s": 300,
+            "worst_dw_ratio": 8.944566960058348,
+            "worst_dx_ratio": 0.23646312197982228
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Across 16 legal shapes in the declared domain (1<=M<=4096, 16<=N<=512, non-power-of-two N included, |x|,|dy|<=4, |weight|<=2, row RMS within [0.25,4]), dx always satisfies the bound (max ratio 0.236). dw violates the bound (ratio>1, up to 8.94) precisely on inputs that take the _block_backward path (block<=256 and m>=512): e.g. M=512,N=128 ratio 8.94; M=1000,N=129 ratio 8.21; M=2048,N=100 ratio 4.12; M=4096,N=256 ratio 3.28. All _row_backward-path cases (n>256 or m<512) have dw ratio < 0.01. Kernel's own error_ratios() agrees with the independent contract computation. No input mutation; all outputs finite.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The two Triton kernels and the wrapper (branch choice, ROWS=cdiv partitioning, strided start loop, partial dw reduction) must match the contract formulas and bounds for all legal shapes, including non-power-of-two N and small/large M exercising both kernels.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Bounds 'apply to all legal input values and shapes'; 1<=M<=4096, 16<=N<=512, non-powers of two included."
+        }
+      ],
+      "scope_rationale": "The contract requires the dx/dw error bounds for every legal shape/value in the declared domain; a violation on any admitted input is a contract breach.",
+      "statement": "The kernel's dx or dw outputs violate the contract error bounds (dx: 0.002+0.002|dx|, dw: 1e-5+1e-5*sum|t|) for some legal input in the declared domain.",
+      "status": "confirmed",
+      "updated_at": "2026-10-03T04:59:10Z"
+    },
+    {
+      "created_at": "2026-10-03T04:57:42Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-03T04:59:21Z",
+          "data": {},
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "The t9 probe shows the H16 intermediate-rounding hypothesis does not explain any contract violation: dx is within bound on all 16 legal shapes (max ratio 0.236), and the dw violations occur only on the _block_backward path where the failure is FP16 accumulation of the 16-row tl.sum (row-kernel cases with the same casting policy have dw ratio < 0.01). So the casting policy for m, h, t is not the cause of the errors.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "Triton may keep dy*weight in fp16 or fp32 without explicit H16 rounding; the contract defines H16-rounded m, h, t as part of the target, so a mismatch could push errors beyond tolerance.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Casting policy: m=H16(dy*weight), h=H16(F32(F32(x)*rstd)), t=H16(dy*h); rounded per-element products are intentional parts of the policy, not implementation errors."
+        }
+      ],
+      "scope_rationale": "The contract's target formulas are defined in terms of H16-rounded intermediates m, h, t; the kernel must reproduce those within the stated elementwise bounds.",
+      "statement": "The kernels do not honor the H16 rounding of intermediates m, h, t, causing dx/dw errors beyond the stated tolerances.",
+      "status": "rebutted",
+      "updated_at": "2026-10-03T04:59:25Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_109",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_109"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_109"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_109"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_109",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 24.544049876,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll analyze the kernel against the contract, then verify numerically across the domain, covering both Triton kernel branches (row-wise and block-wise).",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The two Triton kernels and the Python wrapper (branch choice, row partitioning via ROWS=cdiv(m,programs) and strided start loop, dw partial-buffer reduction) must match the contract's dx/dw formulas and error bounds for all legal shapes, including non-powers-of-two N and small/large M that exercise both kernels.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Bounds 'apply to all legal input values and shapes'; 1<=M<=4096, 16<=N<=512, non-powers of two included."
+              }
+            ],
+            "statement": "The kernel's dx and dw outputs violate the contract error bounds for some legal input in the declared domain (1<=M<=4096, 16<=N<=512, finite values with |x|,|dy|<=4, |weight|<=2, row RMS in [0.25,4])."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Triton may promote fp16*fp16 arithmetic or fuse operations; the contract explicitly defines H16-rounding of m, h, and t, so any different intermediate precision could shift errors, especially dx stored as fp16 against the 0.002+0.002*|dx| bound.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Casting policy: m=H16(dy*weight), h=H16(F32(F32(x)*rstd)), t=H16(dy*h); rounded per-element products are intentional."
+              }
+            ],
+            "statement": "The mixed-precision intermediate roundings (m=H16(dy*w), h=H16(F32(x*rstd)), t=H16(dy*h)) are not honored by the kernels, causing errors beyond the stated tolerances (dx: 0.002+0.002|dx|, dw: 1e-5+1e-5*sum|t|)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 24.544,
+        "input_tokens": 10931,
+        "output_tokens": 1409
+      }
+    },
+    {
+      "duration_s": 8.689541759,
+      "role": "solo",
+      "round": 3,
+      "text": "The two claim recordings failed for missing scope_rationale; I'll re-send them with that field filled.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The two Triton kernels and the wrapper (branch choice, ROWS=cdiv partitioning, strided start loop, partial dw reduction) must match the contract formulas and bounds for all legal shapes, including non-power-of-two N and small/large M exercising both kernels.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Bounds 'apply to all legal input values and shapes'; 1<=M<=4096, 16<=N<=512, non-powers of two included."
+              }
+            ],
+            "scope_rationale": "The contract requires the dx/dw error bounds for every legal shape/value in the declared domain; a violation on any admitted input is a contract breach.",
+            "statement": "The kernel's dx or dw outputs violate the contract error bounds (dx: 0.002+0.002|dx|, dw: 1e-5+1e-5*sum|t|) for some legal input in the declared domain."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Triton may keep dy*weight in fp16 or fp32 without explicit H16 rounding; the contract defines H16-rounded m, h, t as part of the target, so a mismatch could push errors beyond tolerance.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Casting policy: m=H16(dy*weight), h=H16(F32(F32(x)*rstd)), t=H16(dy*h); rounded per-element products are intentional parts of the policy, not implementation errors."
+              }
+            ],
+            "scope_rationale": "The contract's target formulas are defined in terms of H16-rounded intermediates m, h, t; the kernel must reproduce those within the stated elementwise bounds.",
+            "statement": "The kernels do not honor the H16 rounding of intermediates m, h, t, causing dx/dw errors beyond the stated tolerances."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.69,
+        "input_tokens": 12324,
+        "output_tokens": 457
+      }
+    },
+    {
+      "duration_s": 26.406813801,
+      "role": "solo",
+      "round": 4,
+      "text": "I'll run a comprehensive probe over the declared domain: both kernel branches (block \u2264256 & M\u2265512, and row kernel for non-power-of-two N>256 or small M), comparing against an independent FP64 contract computation, plus input mutation checks.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, sys, os\nsys.path.insert(0, \"/root/cases/case_109\")\nimport kernel as K\n\ndev = \"cuda\"\ndef contract(x, weight, dy, rstd):\n    # independent FP64 implementation of problem.txt formulas\n    x64 = x.double(); w64 = weight.double(); d64 = dy.double(); r64 = rstd.double()[:, None]\n    m = (dy.float() * weight.float()).half().double()          # H16(dy*w)\n    h = (x.float() * rstd[:, None]).half().double()            # H16(F32(F32(x)*rstd))\n    t = (dy.float() * h.half().float()).half().double()        # H16(dy*h)\n    dx = r64 * (m - x64 * r64.square() * (m * x64).sum(1, keepdim=True) / x.shape[1])\n    dw = t.sum(0)\n    return dx, dw, t\n\ndef check(m, n, seed, extreme=False):\n    g = torch.Generator(device=\"cpu\").manual_seed(seed)\n    if extreme:\n        # push values to domain extremes, rows with RMS near 0.25 and 4\n        x = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\n        # scale rows so RMS hits ~0.25 or ~4\n        for i in range(m):\n            rms = x[i].float().square().mean().sqrt()\n            target = 4.0 if i % 2 else 0.25\n            x[i] = (x[i].float() * (target / (rms + 1e-9))).clamp(-4, 4).half()\n        # rescale slightly below 4 to keep |x|<=4 after rounding\n        x = (x.float() * 0.99).half()\n        weight = (2.0 * torch.ones(n)).half()\n        dy = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\n    else:\n        x = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\n        weight = (torch.empty(n).uniform_(0.05, 2.0, generator=g)).half()\n        dy = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\n    # verify row RMS in [0.25,4]; rescale otherwise\n    rms = x.float().square().mean(1).sqrt()\n    lo, hi = rms.min().item(), rms.max().item()\n    if lo < 0.24 or hi > 4.01:\n        # scale rows into band\n        sc = torch.where(rms < 0.25, 0.25/(rms+1e-9), torch.where(rms > 4.0, 4.0/(rms+1e-9), torch.ones_like(rms)))\n        x = (x.float() * sc[:, None]).clamp(-4, 4).half()\n        rms = x.float().square().mean(1).sqrt()\n        lo, hi = rms.min().item(), rms.max().item()\n    eps = 1e-5\n    rstd = (1.0 / torch.sqrt(x.float().square().mean(1) + eps)).float()\n    x0, w0, d0, r0 = (t.clone() for t in (x, weight, dy, rstd))\n    x, weight, dy, rstd = (t.to(dev) for t in (x, weight, dy, rstd))\n    dx, dw = K.run(x, weight, dy, rstd)\n    inputs = (x, weight, dy, rstd)\n    rdx, rdw, t = contract(x, weight, dy, rstd)\n    # error bounds\n    dx_lim = 0.002 + 0.002 * rdx.abs()\n    dw_lim = 1e-5 + 1e-5 * t.abs().sum(0)\n    dxr = ((dx.double() - rdx).abs() / dx_lim)\n    dwr = ((dw.double() - rdw).abs() / dw_lim)\n    # also use kernel's own error_ratios\n    ratios = K.error_ratios((dx, dw), inputs)\n    mutated = any(not torch.equal(a.cpu(), b) for a, b in zip((x, weight, dy, rstd), (x0, w0, d0, r0)))\n    finite = torch.isfinite(dx.float()).all().item() and torch.isfinite(dw).all().item()\n    return dict(m=m, n=n, rms_band=(round(lo,4), round(hi,4)),\n                dx_ratio=float(dxr.max().item()), dw_ratio=float(dwr.max().item()),\n                kernel_error_ratios=ratios, finite=bool(finite), mutated=mutated)\n\nresults = []\n# shapes: exercise block kernel (block<=256, m>=512) and row kernel (block>256 i.e. n>256, or m<512)\nfor (m, n, ex) in [(512,128,False),(512,64,False),(768,128,False),(4096,512,False),(4096,256,False),\n                   (512,128,True),(4096,512,True),\n                   (511,100,False),(513,300,False),(4095,511,False),(1,16,False),(17,31,False),\n                   (127,257,False),(1000,129,False),(2048,100,False),(300,400,False),(2,512,False)]:\n    results.append(check(m, n, seed=m*7+n, extreme=ex))\n\nprint(json.dumps(results, indent=1))\nworst_dx = max(r[\"dx_ratio\"] for r in results)\nworst_dw = max(r[\"dw_ratio\"] for r in results)\nprint(json.dumps({\"worst_dx_ratio\": worst_dx, \"worst_dw_ratio\": worst_dw,\n                  \"all_finite\": all(r[\"finite\"] for r in results),\n                  \"any_mutation\": any(r[\"mutated\"] for r in results)}))\n",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 26.407,
+        "input_tokens": 14567,
+        "output_tokens": 1684
+      }
+    },
+    {
+      "duration_s": 50.117304769,
+      "role": "solo",
+      "round": 5,
+      "text": "The probe (t9) reveals a clear pattern: dx is always within tolerance (max ratio 0.24), but dw violates the contract bound whenever the **block kernel** path runs (n \u2264 256 power-of-two, m \u2265 512): dw ratios 3.3\u20138.9, versus ~0.001 when the row kernel runs. Root cause in source: in `_block_backward`, `dw += tl.sum(dy * (x * r).to(tl.float16), 0)` \u2014 the 16-element `tl.sum` is performed in **FP16** (Triton keeps the sum dtype), so each block's partial dw is rounded to FP16 (ulp at magnitude ~64 is 0.0625), accumulating absolute errors well above the `1e-5 + 1e-5*sum|t|` tolerance. The contract explicitly requires the sums \"evaluated in real arithmetic\". The row kernel adds terms elementwise into an FP32 accumulator and passes.\n\nI'll finalize the evidence and claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "all_finite": true,
+              "any_mutation": false,
+              "dw_violations": "(512,128):8.94; (512,64):6.54; (768,128):5.20; (4096,256):3.28; (1000,129):8.21; (2048,100):4.12; extreme (512,128):6.73",
+              "kernel_own_error_ratios_agree": true,
+              "metric": "error ratio = abs(err)/(contract bound); >1 means contract violation",
+              "row_kernel_dw_ratios": "<0.01 (n>256 or m<512 cases)",
+              "worst_dw_ratio": 8.944566960058348,
+              "worst_dx_ratio": 0.23646312197982228
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "Across 16 legal shapes in the declared domain (1<=M<=4096, 16<=N<=512, non-power-of-two N included, |x|,|dy|<=4, |weight|<=2, row RMS within [0.25,4]), dx always satisfies the bound (max ratio 0.236). dw violates the bound (ratio>1, up to 8.94) precisely on inputs that take the _block_backward path (block<=256 and m>=512): e.g. M=512,N=128 ratio 8.94; M=1000,N=129 ratio 8.21; M=2048,N=100 ratio 4.12; M=4096,N=256 ratio 3.28. All _row_backward-path cases (n>256 or m<512) have dw ratio < 0.01. Kernel's own error_ratios() agrees with the independent contract computation. No input mutation; all outputs finite.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 50.117,
+        "input_tokens": 22578,
+        "output_tokens": 2656
+      }
+    },
+    {
+      "duration_s": 11.599237748000007,
+      "role": "solo",
+      "round": 6,
+      "text": "The decisive claim c1 is confirmed with a large-margin, reproducible dw violation on the block-kernel path. Claim c2 (H16 rounding of intermediates) is contradicted by the same probe: dx stays within tolerance everywhere (max ratio 0.236), and the dw violations are attributable to the FP16 `tl.sum` accumulation in `_block_backward`, not to the m/h/t casting policy. I'll resolve c2 and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "kind": "runtime_probe",
+            "summary": "The t9 probe shows the H16 intermediate-rounding hypothesis does not explain any contract violation: dx is within bound on all 16 legal shapes (max ratio 0.236), and the dw violations occur only on the _block_backward path where the failure is FP16 accumulation of the 16-row tl.sum (row-kernel cases with the same casting policy have dw ratio < 0.01). So the casting policy for m, h, t is not the cause of the errors.",
+            "supports": "rebutted",
+            "tool_event_id": "t9"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.599,
+        "input_tokens": 33960,
+        "output_tokens": 506
+      }
+    },
+    {
+      "duration_s": 4.048851138000003,
+      "role": "solo",
+      "round": 7,
+      "text": "I'll resolve claim c2 as rebutted, then record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "status": "rebutted"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.049,
+        "input_tokens": 34801,
+        "output_tokens": 38
+      }
+    },
+    {
+      "duration_s": 9.180246469999986,
+      "role": "solo",
+      "round": 8,
+      "text": "Both claims are resolved: c1 (confirmed, in_scope) shows a large, reproducible dw contract violation on the `_block_backward` path, and c2 is rebutted. I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t9 (16 legal shapes across the declared domain 1<=M<=4096, 16<=N<=512, non-power-of-two N, |x|,|dy|<=4, |weight|<=2, row RMS in [0.25,4]) showed dx always within bound (worst ratio 0.236) but dw violating the contract bound abs(dw-dw_target) <= 1e-5 + 1e-5*sum|t| on every input taking the _block_backward path (n<=256, m>=512): ratios 8.94 (512,128), 6.54 (512,64), 5.20 (768,128), 8.21 (1000,129), 4.12 (2048,100), 3.28 (4096,256). The row-kernel path passes (dw ratio <0.01), and the kernel's own error_ratios() agrees with the independent contract computation, so this is a genuine contract violation, not a metric artifact. Root cause: _block_backward accumulates dw via tl.sum over the 16-row block in FP16 rather than the real-arithmetic sums the contract requires, before adding to the FP32 partial. All outputs finite; no input mutation. Claim c2 (H16 intermediate rounding) was rebutted by the same probe. Since the contract explicitly states the bounds apply to all legal input values and shapes, this is a definitive reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.18,
+        "input_tokens": 35090,
+        "output_tokens": 410
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_109"
+      },
+      "created_at": "2026-10-03T04:57:08Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "LICENSE",
+          "__pycache__/kernel.cpython-313.pyc",
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_109",
+        "has_error": null,
+        "kernel_code": "\"\"\"Standalone RMSNorm backward kernels adapted from Liger Kernel.\n\nCopyright 2024 LinkedIn Corporation. See LICENSE for license and attribution.\n2026 adaptation: standalone CUDA interface, FP16 activations and FP32 weight\naccumulation buffer. The public contract defines the supported casting policy.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _row_backward(DY, DX, X, W, RSTD, PARTIAL, M: tl.constexpr,\n                  N: tl.constexpr, ROWS: tl.constexpr, B: tl.constexpr):\n    pid = tl.program_id(0).to(tl.int64)\n    cols = tl.arange(0, B)\n    mask = cols < N\n    weight = tl.load(W + cols, mask=mask, other=0.0)\n    dw = tl.zeros((B,), tl.float32)\n    start = pid * ROWS\n    stop = tl.minimum(start + ROWS, M)\n    for row in range(start, stop):\n        dy = tl.load(DY + row * N + cols, mask=mask, other=0.0)\n        x = tl.load(X + row * N + cols, mask=mask, other=0.0).to(tl.float32)\n        r = tl.load(RSTD + row)\n        m = (dy * weight).to(tl.float32)\n        dx = r * m\n        dx += r * (-(1.0 / N) * r * r * tl.sum(m * x, 0) * x)\n        dw += dy * (x * r).to(tl.float16)\n        tl.store(DX + row * N + cols, dx, mask=mask)\n    tl.store(PARTIAL + pid * N + cols, dw, mask=mask)\n\n\n@triton.jit\ndef _block_backward(DY, DX, X, W, RSTD, PARTIAL, M: tl.constexpr,\n                    N: tl.constexpr, B: tl.constexpr, BR: tl.constexpr):\n    pid = tl.program_id(0).to(tl.int64)\n    programs = tl.num_programs(0)\n    cols = tl.arange(0, B)\n    col_mask = cols < N\n    weight = tl.load(W + cols, mask=col_mask, other=0.0)\n    dw = tl.zeros((B,), tl.float32)\n    for start in range(pid * BR, M, programs * BR):\n        rows = start + tl.arange(0, BR)\n        mask = (rows[:, None] < M) & col_mask[None, :]\n        dy = tl.load(DY + rows[:, None] * N + cols[None, :], mask=mask, other=0.0)\n        x = tl.load(X + rows[:, None] * N + cols[None, :], mask=mask, other=0.0).to(tl.float32)\n        r = tl.load(RSTD + rows, mask=rows < M, other=0.0)\n        m = (dy * weight[None, :]).to(tl.float32)\n        dx = r[:, None] * m\n        dx += r[:, None] * (\n            -(1.0 / N) * (r * r * tl.sum(m * x, 1))[:, None] * x\n        )\n        dw += tl.sum(dy * (x * r[:, None]).to(tl.float16), 0)\n        tl.store(DX + rows[:, None] * N + cols[None, :], dx, mask=mask)\n    tl.store(PARTIAL + pid * N + cols, dw, mask=col_mask)\n\n\ndef run(x, weight, dy, rstd):\n    \"\"\"Return (dx: FP16[M,N], dw: FP32[N]); preserve all inputs.\"\"\"\n    m, n = x.shape\n    assert x.is_cuda and x.is_contiguous() and dy.is_contiguous()\n    assert weight.is_contiguous() and rstd.is_contiguous()\n    assert x.dtype == dy.dtype == weight.dtype == torch.float16\n    assert rstd.dtype == torch.float32\n    assert dy.shape == x.shape and weight.shape == (n,) and rstd.shape == (m,)\n    assert x.device == weight.device == dy.device == rstd.device\n    assert 1 <= m <= 4096 and 16 <= n <= 512\n    block = triton.next_power_of_2(n)\n    programs = min(torch.cuda.get_device_properties(x.device).multi_processor_count, m)\n    partial = torch.empty((programs, n), dtype=torch.float32, device=x.device)\n    dx = torch.empty_like(dy)\n    if block > 256 or m < 512:\n        _row_backward[(programs,)](\n            dy, dx, x, weight, rstd, partial, m, n,\n            ROWS=triton.cdiv(m, programs), B=block,\n            num_warps=4, enable_fp_fusion=False,\n        )\n    else:\n        _block_backward[(programs,)](\n            dy, dx, x, weight, rstd, partial, m, n,\n            B=block, BR=16, num_warps=4, enable_fp_fusion=False,\n        )\n    dw = partial.sum(dim=0)\n    return dx, dw\n\n\ndef reference(x, weight, dy, rstd):\n    \"\"\"Independent tensor reference for the public mixed-precision contract.\n\n    FP64 evaluates the analytic dx formula and accumulates the individually\n    rounded weight-gradient terms. This function can also run on CPU.\n    \"\"\"\n    x64 = x.to(torch.float64)\n    r64 = rstd.to(torch.float64)[:, None]\n    m64 = (dy * weight).to(torch.float64)\n    dx64 = r64 * (m64 - x64 * r64.square() * (m64 * x64).mean(dim=1, keepdim=True))\n    h = (x.float() * rstd[:, None]).to(torch.float16)\n    terms64 = (dy * h).to(torch.float64)\n    return dx64, terms64.sum(dim=0)\n\n\ndef error_ratios(outputs, inputs):\n    \"\"\"A value <= 1 for each output satisfies the numerical contract.\"\"\"\n    dx, dw = outputs\n    x, weight, dy, rstd = inputs\n    ref_dx, ref_dw = reference(*inputs)\n    h = (x.float() * rstd[:, None]).to(torch.float16)\n    abs_terms = (dy * h).to(torch.float64).abs().sum(dim=0)\n    dx_limit = 0.002 + 0.002 * ref_dx.abs()\n    dw_limit = 0.00001 + 0.00001 * abs_terms\n    return {\n        \"dx\": float(((dx.double() - ref_dx).abs() / dx_limit).max().item()),\n        \"dw\": float(((dw.double() - ref_dw).abs() / dw_limit).max().item()),\n    }\n\n\ndef make_inputs(device=\"cuda\", rows=768, cols=128, seed=0):\n    \"\"\"An ordinary example, not a restriction of the supported input domain.\"\"\"\n    g = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2 * torch.rand((rows, cols), generator=g) - 1).half()\n    weight = (0.5 + torch.rand((cols,), generator=g)).half()\n    dy = (2 * torch.rand((rows, cols), generator=g) - 1).half()\n    rstd = torch.rsqrt(x.float().square().mean(dim=1) + 1e-5)\n    return tuple(t.to(device) for t in (x, weight, dy, rstd))\n",
+        "passed": null,
+        "problem_text": "Verify a CUDA RMSNorm backward implementation with the stated mixed-precision\ncasting policy. The task concerns this implementation over the entire domain\nbelow, not only the example returned by make_inputs().\n\nInputs (all contiguous, non-overlapping, on the same CUDA device):\n- x and dy: FP16 tensors of shape [M, N]; weight: FP16 tensor of shape [N].\n- rstd: FP32 tensor of shape [M], the saved reciprocal RMS from the forward pass.\n- 1 <= M <= 4096; 16 <= N <= 512. Non-powers of two are included.\n- All values are finite; |x| <= 4, |dy| <= 4, |weight| <= 2.\n- The RMS of each row of x lies in [0.25, 4]. For epsilon = 1e-5,\n  rstd agrees with 1/sqrt(mean_j(x[i,j]^2) + epsilon) to relative error <= 1e-6.\n\nLet H16 denote rounding to IEEE FP16, and F32 rounding to IEEE FP32.\nAs in the Llama mixed-precision backward policy, define:\n  m[i,j] = H16(dy[i,j] * weight[j])\n  h[i,j] = H16(F32(F32(x[i,j]) * rstd[i]))\n  t[i,j] = H16(dy[i,j] * h[i,j])\nThe target outputs, with sums below evaluated in real arithmetic, are:\n  dx[i,j] = rstd[i] * (m[i,j] - x[i,j] * rstd[i]^2\n                        * sum_k(m[i,k] * x[i,k]) / N)\n  dw[j] = sum_i t[i,j]\nThe rounded per-element products are intentional parts of the casting policy;\nthey are not themselves implementation errors. The dw result is an FP32 main\ngradient buffer, as used for stable parameter-gradient accumulation.\n\nReturn a pair: dx of shape [M,N] and dtype FP16, dw of shape [N] and dtype FP32.\nAll outputs must be finite. For every element:\n  abs(dx_output - dx_target) <= 0.002 + 0.002 * abs(dx_target)\n  abs(dw_output - dw_target) <= 1e-5 + 1e-5 * sum_i abs(t[i,j])\nThe absolute-sum scale permits cancellation without demanding relative accuracy\non a near-zero gradient. These bounds apply to all legal input values and shapes.\n\nDo not modify any input. The public reference() and error_ratios() in kernel.py\nimplement these formulas independently of the Triton kernels. You may create any\nlegal test inputs; make_inputs() is only a convenient example. Run on the frozen\nNVIDIA T4 / PyTorch 2.8.0 / Triton 3.4.0 CUDA environment.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_109",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_109"
+      },
+      "created_at": "2026-10-03T04:57:08Z",
+      "id": "t2",
+      "output": {
+        "content": "Verify a CUDA RMSNorm backward implementation with the stated mixed-precision\ncasting policy. The task concerns this implementation over the entire domain\nbelow, not only the example returned by make_inputs().\n\nInputs (all contiguous, non-overlapping, on the same CUDA device):\n- x and dy: FP16 tensors of shape [M, N]; weight: FP16 tensor of shape [N].\n- rstd: FP32 tensor of shape [M], the saved reciprocal RMS from the forward pass.\n- 1 <= M <= 4096; 16 <= N <= 512. Non-powers of two are included.\n- All values are finite; |x| <= 4, |dy| <= 4, |weight| <= 2.\n- The RMS of each row of x lies in [0.25, 4]. For epsilon = 1e-5,\n  rstd agrees with 1/sqrt(mean_j(x[i,j]^2) + epsilon) to relative error <= 1e-6.\n\nLet H16 denote rounding to IEEE FP16, and F32 rounding to IEEE FP32.\nAs in the Llama mixed-precision backward policy, define:\n  m[i,j] = H16(dy[i,j] * weight[j])\n  h[i,j] = H16(F32(F32(x[i,j]) * rstd[i]))\n  t[i,j] = H16(dy[i,j] * h[i,j])\nThe target outputs, with sums below evaluated in real arithmetic, are:\n  dx[i,j] = rstd[i] * (m[i,j] - x[i,j] * rstd[i]^2\n                        * sum_k(m[i,k] * x[i,k]) / N)\n  dw[j] = sum_i t[i,j]\nThe rounded per-element products are intentional parts of the casting policy;\nthey are not themselves implementation errors. The dw result is an FP32 main\ngradient buffer, as used for stable parameter-gradient accumulation.\n\nReturn a pair: dx of shape [M,N] and dtype FP16, dw of shape [N] and dtype FP32.\nAll outputs must be finite. For every element:\n  abs(dx_output - dx_target) <= 0.002 + 0.002 * abs(dx_target)\n  abs(dw_output - dw_target) <= 1e-5 + 1e-5 * sum_i abs(t[i,j])\nThe absolute-sum scale permits cancellation without demanding relative accuracy\non a near-zero gradient. These bounds apply to all legal input values and shapes.\n\nDo not modify any input. The public reference() and error_ratios() in kernel.py\nimplement these formulas independently of the Triton kernels. You may create any\nlegal test inputs; make_inputs() is only a convenient example. Run on the frozen\nNVIDIA T4 / PyTorch 2.8.0 / Triton 3.4.0 CUDA environment.\n",
+        "entry": "case_109",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_109"
+      },
+      "created_at": "2026-10-03T04:57:08Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_109",
+        "files": [
+          {
+            "kind": "other",
+            "path": "LICENSE",
+            "size_bytes": 13242
+          },
+          {
+            "kind": "other",
+            "path": "__pycache__/kernel.cpython-313.pyc",
+            "size_bytes": 10923
+          },
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 5270
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2092
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_109",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-03T04:57:08Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_109",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The two Triton kernels and the Python wrapper (branch choice, row partitioning via ROWS=cdiv(m,programs) and strided start loop, dw partial-buffer reduction) must match the contract's dx/dw formulas and error bounds for all legal shapes, including non-powers-of-two N and small/large M that exercise both kernels.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Bounds 'apply to all legal input values and shapes'; 1<=M<=4096, 16<=N<=512, non-powers of two included."
+          }
+        ],
+        "statement": "The kernel's dx and dw outputs violate the contract error bounds for some legal input in the declared domain (1<=M<=4096, 16<=N<=512, finite values with |x|,|dy|<=4, |weight|<=2, row RMS in [0.25,4])."
+      },
+      "created_at": "2026-10-03T04:57:34Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t5",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Triton may promote fp16*fp16 arithmetic or fuse operations; the contract explicitly defines H16-rounding of m, h, and t, so any different intermediate precision could shift errors, especially dx stored as fp16 against the 0.002+0.002*|dx| bound.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Casting policy: m=H16(dy*weight), h=H16(F32(F32(x)*rstd)), t=H16(dy*h); rounded per-element products are intentional."
+          }
+        ],
+        "statement": "The mixed-precision intermediate roundings (m=H16(dy*w), h=H16(F32(x*rstd)), t=H16(dy*h)) are not honored by the kernels, causing errors beyond the stated tolerances (dx: 0.002+0.002|dx|, dw: 1e-5+1e-5*sum|t|)."
+      },
+      "created_at": "2026-10-03T04:57:34Z",
+      "id": "t6",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t6",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The two Triton kernels and the wrapper (branch choice, ROWS=cdiv partitioning, strided start loop, partial dw reduction) must match the contract formulas and bounds for all legal shapes, including non-power-of-two N and small/large M exercising both kernels.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Bounds 'apply to all legal input values and shapes'; 1<=M<=4096, 16<=N<=512, non-powers of two included."
+          }
+        ],
+        "scope_rationale": "The contract requires the dx/dw error bounds for every legal shape/value in the declared domain; a violation on any admitted input is a contract breach.",
+        "statement": "The kernel's dx or dw outputs violate the contract error bounds (dx: 0.002+0.002|dx|, dw: 1e-5+1e-5*sum|t|) for some legal input in the declared domain."
+      },
+      "created_at": "2026-10-03T04:57:42Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-10-03T04:57:42Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The two Triton kernels and the wrapper (branch choice, ROWS=cdiv partitioning, strided start loop, partial dw reduction) must match the contract formulas and bounds for all legal shapes, including non-power-of-two N and small/large M exercising both kernels.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Bounds 'apply to all legal input values and shapes'; 1<=M<=4096, 16<=N<=512, non-powers of two included."
+          }
+        ],
+        "scope_rationale": "The contract requires the dx/dw error bounds for every legal shape/value in the declared domain; a violation on any admitted input is a contract breach.",
+        "statement": "The kernel's dx or dw outputs violate the contract error bounds (dx: 0.002+0.002|dx|, dw: 1e-5+1e-5*sum|t|) for some legal input in the declared domain.",
+        "status": "open",
+        "updated_at": "2026-10-03T04:57:42Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Triton may keep dy*weight in fp16 or fp32 without explicit H16 rounding; the contract defines H16-rounded m, h, t as part of the target, so a mismatch could push errors beyond tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Casting policy: m=H16(dy*weight), h=H16(F32(F32(x)*rstd)), t=H16(dy*h); rounded per-element products are intentional parts of the policy, not implementation errors."
+          }
+        ],
+        "scope_rationale": "The contract's target formulas are defined in terms of H16-rounded intermediates m, h, t; the kernel must reproduce those within the stated elementwise bounds.",
+        "statement": "The kernels do not honor the H16 rounding of intermediates m, h, t, causing dx/dw errors beyond the stated tolerances."
+      },
+      "created_at": "2026-10-03T04:57:42Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-10-03T04:57:42Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Triton may keep dy*weight in fp16 or fp32 without explicit H16 rounding; the contract defines H16-rounded m, h, t as part of the target, so a mismatch could push errors beyond tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Casting policy: m=H16(dy*weight), h=H16(F32(F32(x)*rstd)), t=H16(dy*h); rounded per-element products are intentional parts of the policy, not implementation errors."
+          }
+        ],
+        "scope_rationale": "The contract's target formulas are defined in terms of H16-rounded intermediates m, h, t; the kernel must reproduce those within the stated elementwise bounds.",
+        "statement": "The kernels do not honor the H16 rounding of intermediates m, h, t, causing dx/dw errors beyond the stated tolerances.",
+        "status": "open",
+        "updated_at": "2026-10-03T04:57:42Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, sys, os\nsys.path.insert(0, \"/root/cases/case_109\")\nimport kernel as K\n\ndev = \"cuda\"\ndef contract(x, weight, dy, rstd):\n    # independent FP64 implementation of problem.txt formulas\n    x64 = x.double(); w64 = weight.double(); d64 = dy.double(); r64 = rstd.double()[:, None]\n    m = (dy.float() * weight.float()).half().double()          # H16(dy*w)\n    h = (x.float() * rstd[:, None]).half().double()            # H16(F32(F32(x)*rstd))\n    t = (dy.float() * h.half().float()).half().double()        # H16(dy*h)\n    dx = r64 * (m - x64 * r64.square() * (m * x64).sum(1, keepdim=True) / x.shape[1])\n    dw = t.sum(0)\n    return dx, dw, t\n\ndef check(m, n, seed, extreme=False):\n    g = torch.Generator(device=\"cpu\").manual_seed(seed)\n    if extreme:\n        # push values to domain extremes, rows with RMS near 0.25 and 4\n        x = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\n        # scale rows so RMS hits ~0.25 or ~4\n        for i in range(m):\n            rms = x[i].float().square().mean().sqrt()\n            target = 4.0 if i % 2 else 0.25\n            x[i] = (x[i].float() * (target / (rms + 1e-9))).clamp(-4, 4).half()\n        # rescale slightly below 4 to keep |x|<=4 after rounding\n        x = (x.float() * 0.99).half()\n        weight = (2.0 * torch.ones(n)).half()\n        dy = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\n    else:\n        x = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\n        weight = (torch.empty(n).uniform_(0.05, 2.0, generator=g)).half()\n        dy = (torch.empty(m, n).uniform_(-4, 4, generator=g)).half()\n    # verify row RMS in [0.25,4]; rescale otherwise\n    rms = x.float().square().mean(1).sqrt()\n    lo, hi = rms.min().item(), rms.max().item()\n    if lo < 0.24 or hi > 4.01:\n        # scale rows into band\n        sc = torch.where(rms < 0.25, 0.25/(rms+1e-9), torch.where(rms > 4.0, 4.0/(rms+1e-9), torch.ones_like(rms)))\n        x = (x.float() * sc[:, None]).clamp(-4, 4).half()\n        rms = x.float().square().mean(1).sqrt()\n        lo, hi = rms.min().item(), rms.max().item()\n    eps = 1e-5\n    rstd = (1.0 / torch.sqrt(x.float().square().mean(1) + eps)).float()\n    x0, w0, d0, r0 = (t.clone() for t in (x, weight, dy, rstd))\n    x, weight, dy, rstd = (t.to(dev) for t in (x, weight, dy, rstd))\n    dx, dw = K.run(x, weight, dy, rstd)\n    inputs = (x, weight, dy, rstd)\n    rdx, rdw, t = contract(x, weight, dy, rstd)\n    # error bounds\n    dx_lim = 0.002 + 0.002 * rdx.abs()\n    dw_lim = 1e-5 + 1e-5 * t.abs().sum(0)\n    dxr = ((dx.double() - rdx).abs() / dx_lim)\n    dwr = ((dw.double() - rdw).abs() / dw_lim)\n    # also use kernel's own error_ratios\n    ratios = K.error_ratios((dx, dw), inputs)\n    mutated = any(not torch.equal(a.cpu(), b) for a, b in zip((x, weight, dy, rstd), (x0, w0, d0, r0)))\n    finite = torch.isfinite(dx.float()).all().item() and torch.isfinite(dw).all().item()\n    return dict(m=m, n=n, rms_band=(round(lo,4), round(hi,4)),\n                dx_ratio=float(dxr.max().item()), dw_ratio=float(dwr.max().item()),\n                kernel_error_ratios=ratios, finite=bool(finite), mutated=mutated)\n\nresults = []\n# shapes: exercise block kernel (block<=256, m>=512) and row kernel (block>256 i.e. n>256, or m<512)\nfor (m, n, ex) in [(512,128,False),(512,64,False),(768,128,False),(4096,512,False),(4096,256,False),\n                   (512,128,True),(4096,512,True),\n                   (511,100,False),(513,300,False),(4095,511,False),(1,16,False),(17,31,False),\n                   (127,257,False),(1000,129,False),(2048,100,False),(300,400,False),(2,512,False)]:\n    results.append(check(m, n, seed=m*7+n, extreme=ex))\n\nprint(json.dumps(results, indent=1))\nworst_dx = max(r[\"dx_ratio\"] for r in results)\nworst_dw = max(r[\"dw_ratio\"] for r in results)\nprint(json.dumps({\"worst_dx_ratio\": worst_dx, \"worst_dw_ratio\": worst_dw,\n                  \"all_finite\": all(r[\"finite\"] for r in results),\n                  \"any_mutation\": any(r[\"mutated\"] for r in results)}))\n",
+        "timeout_s": 300
+      },
+      "created_at": "2026-10-03T04:58:19Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "e4856e18f87a9dbd53c3c909c3e6dd5b426de724b33fed08d5038077164db275"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "66b90849a5a34e85e6a98e33153d47d0401c68fe9ae8d163d4acebe0c7e18d37"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "572958968687c8780f118a0ab24bee320abe298d60bcc6de614081e5539161df"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's dx or dw outputs violate the contract error bounds (dx: 0.002+0.002|dx|, dw: 1e-5+1e-5*sum|t|) for some legal input in the declared domain.",
+        "cwd": "/root/cases/case_109",
+        "duration_s": 10.719702,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "e4856e18f87a9dbd53c3c909c3e6dd5b426de724b33fed08d5038077164db275"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "66b90849a5a34e85e6a98e33153d47d0401c68fe9ae8d163d4acebe0c7e18d37"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "572958968687c8780f118a0ab24bee320abe298d60bcc6de614081e5539161df"
+              }
+            ],
+            "duration_s": 10.719702,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "all_finite": true,
+              "any_mutation": false,
+              "worst_dw_ratio": 8.944566960058348,
+              "worst_dx_ratio": 0.23646312197982228
+            },
+            "stderr": "",
+            "stdout": "[\n {\n  \"m\": 512,\n  \"n\": 128,\n  \"rms_band\": [\n   2.0202,\n   2.6293\n  ],\n  \"dx_ratio\": 0.1601462734524127,\n  \"dw_ratio\": 8.944566960058348,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1601462734524127,\n   \"dw\": 8.944566960058348\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 512,\n  \"n\": 64,\n  \"rms_band\": [\n   1.9609,\n   2.6583\n  ],\n  \"dx_ratio\": 0.16147115894974592,\n  \"dw_ratio\": 6.536592118712277,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16147115894974592,\n   \"dw\": 6.536592118712277\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 768,\n  \"n\": 128,\n  \"rms_band\": [\n   2.0126,\n   2.6111\n  ],\n  \"dx_ratio\": 0.16124799011217436,\n  \"dw_ratio\": 5.198156853254795,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16124799011217436,\n   \"dw\": 5.198156853254795\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 512,\n  \"rms_band\": [\n   2.1375,\n   2.4735\n  ],\n  \"dx_ratio\": 0.16264743188642378,\n  \"dw_ratio\": 0.0005838789920648959,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16264743188642378,\n   \"dw\": 0.0005838789920648959\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 256,\n  \"rms_band\": [\n   2.069,\n   2.5405\n  ],\n  \"dx_ratio\": 0.1625221768500764,\n  \"dw_ratio\": 3.2837103581920473,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1625221768500764,\n   \"dw\": 3.2837103581920473\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 512,\n  \"n\": 128,\n  \"rms_band\": [\n   0.2475,\n   3.2509\n  ],\n  \"dx_ratio\": 0.23545445774791787,\n  \"dw_ratio\": 6.7271252498056455,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.23545445774791787,\n   \"dw\": 6.7271252498056455\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 512,\n  \"rms_band\": [\n   0.2475,\n   3.2208\n  ],\n  \"dx_ratio\": 0.23646312197982228,\n  \"dw_ratio\": 0.0005818394984539614,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.23646312197982228,\n   \"dw\": 0.0005818394984539614\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 511,\n  \"n\": 100,\n  \"rms_band\": [\n   2.0518,\n   2.691\n  ],\n  \"dx_ratio\": 0.16000088699144127,\n  \"dw_ratio\": 0.0005413462731510172,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16000088699144127,\n   \"dw\": 0.0005413462731510172\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 513,\n  \"n\": 300,\n  \"rms_band\": [\n   2.1315,\n   2.4759\n  ],\n  \"dx_ratio\": 0.16173278173064104,\n  \"dw_ratio\": 0.0009076250248335051,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16173278173064104,\n   \"dw\": 0.0009076250248335051\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4095,\n  \"n\": 511,\n  \"rms_band\": [\n   2.132,\n   2.47\n  ],\n  \"dx_ratio\": 0.1625860967383,\n  \"dw_ratio\": 0.000604249272007537,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1625860967383,\n   \"dw\": 0.000604249272007537\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 1,\n  \"n\": 16,\n  \"rms_band\": [\n   2.144,\n   2.144\n  ],\n  \"dx_ratio\": 0.10177206476797097,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.10177206476797097,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 17,\n  \"n\": 31,\n  \"rms_band\": [\n   1.9596,\n   2.61\n  ],\n  \"dx_ratio\": 0.15821282703025327,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.15821282703025327,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 127,\n  \"n\": 257,\n  \"rms_band\": [\n   2.1295,\n   2.4913\n  ],\n  \"dx_ratio\": 0.16106923622379724,\n  \"dw_ratio\": 0.0009054053578104479,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16106923622379724,\n   \"dw\": 0.0009054053578104479\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 1000,\n  \"n\": 129,\n  \"rms_band\": [\n   2.0173,\n   2.61\n  ],\n  \"dx_ratio\": 0.16271820813820806,\n  \"dw_ratio\": 8.20543196174477,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16271820813820806,\n   \"dw\": 8.20543196174477\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 2048,\n  \"n\": 100,\n  \"rms_band\": [\n   1.9568,\n   2.6569\n  ],\n  \"dx_ratio\": 0.16209313684801302,\n  \"dw_ratio\": 4.1238979102638975,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16209313684801302,\n   \"dw\": 4.1238979102638975\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 300,\n  \"n\": 400,\n  \"rms_band\": [\n   2.1089,\n   2.4339\n  ],\n  \"dx_ratio\": 0.1617867782851786,\n  \"dw_ratio\": 0.001692023940934043,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1617867782851786,\n   \"dw\": 0.001692023940934043\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 2,\n  \"n\": 512,\n  \"rms_band\": [\n   2.3498,\n   2.378\n  ],\n  \"dx_ratio\": 0.14484880122769792,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.14484880122769792,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n }\n]\n{\"worst_dx_ratio\": 0.23646312197982228, \"worst_dw_ratio\": 8.944566960058348, \"all_finite\": true, \"any_mutation\": false}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "all_finite": true,
+          "any_mutation": false,
+          "worst_dw_ratio": 8.944566960058348,
+          "worst_dx_ratio": 0.23646312197982228
+        },
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "[\n {\n  \"m\": 512,\n  \"n\": 128,\n  \"rms_band\": [\n   2.0202,\n   2.6293\n  ],\n  \"dx_ratio\": 0.1601462734524127,\n  \"dw_ratio\": 8.944566960058348,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1601462734524127,\n   \"dw\": 8.944566960058348\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 512,\n  \"n\": 64,\n  \"rms_band\": [\n   1.9609,\n   2.6583\n  ],\n  \"dx_ratio\": 0.16147115894974592,\n  \"dw_ratio\": 6.536592118712277,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16147115894974592,\n   \"dw\": 6.536592118712277\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 768,\n  \"n\": 128,\n  \"rms_band\": [\n   2.0126,\n   2.6111\n  ],\n  \"dx_ratio\": 0.16124799011217436,\n  \"dw_ratio\": 5.198156853254795,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16124799011217436,\n   \"dw\": 5.198156853254795\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 512,\n  \"rms_band\": [\n   2.1375,\n   2.4735\n  ],\n  \"dx_ratio\": 0.16264743188642378,\n  \"dw_ratio\": 0.0005838789920648959,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16264743188642378,\n   \"dw\": 0.0005838789920648959\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 256,\n  \"rms_band\": [\n   2.069,\n   2.5405\n  ],\n  \"dx_ratio\": 0.1625221768500764,\n  \"dw_ratio\": 3.2837103581920473,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1625221768500764,\n   \"dw\": 3.2837103581920473\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 512,\n  \"n\": 128,\n  \"rms_band\": [\n   0.2475,\n   3.2509\n  ],\n  \"dx_ratio\": 0.23545445774791787,\n  \"dw_ratio\": 6.7271252498056455,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.23545445774791787,\n   \"dw\": 6.7271252498056455\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 512,\n  \"rms_band\": [\n   0.2475,\n   3.2208\n  ],\n  \"dx_ratio\": 0.23646312197982228,\n  \"dw_ratio\": 0.0005818394984539614,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.23646312197982228,\n   \"dw\": 0.0005818394984539614\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 511,\n  \"n\": 100,\n  \"rms_band\": [\n   2.0518,\n   2.691\n  ],\n  \"dx_ratio\": 0.16000088699144127,\n  \"dw_ratio\": 0.0005413462731510172,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16000088699144127,\n   \"dw\": 0.0005413462731510172\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 513,\n  \"n\": 300,\n  \"rms_band\": [\n   2.1315,\n   2.4759\n  ],\n  \"dx_ratio\": 0.16173278173064104,\n  \"dw_ratio\": 0.0009076250248335051,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16173278173064104,\n   \"dw\": 0.0009076250248335051\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4095,\n  \"n\": 511,\n  \"rms_band\": [\n   2.132,\n   2.47\n  ],\n  \"dx_ratio\": 0.1625860967383,\n  \"dw_ratio\": 0.000604249272007537,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1625860967383,\n   \"dw\": 0.000604249272007537\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 1,\n  \"n\": 16,\n  \"rms_band\": [\n   2.144,\n   2.144\n  ],\n  \"dx_ratio\": 0.10177206476797097,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.10177206476797097,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 17,\n  \"n\": 31,\n  \"rms_band\": [\n   1.9596,\n   2.61\n  ],\n  \"dx_ratio\": 0.15821282703025327,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.15821282703025327,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 127,\n  \"n\": 257,\n  \"rms_band\": [\n   2.1295,\n   2.4913\n  ],\n  \"dx_ratio\": 0.16106923622379724,\n  \"dw_ratio\": 0.0009054053578104479,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16106923622379724,\n   \"dw\": 0.0009054053578104479\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 1000,\n  \"n\": 129,\n  \"rms_band\": [\n   2.0173,\n   2.61\n  ],\n  \"dx_ratio\": 0.16271820813820806,\n  \"dw_ratio\": 8.20543196174477,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16271820813820806,\n   \"dw\": 8.20543196174477\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 2048,\n  \"n\": 100,\n  \"rms_band\": [\n   1.9568,\n   2.6569\n  ],\n  \"dx_ratio\": 0.16209313684801302,\n  \"dw_ratio\": 4.1238979102638975,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16209313684801302,\n   \"dw\": 4.1238979102638975\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 300,\n  \"n\": 400,\n  \"rms_band\": [\n   2.1089,\n   2.4339\n  ],\n  \"dx_ratio\": 0.1617867782851786,\n  \"dw_ratio\": 0.001692023940934043,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1617867782851786,\n   \"dw\": 0.001692023940934043\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 2,\n  \"n\": 512,\n  \"rms_band\": [\n   2.3498,\n   2.378\n  ],\n  \"dx_ratio\": 0.14484880122769792,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.14484880122769792,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n }\n]\n{\"worst_dx_ratio\": 0.23646312197982228, \"worst_dw_ratio\": 8.944566960058348, \"all_finite\": true, \"any_mutation\": false}\n",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "all_finite": true,
+          "any_mutation": false,
+          "dw_violations": "(512,128):8.94; (512,64):6.54; (768,128):5.20; (4096,256):3.28; (1000,129):8.21; (2048,100):4.12; extreme (512,128):6.73",
+          "kernel_own_error_ratios_agree": true,
+          "metric": "error ratio = abs(err)/(contract bound); >1 means contract violation",
+          "row_kernel_dw_ratios": "<0.01 (n>256 or m<512 cases)",
+          "worst_dw_ratio": 8.944566960058348,
+          "worst_dx_ratio": 0.23646312197982228
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "Across 16 legal shapes in the declared domain (1<=M<=4096, 16<=N<=512, non-power-of-two N included, |x|,|dy|<=4, |weight|<=2, row RMS within [0.25,4]), dx always satisfies the bound (max ratio 0.236). dw violates the bound (ratio>1, up to 8.94) precisely on inputs that take the _block_backward path (block<=256 and m>=512): e.g. M=512,N=128 ratio 8.94; M=1000,N=129 ratio 8.21; M=2048,N=100 ratio 4.12; M=4096,N=256 ratio 3.28. All _row_backward-path cases (n>256 or m<512) have dw ratio < 0.01. Kernel's own error_ratios() agrees with the independent contract computation. No input mutation; all outputs finite.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-03T04:59:10Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-03T04:57:42Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-03T04:59:10Z",
+              "data": {
+                "all_finite": true,
+                "any_mutation": false,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "e4856e18f87a9dbd53c3c909c3e6dd5b426de724b33fed08d5038077164db275"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "66b90849a5a34e85e6a98e33153d47d0401c68fe9ae8d163d4acebe0c7e18d37"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "572958968687c8780f118a0ab24bee320abe298d60bcc6de614081e5539161df"
+                  }
+                ],
+                "duration_s": 10.719702,
+                "dw_violations": "(512,128):8.94; (512,64):6.54; (768,128):5.20; (4096,256):3.28; (1000,129):8.21; (2048,100):4.12; extreme (512,128):6.73",
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "all_finite": true,
+                  "any_mutation": false,
+                  "worst_dw_ratio": 8.944566960058348,
+                  "worst_dx_ratio": 0.23646312197982228
+                },
+                "kernel_own_error_ratios_agree": true,
+                "metric": "error ratio = abs(err)/(contract bound); >1 means contract violation",
+                "row_kernel_dw_ratios": "<0.01 (n>256 or m<512 cases)",
+                "stderr": "",
+                "stdout": "[\n {\n  \"m\": 512,\n  \"n\": 128,\n  \"rms_band\": [\n   2.0202,\n   2.6293\n  ],\n  \"dx_ratio\": 0.1601462734524127,\n  \"dw_ratio\": 8.944566960058348,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1601462734524127,\n   \"dw\": 8.944566960058348\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 512,\n  \"n\": 64,\n  \"rms_band\": [\n   1.9609,\n   2.6583\n  ],\n  \"dx_ratio\": 0.16147115894974592,\n  \"dw_ratio\": 6.536592118712277,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16147115894974592,\n   \"dw\": 6.536592118712277\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 768,\n  \"n\": 128,\n  \"rms_band\": [\n   2.0126,\n   2.6111\n  ],\n  \"dx_ratio\": 0.16124799011217436,\n  \"dw_ratio\": 5.198156853254795,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16124799011217436,\n   \"dw\": 5.198156853254795\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 512,\n  \"rms_band\": [\n   2.1375,\n   2.4735\n  ],\n  \"dx_ratio\": 0.16264743188642378,\n  \"dw_ratio\": 0.0005838789920648959,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16264743188642378,\n   \"dw\": 0.0005838789920648959\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 256,\n  \"rms_band\": [\n   2.069,\n   2.5405\n  ],\n  \"dx_ratio\": 0.1625221768500764,\n  \"dw_ratio\": 3.2837103581920473,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1625221768500764,\n   \"dw\": 3.2837103581920473\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 512,\n  \"n\": 128,\n  \"rms_band\": [\n   0.2475,\n   3.2509\n  ],\n  \"dx_ratio\": 0.23545445774791787,\n  \"dw_ratio\": 6.7271252498056455,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.23545445774791787,\n   \"dw\": 6.7271252498056455\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 512,\n  \"rms_band\": [\n   0.2475,\n   3.2208\n  ],\n  \"dx_ratio\": 0.23646312197982228,\n  \"dw_ratio\": 0.0005818394984539614,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.23646312197982228,\n   \"dw\": 0.0005818394984539614\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 511,\n  \"n\": 100,\n  \"rms_band\": [\n   2.0518,\n   2.691\n  ],\n  \"dx_ratio\": 0.16000088699144127,\n  \"dw_ratio\": 0.0005413462731510172,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16000088699144127,\n   \"dw\": 0.0005413462731510172\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 513,\n  \"n\": 300,\n  \"rms_band\": [\n   2.1315,\n   2.4759\n  ],\n  \"dx_ratio\": 0.16173278173064104,\n  \"dw_ratio\": 0.0009076250248335051,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16173278173064104,\n   \"dw\": 0.0009076250248335051\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4095,\n  \"n\": 511,\n  \"rms_band\": [\n   2.132,\n   2.47\n  ],\n  \"dx_ratio\": 0.1625860967383,\n  \"dw_ratio\": 0.000604249272007537,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1625860967383,\n   \"dw\": 0.000604249272007537\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 1,\n  \"n\": 16,\n  \"rms_band\": [\n   2.144,\n   2.144\n  ],\n  \"dx_ratio\": 0.10177206476797097,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.10177206476797097,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 17,\n  \"n\": 31,\n  \"rms_band\": [\n   1.9596,\n   2.61\n  ],\n  \"dx_ratio\": 0.15821282703025327,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.15821282703025327,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 127,\n  \"n\": 257,\n  \"rms_band\": [\n   2.1295,\n   2.4913\n  ],\n  \"dx_ratio\": 0.16106923622379724,\n  \"dw_ratio\": 0.0009054053578104479,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16106923622379724,\n   \"dw\": 0.0009054053578104479\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 1000,\n  \"n\": 129,\n  \"rms_band\": [\n   2.0173,\n   2.61\n  ],\n  \"dx_ratio\": 0.16271820813820806,\n  \"dw_ratio\": 8.20543196174477,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16271820813820806,\n   \"dw\": 8.20543196174477\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 2048,\n  \"n\": 100,\n  \"rms_band\": [\n   1.9568,\n   2.6569\n  ],\n  \"dx_ratio\": 0.16209313684801302,\n  \"dw_ratio\": 4.1238979102638975,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16209313684801302,\n   \"dw\": 4.1238979102638975\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 300,\n  \"n\": 400,\n  \"rms_band\": [\n   2.1089,\n   2.4339\n  ],\n  \"dx_ratio\": 0.1617867782851786,\n  \"dw_ratio\": 0.001692023940934043,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1617867782851786,\n   \"dw\": 0.001692023940934043\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 2,\n  \"n\": 512,\n  \"rms_band\": [\n   2.3498,\n   2.378\n  ],\n  \"dx_ratio\": 0.14484880122769792,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.14484880122769792,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n }\n]\n{\"worst_dx_ratio\": 0.23646312197982228, \"worst_dw_ratio\": 8.944566960058348, \"all_finite\": true, \"any_mutation\": false}\n",
+                "timed_out": false,
+                "timeout_s": 300,
+                "worst_dw_ratio": 8.944566960058348,
+                "worst_dx_ratio": 0.23646312197982228
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Across 16 legal shapes in the declared domain (1<=M<=4096, 16<=N<=512, non-power-of-two N included, |x|,|dy|<=4, |weight|<=2, row RMS within [0.25,4]), dx always satisfies the bound (max ratio 0.236). dw violates the bound (ratio>1, up to 8.94) precisely on inputs that take the _block_backward path (block<=256 and m>=512): e.g. M=512,N=128 ratio 8.94; M=1000,N=129 ratio 8.21; M=2048,N=100 ratio 4.12; M=4096,N=256 ratio 3.28. All _row_backward-path cases (n>256 or m<512) have dw ratio < 0.01. Kernel's own error_ratios() agrees with the independent contract computation. No input mutation; all outputs finite.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The two Triton kernels and the wrapper (branch choice, ROWS=cdiv partitioning, strided start loop, partial dw reduction) must match the contract formulas and bounds for all legal shapes, including non-power-of-two N and small/large M exercising both kernels.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Bounds 'apply to all legal input values and shapes'; 1<=M<=4096, 16<=N<=512, non-powers of two included."
+            }
+          ],
+          "scope_rationale": "The contract requires the dx/dw error bounds for every legal shape/value in the declared domain; a violation on any admitted input is a contract breach.",
+          "statement": "The kernel's dx or dw outputs violate the contract error bounds (dx: 0.002+0.002|dx|, dw: 1e-5+1e-5*sum|t|) for some legal input in the declared domain.",
+          "status": "confirmed",
+          "updated_at": "2026-10-03T04:59:10Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-03T04:59:10Z",
+          "data": {
+            "all_finite": true,
+            "any_mutation": false,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "e4856e18f87a9dbd53c3c909c3e6dd5b426de724b33fed08d5038077164db275"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "66b90849a5a34e85e6a98e33153d47d0401c68fe9ae8d163d4acebe0c7e18d37"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "572958968687c8780f118a0ab24bee320abe298d60bcc6de614081e5539161df"
+              }
+            ],
+            "duration_s": 10.719702,
+            "dw_violations": "(512,128):8.94; (512,64):6.54; (768,128):5.20; (4096,256):3.28; (1000,129):8.21; (2048,100):4.12; extreme (512,128):6.73",
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "all_finite": true,
+              "any_mutation": false,
+              "worst_dw_ratio": 8.944566960058348,
+              "worst_dx_ratio": 0.23646312197982228
+            },
+            "kernel_own_error_ratios_agree": true,
+            "metric": "error ratio = abs(err)/(contract bound); >1 means contract violation",
+            "row_kernel_dw_ratios": "<0.01 (n>256 or m<512 cases)",
+            "stderr": "",
+            "stdout": "[\n {\n  \"m\": 512,\n  \"n\": 128,\n  \"rms_band\": [\n   2.0202,\n   2.6293\n  ],\n  \"dx_ratio\": 0.1601462734524127,\n  \"dw_ratio\": 8.944566960058348,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1601462734524127,\n   \"dw\": 8.944566960058348\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 512,\n  \"n\": 64,\n  \"rms_band\": [\n   1.9609,\n   2.6583\n  ],\n  \"dx_ratio\": 0.16147115894974592,\n  \"dw_ratio\": 6.536592118712277,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16147115894974592,\n   \"dw\": 6.536592118712277\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 768,\n  \"n\": 128,\n  \"rms_band\": [\n   2.0126,\n   2.6111\n  ],\n  \"dx_ratio\": 0.16124799011217436,\n  \"dw_ratio\": 5.198156853254795,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16124799011217436,\n   \"dw\": 5.198156853254795\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 512,\n  \"rms_band\": [\n   2.1375,\n   2.4735\n  ],\n  \"dx_ratio\": 0.16264743188642378,\n  \"dw_ratio\": 0.0005838789920648959,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16264743188642378,\n   \"dw\": 0.0005838789920648959\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 256,\n  \"rms_band\": [\n   2.069,\n   2.5405\n  ],\n  \"dx_ratio\": 0.1625221768500764,\n  \"dw_ratio\": 3.2837103581920473,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1625221768500764,\n   \"dw\": 3.2837103581920473\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 512,\n  \"n\": 128,\n  \"rms_band\": [\n   0.2475,\n   3.2509\n  ],\n  \"dx_ratio\": 0.23545445774791787,\n  \"dw_ratio\": 6.7271252498056455,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.23545445774791787,\n   \"dw\": 6.7271252498056455\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4096,\n  \"n\": 512,\n  \"rms_band\": [\n   0.2475,\n   3.2208\n  ],\n  \"dx_ratio\": 0.23646312197982228,\n  \"dw_ratio\": 0.0005818394984539614,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.23646312197982228,\n   \"dw\": 0.0005818394984539614\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 511,\n  \"n\": 100,\n  \"rms_band\": [\n   2.0518,\n   2.691\n  ],\n  \"dx_ratio\": 0.16000088699144127,\n  \"dw_ratio\": 0.0005413462731510172,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16000088699144127,\n   \"dw\": 0.0005413462731510172\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 513,\n  \"n\": 300,\n  \"rms_band\": [\n   2.1315,\n   2.4759\n  ],\n  \"dx_ratio\": 0.16173278173064104,\n  \"dw_ratio\": 0.0009076250248335051,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16173278173064104,\n   \"dw\": 0.0009076250248335051\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 4095,\n  \"n\": 511,\n  \"rms_band\": [\n   2.132,\n   2.47\n  ],\n  \"dx_ratio\": 0.1625860967383,\n  \"dw_ratio\": 0.000604249272007537,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1625860967383,\n   \"dw\": 0.000604249272007537\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 1,\n  \"n\": 16,\n  \"rms_band\": [\n   2.144,\n   2.144\n  ],\n  \"dx_ratio\": 0.10177206476797097,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.10177206476797097,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 17,\n  \"n\": 31,\n  \"rms_band\": [\n   1.9596,\n   2.61\n  ],\n  \"dx_ratio\": 0.15821282703025327,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.15821282703025327,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 127,\n  \"n\": 257,\n  \"rms_band\": [\n   2.1295,\n   2.4913\n  ],\n  \"dx_ratio\": 0.16106923622379724,\n  \"dw_ratio\": 0.0009054053578104479,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16106923622379724,\n   \"dw\": 0.0009054053578104479\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 1000,\n  \"n\": 129,\n  \"rms_band\": [\n   2.0173,\n   2.61\n  ],\n  \"dx_ratio\": 0.16271820813820806,\n  \"dw_ratio\": 8.20543196174477,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16271820813820806,\n   \"dw\": 8.20543196174477\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 2048,\n  \"n\": 100,\n  \"rms_band\": [\n   1.9568,\n   2.6569\n  ],\n  \"dx_ratio\": 0.16209313684801302,\n  \"dw_ratio\": 4.1238979102638975,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.16209313684801302,\n   \"dw\": 4.1238979102638975\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 300,\n  \"n\": 400,\n  \"rms_band\": [\n   2.1089,\n   2.4339\n  ],\n  \"dx_ratio\": 0.1617867782851786,\n  \"dw_ratio\": 0.001692023940934043,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.1617867782851786,\n   \"dw\": 0.001692023940934043\n  },\n  \"finite\": true,\n  \"mutated\": false\n },\n {\n  \"m\": 2,\n  \"n\": 512,\n  \"rms_band\": [\n   2.3498,\n   2.378\n  ],\n  \"dx_ratio\": 0.14484880122769792,\n  \"dw_ratio\": 0.0,\n  \"kernel_error_ratios\": {\n   \"dx\": 0.14484880122769792,\n   \"dw\": 0.0\n  },\n  \"finite\": true,\n  \"mutated\": false\n }\n]\n{\"worst_dx_ratio\": 0.23646312197982228, \"worst_dw_ratio\": 8.944566960058348, \"all_finite\": true, \"any_mutation\": false}\n",
+            "timed_out": false,
+            "timeout_s": 300,
+            "worst_dw_ratio": 8.944566960058348,
+            "worst_dx_ratio": 0.23646312197982228
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Across 16 legal shapes in the declared domain (1<=M<=4096, 16<=N<=512, non-power-of-two N included, |x|,|dy|<=4, |weight|<=2, row RMS within [0.25,4]), dx always satisfies the bound (max ratio 0.236). dw violates the bound (ratio>1, up to 8.94) precisely on inputs that take the _block_backward path (block<=256 and m>=512): e.g. M=512,N=128 ratio 8.94; M=1000,N=129 ratio 8.21; M=2048,N=100 ratio 4.12; M=4096,N=256 ratio 3.28. All _row_backward-path cases (n>256 or m<512) have dw ratio < 0.01. Kernel's own error_ratios() agrees with the independent contract computation. No input mutation; all outputs finite.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "kind": "runtime_probe",
+        "summary": "The t9 probe shows the H16 intermediate-rounding hypothesis does not explain any contract violation: dx is within bound on all 16 legal shapes (max ratio 0.236), and the dw violations occur only on the _block_backward path where the failure is FP16 accumulation of the 16-row tl.sum (row-kernel cases with the same casting policy have dw ratio < 0.01). So the casting policy for m, h, t is not the cause of the errors.",
+        "supports": "rebutted",
+        "tool_event_id": "t9"
+      },
+      "created_at": "2026-10-03T04:59:21Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-10-03T04:59:21Z",
+        "data": {},
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "The t9 probe shows the H16 intermediate-rounding hypothesis does not explain any contract violation: dx is within bound on all 16 legal shapes (max ratio 0.236), and the dw violations occur only on the _block_backward path where the failure is FP16 accumulation of the 16-row tl.sum (row-kernel cases with the same casting policy have dw ratio < 0.01). So the casting policy for m, h, t is not the cause of the errors.",
+        "supports": "rebutted",
+        "tool_event_id": "t9"
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "status": "rebutted"
+      },
+      "created_at": "2026-10-03T04:59:25Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-10-03T04:57:42Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-10-03T04:59:21Z",
+            "data": {},
+            "id": "c2.e1",
+            "kind": "runtime_probe",
+            "summary": "The t9 probe shows the H16 intermediate-rounding hypothesis does not explain any contract violation: dx is within bound on all 16 legal shapes (max ratio 0.236), and the dw violations occur only on the _block_backward path where the failure is FP16 accumulation of the 16-row tl.sum (row-kernel cases with the same casting policy have dw ratio < 0.01). So the casting policy for m, h, t is not the cause of the errors.",
+            "supports": "rebutted",
+            "tool_event_id": "t9"
+          }
+        ],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "Triton may keep dy*weight in fp16 or fp32 without explicit H16 rounding; the contract defines H16-rounded m, h, t as part of the target, so a mismatch could push errors beyond tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Casting policy: m=H16(dy*weight), h=H16(F32(F32(x)*rstd)), t=H16(dy*h); rounded per-element products are intentional parts of the policy, not implementation errors."
+          }
+        ],
+        "scope_rationale": "The contract's target formulas are defined in terms of H16-rounded intermediates m, h, t; the kernel must reproduce those within the stated elementwise bounds.",
+        "statement": "The kernels do not honor the H16 rounding of intermediates m, h, t, causing dx/dw errors beyond the stated tolerances.",
+        "status": "rebutted",
+        "updated_at": "2026-10-03T04:59:25Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t9 (16 legal shapes across the declared domain 1<=M<=4096, 16<=N<=512, non-power-of-two N, |x|,|dy|<=4, |weight|<=2, row RMS in [0.25,4]) showed dx always within bound (worst ratio 0.236) but dw violating the contract bound abs(dw-dw_target) <= 1e-5 + 1e-5*sum|t| on every input taking the _block_backward path (n<=256, m>=512): ratios 8.94 (512,128), 6.54 (512,64), 5.20 (768,128), 8.21 (1000,129), 4.12 (2048,100), 3.28 (4096,256). The row-kernel path passes (dw ratio <0.01), and the kernel's own error_ratios() agrees with the independent contract computation, so this is a genuine contract violation, not a metric artifact. Root cause: _block_backward accumulates dw via tl.sum over the 16-row block in FP16 rather than the real-arithmetic sums the contract requires, before adding to the FP32 partial. All outputs finite; no input mutation. Claim c2 (H16 intermediate rounding) was rebutted by the same probe. Since the contract explicitly states the bounds apply to all legal input values and shapes, this is a definitive reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-03T04:59:34Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-10-03T04:59:34Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t9 (16 legal shapes across the declared domain 1<=M<=4096, 16<=N<=512, non-power-of-two N, |x|,|dy|<=4, |weight|<=2, row RMS in [0.25,4]) showed dx always within bound (worst ratio 0.236) but dw violating the contract bound abs(dw-dw_target) <= 1e-5 + 1e-5*sum|t| on every input taking the _block_backward path (n<=256, m>=512): ratios 8.94 (512,128), 6.54 (512,64), 5.20 (768,128), 8.21 (1000,129), 4.12 (2048,100), 3.28 (4096,256). The row-kernel path passes (dw ratio <0.01), and the kernel's own error_ratios() agrees with the independent contract computation, so this is a genuine contract violation, not a metric artifact. Root cause: _block_backward accumulates dw via tl.sum over the 16-row block in FP16 rather than the real-arithmetic sums the contract requires, before adding to the FP32 partial. All outputs finite; no input mutation. Claim c2 (H16 intermediate rounding) was rebutted by the same probe. Since the contract explicitly states the bounds apply to all legal input values and shapes, this is a definitive reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-10-03T04:59:34Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t9 (16 legal shapes across the declared domain 1<=M<=4096, 16<=N<=512, non-power-of-two N, |x|,|dy|<=4, |weight|<=2, row RMS in [0.25,4]) showed dx always within bound (worst ratio 0.236) but dw violating the contract bound abs(dw-dw_target) <= 1e-5 + 1e-5*sum|t| on every input taking the _block_backward path (n<=256, m>=512): ratios 8.94 (512,128), 6.54 (512,64), 5.20 (768,128), 8.21 (1000,129), 4.12 (2048,100), 3.28 (4096,256). The row-kernel path passes (dw ratio <0.01), and the kernel's own error_ratios() agrees with the independent contract computation, so this is a genuine contract violation, not a metric artifact. Root cause: _block_backward accumulates dw via tl.sum over the 16-row block in FP16 rather than the real-arithmetic sums the contract requires, before adding to the FP32 partial. All outputs finite; no input mutation. Claim c2 (H16 intermediate rounding) was rebutted by the same probe. Since the contract explicitly states the bounds apply to all legal input values and shapes, this is a definitive reject.",
+    "verdict": "reject"
+  }
+}

@@ -1,0 +1,206 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Describer agent in an agentic kernel verification system.\nYour job is to explain what the kernel appears to implement and what assumptions\nare visible in the source or problem statement.\n\nRules:\n- Maintain the shared description model. Your useful output should be structured, not just prose.\n- When enough context is available, call record_description_update with concise entries for contract_model, kernel_model, risk_map, scope_notes, and open_questions. Each of those five takes a JSON array of strings, exactly this shape:\n    {\"summary\": \"...\", \"contract_model\": [\"first point\", \"second point\"], \"risk_map\": [\"...\"]}\n  Do not pass a paragraph, and do not number the points or wrap them in an object -- the array itself is the ordering.\n- contract_model: what the problem/test/benchmark appears to require.\n- kernel_model: what the kernel source appears to implement and assume.\n- risk_map: specific bug surfaces Skeptic should consider, without recording claims yourself.\n- scope_notes: benchmark/test-domain boundaries that matter for in-scope vs out-of-scope reasoning.\n- open_questions: unresolved facts that need more context or later experiments.\n- If open_description_tasks are present, answer the task directly and include task_id or resolved_task_ids in record_description_update.\n- Cite concrete source, problem, test, metadata, or tool-event context when available.\n- Use inspect_problem, inspect_kernel_source, list_artifact_files, or read_artifact_file when more context is needed.\n- Do not record claims. That is the Skeptic agent's job.\n- Do not run experiments. That is the Experimenter agent's job.\n- Do not output a final correctness verdict.\n- If you cannot resolve a description task, record an update explaining what remains unknown in open_questions.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"LICENSE\",\n      \"__pycache__/kernel.cpython-313.pyc\",\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_108\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Standalone RMSNorm backward kernels adapted from Liger Kernel.\\n2: \\n3: Copyright 2024 LinkedIn Corporation. See LICENSE for license and attribution.\\n4: 2026 adaptation: standalone CUDA interface, FP16 activations and FP32 weight\\n5: accumulation buffer. The public contract defines the supported casting policy.\\n6: \\\"\\\"\\\"\\n7: import torch\\n8: import triton\\n9: import triton.language as tl\\n10: \\n11: \\n12: @triton.jit\\n13: def _row_backward(DY, DX, X, W, RSTD, PARTIAL, M: tl.constexpr,\\n14:                   N: tl.constexpr, ROWS: tl.constexpr, B: tl.constexpr):\\n15:     pid = tl.program_id(0).to(tl.int64)\\n16:     cols = tl.arange(0, B)\\n17:     mask = cols < N\\n18:     weight = tl.load(W + cols, mask=mask, other=0.0)\\n19:     dw = tl.zeros((B,), tl.float32)\\n20:     start = pid * ROWS\\n21:     stop = tl.minimum(start + ROWS, M)\\n22:     for row in range(start, stop):\\n23:         dy = tl.load(DY + row * N + cols, mask=mask, other=0.0)\\n24:         x = tl.load(X + row * N + cols, mask=mask, other=0.0).to(tl.float32)\\n25:         r = tl.load(RSTD + row)\\n26:         m = (dy * weight).to(tl.float32)\\n27:         dx = r * m\\n28:         dx += r * (-(1.0 / N) * r * r * tl.sum(m * x, 0) * x)\\n29:         dw += dy * (x * r).to(tl.float16)\\n30:         tl.store(DX + row * N + cols, dx, mask=mask)\\n31:     tl.store(PARTIAL + pid * N + cols, dw, mask=mask)\\n32: \\n33: \\n34: @triton.jit\\n35: def _block_backward(DY, DX, X, W, RSTD, PARTIAL, M: tl.constexpr,\\n36:                     N: tl.constexpr, B: tl.constexpr, BR: tl.constexpr):\\n37:     pid = tl.program_id(0).to(tl.int64)\\n38:     programs = tl.num_programs(0)\\n39:     cols = tl.arange(0, B)\\n40:     col_mask = cols < N\\n41:     weight = tl.load(W + cols, mask=col_mask, other=0.0)\\n42:     dw = tl.zeros((B,), tl.float32)\\n43:     for start in range(pid * BR, M, programs * BR):\\n44:         rows = start + tl.arange(0, BR)\\n45:         mask = (rows[:, None] < M) & col_mask[None, :]\\n46:         dy = tl.load(DY + rows[:, None] * N + cols[None, :], mask=mask, other=0.0)\\n47:         x = tl.load(X + rows[:, None] * N + cols[None, :], mask=mask, other=0.0).to(tl.float32)\\n48:         r = tl.load(RSTD + rows, mask=rows < M, other=0.0)\\n49:         m = (dy * weight[None, :]).to(tl.float32)\\n50:         dx = r[:, None] * m\\n51:         dx += r[:, None] * (\\n52:             -(1.0 / N) * (r * r * tl.sum(m * x, 1))[:, None] * x\\n53:         )\\n54:         dw += tl.sum((dy * (x * r[:, None]).to(tl.float16)).to(tl.float32), 0)\\n55:         tl.store(DX + rows[:, None] * N + cols[None, :], dx, mask=mask)\\n56:     tl.store(PARTIAL + pid * N + cols, dw, mask=col_mask)\\n57: \\n58: \\n59: def run(x, weight, dy, rstd):\\n60:     \\\"\\\"\\\"Return (dx: FP16[M,N], dw: FP32[N]); preserve all inputs.\\\"\\\"\\\"\\n61:     m, n = x.shape\\n62:     assert x.is_cuda and x.is_contiguous() and dy.is_contiguous()\\n63:     assert weight.is_contiguous() and rstd.is_contiguous()\\n64:     assert x.dtype == dy.dtype == weight.dtype == torch.float16\\n65:     assert rstd.dtype == torch.float32\\n66:     assert dy.shape == x.shape and weight.shape == (n,) and rstd.shape == (m,)\\n67:     assert x.device == weight.device == dy.device == rstd.device\\n68:     assert 1 <= m <= 4096 and 16 <= n <= 512\\n69:     block = triton.next_power_of_2(n)\\n70:     programs = min(torch.cuda.get_device_properties(x.device).multi_processor_count, m)\\n71:     partial = torch.empty((programs, n), dtype=torch.float32, device=x.device)\\n72:     dx = torch.empty_like(dy)\\n73:     if block > 256 or m < 512:\\n74:         _row_backward[(programs,)](\\n75:             dy, dx, x, weight, rstd, partial, m, n,\\n76:             ROWS=triton.cdiv(m, programs), B=block,\\n77:             num_warps=4, enable_fp_fusion=False,\\n78:         )\\n79:     else:\\n80:         _block_backward[(programs,)](\\n81:             dy, dx, x, weight, rstd, partial, m, n,\\n82:             B=block, BR=16, num_warps=4, enable_fp_fusion=False,\\n83:         )\\n84:     dw = partial.sum(dim=0)\\n85:     return dx, dw\\n86: \\n87: \\n88: def reference(x, weight, dy, rstd):\\n89:     \\\"\\\"\\\"Independent tensor reference for the public mixed-precision contract.\\n90: \\n91:     FP64 evaluates the analytic dx formula and accumulates the individually\\n92:     rounded weight-gradient terms. This function can also run on CPU.\\n93:     \\\"\\\"\\\"\\n94:     x64 = x.to(torch.float64)\\n95:     r64 = rstd.to(torch.float64)[:, None]\\n96:     m64 = (dy * weight).to(torch.float64)\\n97:     dx64 = r64 * (m64 - x64 * r64.square() * (m64 * x64).mean(dim=1, keepdim=True))\\n98:     h = (x.float() * rstd[:, None]).to(torch.float16)\\n99:     terms64 = (dy * h).to(torch.float64)\\n100:     return dx64, terms64.sum(dim=0)\\n101: \\n102: \\n103: def error_ratios(outputs, inputs):\\n104:     \\\"\\\"\\\"A value <= 1 for each output satisfies the numerical contract.\\\"\\\"\\\"\\n105:     dx, dw = outputs\\n106:     x, weight, dy, rstd = inputs\\n107:     ref_dx, ref_dw = reference(*inputs)\\n108:     h = (x.float() * rstd[:, None]).to(torch.float16)\\n109:     abs_terms = (dy * h).to(torch.float64).abs().sum(dim=0)\\n110:     dx_limit = 0.002 + 0.002 * ref_dx.abs()\\n111:     dw_limit = 0.00001 + 0.00001 * abs_terms\\n112:     return {\\n113:         \\\"dx\\\": float(((dx.double() - ref_dx).abs() / dx_limit).max().item()),\\n114:         \\\"dw\\\": float(((dw.double() - ref_dw).abs() / dw_limit).max().item()),\\n115:     }\\n116: \\n117: \\n118: def make_inputs(device=\\\"cuda\\\", rows=768, cols=128, seed=0):\\n119:     \\\"\\\"\\\"An ordinary example, not a restriction of the supported input domain.\\\"\\\"\\\"\\n120:     g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n121:     x = (2 * torch.rand((rows, cols), generator=g) - 1).half()\\n122:     weight = (0.5 + torch.rand((cols,), generator=g)).half()\\n123:     dy = (2 * torch.rand((rows, cols), generator=g) - 1).half()\\n124:     rstd = torch.rsqrt(x.float().square().mean(dim=1) + 1e-5)\\n125:     return tuple(t.to(device) for t in (x, weight, dy, rstd))\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Verify a CUDA RMSNorm backward implementation with the stated mixed-precision\\ncasting policy. The task concerns this implementation over the entire domain\\nbelow, not only the example returned by make_inputs().\\n\\nInputs (all contiguous, non-overlapping, on the same CUDA device):\\n- x and dy: FP16 tensors of shape [M, N]; weight: FP16 tensor of shape [N].\\n- rstd: FP32 tensor of shape [M], the saved reciprocal RMS from the forward pass.\\n- 1 <= M <= 4096; 16 <= N <= 512. Non-powers of two are included.\\n- All values are finite; |x| <= 4, |dy| <= 4, |weight| <= 2.\\n- The RMS of each row of x lies in [0.25, 4]. For epsilon = 1e-5,\\n  rstd agrees with 1/sqrt(mean_j(x[i,j]^2) + epsilon) to relative error <= 1e-6.\\n\\nLet H16 denote rounding to IEEE FP16, and F32 rounding to IEEE FP32.\\nAs in the Llama mixed-precision backward policy, define:\\n  m[i,j] = H16(dy[i,j] * weight[j])\\n  h[i,j] = H16(F32(F32(x[i,j]) * rstd[i]))\\n  t[i,j] = H16(dy[i,j] * h[i,j])\\nThe target outputs, with sums below evaluated in real arithmetic, are:\\n  dx[i,j] = rstd[i] * (m[i,j] - x[i,j] * rstd[i]^2\\n                        * sum_k(m[i,k] * x[i,k]) / N)\\n  dw[j] = sum_i t[i,j]\\nThe rounded per-element products are intentional parts of the casting policy;\\nthey are not themselves implementation errors. The dw result is an FP32 main\\ngradient buffer, as used for stable parameter-gradient accumulation.\\n\\nReturn a pair: dx of shape [M,N] and dtype FP16, dw of shape [N] and dtype FP32.\\nAll outputs must be finite. For every element:\\n  abs(dx_output - dx_target) <= 0.002 + 0.002 * abs(dx_target)\\n  abs(dw_output - dw_target) <= 1e-5 + 1e-5 * sum_i abs(t[i,j])\\nThe absolute-sum scale permits cancellation without demanding relative accuracy\\non a near-zero gradient. These bounds apply to all legal input values and shapes.\\n\\nDo not modify any input. The public reference() and error_ratios() in kernel.py\\nimplement these formulas independently of the Triton kernels. You may create any\\nlegal test inputs; make_inputs() is only a convenient example. Run on the frozen\\nNVIDIA T4 / PyTorch 2.8.0 / Triton 3.4.0 CUDA environment.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_108\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_108\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_108\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_108\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_108\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_108\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_108\"\n      },\n      \"created_at\": \"2026-10-03T04:57:08Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"LICENSE\",\n          \"__pycache__/kernel.cpython-313.pyc\",\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_108\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Standalone RMSNorm backward kernels adapted from Liger Kernel.\\n\\nCopyright 2024 LinkedIn Corporation. See LICENSE for license and attribution.\\n2026 adaptation: standalone CUDA interface, FP16 activations and FP32 weight\\naccumulation buffer. The public contract defines the supported casting policy.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _row_backward(DY, DX, X, W, RSTD, PARTIAL, M: tl.constexpr,\\n                  N: tl.constexpr, ROWS: tl.constexpr, B: tl.constexpr):\\n    pid = tl.program_id(0).to(tl.int64)\\n    cols = tl.arange(0, B)\\n    mask = cols < N\\n    weight = tl.load(W + cols, mask=mask, other=0.0)\\n    dw = tl.zeros((B,), tl.float32)\\n    start = pid * ROWS\\n    stop = tl.minimum(start + ROWS, M)\\n    for row in range(start, stop):\\n        dy = tl.load(DY + row * N + cols, mask=mask, other=0.0)\\n        x = tl.load(X + row * N + cols, mask=mask, other=0.0).to(tl.float32)\\n        r = tl.load(RSTD + row)\\n        m = (dy * weight).to(tl.float32)\\n        dx = r * m\\n        dx += r * (-(1.0 / N) * r * r * tl.sum(m * x, 0) * x)\\n        dw += dy * (x * r).to(tl.float16)\\n        tl.store(DX + row * N + cols, dx, mask=mask)\\n    tl.store(PARTIAL + pid * N + cols, dw, mask=mask)\\n\\n\\n@triton.jit\\ndef _block_backward(DY, DX, X, W, RSTD, PARTIAL, M: tl.constexpr,\\n                    N: tl.constexpr, B: tl.constexpr, BR: tl.constexpr):\\n    pid = tl.program_id(0).to(tl.int64)\\n    programs = tl.num_programs(0)\\n    cols = tl.arange(0, B)\\n    col_mask = cols < N\\n    weight = tl.load(W + cols, mask=col_mask, other=0.0)\\n    dw = tl.zeros((B,), tl.float32)\\n    for start in range(pid * BR, M, programs * BR):\\n        rows = start + tl.arange(0, BR)\\n        mask = (rows[:, None] < M) & col_mask[None, :]\\n        dy = tl.load(DY + rows[:, None] * N + cols[None, :], mask=mask, other=0.0)\\n        x = tl.load(X + rows[:, None] * N + cols[None, :], mask=mask, other=0.0).to(tl.float32)\\n        r = tl.load(RSTD + rows, mask=rows < M, other=0.0)\\n        m = (dy * weight[None, :]).to(tl.float32)\\n        dx = r[:, None] * m\\n        dx += r[:, None] * (\\n            -(1.0 / N) * (r * r * tl.sum(m * x, 1))[:, None] * x\\n        )\\n        dw += tl.sum((dy * (x * r[:, None]).to(tl.float16)).to(tl.float32), 0)\\n        tl.store(DX + rows[:, None] * N + cols[None, :], dx, mask=mask)\\n    tl.store(PARTIAL + pid * N + cols, dw, mask=col_mask)\\n\\n\\ndef run(x, weight, dy, rstd):\\n    \\\"\\\"\\\"Return (dx: FP16[M,N], dw: FP32[N]); preserve all inputs.\\\"\\\"\\\"\\n    m, n = x.shape\\n    assert x.is_cuda and x.is_contiguous() and dy.is_contiguous()\\n    assert weight.is_contiguous() and rstd.is_contiguous()\\n    assert x.dtype == dy.dtype == weight.dtype == torch.float16\\n    assert rstd.dtype == torch.float32\\n    assert dy.shape == x.shape and weight.shape == (n,) and rstd.shape == (m,)\\n    assert x.device == weight.device == dy.device == rstd.device\\n    assert 1 <= m <= 4096 and 16 <= n <= 512\\n    block = triton.next_power_of_2(n)\\n    programs = min(torch.cuda.get_device_properties(x.device).multi_processor_count, m)\\n    partial = torch.empty((programs, n), dtype=torch.float32, device=x.device)\\n    dx = torch.empty_like(dy)\\n    if block > 256 or m < 512:\\n        _row_backward[(programs,)](\\n            dy, dx, x, weight, rstd, partial, m, n,\\n            ROWS=triton.cdiv(m, programs), B=block,\\n            num_warps=4, enable_fp_fusion=False,\\n        )\\n    else:\\n        _block_backward[(programs,)](\\n            dy, dx, x, weight, rstd, partial, m, n,\\n            B=block, BR=16, num_warps=4, enable_fp_fusion=False,\\n        )\\n    dw = partial.sum(dim=0)\\n    return dx, dw\\n\\n\\ndef reference(x, weight, dy, rstd):\\n    \\\"\\\"\\\"Independent tensor reference for the public mixed-precision contract.\\n\\n    FP64 evaluates the analytic dx formula and accumulates the individually\\n    rounded weight-gradient terms. This function can also run on CPU.\\n    \\\"\\\"\\\"\\n    x64 = x.to(torch.float64)\\n    r64 = rstd.to(torch.float64)[:, None]\\n    m64 = (dy * weight).to(torch.float64)\\n...[truncated, 1306 more chars]\",\n        \"passed\": null,\n        \"problem_text\": \"Verify a CUDA RMSNorm backward implementation with the stated mixed-precision\\ncasting policy. The task concerns this implementation over the entire domain\\nbelow, not only the example returned by make_inputs().\\n\\nInputs (all contiguous, non-overlapping, on the same CUDA device):\\n- x and dy: FP16 tensors of shape [M, N]; weight: FP16 tensor of shape [N].\\n- rstd: FP32 tensor of shape [M], the saved reciprocal RMS from the forward pass.\\n- 1 <= M <= 4096; 16 <= N <= 512. Non-powers of two are included.\\n- All values are finite; |x| <= 4, |dy| <= 4, |weight| <= 2.\\n- The RMS of each row of x lies in [0.25, 4]. For epsilon = 1e-5,\\n  rstd agrees with 1/sqrt(mean_j(x[i,j]^2) + epsilon) to relative error <= 1e-6.\\n\\nLet H16 denote rounding to IEEE FP16, and F32 rounding to IEEE FP32.\\nAs in the Llama mixed-precision backward policy, define:\\n  m[i,j] = H16(dy[i,j] * weight[j])\\n  h[i,j] = H16(F32(F32(x[i,j]) * rstd[i]))\\n  t[i,j] = H16(dy[i,j] * h[i,j])\\nThe target outputs, with sums below evaluated in real arithmetic, are:\\n  dx[i,j] = rstd[i] * (m[i,j] - x[i,j] * rstd[i]^2\\n                        * sum_k(m[i,k] * x[i,k]) / N)\\n  dw[j] = sum_i t[i,j]\\nThe rounded per-element products are intentional parts of the casting policy;\\nthey are not themselves implementation errors. The dw result is an FP32 main\\ngradient buffer, as used for stable parameter-gradient accumulation.\\n\\nReturn a pair: dx of shape [M,N] and dtype FP16, dw of shape [N] and dtype FP32.\\nAll outputs must be finite. For every element:\\n  abs(dx_output - dx_target) <= 0.002 + 0.002 * abs(dx_target)\\n  abs(dw_output - dw_target) <= 1e-5 + 1e-5 * sum_i abs(t[i,j])\\nThe absolute-sum scale permits cancellation without demanding relative accuracy\\non a near-zero gradient. These bounds apply to all legal input values and shapes.\\n\\nDo not modify any input. The public reference() and error_ratios() in kernel.py\\nimplement these formulas independently of the Triton kernels. You may create any\\nlegal test inputs; make_inputs() is only a convenient example. Run on the frozen\\nNVIDIA T4 / PyTorch 2.8.0 / Triton 3.4.0 CUDA environment.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_108\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_108\"\n      },\n      \"created_at\": \"2026-10-03T04:57:08Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Verify a CUDA RMSNorm backward implementation with the stated mixed-precision\\ncasting policy. The task concerns this implementation over the entire domain\\nbelow, not only the example returned by make_inputs().\\n\\nInputs (all contiguous, non-overlapping, on the same CUDA device):\\n- x and dy: FP16 tensors of shape [M, N]; weight: FP16 tensor of shape [N].\\n- rstd: FP32 tensor of shape [M], the saved reciprocal RMS from the forward pass.\\n- 1 <= M <= 4096; 16 <= N <= 512. Non-powers of two are included.\\n- All values are finite; |x| <= 4, |dy| <= 4, |weight| <= 2.\\n- The RMS of each row of x lies in [0.25, 4]. For epsilon = 1e-5,\\n  rstd agrees with 1/sqrt(mean_j(x[i,j]^2) + epsilon) to relative error <= 1e-6.\\n\\nLet H16 denote rounding to IEEE FP16, and F32 rounding to IEEE FP32.\\nAs in the Llama mixed-precision backward policy, define:\\n  m[i,j] = H16(dy[i,j] * weight[j])\\n  h[i,j] = H16(F32(F32(x[i,j]) * rstd[i]))\\n  t[i,j] = H16(dy[i,j] * h[i,j])\\nThe target outputs, with sums below evaluated in real arithmetic, are:\\n  dx[i,j] = rstd[i] * (m[i,j] - x[i,j] * rstd[i]^2\\n                        * sum_k(m[i,k] * x[i,k]) / N)\\n  dw[j] = sum_i t[i,j]\\nThe rounded per-element products are intentional parts of the casting policy;\\nthey are not themselves implementation errors. The dw result is an FP32 main\\ngradient buffer, as used for stable parameter-gradient accumulation.\\n\\nReturn a pair: dx of shape [M,N] and dtype FP16, dw of shape [N] and dtype FP32.\\nAll outputs must be finite. For every element:\\n  abs(dx_output - dx_target) <= 0.002 + 0.002 * abs(dx_target)\\n  abs(dw_output - dw_target) <= 1e-5 + 1e-5 * sum_i abs(t[i,j])\\nThe absolute-sum scale permits cancellation without demanding relative accuracy\\non a near-zero gradient. These bounds apply to all legal input values and shapes.\\n\\nDo not modify any input. The public reference() and error_ratios() in kernel.py\\nimplement these formulas independently of the Triton kernels. You may create any\\nlegal test inputs; make_inputs() is only a convenient example. Run on the frozen\\nNVIDIA T4 / PyTorch 2.8.0 / Triton 3.4.0 CUDA environment.\\n\",\n        \"entry\": \"case_108\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_108\"\n      },\n      \"created_at\": \"2026-10-03T04:57:08Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_108\",\n        \"files\": [\n          {\n            \"kind\": \"other\",\n            \"path\": \"LICENSE\",\n            \"size_bytes\": 13242\n          },\n          {\n            \"kind\": \"other\",\n            \"path\": \"__pycache__/kernel.cpython-313.pyc\",\n            \"size_bytes\": 10996\n          },\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 5287\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 2092\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_108\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-03T04:57:08Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_108\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 32768,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_description_update",
+        "description": "Record a structured Describer update to the shared description model.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resolved_task_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "contract_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "kernel_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "risk_map": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "scope_notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "impact_on_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

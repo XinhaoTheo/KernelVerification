@@ -421,7 +421,7 @@ the most obvious unsafe reject.
 ## 5. Repository layout
 
 The verification benchmarks use one global `case_<number>` registry. Start with
-[the case index](benchmark_fn_fp/CASE_INDEX.md) for all 104 active cases and their
+[the case index](benchmark_fn_fp/CASE_INDEX.md) for 90 active cases, 24 archived pilot cases and their
 experimental purpose; [the benchmark guide](benchmark_fn_fp/README.md) explains
 which files are public inputs, private answers, programs, and historical traces.
 The original FN/FP suite has 34 active cases; `case_03` remains retired.
@@ -434,14 +434,13 @@ kernel_verification/
 │   ├── CASE_INDEX.md         # all case IDs, dataset groups, and links
 │   ├── case_map.json         # single canonical registry
 │   ├── triton/              # original cases with private answers
-│   ├── triton_eval_cases/   # 80 public cases: case_01–case_81 except retired 03
-│   ├── correlation_pair/    # pair README and private_data only
-│   ├── single_call_vs_tools_challenges/ # case_38–case_61: README + private_data
+│   ├── triton_eval_cases/   # 90 public cases: case_01–81 except 03, plus case_106–115
+│   ├── single_call_vs_tools_challenges/ # case_36–case_61: README + private_data
 │   ├── solo_vs_debate_challenges/ # case_62–case_81: README + private_data
-│   ├── numerical_pilot/     # case_82–case_105
-│   ├── real_kernel_challenges/ # plan only
+│   ├── archive/numerical_pilot/ # case_82–case_105 and 72 GLM trials; retired exploration
+│   ├── real_kernel_challenges/ # case_106–115: purpose-built challenges, separate results
 │   ├── eval_scripts/        # evaluation programs
-│   └── traces_glm/          # case/arm/trial records
+│   └── traces_glm/          # current cases, by case/arm/trial
 ├── dataset/                  # saved kernel artifacts
 │   └── <entry>/
 │       ├── problem.txt

@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-46c876ea0ded47a5b942a3b670795e31",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the randomized sweep for claim c2, spanning the full stated domain.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8b123eaea8f7c735",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, sys, json, random\\nsys.path.insert(0, \\\"/root/cases/case_112\\\")\\nimport kernel as K\\n\\nrandom.seed(7)\\ndev = \\\"cuda\\\"\\nconfigs = []\\nfor B in (1, 2):\\n    for L in (1, 5, 15, 16, 17, 31, 32, 33, 63, 64, 65, 96, 128, 129, 255, 257):\\n        for H in (1, 3, 4):\\n            for D in (1, 8, 96):\\n                for Ksz in (16, 32, 64):\\n                    configs.append((B, L, H, D, Ksz))\\nrandom.shuffle(configs)\\ntest_set = []\\n# deterministic coverage + random extras\\nfor B in (1,2):\\n    for L in (1,16,17,32,33,64,65,97,257):\\n        for H in (1,2,4):\\n            for D in (1,33,96):\\n                for Ksz in (16,32,64):\\n                    test_set.append((B,L,H,D,Ksz))\\ntest_set += configs[:60]\\n\\nworst = 0.0; worst_cfg = None; total_viol = 0; ntests = 0\\nfor (B,L,H,D,Ksz) in test_set:\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(ntests*13+5)\\n    u = (2*torch.rand((B,L,H,D), generator=g)-1).float().to(dev)\\n    dec = (0.5+0.46875*torch.rand((B,L,H), generator=g)).float().to(dev)\\n    init = (2*torch.rand((B,H,D), generator=g)-1).float().to(dev)\\n    seq = torch.zeros((B,L), dtype=torch.int32)\\n    # random nondecreasing labels\\n    for b in range(B):\\n        nres = random.randint(0, 5)\\n        for _ in range(nres):\\n            pos = random.randint(1, max(1,L-1))\\n            seq[b, pos:] += random.randint(1,3)\\n    seq = torch.clamp(seq, max=L-1).to(dev)\\n    out, final = K.run(u, dec, seq, init, Ksz)\\n    ro, rf = K.reference(u, dec, seq, init, Ksz)\\n    ro = ro.float(); rf = rf.float()\\n    viol = ((out-ro).abs() > 0.002+0.0001*ro.abs()).sum().item()\\n    viol += ((final-rf).abs() > 0.002+0.0001*rf.abs()).sum().item()\\n    err = (out-ro).abs().max().item()\\n    total_viol += viol; ntests += 1\\n    if err > worst:\\n        worst = err; worst_cfg = (B,L,H,D,Ksz)\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"elementwise |actual-target| vs contract tolerance\\\",\\n  \\\"num_tests\\\": ntests,\\n  \\\"total_violations\\\": total_viol,\\n  \\\"max_abs_err\\\": worst,\\n  \\\"worst_cfg\\\": worst_cfg,\\n}))\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791013426,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 738,
+    "prompt_tokens": 21091,
+    "total_tokens": 21829,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4648,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

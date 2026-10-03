@@ -7,9 +7,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Protocol, Sequence, cast
 
+from .llm import OutputTokenReserveReached, _OutputTokenBudget
 from .persistence import PersistedRun, persist_run
 from .protocol import AgentResponse
-from .state import ClaimStatus, DescriptionTaskStatus, JsonValue, Role, RunState, ToolCall, Turn
+from .state import ClaimStatus, DescriptionTaskStatus, JsonValue, Role, RunState, ToolCall, ToolEvent, Turn
 from .tools.registry import ToolContext, ToolRegistry, build_core_registry
 
 
@@ -25,6 +26,7 @@ class StopReason(str, Enum):
     MORE_DEBATE_REQUESTED = "more_debate_requested"
     NO_OPEN_CLAIMS = "no_open_claims"
     MAX_ROUNDS_EXHAUSTED = "max_rounds_exhausted"
+    OUTPUT_BUDGET_CLOSEOUT = "output_budget_closeout"
 
     def __str__(self) -> str:  # keep f-strings/prints as the plain value, not "StopReason.X"
         return self.value
@@ -64,6 +66,8 @@ class AgenticOrchestrator:
     dataset_dir: Path | None = None
     run_dir: Path = Path("agentic_runs") / "adhoc"
     round_index: int = 0
+    _closeout_tools: frozenset[str] | None = field(default=None, init=False, repr=False)
+    _debate_round: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.run_dir = Path(self.run_dir)
@@ -95,12 +99,24 @@ class AgenticOrchestrator:
         )
         outputs = []
         for call in response.tool_calls:
+            if self._closeout_tools is not None and call.tool not in self._closeout_tools:
+                output = {"error_type": "CloseoutToolError", "message":
+                          "Only evidence consumption, review, and a verdict are allowed during budget closeout."}
+                self.state.tool_events.append(ToolEvent(
+                    id=f"t{len(self.state.tool_events) + 1}", tool=call.tool, args=call.args,
+                    status="error", output=output,
+                ))
+                outputs.append({"tool": call.tool, "output": output})
+                continue
             output = self.registry.call(call.tool, call.args, context=context)
             outputs.append({"tool": call.tool, "output": output})
         return outputs
 
     def run_agent_once(self, agent: Agent) -> list[dict]:
-        response = agent.act(state=self.state, tools=self.registry.list_tools(role=agent.role))
+        tools = self.registry.list_tools(role=agent.role)
+        if self._closeout_tools is not None:
+            tools = [tool for tool in tools if tool["name"] in self._closeout_tools]
+        response = agent.act(state=self.state, tools=tools)
         return self.apply_agent_response(role=agent.role, response=response)
 
     def run_pending_description_tasks(self, describer: Agent | None, *, max_turns: int = 3) -> list[dict]:
@@ -226,6 +242,97 @@ class AgenticOrchestrator:
         stop_when_no_open_claims: bool = False,
         require_claim_coverage: bool = True,
     ) -> LoopResult:
+        """Keep the legacy workflow, with optional token-aware closeout."""
+        kwargs = dict(max_debate_rounds=max_debate_rounds, max_claim_rounds=max_claim_rounds,
+                      max_claim_rounds_per_claim=max_claim_rounds_per_claim,
+                      min_debate_rounds_before_judge=min_debate_rounds_before_judge,
+                      tool_budget=tool_budget, stop_on_verdict=stop_on_verdict,
+                      stop_when_no_open_claims=stop_when_no_open_claims,
+                      require_claim_coverage=require_claim_coverage)
+        start = len(self.state.tool_events)
+        budget = next((getattr(getattr(agent, "llm_client", None), "_output_budget", None)
+                       for agent in agents
+                       if getattr(getattr(agent, "llm_client", None), "_output_budget", None)
+                       is not None), None)
+        if budget is None or not budget.debate_closeout:
+            return self._run_verification_workflow(agents, **kwargs)
+        judge = _first_agent_with_role(agents, Role.JUDGE)
+        if judge is None:
+            raise ValueError("Debate budget closeout requires a Judge")
+        try:
+            result = self._run_verification_workflow(agents, **kwargs)
+        except OutputTokenReserveReached:
+            result = None
+        if result is not None and (self.state.verdict is not None or budget.remaining > 8192
+                                   or result.stop_reason == StopReason.TOOL_BUDGET_EXHAUSTED):
+            return result
+        outputs = [{"tool": event.tool, "output": event.output}
+                   for event in self.state.tool_events[start:]]
+        return self._run_budget_closeout(agents, budget=budget, outputs=outputs)
+
+    def _run_budget_closeout(
+        self, agents: Sequence[Agent], *, budget: _OutputTokenBudget, outputs: list[dict],
+    ) -> LoopResult:
+        """Spend reserved tokens on existing evidence, never additional probes."""
+        experimenter = _first_agent_with_role(agents, Role.EXPERIMENTER)
+        skeptic = _first_agent_with_role(agents, Role.SKEPTIC)
+        judge = _first_agent_with_role(agents, Role.JUDGE)
+        assert judge is not None
+        started_remaining = budget.remaining
+        try:
+            if experimenter is not None and self.has_unconsumed_probe_events():
+                budget.debate_phase = "evidence"
+                self.state.convergence = {
+                    "request": "budget_evidence_consumption",
+                    "reason": "Output budget reserved for closeout. Consume the existing probe results now, "
+                              "checking input legality and whether each probe actually tested its claim. "
+                              "Record evidence and status in this turn. Do not run new probes. "
+                              "A failed or insufficient probe is inconclusive, not rebutted.",
+                }
+                self._closeout_tools = frozenset({"finalize_probe_evidence", "append_evidence",
+                    "update_claim_status", "read_claim_ledger", "retrieve_experiment_history"})
+                outputs.extend(self.run_agent_once(experimenter))
+            if skeptic is not None:
+                budget.debate_phase = "review"
+                self._record_skeptic_final_review_request()
+                self.state.convergence["reason"] += (
+                    " This is budget closeout: audit whether the evidence really addresses each claim "
+                    "and is in-domain; do not treat missing evidence as a pass.")
+                self._closeout_tools = frozenset({"record_no_new_claims", "record_claim",
+                                                 "read_claim_ledger", "retrieve_experiment_history"})
+                outputs.extend(self.run_agent_once(skeptic))
+            notice = self._close_out_for_forced_verdict()
+            notice["reason"] = ("The output-token exploration allowance is spent. Record a verdict now "
+                                "using only the existing evidence. Material unresolved questions require "
+                                "needs_more_evidence; budget exhaustion is never evidence for trust or reject.")
+            notice["output_budget_closeout"] = True
+            budget.debate_phase = "judge"
+            self._closeout_tools = frozenset({"record_verdict"})
+            outputs.extend(self.run_agent_once(judge))
+            if self.state.verdict is not None:
+                self.state.verdict["output_budget_closeout"] = {
+                    "started_remaining_tokens": started_remaining,
+                    "unresolved_claims": notice["unresolved_claims"],
+                    "skeptic_signed_off": notice["skeptic_signed_off"],
+                }
+                return LoopResult(outputs, self._debate_round, StopReason.VERDICT_RECORDED)
+            return LoopResult(outputs, self._debate_round, StopReason.OUTPUT_BUDGET_CLOSEOUT)
+        finally:
+            self._closeout_tools = None
+
+    def _run_verification_workflow(
+        self,
+        agents: Sequence[Agent],
+        *,
+        max_debate_rounds: int,
+        max_claim_rounds: int,
+        max_claim_rounds_per_claim: int = 3,
+        min_debate_rounds_before_judge: int = 1,
+        tool_budget: int | None = None,
+        stop_on_verdict: bool = True,
+        stop_when_no_open_claims: bool = False,
+        require_claim_coverage: bool = True,
+    ) -> LoopResult:
         if max_debate_rounds < 1:
             raise ValueError("max_debate_rounds must be >= 1")
         if max_claim_rounds < 1:
@@ -248,6 +355,7 @@ class AgenticOrchestrator:
         describer = _first_agent_with_role(agents, Role.DESCRIBER)
 
         for debate_round in range(1, max_debate_rounds + 1):
+            self._debate_round = debate_round
             for agent in debate_agents:
                 if self._tool_budget_exhausted(start_tool_events, tool_budget):
                     return LoopResult(outputs, debate_round - 1, StopReason.TOOL_BUDGET_EXHAUSTED)

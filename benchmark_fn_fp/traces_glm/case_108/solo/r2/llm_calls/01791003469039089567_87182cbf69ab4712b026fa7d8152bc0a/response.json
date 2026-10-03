@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-9911c96a68b04b58b87e61d30fcd8f01",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a comprehensive probe over both kernel branches, non-power-of-two N, edge M values, and adversarial extreme-value inputs, checking error ratios and input preservation.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a1684cfc9b5285a9",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_108\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\nresults = []\\nworst = {\\\"dx\\\": 0.0, \\\"dw\\\": 0.0}\\n\\ndef make(rows, cols, seed, extreme=False):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    if extreme:\\n        # extreme magnitudes: |x|,|dy| up to 4, weight up to 2, RMS of each row in [0.25,4]\\n        x = (torch.rand((rows, cols), generator=g) * 8 - 4).half()\\n        # force RMS near 4: scale each row\\n        scale = torch.empty(rows).uniform_(0.25, 4.0, generator=g)\\n        x = (x.float() * (scale / x.float().square().mean(dim=1).add(1e-5).sqrt().clamp_min(1e-6))).clamp_(-4, 4).half()\\n        dy = (torch.rand((rows, cols), generator=g) * 8 - 4).half()\\n        weight = (torch.rand((cols,), generator=g) * 2).half()\\n    else:\\n        x = (2 * torch.rand((rows, cols), generator=g) - 1).half()\\n        dy = (2 * torch.rand((rows, cols), generator=g) - 1).half()\\n        weight = (0.5 + torch.rand((cols,), generator=g)).half()\\n    rstd = torch.rsqrt(x.float().square().mean(dim=1) + 1e-5)\\n    return tuple(t.to(dev) for t in (x, weight, dy, rstd))\\n\\nshapes = [\\n    # (M, N) covering row-kernel branch (block>256 or m<512) and block branch\\n    (1, 16), (1, 512), (7, 100), (17, 33), (511, 128), (512, 128),\\n    (512, 512), (512, 257), (1000, 300), (4096, 512), (4096, 16),\\n    (2048, 255), (513, 256), (511, 64), (3, 17),\\n]\\nfails = []\\nfor idx, (m, n) in enumerate(shapes):\\n    for extreme in (False, True):\\n        inputs = make(m, n, seed=idx * 2 + int(extreme), extreme=extreme)\\n        x, weight, dy, rstd = inputs\\n        snapshots = [t.clone() for t in inputs]\\n        dx, dw = K.run(x, weight, dy, rstd)\\n        # preservation\\n        for t, s, name in zip(inputs, snapshots, [\\\"x\\\", \\\"weight\\\", \\\"dy\\\", \\\"rstd\\\"]):\\n            if not torch.equal(t, s):\\n                fails.append(f\\\"input {name} modified at shape {(m,n)} ext={extreme}\\\")\\n        # shapes/dtypes/finiteness\\n        if dx.dtype != torch.float16 or dx.shape != (m, n):\\n            fails.append(f\\\"dx shape/dtype at {(m,n)}\\\")\\n        if dw.dtype != torch.float32 or dw.shape != (n,):\\n            fails.append(f\\\"dw shape/dtype at {(m,n)}\\\")\\n        if not torch.isfinite(dx).all() or not torch.isfinite(dw).all():\\n            fails.append(f\\\"nonfinite output at {(m,n)} ext={extreme}\\\")\\n        ratios = K.error_ratios((dx, dw), inputs)\\n        worst[\\\"dx\\\"] = max(worst[\\\"dx\\\"], ratios[\\\"dx\\\"])\\n        worst[\\\"dw\\\"] = max(worst[\\\"dw\\\"], ratios[\\\"dw\\\"])\\n        if ratios[\\\"dx\\\"] > 1.0 or ratios[\\\"dw\\\"] > 1.0:\\n            fails.append(f\\\"tolerance exceed at shape {(m,n)} ext={extreme}: {ratios}\\\")\\n\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"error_ratios (ratio<=1 satisfies contract) over 14 shapes x benign/extreme, plus input-preservation, dtype/shape, finiteness checks\\\",\\n    \\\"shapes_tested\\\": len(shapes) * 2,\\n    \\\"worst_dx_ratio\\\": worst[\\\"dx\\\"],\\n    \\\"worst_dw_ratio\\\": worst[\\\"dw\\\"],\\n    \\\"failures\\\": fails,\\n}))\\n\", \"expected_signal\": \"all ratios <= 1 and no failures\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run a probe covering both kernel branches, non-power-of-two N, edge M, checking error_ratios <= 1 and input preservation. Note one subtlety: kernel dx store — dx computed in fp32, stored to fp16 DX — fine. In row kernel, m = (dy*weight).to(fp32) — dy and weight are fp16, product rounds to H16? dy*weight in fp16 arithmetic in Triton... In Triton, fp16*fp16 may be computed in fp32 and rounded back? Actually Triton promotes to fp32? No — tl fp16 * fp16 stays fp16 typically. Then .to(fp32). Matches m=H16(dy*w). h = (x * r).to(fp16): x loaded as fp32, r fp32, product fp32, rounded to fp16 — matches h=H16(F32(x*rstd)). dw += dy * h — fp16*fp16 -> fp16? then added to fp32 dw; contract says t = H16(dy*h), sum in fp32. Good.\n\nAlso note dw limit: 1e-5 + 1e-5*sum|t|. dw is fp32 sum of fp16 t values; accumulation across programs partial fp32. Fine.\n\nBut wait: error_ratios in kernel.py itself is the check. I'll run across many shapes/distributions, including adversarial (tail rows where dx uses fp32 vs fp16 rounding of dx output: dx output dtype fp16, tolerance 0.002+0.002|dx| — fp16 rounding of dx up to |dx|~4 gives error up to ~0.002... could exceed tolerance for large dx? dx magnitude: rstd up to 4, m up to 8? Actually m=dy*w up to 8 in fp16. dx ~ rstd*m ~ 32. fp16 ulp at 32 is 0.03125, relative ~0.001 < 0.002. OK borderline. Test it.\n\nRun probe with many shapes and extreme values (x saturating |x|=4, RMS=4, dy=4, weight=2) to stress fp16 rounding of dx.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791003469,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1480,
+    "prompt_tokens": 13326,
+    "total_tokens": 14806,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 462,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 462
+    }
+  }
+}

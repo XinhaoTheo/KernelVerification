@@ -23,11 +23,19 @@ class LLMAgent:
     max_tokens: int = 4096
 
     def act(self, *, state: RunState, tools: list[dict[str, JsonValue]]) -> AgentResponse:
+        budget = getattr(self.llm_client, "_output_budget", None)
+        max_tokens = (budget.role_limit(self.max_tokens, _role_value(self.role))
+                      if budget is not None else self.max_tokens)
+        user_prompt = self._build_user_prompt(state=state)
+        if budget is not None and budget.debate_closeout and _role_value(self.role) != Role.SOLO.value:
+            user_prompt += "\n\n=== Output budget ===\n" + json.dumps(budget.prompt_notice())
+            user_prompt += ("\nOutput usage includes reasoning. Keep this turn focused; do not spend "
+                            "the entire allowance planning a large probe before obtaining evidence.")
         text = self.llm_client.call(
             system=self._build_system_prompt(),
-            user=self._build_user_prompt(state=state),
+            user=user_prompt,
             tools=tools,
-            max_tokens=self.max_tokens,
+            max_tokens=max_tokens,
         )
         metrics = getattr(self.llm_client, "last_metrics", None)
         try:

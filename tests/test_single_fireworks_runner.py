@@ -71,28 +71,42 @@ def response(content, finish_reason):
 
 
 @pytest.mark.parametrize("dataset,expected", [
-    ("benchmark_fn_fp", "case_tiny"), ("correlation_pair", "case_pair"),
+    ("benchmark_fn_fp", ["case_tiny"]), ("correlation_pair", ["case_pair"]),
+    ("numerical_challenges", ["case_numeric"]),
+    ("single_call_vs_tools_challenges", ["case_numeric", "case_pair"]),
 ])
-def test_all_selects_dataset_from_registry_not_shared_directory(isolated_runner, monkeypatch, dataset, expected):
+def test_all_runs_combined_collection_with_each_cases_original_identity(isolated_runner, monkeypatch, dataset, expected):
     benchmark, code, problem = isolated_runner
-    pair = benchmark / "triton_eval_cases/case_pair"
-    pair.mkdir()
-    (pair / "kernel.py").write_text(code)
-    (pair / "problem.txt").write_text(problem)
+    origins = {"case_tiny": "benchmark_fn_fp", "case_pair": "correlation_pair", "case_numeric": "numerical_challenges"}
+    for case, suffix in (("case_pair", "private_data/correlation_pair"), ("case_numeric", "private_data")):
+        public = benchmark / "triton_eval_cases" / case
+        public.mkdir()
+        (public / "kernel.py").write_text(code)
+        (public / "problem.txt").write_text(problem)
+        private = benchmark / "single_call_vs_tools_challenges" / suffix
+        private.mkdir(parents=True, exist_ok=True)
+        (private / "validation_gpu.json").write_text(json.dumps({"cases": {case: {
+            "ground_truth": "trust", "kernel_sha256": hashlib.sha256(code.encode()).hexdigest(),
+            "problem_sha256": hashlib.sha256(problem.encode()).hexdigest()}}}))
     (benchmark / "case_map.json").write_text(json.dumps({"case_details": {
-        "case_tiny": {"dataset": "benchmark_fn_fp"}, "case_pair": {"dataset": "correlation_pair"}}}))
-    private = benchmark / "correlation_pair/private_data"
-    private.mkdir(parents=True)
-    (private / "validation_gpu.json").write_text(json.dumps({"cases": {"case_pair": {
-        "ground_truth": "trust", "kernel_sha256": hashlib.sha256(code.encode()).hexdigest(),
-        "problem_sha256": hashlib.sha256(problem.encode()).hexdigest()}}}))
+        name: {"dataset": origin} for name, origin in origins.items()}}))
     requests, _ = fake_openai(monkeypatch, response('{"verdict":"trust"}', "stop"))
     runner.main(["--all", "--dataset", dataset, "--trial", "shared_directory"])
-    assert len(requests) == 1
-    records = list((benchmark / "traces_glm").glob("*/*/*/trace_meta.json"))
-    assert len(records) == 1
-    assert read(records[0])["case"] == expected
-    assert read(records[0])["dataset"] == dataset
+    assert len(requests) == len(expected)
+    records = [read(path) for path in (benchmark / "traces_glm").glob("*/*/*/trace_meta.json")]
+    assert sorted(row["case"] for row in records) == expected
+    assert all(row["dataset"] == origins[row["case"]] for row in records)
+
+
+def test_archived_pilot_stops_before_client_or_trace_creation(isolated_runner, monkeypatch):
+    benchmark, _, _ = isolated_runner
+    requests, constructors = fake_openai(monkeypatch, response('{"verdict":"trust"}', "stop"))
+    with pytest.raises(ValueError, match="archived"):
+        runner.main(["--all", "--dataset", "numerical_pilot"])
+    with pytest.raises(ValueError, match="archived"):
+        runner.run_one("case_82", dataset="numerical_pilot", trial="r1", max_tokens=1000)
+    assert requests == constructors == []
+    assert not (benchmark / "traces_glm").exists()
 
 
 def test_original_baseline_loader_excludes_pair_in_shared_directory(isolated_runner, monkeypatch):
@@ -174,12 +188,41 @@ def test_run_one_saves_complete_trace_and_refuses_duplicate_before_api(isolated_
     assert meta["raw_api_capture"] is True
     assert meta["reasoning_effort"] == "low"
     assert meta["timeout_s"] == 1800
+    assert meta["public_input_files"] == ["kernel.py", "problem.txt"]
+    assert len(meta["runner_sha256"]) == 64
+    runtime = read(dest / "runtime.json")
+    assert runtime["verifier_sha256"] == meta["verifier_sha256"]
+    assert runtime["python"] and "openai" in runtime["packages"]
     before = {p.relative_to(dest): p.read_bytes() for p in dest.rglob("*") if p.is_file()}
     with pytest.raises(FileExistsError):
         runner.run_one("case_tiny", dataset="benchmark_fn_fp", trial=trial, max_tokens=1024)
     assert len(requests) == len(constructors) == 1
     assert {p.relative_to(dest): p.read_bytes() for p in dest.rglob("*") if p.is_file()} == before
     assert all(b"offline-fireworks-test-key" not in content for content in before.values())
+
+
+def test_source_only_and_tool_roles_receive_identical_complete_public_task(isolated_runner, monkeypatch):
+    from verifier.agentic.agents.base import LLMAgent
+    from verifier.agentic.state import RunState
+    benchmark, _, _ = isolated_runner
+    case = benchmark / "triton_eval_cases/case_tiny"
+    # Put the reference and final contractual clause past the former 12k cap.
+    code = "# Public implementation\n" * 700 + "def reference(x):\n    return x + 1\n"
+    problem = "The input domain is general.\n" * 500 + "All legal inputs must satisfy the contract.\n"
+    (case / "kernel.py").write_text(code)
+    (case / "problem.txt").write_text(problem)
+    requests, _ = fake_openai(monkeypatch, response('{"verdict":"trust"}', "stop"))
+    runner.run_one("case_tiny", dataset="benchmark_fn_fp", trial="full_task", max_tokens=1024)
+    assert requests[0]["messages"][1]["content"] == runner.USER_TEMPLATE.format(problem=problem, kernel=code)
+    state = RunState()
+    state.artifact = {"kernel_code": code, "problem_text": problem, "test_code": ""}
+    for role in ("solo", "describer", "skeptic", "experimenter", "judge"):
+        prompt = LLMAgent(role=role, instructions="Verify.", llm_client=None)._build_user_prompt(state=state)
+        payload = prompt.split("=== Current Run State ===\n", 1)[1]
+        artifact = json.JSONDecoder().raw_decode(payload)[0]["artifact"]
+        recovered = "\n".join(line.split(": ", 1)[1] for line in artifact["kernel_code"].splitlines())
+        assert recovered == code.rstrip("\n")
+        assert artifact["problem_text"] == problem
 
 
 def test_length_with_empty_content_remains_no_final_verdict(isolated_runner, monkeypatch):

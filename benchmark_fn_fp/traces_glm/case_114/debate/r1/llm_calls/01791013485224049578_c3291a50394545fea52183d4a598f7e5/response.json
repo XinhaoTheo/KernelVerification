@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-91d309f1e92449f49353594603b9888c",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I've reviewed the full kernel source and contract; I'll now record a structured description of the contract, kernel model, and likely bug surfaces.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9f11c4e13790de07",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Paged causal attention forward: FP16 q [B,Q,Hq,D], k/v [P,S,Hkv,D], int32 block_table [B,C], lengths [B], int window in [0,256] (0 = full causal); output FP16 [B,Q,Hq,D] matching abs error <= 0.003 + 0.003*abs(target) against FP64 reference().\", \"Query row r has absolute position a = lengths[b]-Q+r and attends exactly to t with 0<=t<=a and, if window>0, a-window+1<=t. Query head h maps to KV head floor(h/(Hq/Hkv)). Score uses 1/sqrt(D).\", \"Physical mapping: k[block_table[b,t//S], t%S, kv_head, d]; page order arbitrary, duplicates allowed, out-of-range table entries irrelevant.\", \"Only positions reachable by allowed positions are guaranteed finite with |x|<=1; unreferenced cache slots may be NaN/Inf and must not affect output.\", \"Domain: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, Hq/Hkv in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, 1<=C<=512/S, Q<=lengths[b]<=512; all inputs contiguous, disjoint storage, bit-for-bit preserved by run().\", \"error_ratio() compares output vs FP64 reference with the per-element tolerance form.\"], \"kernel_model\": [\"One Triton kernel per (query-block, kv_head, batch): BQ=16/GROUP query rows packed as BM=16 lanes, TILE=64 logical keys per iteration, online softmax with FP32 max/denominator/accumulator rescaling (alpha).\", \"Address math mirrors the contract: qo = ((batch*QT + qpos)*HQ + head)*D; k/v gathered via table at logical//PAGE, % PAGE; head = kv_head*GROUP + rows%GROUP (GQA).\", \"Masking: scores forced to -inf where qpos>=QT, tile_mask (logical<max_prefix) fails, t>absolute_q, or (window>0) absolute_q - t >= WINDOW; tile loop bounds are narrowed by WINDOW to first_key//TILE .. last_key//TILE.\", \"Precision: tl.dot on FP16 q/k with FP32 accumulation, SCALE applied in FP32, probabilities cast to FP16 (v.dtype) before the V dot.\", \"run() validates inputs via validate_inputs() (full domain check, disjoint storage, finiteness on live positions only), allocates torch.empty_like(q), launches grid (cdiv(Q,BQ), Hkv, B) with enable_fp_fusion=False.\", \"reference() is an independent FP64 logical-position loop; validate_inputs' finiteness check itself enforces |x|<=1 only on live positions.\"], \"risk_map\": [\"Sliding-window tile-range narrowing (lines 35-39, 55-57): whether first_key/last_key tile bounds always cover every allowed key for all rows in the block, e.g. negative first_key floor-division, window small vs TILE=64, and whether any allowed position could be skipped or expired-but-loaded position leak in.\", \"NaN/Inf leakage: problem says unreachable cache slots may hold arbitrary bits; check whether any load path (e.g. masked-other lanes, physical page 0 filler, positions loaded but masked only in scores, tile_mask covering logical<max_prefix which may exceed allowed range under window) can read poisoned slots and propagate via exp/dot.\", \"probabilities.to(v.dtype) casts softmax weights to FP16 before the V dot (line 68): with up to 512 tokens and FP16 V, accumulation error vs 0.003+0.003*|target| tolerance is a genuine precision surface, especially when the FP32 accumulator is only rescaled by alpha.\", \"GQA row packing: rows//GROUP and rows%GROUP with BM=16 and BQ=16/GROUP must reproduce head=kv_head*GROUP+(h mod GROUP) mapping exactly for all group sizes 1/2/4/8 and Hq up to 16.\", \"max_prefix = min(context + qb*BQ + BQ, length): verify it never excludes keys allowed for in-range queries (absolute_q = context+qpos <= context + qb*BQ + BQ - 1) and never includes tiles beyond ceil(length/S) for the table load (out-of-range table entries are arbitrary INT32).\", \"Online-softmax edge behavior when a whole tile is masked (-inf maximum mapped to 0.0, denominator initialized to 1.0): confirm no NaN/0-division reaches stored rows; padding rows (qpos>=QT) are not stored but their lanes share the tile loop.\", \"Q up to 33 with BQ=16/GROUP down to 2: grid coverage and mask qpos<QT for the last partial block across all group sizes.\", \"Numerical range: |q|,|k|<=1, D<=128, SCALE<=1/5.66 keeps scores small, so -inf handling and exp are stable; verify no overflow of int32 addressing when physical page IDs are cast (256*64*4*128 fits int32 but is cast to int64 deliberately).\"], \"scope_notes\": [\"In scope: every admitted shape, page mapping, window, and value assignment per validate_inputs; adversarial distributions (NaN/Inf in unreachable cache slots, arbitrary table tails, repeated pages) are explicitly in contract.\", \"Out of scope: autograd, tensor subclasses, aliasing, async mutation, non-contiguous or off-device tensors, table entries beyond ceil(length/S).\", \"make_inputs is an example only; correctness must hold for all domain points, not just the seed-0 case.\", \"Tolerance is elementwise relative 0.003 + 0.003*abs(target), not allclose-atol; FP16 rounding of output itself is inside tolerance.\", \"Error metric decision point: reference() FP64 vs output, via error_ratio(); no index-level intermediate to compare.\"], \"summary\": \"Initial description of case_114: Triton FP16 paged causal attention with GQA and optional sliding window, against an FP64 logical-position reference with per-element tolerance 0.003+0.003*|target|.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Analyze kernel for bug surfaces. Key concerns:\n\n1. Window masking: `allowed = (absolute_q - logical) < WINDOW` matches a-window+1<=t. OK.\n2. Window tile bounds: first_key = context + qb*BQ - WINDOW + 1 — uses qb*BQ (start of query block), correct lower bound for the block's earliest query. But if first_key negative, tile_start = max(0, first_key//TILE) — floor division of negative gives negative, then max 0, fine. tile_end uses last_key = context + min(qb*BQ+BQ-1, QT-1). OK.\n3. Non-window case: rows in a block beyond QT are masked out by qpos<QT... but tile_end via max_prefix = min(context+qb*BQ+BQ, length) — rows beyond QT don't matter since stored masked. OK.\n4. K load: k loaded with base[None,:] + dims[:,None] gives shape (D, TILE)? tl.arange dims is (D,), transposed indexing produces shape... base[None,:] is (1,TILE), dims[:,None] is (D,1) → (D,TILE). q is (BM,D). tl.dot(q, k)? q(BM,D) x k... need k as (D,TILE) — yes that's correct: k[b?] actually base encodes kv_head, so k is (D, TILE) — dot(q,k) = (BM,TILE). Good. v loaded as (TILE, D). Good.\n5. denominator initialized 1.0, first tile alpha = exp(-inf - m) with m=-inf → exp(-inf-...)? maximum=-inf, updated_maximum could be -inf if all scores -inf (fully masked tile within range? If first tile processed has no allowed keys, scores all -inf, updated_maximum = max(-inf,-inf)=-inf, then where gives 0.0. alpha=exp(-inf-0)=0, accumulator*0 fine, denominator = 1*0 + 0 = 0. Then when real scores come: updated max finite, alpha = exp(0 - m)=0, denominator=0*0+sum fine. If entire row all -inf (can't happen: qpos<QT rows always have at least position a>=... allowed t=a, so each valid query has >=1 key). But masked rows qpos>=QT get all -inf scores; denominator ends 1*... let's trace: every tile scores all -inf → updated_maximum each tile: max(-inf,-inf)=-inf→0.0; probabilities=exp(-inf-0)=0; alpha=exp(-inf? no, maximum was 0 from prev tile → alpha=exp(0-0)=1. First tile: maximum=-inf, updated=0, alpha=exp(-inf)=0 → denominator=1*0+0=0. Subsequent tiles alpha=1. denominator=0. result=0/0=NaN, stored? mask=qpos<QT so not stored. OK.\n6. probabilities.to(v.dtype) — cast to fp16 causes precision loss; tolerance 0.003+0.003|t| is generous. Probably fine.\n7. Big risk: tile_mask = logical < max_prefix, where max_prefix = min(context+qb*BQ+BQ, length). For a row qpos within the block but with absolute_q = context+qpos, keys allowed up to absolute_q which is ≤ context+qb*BQ+BQ-1 < max_prefix. Fine. But window case: tile_end computed from last_key // TILE + 1; if all first_key... negative-window first tile includes keys not allowed — masked by `allowed`. OK.\n\nBigger issue: scores set to -inf for disallowed, and max_prefix masked keys loaded as 0 with tile_mask → scores masked -inf. fine.\n\n8. Risk: NaN in unused cache slots — kernel loads only positions < max_prefix... but table entries beyond ceil(length/page)? max_prefix ≤ length so logical//PAGE < ceil(length/page) ≤ C. Fine. But tile_mask only masks logical<max_prefix; loading table for masked lanes other=0 → physical=0, but k load masked. fine.\n\n9. Sliding window when WINDOW>0 and context negative? length >= QT so context>=0. OK.\n\n10. Grid: cdiv(qt, bq) with bq=16//group; group=8 → bq=2, grid fine. BM=16, rows 16 = GROUP*BQ, so rows//GROUP gives qpos covering qb*BQ..+BQ-1 across all 16 rows? rows//GROUP ranges 0..BQ-1 for GROUP=8 rows 0..15 → 0..1. yes.\n\n11. Precision: tl.dot with fp16 inputs accumulates fp32 (default) fine. SCALE applied to full dot in fp32. exp in fp32. Good.\n\nPotential real bug: enable_fp_fusion=False — fine.\n\nAlpha rescaling: standard online softmax. denominator init 1.0: first valid tile, alpha=exp(-inf - m)=0 → denominator = 1*0 + sum = sum. good.\n\nOne subtlety: `allowed = logical <= absolute_q` — for padded rows qpos≥QT absolute_q large; but scores masked by qpos<QT anyway.\n\nRisk: window tile_start when first_key>0 but the tile containing first_key: allowed mask handles. Fine.\n\nAnother: `first_key = context + qb*BQ - WINDOW + 1` — earliest allowed key for the earliest query in block: a - WINDOW + 1 where a = context + qb*BQ. Correct.\n\nPrecision concern: probabilities cast to fp16 before dot with v — sums up to 512 terms; relative error ~2^-11 per term; tolerance 0.003 abs likely OK but with |target| large... fine.\n\nRisk worth flagging: when max_prefix < qb*BQ region... e.g., last query block where some qpos≥QT but absolute_q < max_prefix? scores masked by qpos<QT → -inf, not stored. fine.\n\nAlso: `length` loaded as int32; context, arithmetic int32, fine.\n\nAlso table masked load `other=0` but masked lanes have physical 0 used in base — k load masked so garbage not loaded. But wait: `physical.to(tl.int64)` — P*S*HK*D up to 256*64*4*128*2 bytes ~ fine.\n\nRecord description update.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791013486,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2798,
+    "prompt_tokens": 9157,
+    "total_tokens": 11955,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1387,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 1387
+    }
+  }
+}

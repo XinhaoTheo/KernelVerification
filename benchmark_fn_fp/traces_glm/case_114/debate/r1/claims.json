@@ -1,0 +1,333 @@
+[
+  {
+    "created_at": "2026-10-03T07:47:40Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T07:50:00Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t13_probe.py",
+              "sha256": "f56418bad7919c7e0377984c4fbf505ab20e897733920542b35079491889b88b"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t13_stdout.txt",
+              "sha256": "784fd4fc23ee8c93feba94faddf8e668b7593e63f006c5f8cd65fca7a24cb8de"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t13_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t13_json_result.json",
+              "sha256": "eeb04430c7a721bbc78d4831080c22efb205b49df35204f6771f4947d78302a9"
+            }
+          ],
+          "duration_s": 5.953046,
+          "error_ratio": "NaN",
+          "exit_code": 0,
+          "expected_signal": "Output NaN count > 0 confirms 0*NaN poisoning through the V dot; 0 NaNs rebuts c1 on this GPU's tl.dot path.",
+          "json_parse_error": null,
+          "json_result": {
+            "claim": "c1",
+            "error_ratio": NaN,
+            "finite_output_violation": true,
+            "length": 100,
+            "lo": 95,
+            "output_nan_count": 64,
+            "poisoned_logical_pos": 64,
+            "poisoned_slot": [
+              4,
+              0
+            ],
+            "reference_nan_count": 0,
+            "total_output_elements": 64,
+            "window": 5
+          },
+          "lo": 95,
+          "output_nan_count": 64,
+          "poisoned_logical_pos": 64,
+          "poisoned_slot": [
+            4,
+            0
+          ],
+          "reference_nan_count": 0,
+          "stderr": "",
+          "stdout": "{\"claim\": \"c1\", \"window\": 5, \"length\": 100, \"poisoned_logical_pos\": 64, \"poisoned_slot\": [4, 0], \"lo\": 95, \"output_nan_count\": 64, \"total_output_elements\": 64, \"reference_nan_count\": 0, \"error_ratio\": NaN, \"finite_output_violation\": true}\n",
+          "timed_out": false,
+          "timeout_s": 240,
+          "total_output_elements": 64,
+          "window": 5
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Confirmed: with window=5, length=100, Q=1, a NaN placed in the physical slot of expired logical position 64 (page 4, slot 0 \u2014 unique mapping, validate_inputs passes since only t>=95 is finiteness-checked) poisons the entire output: all 64 output elements are NaN while the FP64 reference has 0 NaNs. This proves 0*NaN propagates through tl.dot(probabilities, v) into the accumulator, violating the finite-output requirement.",
+        "supports": "confirmed",
+        "tool_event_id": "t13"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The v load mask is tile_mask (logical < max_prefix), which includes positions disallowed for individual rows (expired window positions when window>0, and positions t>a). The contract states such slots may hold NaN/Inf. Probabilities for disallowed entries are exp(-inf - max) = 0, and 0*NaN = NaN inside tl.dot, so the accumulator becomes NaN and the stored FP16 output is NaN, violating the finite-output and tolerance requirements.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output.\" Also \"Return one contiguous FP16 tensor ... with finite values\" and per-element tolerance abs(output-target)<=0.003+0.003*abs(target)."
+      },
+      {
+        "source": "kernel.py",
+        "summary": "Lines 52-53: v = tl.load(V_PTR + ..., mask=tile_mask, other=0.0) loads all positions with logical < max_prefix, including expired-window and t>a positions; lines 59-68 mask only scores to -inf but then accumulate tl.dot(probabilities, v) over the same loaded v tile."
+      }
+    ],
+    "scope_rationale": "The contract explicitly permits NaN/Inf in expired window positions and other unreachable cache slots and requires finite output within the per-element tolerance; a NaN-poisoned output directly violates these stated requirements, and window>0 with disallowed-but-loaded positions is an admitted input.",
+    "statement": "When window>0, cache positions loaded under tile_mask (logical<max_prefix) but disallowed for a query row (expired window positions, or t>a) may contain NaN/Inf per the contract; the kernel multiplies them by probability 0.0 inside tl.dot(probabilities.to(v.dtype), v), yielding 0*NaN=NaN that propagates into the accumulator and produces NaN/infinite output for otherwise-valid rows.",
+    "status": "confirmed",
+    "updated_at": "2026-10-03T07:50:00Z"
+  },
+  {
+    "created_at": "2026-10-03T07:47:40Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T07:50:34Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t17_probe.py",
+              "sha256": "b72c485f0c18f5288f772b0e8bf9a87c3be8d6b508d59dd08e67417d107c9c7d"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t17_stdout.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t17_stderr.txt",
+              "sha256": "89346b2713252a25e803491d04c3154d7c912e9c36d2156d1b4958963f1c551b"
+            }
+          ],
+          "duration_s": 2.869108,
+          "exit_code": 1,
+          "expected_signal": "tolerance_violation_count > 0 confirms FP16 probability cast exceeds tolerance; 0 violations rebuts c2.",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "probe_status": "shape_broadcast_error_before_any_run",
+          "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_114/debate/probes/t17_probe.py\", line 16, in <module>\n    v_c = ((torch.rand((P, S, HK, D), device=dev, generator=g) * 0.2).half() * sign)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~\nRuntimeError: The size of tensor a (16) must match the size of tensor b (32) at non-singleton dimension 1\n",
+          "stdout": "",
+          "timed_out": false,
+          "timeout_s": 240
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Inconclusive: the c2 probe crashed before any kernel run \u2014 broadcasting a (1,32,16,1) sign tensor against v of shape (32,16,1,128) raised a size-mismatch error. No precision evidence collected. Relaunching with sign = parity.view(32,16,1,1) so it broadcasts correctly over v (logical position t = page*S + slot under identity table).",
+        "supports": "inconclusive",
+        "tool_event_id": "t17"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "Casting probabilities to FP16 loses ~2^-11 relative precision per weight; with up to 512 allowed positions the numerator sum p*v can accumulate rounding error, and FP16 tl.dot inputs further quantize. Whether the worst-case error stays within 0.003+0.003*|target| (especially for near-zero targets from sign-cancelling v) is untested.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Tolerance is per-element: \"For every element, abs(output-target)<=0.003+0.003*abs(target)\", applied to every admitted shape and value assignment, with lengths up to 512 and window=0 (full causal) meaning up to 512 allowed positions per query."
+      },
+      {
+        "source": "kernel.py",
+        "summary": "Line 68: accumulator += tl.dot(probabilities.to(v.dtype), v) casts softmax weights to FP16 before the V dot; line 69 divides by an FP32 denominator."
+      }
+    ],
+    "scope_rationale": "The tolerance requirement applies to every admitted input including Q=1, lengths up to 512, window=0, D=128; the FP16 probability cast is a direct implementation detail whose accumulated rounding could violate the stated per-element tolerance for such admitted inputs.",
+    "statement": "The kernel casts softmax probabilities to FP16 (probabilities.to(v.dtype)) before the V dot; with large allowed-context lengths (e.g. Q=1, lengths=512, window=0, up to 512 positions, D=128) accumulated rounding of the FP16 weights and FP16 tl.dot inputs may push elementwise error beyond the 0.003+0.003*|target| tolerance, particularly for elements where the target is near zero due to cancellation.",
+    "status": "inconclusive",
+    "updated_at": "2026-10-03T07:50:34Z"
+  },
+  {
+    "created_at": "2026-10-03T07:47:40Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T07:50:34Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t15_probe.py",
+              "sha256": "70a70a77c0d81496d144587aca4ec84b0a434a04a0941dff5aaf755fe9359ef4"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t15_stdout.txt",
+              "sha256": "6488ff960215597db41ef2204bfdf883a2c9fbc63f95962a89b8340426743b6f"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t15_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t15_json_result.json",
+              "sha256": "cb2f88e5eed2a52c674fb77b6f4ab4d293c9b6a85245a14e80eff74ed1c309c4"
+            }
+          ],
+          "cases_run": 0,
+          "duration_s": 3.469964,
+          "exit_code": 0,
+          "expected_signal": "A tolerance violation (ratio>1) at any window/length/Q confirms a skipped-tile coverage bug; all ratios <=1 (benign finite values) rebuts c3.",
+          "json_parse_error": null,
+          "json_result": {
+            "cases_run": 0,
+            "claim": "c3",
+            "failures": [
+              {
+                "case": {
+                  "QT": 1,
+                  "group": 1,
+                  "length": 1,
+                  "window": 1
+                },
+                "exception": "Expected a 'cpu' device type for generator but found 'cuda'"
+              },
+              {
+                "case": {
+                  "QT": 1,
+                  "group": 2,
+                  "length": 1,
+                  "window": 1
+                },
+                "exception": "Expected a 'cpu' device type for generator but found 'cuda'"
+              },
+              {
+                "case": {
+                  "QT": 1,
+                  "group": 4,
+                  "length": 1,
+                  "window": 1
+                },
+                "exception": "Expected a 'cpu' device type for generator but found 'cuda'"
+              },
+              {
+                "case": {
+                  "QT": 1,
+                  "group": 1,
+                  "length": 33,
+                  "window": 1
+                },
+                "exception": "Expected a 'cpu' device type for generator but found 'cuda'"
+              },
+              {
+                "case": {
+                  "QT": 1,
+                  "group": 2,
+                  "length": 33,
+                  "window": 1
+                },
+                "exception": "Expected a 'cpu' device type for generator but found 'cuda'"
+              },
+              {
+                "case": {
+                  "QT": 1,
+                  "group": 4,
+                  "length": 33,
+                  "window": 1
+                },
+                "exception": "Expected a 'cpu' device type for generator but found 'cuda'"
+              },
+              {
+                "case": {
+                  "QT": 1,
+                  "group": 1,
+                  "length": 64,
+                  "window": 1
+                },
+                "exception": "Expected a 'cpu' device type for generator but found 'cuda'"
+              },
+              {
+                "case": {
+                  "QT": 1,
+                  "group": 2,
+                  "length": 64,
+                  "window": 1
+                },
+                "exception": "Expected a 'cpu' device type for generator but found 'cuda'"
+              },
+              {
+                "case": {
+                  "QT": 1,
+                  "group": 4,
+                  "length": 64,
+                  "window": 1
+                },
+                "exception": "Expected a 'cpu' device type for generator but found 'cuda'"
+              },
+              {
+                "case": {
+                  "QT": 1,
+                  "group": 1,
+                  "length": 65,
+                  "window": 1
+                },
+                "exception": "Expected a 'cpu' device type for generator but found 'cuda'"
+              }
+            ],
+            "n_failures": 1836,
+            "worst": {
+              "case": null,
+              "ratio": 0.0
+            }
+          },
+          "n_failures": 1836,
+          "probe_status": "broken_all_cases_raised_exception",
+          "stderr": "",
+          "stdout": "{\"claim\": \"c3\", \"cases_run\": 0, \"n_failures\": 1836, \"worst\": {\"case\": null, \"ratio\": 0.0}, \"failures\": [{\"case\": {\"window\": 1, \"QT\": 1, \"length\": 1, \"group\": 1}, \"exception\": \"Expected a 'cpu' device type for generator but found 'cuda'\"}, {\"case\": {\"window\": 1, \"QT\": 1, \"length\": 1, \"group\": 2}, \"exception\": \"Expected a 'cpu' device type for generator but found 'cuda'\"}, {\"case\": {\"window\": 1, \"QT\": 1, \"length\": 1, \"group\": 4}, \"exception\": \"Expected a 'cpu' device type for generator but found 'cuda'\"}, {\"case\": {\"window\": 1, \"QT\": 1, \"length\": 33, \"group\": 1}, \"exception\": \"Expected a 'cpu' device type for generator but found 'cuda'\"}, {\"case\": {\"window\": 1, \"QT\": 1, \"length\": 33, \"group\": 2}, \"exception\": \"Expected a 'cpu' device type for generator but found 'cuda'\"}, {\"case\": {\"window\": 1, \"QT\": 1, \"length\": 33, \"group\": 4}, \"exception\": \"Expected a 'cpu' device type for generator but found 'cuda'\"}, {\"case\": {\"window\": 1, \"QT\": 1, \"length\": 64, \"group\": 1}, \"exception\": \"Expected a 'cpu' device type for generator but found 'cuda'\"}, {\"case\": {\"window\": 1, \"QT\": 1, \"length\": 64, \"group\": 2}, \"exception\": \"Expected a 'cpu' device type for generator but found 'cuda'\"}, {\"case\": {\"window\": 1, \"QT\": 1, \"length\": 64, \"group\": 4}, \"exception\": \"Expected a 'cpu' device type for generator but found 'cuda'\"}, {\"case\": {\"window\": 1, \"QT\": 1, \"length\": 65, \"group\": 1}, \"exception\": \"Expected a 'cpu' device type for generator but found 'cuda'\"}]}\n",
+          "timed_out": false,
+          "timeout_s": 560
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "Inconclusive: the c3 sweep probe itself was broken \u2014 every one of 1836 candidate cases raised \"Expected a 'cpu' device type for generator but found 'cuda'\" (torch.Generator(device=dev) misused inside build()), so 0 cases actually executed. No evidence either way on window tile-bound coverage. A corrected probe (CPU generator, then .to(dev)) is being relaunched.",
+        "supports": "inconclusive",
+        "tool_event_id": "t15"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "Lines 35-39 compute tile_start = max(0, first_key // TILE) where first_key can be negative; Triton's // on negative ints floors toward -infinity, so -5//64 = -1 and tile_start becomes 0 only via max \u2014 that part is fine \u2014 but tile_end = min(last_key//TILE + 1, num_tiles) with last_key = context + min(qb*BQ+BQ-1, QT-1) uses QT-1 instead of the block's actual max query row (qb*BQ+BQ-1), potentially under-covering tiles for later query rows; conversely expired-but-within-window-bound tiles may be skipped for early rows whose allowed keys lie in earlier tiles. Each query row's allowed keys must lie within [tile_start, tile_end), otherwise they are silently omitted.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"Query row r has absolute position a=lengths[b]-Q+r. It attends only to positions t satisfying 0<=t<=a and, if window>0, a-window+1<=t\" \u2014 every allowed position must be included in the softmax for every admitted shape and window."
+      },
+      {
+        "source": "kernel.py",
+        "summary": "Lines 36-39: first_key = context + qb*BQ - WINDOW + 1; last_key = context + min(qb*BQ + BQ - 1, QT - 1); tile bounds derived from these replace the full loop range when WINDOW>0."
+      }
+    ],
+    "scope_rationale": "The contract requires exact softmax over all allowed positions for every admitted window in [0,256] and every Q up to 33; the tile-range narrowing at lines 35-39 must cover every allowed key of every in-range query row, and a missed tile would directly violate the stated output formula.",
+    "statement": "The sliding-window tile-range narrowing (lines 35-39) may skip allowed keys for some query rows in the block: last_key is clamped to QT-1 (the last row overall) rather than the block's last in-range row (context + qb*BQ + BQ - 1), and tile_start/tile_end derived from block-edge rows may not cover the union of allowed key ranges across all rows in the block, silently omitting allowed positions and producing wrong softmax denominators/output.",
+    "status": "inconclusive",
+    "updated_at": "2026-10-03T07:50:34Z"
+  }
+]

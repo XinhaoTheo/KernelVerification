@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-959c241333564465bae8b4b46807b749",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The claim c1 is recorded and analytically plausible. I'll run a runtime probe with a mid-chunk sequence reset to confirm whether outputs after the reset incorrectly include the carry term.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-871d03a7f22b7407",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_112\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ntorch.manual_seed(1)\\nB, L, H, D = 1, 64, 2, 8\\nchunk = 32\\nu = (2*torch.rand(B,L,H,D)-1).float().to(dev)\\ndec = (0.5 + 0.46*torch.rand(B,L,H)).float().to(dev)\\ninit = (2*torch.rand(B,H,D)-1).float().to(dev)\\nseq = torch.zeros(B,L, dtype=torch.int32)\\n# mid-chunk reset at token 10 (inside chunk 0), another at token 40 (chunk boundary of chunk 1)\\nseq[:, 10:] += 1\\nseq[:, 40:] += 1\\nseq = seq.to(dev)\\n\\nout, final = K.run(u, dec, seq, init, chunk)\\nref_out, ref_final = K.reference(u, dec, seq, init, chunk)\\nref_out = ref_out.float(); ref_final = ref_final.float()\\n\\ndiff = (out - ref_out).abs()\\ntol = 0.002 + 0.0001*ref_out.abs()\\nviol = diff > tol\\n# examine tokens 10..31 (after first reset, still chunk 0)\\nbad = viol[0,:,0,:]\\ntok_bad = bad.any(dim=1).nonzero().flatten().tolist()\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"elementwise |actual-target| vs contract tolerance\\\",\\n  \\\"max_abs_err\\\": diff.max().item(),\\n  \\\"num_violations\\\": int(viol.sum().item()),\\n  \\\"tokens_with_violations\\\": tok_bad[:40],\\n  \\\"max_err_token10_31\\\": diff[0,10:32].max().item(),\\n  \\\"max_err_token32_39\\\": diff[0,32:40].max().item(),\\n  \\\"final_state_max_err\\\": (final-ref_final).abs().max().item(),\\n  \\\"seq_boundaries\\\": [10,40],\\n}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Let me analyze the math. In _combine, prefix token = product of alphas from chunk start through token t inclusive. Carry = state at chunk start (end of previous chunk). Correct output = local_t + (product of alphas from chunk start to t) * carry, but only if no sequence reset between chunk start and t. If a reset occurs at token r (first token of new sequence), then carry contribution should be zero for t >= r.\n\nKernel zeroes prefix only where current != previous, i.e. at the reset token itself. For t > r within the same chunk, current == previous (same new sequence), prefix stays full product including alphas before r. So output = local_t + full_prefix * carry — local_t correctly restarts (in _local_chunks prior is zeroed at reset), but the carry term incorrectly injects old sequence's carry scaled by decay product spanning the reset.\n\nWait — but does the reset token even get prefix*carry? At the reset token, prefix is zeroed, so output = local (correct). Tokens after reset: carry should not apply — but does it? Carry is the state at chunk start, which belongs to the old sequence. Correct recurrence says after reset, state depends only on tokens from r. So carry contribution must be zero for all t >= r. Kernel applies it. Bug confirmed analytically, but run probe to confirm.\n\nAlso _pass_states handles chunk-level resets (factor=0 when sequence label changes between chunk representatives) — that handles cross-chunk carry, but mid-chunk resets fail.\n\nWait, also consider: if reset is mid-chunk, local state at reset token is computed correctly (prior=0). And summary/scale for the chunk: scale = full product — used in _pass_states with factor zeroed if chunk's representative sequence differs from previous chunk's representative. That handles final state correctly. Only _combine is wrong.\n\nProbe: seq_idx with mid-chunk reset, e.g. L=64, chunk=32, reset at token 10. Run probe.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791013363,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 919,
+    "prompt_tokens": 13525,
+    "total_tokens": 14444,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 422,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 422
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-3a2872b9acef4096ba5808f121b3835d",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The corrected sweep (t15) passed all 14 admitted configs; I'll finalize that as rebutting c1. The NaN-poisoning probe (t16) crashed because I never moved tensors to CUDA — rerunning with the device fix.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-822099acfb04f220",
+            "function": {
+              "arguments": "{\"data\": {\"configs\": 14, \"errors\": 0, \"worst_ratio\": 0.041}, \"event_id\": \"t15\", \"status\": \"rebutted\", \"summary\": \"Corrected sweep over 14 admitted configurations (C<=512/S, covering B up to 4, Q up to 33, D in {32,64,128}, GQA group up to 8, page sizes 16/32/64, windows 0/1/41/63/100/128/255/256, lengths up to 512) all passed with finite outputs; worst contract error ratio 0.0410, well under the ratio<=1 contract bound. No configuration deviated beyond tolerance.\", \"supports\": \"rebutted\"}",
+              "name": "finalize_probe_evidence"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-9d6ebd88af69158f",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, torch, json\\nsys.path.insert(0, \\\"/root/cases/case_115\\\")\\nimport kernel\\ndev=\\\"cuda\\\"\\n\\ndef build(seed, window):\\n    g=torch.Generator().manual_seed(seed)\\n    b,qt,d,hk,group,page=2,9,64,2,2,16\\n    hq=4; lengths=[97,113]\\n    pages=20; c=8\\n    q=(2*torch.rand((b,qt,hq,d),generator=g)-1).half()\\n    k=(2*torch.rand((pages,page,hk,d),generator=g)-1).half()\\n    v=(2*torch.rand(k.shape,generator=g)-1).half()\\n    tbl=torch.randint(0,pages,(b,c),generator=g).to(torch.int32)\\n    ln=torch.tensor(lengths,dtype=torch.int32)\\n    return tuple(t.to(dev) for t in (q,k,v,tbl,ln))+(window,)\\n\\ndef poison(k,v,q,tbl,ln,window):\\n    k=k.clone(); v=v.clone()\\n    b,qt,hq,d=q.shape\\n    page,hk=k.shape[1],k.shape[2]\\n    for i in range(b):\\n        length=int(ln[i].item())\\n        lo = max(0, length-qt-window+1) if window else 0\\n        reachable=set(range(lo,length))\\n        used_pages=set(int(tbl[i,t//page].item()) for t in reachable)\\n        for p in range(k.shape[0]):\\n            if p not in used_pages:\\n                k[p]=float('nan'); v[p]=float('nan')\\n        for p in used_pages:\\n            for pos in range(page):\\n                ok=any(int(tbl[i,t//page].item())==p and t%page==pos and t in reachable for t in range(length))\\n                if not ok:\\n                    k[p,pos]=float('nan'); v[p,pos]=float('nan')\\n    tbl=tbl.clone()\\n    for i in range(b):\\n        need=(int(ln[i].item())+page-1)//page\\n        tbl[i,need:]=999999\\n    return k,v,tbl\\n\\ncases=[]\\nfor seed,window in [(3,41),(4,0),(5,256),(6,1),(7,17)]:\\n    q,k,v,tbl,ln,window=build(seed,window)\\n    out_clean=kernel.run(q,k,v,tbl,ln,window)\\n    ref=kernel.reference(q,k,v,tbl,ln,window)\\n    ratio_clean=float(((out_clean.double()-ref).abs()/(0.003+0.003*ref.abs())).max())\\n    kp,vp,tblp=poison(k,v,q,tbl,ln,window)\\n    out_p=kernel.run(q,kp,vp,tblp,ln,window)\\n    finite=bool(torch.isfinite(out_p).all())\\n    diff=float((out_p.float()-out_clean.float()).abs().max())\\n    ratio_p=float(((out_p.double()-ref).abs()/(0.003+0.003*ref.abs())).max())\\n    cases.append([seed,window,round(ratio_clean,4),round(ratio_p,4),diff,finite])\\nprint(json.dumps({\\\"metric\\\":\\\"contract ratio clean vs NaN-poisoned irrelevant slots (incl. dirty block_table entries beyond ceil(length/page))\\\",\\\"reason\\\":\\\"irrelevant-slot NaN must not change output; require finite outputs and ratio<=1\\\",\\\"cases\\\":cases,\\\"all_finite\\\":all(c[5] for c in cases)}))\\n\", \"expected_signal\": \"all cases finite, ratio_p <= 1, diff ~ 0\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "c1 sweep t15 passed all 14 configs — finalize it as rebutted. c2's probe t16 failed because tensors were kept on CPU (never moved to cuda). Need to rerun with .to(dev) and correct CUDA placement, then finalize.\n\nLet me finalize t15 and rerun c2 probe with device fix.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791013778,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1082,
+    "prompt_tokens": 44972,
+    "total_tokens": 46054,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 68,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 68
+    }
+  }
+}

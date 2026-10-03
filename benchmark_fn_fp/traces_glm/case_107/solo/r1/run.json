@@ -1,0 +1,962 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_107",
+    "has_error": null,
+    "kernel_code": "\"\"\"Standalone CUDA sliding-window state update.\n\nThe public contract and independent reference are in this file and problem.txt.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _slide(STATE, EVENTS, OUT, L: tl.constexpr, D: tl.constexpr,\n           K: tl.constexpr, TOTAL: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)\n    valid = index < TOTAL\n    batch = index // (L * D)\n    row = (index // D) % L\n    col = index % D\n    from_state = row < L - K\n    old_value = tl.load(STATE + batch * L * D + (row + K) * D + col,\n                        mask=valid & from_state, other=0.0)\n    new_value = tl.load(EVENTS + batch * K * D + (row - (L - K)) * D + col,\n                        mask=valid & ~from_state, other=0.0)\n    value = tl.where(from_state, old_value, new_value)\n    tl.store(OUT + index, value, mask=valid)\n\n\ndef run(state, new_events):\n    \"\"\"Update state in place, return that same tensor, preserve new_events.\"\"\"\n    assert state.is_cuda and new_events.is_cuda\n    assert state.device == new_events.device\n    assert state.dtype == new_events.dtype == torch.float32\n    assert state.is_contiguous() and new_events.is_contiguous()\n    assert state.ndim == new_events.ndim == 3\n    batch, length, width = state.shape\n    assert new_events.shape[0] == batch and new_events.shape[2] == width\n    steps = new_events.shape[1]\n    assert 1 <= batch <= 4 and 2 <= length <= 4096 and 1 <= width <= 1024\n    assert 1 <= steps <= min(length, 128)\n    output = torch.empty_like(state)\n    _slide[(triton.cdiv(state.numel(), 1024),)](\n        state, new_events, output, length, width, steps, state.numel(),\n        BLOCK=1024, num_warps=4,\n    )\n    state.copy_(output)\n    return state\n\n\ndef reference(state, new_events):\n    \"\"\"Independent result computed from the pre-call state, without mutation.\"\"\"\n    return torch.cat((state[:, new_events.shape[1]:, :], new_events), dim=1)\n\n\ndef make_inputs(device=\"cuda\", batch=4, length=2048, width=1024,\n                steps=2, seed=0):\n    \"\"\"One convenient example; any legal input may be tested.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    state = torch.randn((batch, length, width), generator=generator)\n    new_events = torch.randn((batch, steps, width), generator=generator)\n    return state.to(device), new_events.to(device)\n",
+    "passed": null,
+    "problem_text": "Verify a CUDA sliding-window state-update implementation over the complete\ninput domain below, not only the example returned by make_inputs().\n\nInputs are contiguous FP32 CUDA tensors on the same NVIDIA T4 device:\n- state has shape [B, L, D], where 1 <= B <= 4, 2 <= L <= 4096,\n  and 1 <= D <= 1024.\n- new_events has shape [B, K, D], where 1 <= K <= min(L, 128).\n- The two input tensors have disjoint storage. Their values may be any finite\n  FP32 values, including zeros and signed zeros.\n\nLet old_state be the contents of state before this call. After run() completes,\nfor every legal batch b, row r, and feature d:\n  state[b,r,d] = old_state[b,r+K,d]  if r < L-K\n                 new_events[b,r-(L-K),d] otherwise.\nEach result must preserve the exact FP32 bit pattern of its source element.\nThis is a copy operation; no numerical approximation is permitted.\n\nrun() must update state in place and return that same tensor (same storage),\nwhile preserving new_events. Calls may be repeated on the state resulting from\nprevious calls, with any legal new_events. All calls are on the same CUDA stream,\nwith no concurrent external access to either tensor. CUDA's usual asynchronous\nreturn is allowed; correctness is observed after stream synchronization.\n\nThe full wrapper, including its allocation decisions and launch arguments, is\npart of the implementation to verify. Do not assume distinct pointer names in\nthe Triton function imply distinct storage: inspect the arguments passed by run.\nThe public reference() in kernel.py computes the required new contents without\nmutating either input and can also execute on CPU. Evaluate it BEFORE run() or\non a saved pre-call state. You may construct any legal inputs and repeat calls.\nThe frozen environment is PyTorch 2.8.0 / Triton 3.4.0 / NVIDIA T4.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_107",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-03T04:59:30Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-03T05:00:38Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "4cc512b2b6662ff37b8200dce7a3fe2255ee556f6531526482e4bfa9051ae2a9"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "5131ade84a9e6c34d0d3df0279191bdd0ef0f8f508967286993769f8cfbc2e25"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "10ab8f6fc6a76d3b8bc511ccf51c7ae6317a33cc8cf6644663ea5e7778307a43"
+              }
+            ],
+            "duration_s": 6.421992,
+            "exit_code": 0,
+            "expected_signal": null,
+            "fails": 0,
+            "json_parse_error": null,
+            "json_result": {
+              "fails": [],
+              "repeated_ok": true,
+              "storage_ptr_preserved": true,
+              "tested_cases": 23
+            },
+            "repeated_ok": true,
+            "stderr": "",
+            "stdout": "{\"tested_cases\": 23, \"fails\": [], \"storage_ptr_preserved\": true, \"repeated_ok\": true}\n",
+            "storage_ptr_preserved": true,
+            "tested_cases": 23,
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Across 23 legal shape cases (edges L=2, K=L, K=1, large B/L/D, K=128) run() matched reference() exactly bit-for-bit (torch.equal on int32 views), returned the same tensor with preserved storage pointer, preserved new_events, and passed 5 chained repeated calls. Signed-zero elements included.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The Triton index math (batch/row/col decomposition, from_state mask, row+K and row-(L-K) offsets) could be wrong for edge shapes like L=2, K=L, K=1, or large sizes.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract: state[b,r,d] = old_state[b,r+K,d] if r<L-K else new_events[b,r-(L-K),d], exact FP32 bit pattern, over 1<=B<=4, 2<=L<=4096, 1<=D<=1024, 1<=K<=min(L,128)."
+        }
+      ],
+      "scope_rationale": "The contract requires the exact sliding-window formula with exact FP32 bit preservation across the full declared domain (all B, L, D, K within bounds).",
+      "statement": "run() computes the sliding-window update correctly across the full legal input domain (edge shapes L=2, K=L, K=1, large shapes, repeated calls), with exact bit-pattern preservation, in-place mutation of state, and preservation of new_events.",
+      "status": "confirmed",
+      "updated_at": "2026-10-03T05:00:38Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_107",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_107"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_107"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_107"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_107",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 8.799555499,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel looks like a straightforward correct sliding-window copy. I'll record claims and probe a range of legal shapes, including repeated calls and in-place identity.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Contract requires state[b,r,d] = old_state[b,r+K,d] if r<L-K else new_events[b,r-(L-K),d], exact bit pattern. The Triton index math could be off for edge shapes (L=2, K=L, large shapes).",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract defines the exact sliding-window formula over full domain 1<=B<=4, 2<=L<=4096, 1<=D<=1024, 1<=K<=min(L,128), with exact FP32 bit preservation."
+              }
+            ],
+            "statement": "run() computes the sliding-window update correctly across the full legal input domain, including edge shapes (L=2, K=L, K=1, large shapes), with exact bit-pattern preservation."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.8,
+        "input_tokens": 8445,
+        "output_tokens": 386
+      }
+    },
+    {
+      "duration_s": 5.405870655000001,
+      "role": "solo",
+      "round": 3,
+      "text": "Re-record the claim with scope_rationale, then run probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The Triton index math (batch/row/col decomposition, from_state mask, row+K and row-(L-K) offsets) could be wrong for edge shapes like L=2, K=L, K=1, or large sizes.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract: state[b,r,d] = old_state[b,r+K,d] if r<L-K else new_events[b,r-(L-K),d], exact FP32 bit pattern, over 1<=B<=4, 2<=L<=4096, 1<=D<=1024, 1<=K<=min(L,128)."
+              }
+            ],
+            "scope_rationale": "The contract requires the exact sliding-window formula with exact FP32 bit preservation across the full declared domain (all B, L, D, K within bounds).",
+            "statement": "run() computes the sliding-window update correctly across the full legal input domain (edge shapes L=2, K=L, K=1, large shapes, repeated calls), with exact bit-pattern preservation, in-place mutation of state, and preservation of new_events."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.406,
+        "input_tokens": 9118,
+        "output_tokens": 270
+      }
+    },
+    {
+      "duration_s": 13.845878911,
+      "role": "solo",
+      "round": 4,
+      "text": "I'll run the probe across a sweep of edge shapes, verifying exact bit patterns, in-place update, event preservation, and repeated calls.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_107\")\nfrom kernel import run, reference\n\ntorch.cuda.synchronize()\ndef make(B,L,D,K,seed):\n    g = torch.Generator(device=\"cpu\").manual_seed(seed)\n    s = torch.randn((B,L,D), generator=g)\n    e = torch.randn((B,K,D), generator=g)\n    # include zeros and signed zeros\n    s[0,0,0] = 0.0\n    if D>1: e[0,0,1] = -0.0\n    return s.cuda(), e.cuda()\n\ncases = [\n    (1,2,1,1),(1,2,1,2),(4,2,1024,1),(4,2,1024,2),\n    (1,3,7,1),(1,3,7,2),(1,3,7,3),(2,5,3,4),(1,7,1,7),\n    (3,17,13,16),(2,64,33,64),(1,4096,1,128),(1,4096,3,128),\n    (4,1024,5,128),(2,1000,7,1),(1,4096,1024,2),(1,4096,1024,128),\n    (3,33,65,32),(1,1,1,1),(1,2,1,128),(2,129,4,128),(1,2048,1024,3),\n]\nfails=[]\nfor (B,L,D,K) in cases:\n    try:\n        s,e = make(B,L,D,K,hash((B,L,D,K))%10000)\n    except Exception as ex:\n        continue  # illegal K maybe\n    s_pre = s.clone(); e_pre = e.clone()\n    ref = reference(s_pre, e_pre)\n    ret = run(s, e)\n    torch.cuda.synchronize()\n    ok_bits = torch.equal(s.view(torch.int32), ref.view(torch.int32))\n    ok_ret = (ret is s) and (s.data_ptr()==s_pre.data_ptr()) if False else (ret is s)\n    ok_ev = torch.equal(e, e_pre)\n    if not (ok_bits and ok_ret and ok_ev):\n        fails.append({\"case\":[B,L,D,K],\"bits\":ok_bits,\"ret_same\":ret is s,\"ev_ok\":ok_ev,\n                      \"n_diff\":(s.view(torch.int32)!=ref.view(torch.int32)).sum().item()})\n# repeated calls\nB,L,D=2,50,11\ns,e = make(B,L,D,5,123)\nok_rep=True\nfor i in range(5):\n    K = [5,1,3,11,2][i]\n    e = torch.randn((B,K,D), device=\"cuda\")\n    ref = reference(s, e)\n    s = run(s, e)\n    torch.cuda.synchronize()\n    if not torch.equal(s.view(torch.int32), ref.view(torch.int32)):\n        ok_rep=False; break\nprint(json.dumps({\"metric\":\"exact FP32 bit equality vs reference() over shape sweep + in-place + event preservation + repeated calls\",\"n_cases\":len(cases)+1,\"fails\":fails,\"repeated_ok\":ok_rep}))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.846,
+        "input_tokens": 10432,
+        "output_tokens": 757
+      }
+    },
+    {
+      "duration_s": 15.718134706999997,
+      "role": "solo",
+      "round": 5,
+      "text": "The probe crashed on an illegal case (L=1 violates 2<=L). I'll rerun with only legal shapes, printing results incrementally.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_107\")\nfrom kernel import run, reference\n\ntorch.cuda.synchronize()\ndef make(B,L,D,K,seed):\n    g = torch.Generator(device=\"cpu\").manual_seed(seed)\n    s = torch.randn((B,L,D), generator=g)\n    e = torch.randn((B,K,D), generator=g)\n    s[0,0,0] = 0.0\n    if D>1: e[0,0,1] = -0.0\n    return s.cuda(), e.cuda()\n\ncases = [\n    (1,2,1,1),(1,2,1,2),(4,2,1024,1),(4,2,1024,2),\n    (1,3,7,1),(1,3,7,2),(1,3,7,3),(2,5,3,4),(1,7,1,7),\n    (3,17,13,16),(2,64,33,64),(1,4096,1,128),(1,4096,3,128),\n    (4,1024,5,128),(2,1000,7,1),(1,4096,1024,2),(1,4096,1024,128),\n    (3,33,65,32),(1,2,1,128),(2,129,4,128),(1,2048,1024,3),\n]\nfails=[]; ptr_ok=True; tested=0\nfor (B,L,D,K) in cases:\n    s,e = make(B,L,D,K,1234)\n    s_pre = s.clone(); e_pre = e.clone(); ptr = s.data_ptr()\n    ref = reference(s_pre, e_pre)\n    ret = run(s, e)\n    torch.cuda.synchronize()\n    tested+=1\n    ok_bits = torch.equal(s.view(torch.int32), ref.view(torch.int32))\n    ok_ptr = s.data_ptr()==ptr\n    ptr_ok = ptr_ok and ok_ptr\n    ok_ev = torch.equal(e, e_pre)\n    if not (ok_bits and (ret is s) and ok_ev and ok_ptr):\n        fails.append({\"case\":[B,L,D,K],\"bits\":ok_bits,\"ret_same\":ret is s,\"ev_ok\":ok_ev,\"ptr_ok\":ok_ptr,\n                      \"n_diff\":(s.view(torch.int32)!=ref.view(torch.int32)).sum().item()})\nB,L,D=2,50,11\ns,e = make(B,L,D,5,123)\nok_rep=True\nfor i in range(5):\n    K = [5,1,3,11,2][i]\n    e = torch.randn((B,K,D), device=\"cuda\")\n    ref = reference(s, e)\n    ptr = s.data_ptr()\n    s = run(s, e)\n    torch.cuda.synchronize()\n    if not (torch.equal(s.view(torch.int32), ref.view(torch.int32)) and s.data_ptr()==ptr):\n        ok_rep=False; break\nprint(json.dumps({\"tested_cases\":tested,\"fails\":fails,\"storage_ptr_preserved\":ptr_ok,\"repeated_ok\":ok_rep}))"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.718,
+        "input_tokens": 13304,
+        "output_tokens": 915
+      }
+    },
+    {
+      "duration_s": 12.287161042999998,
+      "role": "solo",
+      "round": 6,
+      "text": "The probe hit asserts on cases where K exceeded min(L,128) \u2014 those are illegal inputs. I'll filter to legal shapes and rerun.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_107\")\nfrom kernel import run, reference\n\ntorch.cuda.synchronize()\ndef make(B,L,D,K,seed):\n    g = torch.Generator(device=\"cpu\").manual_seed(seed)\n    s = torch.randn((B,L,D), generator=g)\n    e = torch.randn((B,K,D), generator=g)\n    s[0,0,0] = 0.0\n    if D>1: e[0,0,1] = -0.0\n    return s.cuda(), e.cuda()\n\ncases = [\n    (1,2,1,1),(1,2,1,2),(4,2,1024,1),(4,2,1024,2),\n    (1,3,7,1),(1,3,7,2),(1,3,7,3),(2,5,3,4),(1,7,1,7),\n    (3,17,13,16),(2,64,33,64),(1,4096,1,128),(1,4096,3,128),\n    (4,1024,5,128),(2,1000,7,1),(1,4096,1024,2),(1,4096,1024,128),\n    (3,33,65,32),(1,2,1,2),(2,129,4,128),(1,2048,1024,3),\n    (2,300,17,128),(4,4096,1024,128),\n]\ncases = [c for c in cases if c[3] <= min(c[1],128)]\nfails=[]; ptr_ok=True; tested=0\nfor (B,L,D,K) in cases:\n    s,e = make(B,L,D,K,1234)\n    s_pre = s.clone(); e_pre = e.clone(); ptr = s.data_ptr()\n    ref = reference(s_pre, e_pre)\n    ret = run(s, e)\n    torch.cuda.synchronize()\n    tested+=1\n    ok_bits = torch.equal(s.view(torch.int32), ref.view(torch.int32))\n    ok_ptr = s.data_ptr()==ptr\n    ptr_ok = ptr_ok and ok_ptr\n    ok_ev = torch.equal(e, e_pre)\n    if not (ok_bits and (ret is s) and ok_ev and ok_ptr):\n        fails.append({\"case\":[B,L,D,K],\"bits\":ok_bits,\"ret_same\":ret is s,\"ev_ok\":ok_ev,\"ptr_ok\":ok_ptr,\n                      \"n_diff\":(s.view(torch.int32)!=ref.view(torch.int32)).sum().item()})\nB,L,D=2,50,11\ns,e = make(B,L,D,5,123)\nok_rep=True\nfor i in range(5):\n    K = [5,1,3,11,2][i]\n    e = torch.randn((B,K,D), device=\"cuda\")\n    ref = reference(s, e)\n    ptr = s.data_ptr()\n    s = run(s, e)\n    torch.cuda.synchronize()\n    if not (torch.equal(s.view(torch.int32), ref.view(torch.int32)) and s.data_ptr()==ptr):\n        ok_rep=False; break\nprint(json.dumps({\"tested_cases\":tested,\"fails\":fails,\"storage_ptr_preserved\":ptr_ok,\"repeated_ok\":ok_rep}))"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.287,
+        "input_tokens": 16067,
+        "output_tokens": 812
+      }
+    },
+    {
+      "duration_s": 7.130211423999995,
+      "role": "solo",
+      "round": 7,
+      "text": "The probe (t9) passed all 23 legal shape cases with exact bit equality, preserved storage, preserved events, and repeated calls. That confirms the correctness claim, so I'll finalize the evidence and record a trust verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "fails": 0,
+              "repeated_ok": true,
+              "storage_ptr_preserved": true,
+              "tested_cases": 23
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "Across 23 legal shape cases (edges L=2, K=L, K=1, large B/L/D, K=128) run() matched reference() exactly bit-for-bit (torch.equal on int32 views), returned the same tensor with preserved storage pointer, preserved new_events, and passed 5 chained repeated calls. Signed-zero elements included.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.13,
+        "input_tokens": 19003,
+        "output_tokens": 258
+      }
+    },
+    {
+      "duration_s": 7.016368279000005,
+      "role": "solo",
+      "round": 8,
+      "text": "The correctness claim is confirmed with exact bit-equality across 23 legal shape cases, preserved storage, preserved events, and chained repeated calls (probe t9). Nothing further would change the verdict, so I'll record it.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t9 ran run() against reference() on 23 legal shape cases covering the full contract domain edges (L=2, K=L, K=1, K=128, B=4, L=4096, D=1024, mixed shapes) with signed zeros. Every case matched exactly bit-for-bit (torch.equal on int32 views), run() returned the same tensor with unchanged storage pointer (in-place), new_events was preserved, and 5 chained repeated calls with varying K also matched exactly. Source inspection (kernel.py) confirms the Triton index math implements the contract formula: state rows r<L-K read old_state[r+K], rows r>=L-K read new_events[r-(L-K)], via a separate output buffer then state.copy_. No failures observed; no further evidence needed.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.016,
+        "input_tokens": 21564,
+        "output_tokens": 258
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_107"
+      },
+      "created_at": "2026-10-03T04:59:15Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_107",
+        "has_error": null,
+        "kernel_code": "\"\"\"Standalone CUDA sliding-window state update.\n\nThe public contract and independent reference are in this file and problem.txt.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _slide(STATE, EVENTS, OUT, L: tl.constexpr, D: tl.constexpr,\n           K: tl.constexpr, TOTAL: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)\n    valid = index < TOTAL\n    batch = index // (L * D)\n    row = (index // D) % L\n    col = index % D\n    from_state = row < L - K\n    old_value = tl.load(STATE + batch * L * D + (row + K) * D + col,\n                        mask=valid & from_state, other=0.0)\n    new_value = tl.load(EVENTS + batch * K * D + (row - (L - K)) * D + col,\n                        mask=valid & ~from_state, other=0.0)\n    value = tl.where(from_state, old_value, new_value)\n    tl.store(OUT + index, value, mask=valid)\n\n\ndef run(state, new_events):\n    \"\"\"Update state in place, return that same tensor, preserve new_events.\"\"\"\n    assert state.is_cuda and new_events.is_cuda\n    assert state.device == new_events.device\n    assert state.dtype == new_events.dtype == torch.float32\n    assert state.is_contiguous() and new_events.is_contiguous()\n    assert state.ndim == new_events.ndim == 3\n    batch, length, width = state.shape\n    assert new_events.shape[0] == batch and new_events.shape[2] == width\n    steps = new_events.shape[1]\n    assert 1 <= batch <= 4 and 2 <= length <= 4096 and 1 <= width <= 1024\n    assert 1 <= steps <= min(length, 128)\n    output = torch.empty_like(state)\n    _slide[(triton.cdiv(state.numel(), 1024),)](\n        state, new_events, output, length, width, steps, state.numel(),\n        BLOCK=1024, num_warps=4,\n    )\n    state.copy_(output)\n    return state\n\n\ndef reference(state, new_events):\n    \"\"\"Independent result computed from the pre-call state, without mutation.\"\"\"\n    return torch.cat((state[:, new_events.shape[1]:, :], new_events), dim=1)\n\n\ndef make_inputs(device=\"cuda\", batch=4, length=2048, width=1024,\n                steps=2, seed=0):\n    \"\"\"One convenient example; any legal input may be tested.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    state = torch.randn((batch, length, width), generator=generator)\n    new_events = torch.randn((batch, steps, width), generator=generator)\n    return state.to(device), new_events.to(device)\n",
+        "passed": null,
+        "problem_text": "Verify a CUDA sliding-window state-update implementation over the complete\ninput domain below, not only the example returned by make_inputs().\n\nInputs are contiguous FP32 CUDA tensors on the same NVIDIA T4 device:\n- state has shape [B, L, D], where 1 <= B <= 4, 2 <= L <= 4096,\n  and 1 <= D <= 1024.\n- new_events has shape [B, K, D], where 1 <= K <= min(L, 128).\n- The two input tensors have disjoint storage. Their values may be any finite\n  FP32 values, including zeros and signed zeros.\n\nLet old_state be the contents of state before this call. After run() completes,\nfor every legal batch b, row r, and feature d:\n  state[b,r,d] = old_state[b,r+K,d]  if r < L-K\n                 new_events[b,r-(L-K),d] otherwise.\nEach result must preserve the exact FP32 bit pattern of its source element.\nThis is a copy operation; no numerical approximation is permitted.\n\nrun() must update state in place and return that same tensor (same storage),\nwhile preserving new_events. Calls may be repeated on the state resulting from\nprevious calls, with any legal new_events. All calls are on the same CUDA stream,\nwith no concurrent external access to either tensor. CUDA's usual asynchronous\nreturn is allowed; correctness is observed after stream synchronization.\n\nThe full wrapper, including its allocation decisions and launch arguments, is\npart of the implementation to verify. Do not assume distinct pointer names in\nthe Triton function imply distinct storage: inspect the arguments passed by run.\nThe public reference() in kernel.py computes the required new contents without\nmutating either input and can also execute on CPU. Evaluate it BEFORE run() or\non a saved pre-call state. You may construct any legal inputs and repeat calls.\nThe frozen environment is PyTorch 2.8.0 / Triton 3.4.0 / NVIDIA T4.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_107",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_107"
+      },
+      "created_at": "2026-10-03T04:59:15Z",
+      "id": "t2",
+      "output": {
+        "content": "Verify a CUDA sliding-window state-update implementation over the complete\ninput domain below, not only the example returned by make_inputs().\n\nInputs are contiguous FP32 CUDA tensors on the same NVIDIA T4 device:\n- state has shape [B, L, D], where 1 <= B <= 4, 2 <= L <= 4096,\n  and 1 <= D <= 1024.\n- new_events has shape [B, K, D], where 1 <= K <= min(L, 128).\n- The two input tensors have disjoint storage. Their values may be any finite\n  FP32 values, including zeros and signed zeros.\n\nLet old_state be the contents of state before this call. After run() completes,\nfor every legal batch b, row r, and feature d:\n  state[b,r,d] = old_state[b,r+K,d]  if r < L-K\n                 new_events[b,r-(L-K),d] otherwise.\nEach result must preserve the exact FP32 bit pattern of its source element.\nThis is a copy operation; no numerical approximation is permitted.\n\nrun() must update state in place and return that same tensor (same storage),\nwhile preserving new_events. Calls may be repeated on the state resulting from\nprevious calls, with any legal new_events. All calls are on the same CUDA stream,\nwith no concurrent external access to either tensor. CUDA's usual asynchronous\nreturn is allowed; correctness is observed after stream synchronization.\n\nThe full wrapper, including its allocation decisions and launch arguments, is\npart of the implementation to verify. Do not assume distinct pointer names in\nthe Triton function imply distinct storage: inspect the arguments passed by run.\nThe public reference() in kernel.py computes the required new contents without\nmutating either input and can also execute on CPU. Evaluate it BEFORE run() or\non a saved pre-call state. You may construct any legal inputs and repeat calls.\nThe frozen environment is PyTorch 2.8.0 / Triton 3.4.0 / NVIDIA T4.\n",
+        "entry": "case_107",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_107"
+      },
+      "created_at": "2026-10-03T04:59:15Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_107",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2395
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1796
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_107",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-03T04:59:15Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_107",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Contract requires state[b,r,d] = old_state[b,r+K,d] if r<L-K else new_events[b,r-(L-K),d], exact bit pattern. The Triton index math could be off for edge shapes (L=2, K=L, large shapes).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract defines the exact sliding-window formula over full domain 1<=B<=4, 2<=L<=4096, 1<=D<=1024, 1<=K<=min(L,128), with exact FP32 bit preservation."
+          }
+        ],
+        "statement": "run() computes the sliding-window update correctly across the full legal input domain, including edge shapes (L=2, K=L, K=1, large shapes), with exact bit-pattern preservation."
+      },
+      "created_at": "2026-10-03T04:59:25Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t5",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The Triton index math (batch/row/col decomposition, from_state mask, row+K and row-(L-K) offsets) could be wrong for edge shapes like L=2, K=L, K=1, or large sizes.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: state[b,r,d] = old_state[b,r+K,d] if r<L-K else new_events[b,r-(L-K),d], exact FP32 bit pattern, over 1<=B<=4, 2<=L<=4096, 1<=D<=1024, 1<=K<=min(L,128)."
+          }
+        ],
+        "scope_rationale": "The contract requires the exact sliding-window formula with exact FP32 bit preservation across the full declared domain (all B, L, D, K within bounds).",
+        "statement": "run() computes the sliding-window update correctly across the full legal input domain (edge shapes L=2, K=L, K=1, large shapes, repeated calls), with exact bit-pattern preservation, in-place mutation of state, and preservation of new_events."
+      },
+      "created_at": "2026-10-03T04:59:30Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-03T04:59:30Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The Triton index math (batch/row/col decomposition, from_state mask, row+K and row-(L-K) offsets) could be wrong for edge shapes like L=2, K=L, K=1, or large sizes.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: state[b,r,d] = old_state[b,r+K,d] if r<L-K else new_events[b,r-(L-K),d], exact FP32 bit pattern, over 1<=B<=4, 2<=L<=4096, 1<=D<=1024, 1<=K<=min(L,128)."
+          }
+        ],
+        "scope_rationale": "The contract requires the exact sliding-window formula with exact FP32 bit preservation across the full declared domain (all B, L, D, K within bounds).",
+        "statement": "run() computes the sliding-window update correctly across the full legal input domain (edge shapes L=2, K=L, K=1, large shapes, repeated calls), with exact bit-pattern preservation, in-place mutation of state, and preservation of new_events.",
+        "status": "open",
+        "updated_at": "2026-10-03T04:59:30Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_107\")\nfrom kernel import run, reference\n\ntorch.cuda.synchronize()\ndef make(B,L,D,K,seed):\n    g = torch.Generator(device=\"cpu\").manual_seed(seed)\n    s = torch.randn((B,L,D), generator=g)\n    e = torch.randn((B,K,D), generator=g)\n    # include zeros and signed zeros\n    s[0,0,0] = 0.0\n    if D>1: e[0,0,1] = -0.0\n    return s.cuda(), e.cuda()\n\ncases = [\n    (1,2,1,1),(1,2,1,2),(4,2,1024,1),(4,2,1024,2),\n    (1,3,7,1),(1,3,7,2),(1,3,7,3),(2,5,3,4),(1,7,1,7),\n    (3,17,13,16),(2,64,33,64),(1,4096,1,128),(1,4096,3,128),\n    (4,1024,5,128),(2,1000,7,1),(1,4096,1024,2),(1,4096,1024,128),\n    (3,33,65,32),(1,1,1,1),(1,2,1,128),(2,129,4,128),(1,2048,1024,3),\n]\nfails=[]\nfor (B,L,D,K) in cases:\n    try:\n        s,e = make(B,L,D,K,hash((B,L,D,K))%10000)\n    except Exception as ex:\n        continue  # illegal K maybe\n    s_pre = s.clone(); e_pre = e.clone()\n    ref = reference(s_pre, e_pre)\n    ret = run(s, e)\n    torch.cuda.synchronize()\n    ok_bits = torch.equal(s.view(torch.int32), ref.view(torch.int32))\n    ok_ret = (ret is s) and (s.data_ptr()==s_pre.data_ptr()) if False else (ret is s)\n    ok_ev = torch.equal(e, e_pre)\n    if not (ok_bits and ok_ret and ok_ev):\n        fails.append({\"case\":[B,L,D,K],\"bits\":ok_bits,\"ret_same\":ret is s,\"ev_ok\":ok_ev,\n                      \"n_diff\":(s.view(torch.int32)!=ref.view(torch.int32)).sum().item()})\n# repeated calls\nB,L,D=2,50,11\ns,e = make(B,L,D,5,123)\nok_rep=True\nfor i in range(5):\n    K = [5,1,3,11,2][i]\n    e = torch.randn((B,K,D), device=\"cuda\")\n    ref = reference(s, e)\n    s = run(s, e)\n    torch.cuda.synchronize()\n    if not torch.equal(s.view(torch.int32), ref.view(torch.int32)):\n        ok_rep=False; break\nprint(json.dumps({\"metric\":\"exact FP32 bit equality vs reference() over shape sweep + in-place + event preservation + repeated calls\",\"n_cases\":len(cases)+1,\"fails\":fails,\"repeated_ok\":ok_rep}))\n"
+      },
+      "created_at": "2026-10-03T04:59:52Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "9e41c38dd607fa19ac6740e3183ebfdde21fc719faa5490fcf9a72cd9e2fb304"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "a24b648dabd51437bc648b8359d9148ee39c68ca64173733ce63437dc8443b1b"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "run() computes the sliding-window update correctly across the full legal input domain (edge shapes L=2, K=L, K=1, large shapes, repeated calls), with exact bit-pattern preservation, in-place mutation of state, and preservation of new_events.",
+        "cwd": "/root/cases/case_107",
+        "duration_s": 8.492923,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "9e41c38dd607fa19ac6740e3183ebfdde21fc719faa5490fcf9a72cd9e2fb304"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "a24b648dabd51437bc648b8359d9148ee39c68ca64173733ce63437dc8443b1b"
+              }
+            ],
+            "duration_s": 8.492923,
+            "exit_code": 1,
+            "expected_signal": null,
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_107/solo/probes/t7_probe.py\", line 31, in <module>\n    ret = run(s, e)\n          ^^^^^^^^^\n  File \"/root/cases/case_107/kernel.py\", line 37, in run\n    assert 1 <= batch <= 4 and 2 <= length <= 4096 and 1 <= width <= 1024\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 1,
+        "expected_signal": null,
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_107/solo/probes/t7_probe.py\", line 31, in <module>\n    ret = run(s, e)\n          ^^^^^^^^^\n  File \"/root/cases/case_107/kernel.py\", line 37, in run\n    assert 1 <= batch <= 4 and 2 <= length <= 4096 and 1 <= width <= 1024\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_107\")\nfrom kernel import run, reference\n\ntorch.cuda.synchronize()\ndef make(B,L,D,K,seed):\n    g = torch.Generator(device=\"cpu\").manual_seed(seed)\n    s = torch.randn((B,L,D), generator=g)\n    e = torch.randn((B,K,D), generator=g)\n    s[0,0,0] = 0.0\n    if D>1: e[0,0,1] = -0.0\n    return s.cuda(), e.cuda()\n\ncases = [\n    (1,2,1,1),(1,2,1,2),(4,2,1024,1),(4,2,1024,2),\n    (1,3,7,1),(1,3,7,2),(1,3,7,3),(2,5,3,4),(1,7,1,7),\n    (3,17,13,16),(2,64,33,64),(1,4096,1,128),(1,4096,3,128),\n    (4,1024,5,128),(2,1000,7,1),(1,4096,1024,2),(1,4096,1024,128),\n    (3,33,65,32),(1,2,1,128),(2,129,4,128),(1,2048,1024,3),\n]\nfails=[]; ptr_ok=True; tested=0\nfor (B,L,D,K) in cases:\n    s,e = make(B,L,D,K,1234)\n    s_pre = s.clone(); e_pre = e.clone(); ptr = s.data_ptr()\n    ref = reference(s_pre, e_pre)\n    ret = run(s, e)\n    torch.cuda.synchronize()\n    tested+=1\n    ok_bits = torch.equal(s.view(torch.int32), ref.view(torch.int32))\n    ok_ptr = s.data_ptr()==ptr\n    ptr_ok = ptr_ok and ok_ptr\n    ok_ev = torch.equal(e, e_pre)\n    if not (ok_bits and (ret is s) and ok_ev and ok_ptr):\n        fails.append({\"case\":[B,L,D,K],\"bits\":ok_bits,\"ret_same\":ret is s,\"ev_ok\":ok_ev,\"ptr_ok\":ok_ptr,\n                      \"n_diff\":(s.view(torch.int32)!=ref.view(torch.int32)).sum().item()})\nB,L,D=2,50,11\ns,e = make(B,L,D,5,123)\nok_rep=True\nfor i in range(5):\n    K = [5,1,3,11,2][i]\n    e = torch.randn((B,K,D), device=\"cuda\")\n    ref = reference(s, e)\n    ptr = s.data_ptr()\n    s = run(s, e)\n    torch.cuda.synchronize()\n    if not (torch.equal(s.view(torch.int32), ref.view(torch.int32)) and s.data_ptr()==ptr):\n        ok_rep=False; break\nprint(json.dumps({\"tested_cases\":tested,\"fails\":fails,\"storage_ptr_preserved\":ptr_ok,\"repeated_ok\":ok_rep}))"
+      },
+      "created_at": "2026-10-03T05:00:12Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "1b558a18abb9da831610e145059e95bbbb0c50378ea71d250dce67134ea5682d"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "58150e556fbb93879894f677cdd8e1a190478d4f28c4993246d23c68533f0a14"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "run() computes the sliding-window update correctly across the full legal input domain (edge shapes L=2, K=L, K=1, large shapes, repeated calls), with exact bit-pattern preservation, in-place mutation of state, and preservation of new_events.",
+        "cwd": "/root/cases/case_107",
+        "duration_s": 4.018304,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "1b558a18abb9da831610e145059e95bbbb0c50378ea71d250dce67134ea5682d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "58150e556fbb93879894f677cdd8e1a190478d4f28c4993246d23c68533f0a14"
+              }
+            ],
+            "duration_s": 4.018304,
+            "exit_code": 1,
+            "expected_signal": null,
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_107/solo/probes/t8_probe.py\", line 26, in <module>\n    ret = run(s, e)\n          ^^^^^^^^^\n  File \"/root/cases/case_107/kernel.py\", line 38, in run\n    assert 1 <= steps <= min(length, 128)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 1,
+        "expected_signal": null,
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_107/solo/probes/t8_probe.py\", line 26, in <module>\n    ret = run(s, e)\n          ^^^^^^^^^\n  File \"/root/cases/case_107/kernel.py\", line 38, in run\n    assert 1 <= steps <= min(length, 128)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_107\")\nfrom kernel import run, reference\n\ntorch.cuda.synchronize()\ndef make(B,L,D,K,seed):\n    g = torch.Generator(device=\"cpu\").manual_seed(seed)\n    s = torch.randn((B,L,D), generator=g)\n    e = torch.randn((B,K,D), generator=g)\n    s[0,0,0] = 0.0\n    if D>1: e[0,0,1] = -0.0\n    return s.cuda(), e.cuda()\n\ncases = [\n    (1,2,1,1),(1,2,1,2),(4,2,1024,1),(4,2,1024,2),\n    (1,3,7,1),(1,3,7,2),(1,3,7,3),(2,5,3,4),(1,7,1,7),\n    (3,17,13,16),(2,64,33,64),(1,4096,1,128),(1,4096,3,128),\n    (4,1024,5,128),(2,1000,7,1),(1,4096,1024,2),(1,4096,1024,128),\n    (3,33,65,32),(1,2,1,2),(2,129,4,128),(1,2048,1024,3),\n    (2,300,17,128),(4,4096,1024,128),\n]\ncases = [c for c in cases if c[3] <= min(c[1],128)]\nfails=[]; ptr_ok=True; tested=0\nfor (B,L,D,K) in cases:\n    s,e = make(B,L,D,K,1234)\n    s_pre = s.clone(); e_pre = e.clone(); ptr = s.data_ptr()\n    ref = reference(s_pre, e_pre)\n    ret = run(s, e)\n    torch.cuda.synchronize()\n    tested+=1\n    ok_bits = torch.equal(s.view(torch.int32), ref.view(torch.int32))\n    ok_ptr = s.data_ptr()==ptr\n    ptr_ok = ptr_ok and ok_ptr\n    ok_ev = torch.equal(e, e_pre)\n    if not (ok_bits and (ret is s) and ok_ev and ok_ptr):\n        fails.append({\"case\":[B,L,D,K],\"bits\":ok_bits,\"ret_same\":ret is s,\"ev_ok\":ok_ev,\"ptr_ok\":ok_ptr,\n                      \"n_diff\":(s.view(torch.int32)!=ref.view(torch.int32)).sum().item()})\nB,L,D=2,50,11\ns,e = make(B,L,D,5,123)\nok_rep=True\nfor i in range(5):\n    K = [5,1,3,11,2][i]\n    e = torch.randn((B,K,D), device=\"cuda\")\n    ref = reference(s, e)\n    ptr = s.data_ptr()\n    s = run(s, e)\n    torch.cuda.synchronize()\n    if not (torch.equal(s.view(torch.int32), ref.view(torch.int32)) and s.data_ptr()==ptr):\n        ok_rep=False; break\nprint(json.dumps({\"tested_cases\":tested,\"fails\":fails,\"storage_ptr_preserved\":ptr_ok,\"repeated_ok\":ok_rep}))"
+      },
+      "created_at": "2026-10-03T05:00:31Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "4cc512b2b6662ff37b8200dce7a3fe2255ee556f6531526482e4bfa9051ae2a9"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "5131ade84a9e6c34d0d3df0279191bdd0ef0f8f508967286993769f8cfbc2e25"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "10ab8f6fc6a76d3b8bc511ccf51c7ae6317a33cc8cf6644663ea5e7778307a43"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "run() computes the sliding-window update correctly across the full legal input domain (edge shapes L=2, K=L, K=1, large shapes, repeated calls), with exact bit-pattern preservation, in-place mutation of state, and preservation of new_events.",
+        "cwd": "/root/cases/case_107",
+        "duration_s": 6.421992,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "4cc512b2b6662ff37b8200dce7a3fe2255ee556f6531526482e4bfa9051ae2a9"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "5131ade84a9e6c34d0d3df0279191bdd0ef0f8f508967286993769f8cfbc2e25"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "10ab8f6fc6a76d3b8bc511ccf51c7ae6317a33cc8cf6644663ea5e7778307a43"
+              }
+            ],
+            "duration_s": 6.421992,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "fails": [],
+              "repeated_ok": true,
+              "storage_ptr_preserved": true,
+              "tested_cases": 23
+            },
+            "stderr": "",
+            "stdout": "{\"tested_cases\": 23, \"fails\": [], \"storage_ptr_preserved\": true, \"repeated_ok\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "fails": [],
+          "repeated_ok": true,
+          "storage_ptr_preserved": true,
+          "tested_cases": 23
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"tested_cases\": 23, \"fails\": [], \"storage_ptr_preserved\": true, \"repeated_ok\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "fails": 0,
+          "repeated_ok": true,
+          "storage_ptr_preserved": true,
+          "tested_cases": 23
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "Across 23 legal shape cases (edges L=2, K=L, K=1, large B/L/D, K=128) run() matched reference() exactly bit-for-bit (torch.equal on int32 views), returned the same tensor with preserved storage pointer, preserved new_events, and passed 5 chained repeated calls. Signed-zero elements included.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-03T05:00:38Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-03T04:59:30Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-03T05:00:38Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "4cc512b2b6662ff37b8200dce7a3fe2255ee556f6531526482e4bfa9051ae2a9"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "5131ade84a9e6c34d0d3df0279191bdd0ef0f8f508967286993769f8cfbc2e25"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "10ab8f6fc6a76d3b8bc511ccf51c7ae6317a33cc8cf6644663ea5e7778307a43"
+                  }
+                ],
+                "duration_s": 6.421992,
+                "exit_code": 0,
+                "expected_signal": null,
+                "fails": 0,
+                "json_parse_error": null,
+                "json_result": {
+                  "fails": [],
+                  "repeated_ok": true,
+                  "storage_ptr_preserved": true,
+                  "tested_cases": 23
+                },
+                "repeated_ok": true,
+                "stderr": "",
+                "stdout": "{\"tested_cases\": 23, \"fails\": [], \"storage_ptr_preserved\": true, \"repeated_ok\": true}\n",
+                "storage_ptr_preserved": true,
+                "tested_cases": 23,
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Across 23 legal shape cases (edges L=2, K=L, K=1, large B/L/D, K=128) run() matched reference() exactly bit-for-bit (torch.equal on int32 views), returned the same tensor with preserved storage pointer, preserved new_events, and passed 5 chained repeated calls. Signed-zero elements included.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The Triton index math (batch/row/col decomposition, from_state mask, row+K and row-(L-K) offsets) could be wrong for edge shapes like L=2, K=L, K=1, or large sizes.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract: state[b,r,d] = old_state[b,r+K,d] if r<L-K else new_events[b,r-(L-K),d], exact FP32 bit pattern, over 1<=B<=4, 2<=L<=4096, 1<=D<=1024, 1<=K<=min(L,128)."
+            }
+          ],
+          "scope_rationale": "The contract requires the exact sliding-window formula with exact FP32 bit preservation across the full declared domain (all B, L, D, K within bounds).",
+          "statement": "run() computes the sliding-window update correctly across the full legal input domain (edge shapes L=2, K=L, K=1, large shapes, repeated calls), with exact bit-pattern preservation, in-place mutation of state, and preservation of new_events.",
+          "status": "confirmed",
+          "updated_at": "2026-10-03T05:00:38Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-03T05:00:38Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "4cc512b2b6662ff37b8200dce7a3fe2255ee556f6531526482e4bfa9051ae2a9"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "5131ade84a9e6c34d0d3df0279191bdd0ef0f8f508967286993769f8cfbc2e25"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "10ab8f6fc6a76d3b8bc511ccf51c7ae6317a33cc8cf6644663ea5e7778307a43"
+              }
+            ],
+            "duration_s": 6.421992,
+            "exit_code": 0,
+            "expected_signal": null,
+            "fails": 0,
+            "json_parse_error": null,
+            "json_result": {
+              "fails": [],
+              "repeated_ok": true,
+              "storage_ptr_preserved": true,
+              "tested_cases": 23
+            },
+            "repeated_ok": true,
+            "stderr": "",
+            "stdout": "{\"tested_cases\": 23, \"fails\": [], \"storage_ptr_preserved\": true, \"repeated_ok\": true}\n",
+            "storage_ptr_preserved": true,
+            "tested_cases": 23,
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Across 23 legal shape cases (edges L=2, K=L, K=1, large B/L/D, K=128) run() matched reference() exactly bit-for-bit (torch.equal on int32 views), returned the same tensor with preserved storage pointer, preserved new_events, and passed 5 chained repeated calls. Signed-zero elements included.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t9 ran run() against reference() on 23 legal shape cases covering the full contract domain edges (L=2, K=L, K=1, K=128, B=4, L=4096, D=1024, mixed shapes) with signed zeros. Every case matched exactly bit-for-bit (torch.equal on int32 views), run() returned the same tensor with unchanged storage pointer (in-place), new_events was preserved, and 5 chained repeated calls with varying K also matched exactly. Source inspection (kernel.py) confirms the Triton index math implements the contract formula: state rows r<L-K read old_state[r+K], rows r>=L-K read new_events[r-(L-K)], via a separate output buffer then state.copy_. No failures observed; no further evidence needed.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-10-03T05:00:45Z",
+      "id": "t11",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-10-03T05:00:45Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t9 ran run() against reference() on 23 legal shape cases covering the full contract domain edges (L=2, K=L, K=1, K=128, B=4, L=4096, D=1024, mixed shapes) with signed zeros. Every case matched exactly bit-for-bit (torch.equal on int32 views), run() returned the same tensor with unchanged storage pointer (in-place), new_events was preserved, and 5 chained repeated calls with varying K also matched exactly. Source inspection (kernel.py) confirms the Triton index math implements the contract formula: state rows r<L-K read old_state[r+K], rows r>=L-K read new_events[r-(L-K)], via a separate output buffer then state.copy_. No failures observed; no further evidence needed.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-10-03T05:00:45Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t9 ran run() against reference() on 23 legal shape cases covering the full contract domain edges (L=2, K=L, K=1, K=128, B=4, L=4096, D=1024, mixed shapes) with signed zeros. Every case matched exactly bit-for-bit (torch.equal on int32 views), run() returned the same tensor with unchanged storage pointer (in-place), new_events was preserved, and 5 chained repeated calls with varying K also matched exactly. Source inspection (kernel.py) confirms the Triton index math implements the contract formula: state rows r<L-K read old_state[r+K], rows r>=L-K read new_events[r-(L-K)], via a separate output buffer then state.copy_. No failures observed; no further evidence needed.",
+    "verdict": "trust"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "id": "chatcmpl-3691a1c0068249d4ab3877d02ade7462",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the two remaining probes: a corrected domain sweep for c1 (with C ≤ 512/S) and a NaN-poisoning probe for c2 targeting semantically irrelevant slots.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a79cbba8e054dad5",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, torch, json, math\\nsys.path.insert(0, \\\"/root/cases/case_115\\\")\\nimport kernel\\ndev=\\\"cuda\\\"\\n\\ndef gen(b,qt,d,hk,group,page,lengths,window,seed):\\n    g=torch.Generator().manual_seed(seed)\\n    hq=hk*group\\n    pages=random.Random(seed).randint( max((max(lengths)+page-1)//page,1), 256)\\n    c = 512//page  # max allowed, >= ceil(max len / page) since len<=512\\n    q=(2*torch.rand((b,qt,hq,d),generator=g)-1).half()\\n    k=(2*torch.rand((pages,page,hk,d),generator=g)-1).half()\\n    v=(2*torch.rand(k.shape,generator=g)-1).half()\\n    tbl=torch.randint(0,pages,(b,c),generator=g).to(torch.int32)\\n    ln=torch.tensor(lengths,dtype=torch.int32)\\n    return tuple(t.to(dev) for t in (q,k,v,tbl,ln))+(window,)\\n\\nimport random\\nconfigs=[\\n (1,1,128,4,4,64,[512],0),\\n (1,33,64,1,1,64,[512],0),\\n (1,33,64,1,1,64,[512],256),\\n (1,33,64,1,1,64,[512],1),\\n (3,8,64,4,2,32,[64,128,512],0),\\n (3,8,64,4,2,32,[64,128,512],63),\\n (4,5,32,3,1,16,[500,33,64,129],0),\\n (4,5,32,3,1,16,[500,33,64,129],128),\\n (1,2,64,1,8,16,[512],0),\\n (2,20,64,2,2,32,[512,512],0),\\n (2,20,64,2,2,32,[512,512],100),\\n (1,6,32,4,4,16,[512],256),\\n (1,6,32,4,4,16,[512],255),\\n (2,9,64,2,2,16,[97,113],41),\\n]\\nresults=[]; worst=0.0; worst_cfg=None; nerr=0\\nfor i,cfg in enumerate(configs):\\n    try:\\n        inputs=gen(*cfg, seed=2000+i)\\n        out=kernel.run(*inputs)\\n        ratio=kernel.error_ratio(out,inputs)\\n        fin=bool(torch.isfinite(out).all())\\n        results.append([i,cfg,round(ratio,4),fin])\\n        if ratio>worst: worst,worst_cfg=ratio,cfg\\n    except Exception as e:\\n        nerr+=1\\n        results.append([i,cfg,f\\\"ERROR {type(e).__name__}: {e}\\\",None])\\nprint(json.dumps({\\\"metric\\\":\\\"max contract error ratio over sweep (C<=512/S)\\\",\\\"reason\\\":\\\"ratio<=1 is contract tolerance\\\",\\\"results\\\":results,\\\"worst_ratio\\\":worst,\\\"worst_cfg\\\":worst_cfg,\\\"errors\\\":nerr}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-9412b3177d2ca000",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, torch, json\\nsys.path.insert(0, \\\"/root/cases/case_115\\\")\\nimport kernel\\ndev=\\\"cuda\\\"\\n\\ndef build(seed, window):\\n    g=torch.Generator().manual_seed(seed)\\n    b,qt,d,hk,group,page=2,9,64,2,2,16\\n    hq=4; lengths=[97,113]\\n    pages=20; c=8\\n    q=(2*torch.rand((b,qt,hq,d),generator=g)-1).half()\\n    k=(2*torch.rand((pages,page,hk,d),generator=g)-1).half()\\n    v=(2*torch.rand(k.shape,generator=g)-1).half()\\n    tbl=torch.randint(0,pages,(b,c),generator=g).to(torch.int32)\\n    ln=torch.tensor(lengths,dtype=torch.int32)\\n    return (q,k,v,tbl,ln,window,g)\\n\\ndef poison(k,v,q,tbl,ln,window,mode):\\n    # mode 'n': NaN everywhere reachable-kv is kept; poison all slots NOT reachable by any allowed position\\n    k=k.clone(); v=v.clone()\\n    b,qt,hq,d=q.shape\\n    page,hk=k.shape[1],k.shape[2]\\n    for i in range(b):\\n        length=int(ln[i])\\n        lo = max(0, length-qt-window+1) if window else 0\\n        reachable=set(range(lo,length))\\n        used_pages=set(int(tbl[i,t//page]) for t in reachable)\\n        # poison slots not reachable: within used pages, positions not allowed; and all unused pages\\n        for p in range(k.shape[0]):\\n            if p not in used_pages:\\n                k[p]=float('nan'); v[p]=float('nan')\\n        for p in used_pages:\\n            for pos in range(page):\\n                tset=set()  # any logical position mapping to (p,pos)?\\n                # find logical positions in [0,length) mapping here\\n                for t in range(length):\\n                    if int(tbl[i,t//page])==p and t%page==pos and t in reachable:\\n                        tset.add(t)\\n                if not tset:\\n                    k[p,pos]=float('nan'); v[p,pos]=float('nan')\\n    # poison block_table entries beyond ceil(length/page)\\n    tbl=tbl.clone()\\n    for i in range(b):\\n        need=(int(ln[i])+page-1)//page\\n        tbl[i,need:]=99999\\n    return k,v,tbl\\n\\ncases=[]\\nfor seed,window in [(3,41),(4,0),(5,256),(6,1),(7,17)]:\\n    q,k,v,tbl,ln,window,g=build(seed,window)\\n    # reference on clean k,v first\\n    out_clean=kernel.run(q,k,v,tbl,ln,window)\\n    ref=kernel.reference(q,k,v,tbl,ln,window)\\n    ratio_clean=float(((out_clean.double()-ref).abs()/(0.003+0.003*ref.abs())).max())\\n    kp,vp,tblp=poison(k,v,q,tbl,ln,window)\\n    # validate inputs manually? validate would fail on NaN in cache -> use raw kernel? kernel.run validates. bypass by constructing where unreachable slots NaN but validate only checks reachable slots -> passes.\\n    out_p=kernel.run(q,kp,vp,tblp,ln,window)\\n    finite=bool(torch.isfinite(out_p).all())\\n    diff=float((out_p.float()-out_clean.float()).abs().max())\\n    ratio_p=float(((out_p.double()-ref).abs()/(0.003+0.003*ref.abs())).max())\\n    cases.append([seed,window,ratio_clean,ratio_p,diff,finite])\\nprint(json.dumps({\\\"metric\\\":\\\"contract ratio clean vs NaN-poisoned irrelevant slots\\\",\\\"reason\\\":\\\"poisoned irrelevant slots must not change output; ratio<=1 and diff~0\\\",\\\"cases\\\":cases,\\\"all_finite\\\":all(c[5] for c in cases)}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Remaining: rerun corrected sweep (c1) and NaN-poisoning probe (c2). Run both probes now.\n\nCorrect C constraint: C <= 512/S. Set c = min(needed, 512//page), maybe C = 512//page exactly.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791013732,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1677,
+    "prompt_tokens": 36463,
+    "total_tokens": 38140,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 56,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 56
+    }
+  }
+}

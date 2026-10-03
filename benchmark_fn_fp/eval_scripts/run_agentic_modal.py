@@ -40,10 +40,17 @@ from uuid import uuid4
 
 import modal
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+_IS_LOCAL = modal.is_local()
+# Modal can reconstruct this module as /root/run_agentic_modal.py. Host repo
+# ancestors, local source mounts and dotenv paths only exist on the submitter.
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2] if _IS_LOCAL else pathlib.Path("/root")
 # The answer-free copy: no test.py, no verdict in meta.json, opaque case ids.
-CASES_DIR = REPO_ROOT / "benchmark_fn_fp" / "triton_eval_cases"
+CASES_DIR = REPO_ROOT / "benchmark_fn_fp" / "triton_eval_cases" if _IS_LOCAL else pathlib.Path("/root/cases")
+_REMOTE_CASE_ROOT = "/root/cases"
 _REMOTE_TRACE_ROOT = "/root/trace_runs"
+_PUBLIC_FILES = frozenset({"kernel.py", "problem.txt", "meta.json", "LICENSE"})
+_NEUTRAL_META_STATUSES = ("under_test", "unverified", "unknown")
+_NEUTRAL_META_FAMILIES = ("sequence_audit", "joint_audit", "mutation_audit", "box_relu_audit")
 
 # The one line that actually differs between arms.
 ARMS = {
@@ -54,23 +61,98 @@ ARMS = {
 app = modal.App("kv-fn-fp-agentic-eval")
 
 def _make_image(numpy_version: str):
-    return (
+    worker_image = (
         modal.Image.debian_slim(python_version="3.11")
         .pip_install("torch==2.8.0", "triton==3.4.0", f"numpy=={numpy_version}",
                      "anthropic", "openai", "python-dotenv")
-        .add_local_dir(str(REPO_ROOT / "verifier"), "/root/verifier")
-        .add_local_dir(str(CASES_DIR), "/root/cases")
-        .add_local_dir(str(REPO_ROOT / "benchmark_fn_fp/numerical_pilot/eval_cases"), "/root/pilot_cases")
     )
+    if _IS_LOCAL:
+        worker_image = worker_image.add_local_dir(str(REPO_ROOT / "verifier"), "/root/verifier")
+    return worker_image
 
 
 image = _make_image("1.26.4")
-pilot_image = _make_image("2.2.6")
+
+
+def _public_files_for_case(case_dir: pathlib.Path) -> dict[str, bytes]:
+    """Only the public problem bundle crosses into an agent worker."""
+    files = {}
+    for name in sorted(_PUBLIC_FILES):
+        path = case_dir / name
+        if path.is_symlink():
+            raise ValueError(f"Public input must not be a symlink: {path}")
+        if path.is_file():
+            files[name] = path.read_bytes()
+    _validate_public_payload(case_dir.name, files)
+    return files
+
+
+def _validate_public_payload(entry: str, public_files: dict | None) -> None:
+    if not re.fullmatch(r"case_[A-Za-z0-9_]+", entry):
+        raise ValueError(f"Invalid case directory name: {entry!r}")
+    if not isinstance(public_files, dict):
+        raise ValueError("An explicit per-case public_files payload is required")
+    if not {"kernel.py", "problem.txt", "meta.json"} <= set(public_files) <= _PUBLIC_FILES:
+        raise ValueError("Public bundle must contain kernel.py, problem.txt and neutral meta.json only, with optional LICENSE")
+    if any(not isinstance(value, bytes) for value in public_files.values()):
+        raise ValueError("Public bundle contents must be bytes")
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Agent-visible meta.json must not contain duplicate fields")
+            result[key] = value
+        return result
+
+    meta = json.loads(public_files["meta.json"], object_pairs_hook=unique_fields)
+    if meta == {}:
+        return
+    # Historical public bundles use an explicit unknown result. Preserve their
+    # original bytes, but never admit a result, a label, or arbitrary metadata.
+    required = {"name", "status", "passed"}
+    neutral = (isinstance(meta, dict)
+               and required <= set(meta) <= required | {"family"}
+               and meta["name"] == entry
+               and meta["passed"] is None
+               and meta["status"] in _NEUTRAL_META_STATUSES
+               and ("family" not in meta or meta["family"] in _NEUTRAL_META_FAMILIES))
+    if not neutral:
+        raise ValueError("Agent-visible meta.json must be empty or use the strict neutral legacy schema")
+
+
+def _materialize_public_case(entry: str, public_files: dict | None,
+                             expected_hashes: dict | None = None) -> dict:
+    """Reset reused workers; expose only this case and no previous arm traces."""
+    import hashlib
+    import shutil
+
+    _validate_public_payload(entry, public_files)
+    digests = {name: hashlib.sha256(data).hexdigest() for name, data in public_files.items()}
+    if expected_hashes is not None:
+        for kind, name in (("kernel", "kernel.py"), ("problem", "problem.txt")):
+            if digests[name] != expected_hashes[f"{kind}_sha256"]:
+                raise ValueError(f"Public payload differs from checked source: {entry}/{name}")
+    for root in (pathlib.Path(_REMOTE_CASE_ROOT), pathlib.Path(_REMOTE_TRACE_ROOT)):
+        if root.is_symlink() or root.is_file():
+            root.unlink()
+        elif root.exists():
+            shutil.rmtree(root)
+    dest = pathlib.Path(_REMOTE_CASE_ROOT) / entry
+    dest.mkdir(parents=True)
+    for name, data in public_files.items():
+        (dest / name).write_bytes(data)
+    visible_cases = sorted(path.name for path in pathlib.Path(_REMOTE_CASE_ROOT).iterdir())
+    if visible_cases != [entry]:
+        raise RuntimeError(f"Unexpected visible cases: {visible_cases}")
+    return {"visible_cases": visible_cases, "public_files_sha256": digests,
+            "previous_trace_root_removed": not pathlib.Path(_REMOTE_TRACE_ROOT).exists()}
 
 
 def _run_one_impl(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int,
                   provider: str, timeout_s: int, dataset: str = "benchmark_fn_fp", trial: str = "legacy",
-                  expected_hashes: dict | None = None, total_output_tokens: int = 0) -> dict:
+                  expected_hashes: dict | None = None, total_output_tokens: int = 0,
+                  debate_budget_closeout: bool = False, require_claim_scope_fields: bool = False,
+                  public_files: dict | None = None) -> dict:
     """Run one case under one arm inside this GPU container."""
     import contextlib
     import io
@@ -80,6 +162,7 @@ def _run_one_impl(entry: str, arm: str, max_rounds: int, model: str, max_tokens:
 
     os.chdir("/root")
     sys.path.insert(0, "/root")
+    visibility = _materialize_public_case(entry, public_files, expected_hashes)
     # Both set explicitly, not setdefault: Secret.from_dotenv injects the whole
     # .env into the container, and it pins AGENTIC_PROVIDER and AGENTIC_MODEL.
     # A setdefault would silently keep those and run the wrong model under the
@@ -99,6 +182,14 @@ def _run_one_impl(entry: str, arm: str, max_rounds: int, model: str, max_tokens:
         os.environ["AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET"] = str(total_output_tokens)
     else:
         os.environ.pop("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET", None)
+    if debate_budget_closeout and arm == "debate":
+        os.environ["AGENTIC_DEBATE_BUDGET_CLOSEOUT"] = "1"
+    else:
+        os.environ.pop("AGENTIC_DEBATE_BUDGET_CLOSEOUT", None)
+    if require_claim_scope_fields:
+        os.environ["AGENTIC_REQUIRE_CLAIM_SCOPE_FIELDS"] = "1"
+    else:
+        os.environ.pop("AGENTIC_REQUIRE_CLAIM_SCOPE_FIELDS", None)
     # Explicit experiment setting, also captured in each request. Observed
     # latency differences alone do not establish a cause for provider failures.
     if provider in {"fireworks", "openrouter"}:
@@ -106,23 +197,20 @@ def _run_one_impl(entry: str, arm: str, max_rounds: int, model: str, max_tokens:
 
     from verifier.agentic_run import main as agentic_main
     from verifier.agentic.llm_trace import _exception_details
+    from verifier.agentic.provenance import runtime_fingerprint
 
     agents = ARMS[arm]
-    dataset_dir = {"benchmark_fn_fp": "/root/cases", "correlation_pair": "/root/cases",
-                   "numerical_challenges": "/root/cases",
-                   "evidence_challenges": "/root/cases",
-                   "numerical_pilot": "/root/pilot_cases"}[dataset]
-    if expected_hashes is not None:
-        import hashlib
-        for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt")):
-            actual = hashlib.sha256((Path(dataset_dir) / entry / filename).read_bytes()).hexdigest()
-            if actual != expected_hashes[f"{kind}_sha256"]:
-                raise ValueError(f"Mounted case differs from checked source: {entry}/{filename}")
+    if dataset not in {"benchmark_fn_fp", "correlation_pair", "numerical_challenges",
+                       "evidence_challenges", "real_kernel_challenges"}:
+        raise ValueError(f"Unsupported source dataset: {dataset}")
+    dataset_dir = _REMOTE_CASE_ROOT
     run_dir = Path(_REMOTE_TRACE_ROOT) / trial / dataset / entry / arm
     if run_dir.exists():
         raise FileExistsError(f"Remote trial already exists: {run_dir}")
     os.environ["AGENTIC_LLM_TRACE_DIR"] = str(run_dir / "llm_calls")
     os.environ["AGENTIC_LLM_TRACE_PROGRESS"] = "1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "artifact_visibility.json").write_text(json.dumps(visibility, indent=2))
     argv = [
         entry,
         "--dataset-dir", dataset_dir,
@@ -154,6 +242,8 @@ def _run_one_impl(entry: str, arm: str, max_rounds: int, model: str, max_tokens:
 
     verdict_path = run_dir / "verdict.json"
     if run_dir.exists():
+        # The actual GPU environment, not the local submitter's environment.
+        (run_dir / "runtime.json").write_text(json.dumps(runtime_fingerprint(capture_gpu=True), indent=2))
         # The whole run directory comes back: run.json, tool_events.jsonl,
         # claims.json, the untruncated transcript, and every probe's source and
         # captured output. Fifteen runs were made before this existed and not
@@ -186,28 +276,52 @@ def _run_one_impl(entry: str, arm: str, max_rounds: int, model: str, max_tokens:
 
 
 def _worker_options(worker_image):
+    # Modal hydrates explicit dependencies positionally in the container.
+    # Keep one Secret before the Image on both sides; the remote placeholder
+    # receives the submitted secret's object id without reading a host .env.
+    secret = modal.Secret.from_dotenv(REPO_ROOT) if _IS_LOCAL else modal.Secret.from_dict({})
     return dict(image=worker_image, gpu="T4", timeout=5400, max_containers=4,
-                secrets=[modal.Secret.from_dotenv(REPO_ROOT)])
+                single_use_containers=True,
+                secrets=[secret])
+
+
+@app.function(**_worker_options(image))
+def preflight_remote(entries: list[str], expected_hashes: dict,
+                     public_files: dict | None = None) -> dict:
+    """Exercise the same container/dependencies without any model calls or traces."""
+    import os
+    import torch
+    from pathlib import Path
+
+    sys.path.insert(0, "/root")
+    from verifier.agentic.provenance import runtime_fingerprint
+
+    if not os.environ.get("FIREWORKS_API_KEY"):
+        raise RuntimeError("FIREWORKS_API_KEY is missing in the worker environment")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable in the worker environment")
+    checked = {}
+    for entry in entries:
+        visibility = _materialize_public_case(entry, (public_files or {}).get(entry), expected_hashes[entry])
+        checked[entry] = {**expected_hashes[entry], **visibility}
+        # The existing artifact loader requires neutral meta.json too.
+        from verifier.dataset import load_entry
+        load_entry(entry, dataset_dir=Path(_REMOTE_CASE_ROOT))
+    return {"fireworks_key_present": True, "cases": checked,
+            "runtime": runtime_fingerprint(capture_gpu=True), "model_calls": 0}
 
 
 @app.function(**_worker_options(image))
 def run_one(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int,
             provider: str, timeout_s: int, dataset: str = "benchmark_fn_fp", trial: str = "legacy",
-            expected_hashes: dict | None = None, total_output_tokens: int = 0) -> dict:
+            expected_hashes: dict | None = None, total_output_tokens: int = 0,
+            debate_budget_closeout: bool = False, require_claim_scope_fields: bool = False,
+            public_files: dict | None = None) -> dict:
     if dataset == "numerical_pilot":
-        raise ValueError("The numerical pilot requires the NumPy 2.2.6 worker")
+        raise ValueError("numerical_pilot is archived; excluded from new experiments")
     return _run_one_impl(entry, arm, max_rounds, model, max_tokens, provider, timeout_s,
-                         dataset, trial, expected_hashes, total_output_tokens)
-
-
-@app.function(**_worker_options(pilot_image))
-def run_pilot(entry: str, arm: str, max_rounds: int, model: str, max_tokens: int,
-              provider: str, timeout_s: int, dataset: str = "numerical_pilot", trial: str = "legacy",
-              expected_hashes: dict | None = None, total_output_tokens: int = 0) -> dict:
-    if dataset != "numerical_pilot":
-        raise ValueError("The NumPy 2.2.6 worker is reserved for the numerical pilot")
-    return _run_one_impl(entry, arm, max_rounds, model, max_tokens, provider, timeout_s,
-                         dataset, trial, expected_hashes, total_output_tokens)
+                         dataset, trial, expected_hashes, total_output_tokens, debate_budget_closeout,
+                         require_claim_scope_fields, public_files)
 
 
 def existing_valid_slots(benchmark_dir: pathlib.Path, traces_dir: str, dataset: str) -> set[tuple[str, str]]:
@@ -218,14 +332,12 @@ def existing_valid_slots(benchmark_dir: pathlib.Path, traces_dir: str, dataset: 
     """
     from traces import iter_trace_records
     from summarize_traces import build_report
-    from datasets import canonical_dataset
-
-    dataset = canonical_dataset(dataset)
+    from datasets import dataset_members
 
     benchmark = pathlib.Path(benchmark_dir).resolve()
     target = benchmark / traces_dir
     records = [record for record in iter_trace_records(benchmark_dir=benchmark)
-               if record["dataset"] == dataset
+               if record["dataset"] in dataset_members(dataset)
                and pathlib.Path(record["path"]).resolve().is_relative_to(target)]
     metadata = {str(pathlib.Path(record["path"]).resolve()): record["metadata"] for record in records}
     report = build_report(records=records, benchmark_dir=benchmark, labels={})
@@ -270,9 +382,15 @@ def _retain_failed_result(dest: pathlib.Path, error: Exception, *, kind: str,
 def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
          provider: str = "anthropic", model: str = "", max_tokens: int = 0,
          skip_existing: bool = False, dataset: str = "benchmark_fn_fp", trial: str = "",
-         total_output_tokens: int = 0, only_missing: bool = False):
+         total_output_tokens: int = 0, only_missing: bool = False,
+         preflight_only: bool = False, debate_budget_closeout: bool = False,
+         require_claim_scope_fields: bool = False):
     if total_output_tokens < 0:
         raise ValueError("total_output_tokens must be nonnegative")
+    if debate_budget_closeout and total_output_tokens <= 8192:
+        raise ValueError("Budget closeout requires a total output budget greater than 8192")
+    if preflight_only and not arm:
+        arm = "both"
     if arm not in (*ARMS, "both"):
         print(f"--arm must be one of {sorted(ARMS)} or both", file=sys.stderr)
         raise SystemExit(1)
@@ -284,8 +402,10 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     from traces import write_trace, trace_path, reserve_trace, new_trial_id, next_trial_id, experiment_trial_id
     from models import DEFAULT_MODEL_FOR_PROVIDER, profile_for
-    from datasets import canonical_dataset, case_names, cases_dir as dataset_cases_dir, checked_case_hashes
-    dataset = canonical_dataset(dataset)
+    from datasets import (case_dataset, case_names, cases_dir as dataset_cases_dir,
+                          checked_case_hashes, ensure_active_dataset)
+    from verifier.agentic.provenance import file_sha256, verifier_sha256
+    ensure_active_dataset(dataset)
     # The debate reaches a verdict in 7 turns; the solo agent needs more rounds
     # because one agent does every role's work in sequence.
     selected_arms = list(ARMS) if arm == "both" else [arm]
@@ -338,7 +458,12 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
         if batches:
             original_trial = batches.pop()
     # Validate the entire batch before reserving traces or submitting any work.
+    source_datasets = {name: case_dataset(REPO_ROOT, dataset, name, require_active=True) for name in names}
     source_hashes = {name: checked_case_hashes(REPO_ROOT, dataset, name) for name in names}
+    public_payloads = {name: _public_files_for_case(cases_dir / name) for name in names}
+    if preflight_only:
+        print(json.dumps(preflight_remote.remote(names, source_hashes, public_payloads), indent=2), flush=True)
+        return
     filled = (existing_valid_slots(REPO_ROOT / "benchmark_fn_fp", profile.traces_dir, dataset)
               if only_missing else set())
     jobs = []
@@ -354,25 +479,34 @@ def main(arm: str = "", cases: str = "", all: bool = False, max_rounds: int = 0,
                 continue
             if dest.exists():raise FileExistsError(f"Use a new trial; refusing overwrite: {dest}")
             jobs.append((n, selected_arm, max_rounds or (4 if selected_arm == "debate" else 10),
-                         model, max_tokens, provider, profile.timeout_s, dataset, trial, source_hashes[n],
-                         total_output_tokens))
+                         model, max_tokens, provider, profile.timeout_s, source_datasets[n], trial, source_hashes[n],
+                         total_output_tokens, debate_budget_closeout, require_claim_scope_fields, public_payloads[n]))
+    provenance = {"verifier_sha256": verifier_sha256(), "runner_sha256": file_sha256(__file__),
+                  "case_visibility": "current_case_only"}
     for job in jobs:
         n, selected_arm, rounds = job[:3]
         reserve_trace(n,selected_arm,traces_dir=profile.traces_dir,trial=trial,metadata={
-            "dataset":dataset,"provider":provider,"model":model,"max_tokens":max_tokens,
+            "dataset":job[7],"provider":provider,"model":model,"max_tokens":max_tokens,
             "reasoning_effort":"low" if provider in {"fireworks", "openrouter"} else "default",
             "timeout_s":profile.timeout_s,
             "max_rounds":rounds,"raw_api_capture":provider == "fireworks",
             "original_trial":original_trial,
             "total_output_token_budget":total_output_tokens or None,
-            **source_hashes[n]})
+            "debate_budget_closeout":bool(debate_budget_closeout and selected_arm == "debate"),
+            "require_claim_scope_fields":require_claim_scope_fields,
+            "normal_turn_output_cap":min(max_tokens, 8192) if debate_budget_closeout and selected_arm == "debate" else max_tokens,
+            "closeout_reserve":8192 if debate_budget_closeout and selected_arm == "debate" else 0,
+            "closeout_stage_caps":{"evidence":4096,"skeptic":1024,"judge":3072}
+                if debate_budget_closeout and selected_arm == "debate" else None,
+            "public_input_files":sorted(public_payloads[n]),
+            **source_hashes[n], **provenance})
     print(f"running {len(jobs)} tool trials: {provider}/{model}, dataset={dataset}, trial={trial}, max_tokens={max_tokens}",flush=True)
     # Submit each remote call once, preserving its job identity even when Modal
     # raises instead of returning a result. Unlike a fail-fast starmap iterator,
     # one remote or local persistence failure cannot discard other paid runs.
     done = 0
     failures = []
-    worker = run_pilot if dataset == "numerical_pilot" else run_one
+    worker = run_one
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(worker.remote, *job): job for job in jobs}
         for future in as_completed(futures):

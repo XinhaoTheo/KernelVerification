@@ -18,6 +18,8 @@ from verifier.agentic.llm import (
 def isolate_environment(monkeypatch):
     monkeypatch.delenv("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET", raising=False)
     monkeypatch.delenv("AGENTIC_LLM_TRACE_DIR", raising=False)
+    monkeypatch.delenv("AGENTIC_DEBATE_BUDGET_CLOSEOUT", raising=False)
+    monkeypatch.delenv("AGENTIC_REQUIRE_CLAIM_SCOPE_FIELDS", raising=False)
     monkeypatch.setenv("FIREWORKS_API_KEY", "offline-budget-test-key")
 
 
@@ -159,4 +161,139 @@ def test_invalid_budget_fails_before_constructing_client(monkeypatch, invalid):
     monkeypatch.setenv("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET", invalid)
     monkeypatch.setattr(openai, "OpenAI", lambda **kwargs: pytest.fail("SDK should not be constructed"))
     with pytest.raises(ValueError, match="positive integer"):
+        build_llm_client(provider="fireworks")
+
+
+@pytest.mark.parametrize("consume_as", ["confirmed", "inconclusive", None])
+def test_debate_reserves_evidence_review_and_judge_with_real_sdk(monkeypatch, tmp_path, consume_as):
+    """Reproduce the 109 failure boundary: a probe exists at 24K tokens used."""
+    from verifier.agentic.agents.base import LLMAgent
+    from verifier.agentic.ledger import ClaimLedger
+    from verifier.agentic.orchestrator import AgenticOrchestrator
+    from verifier.agentic.state import Role, RunState, ToolEvent
+
+    monkeypatch.setenv("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET", "32768")
+    monkeypatch.setenv("AGENTIC_DEBATE_BUDGET_CLOSEOUT", "1")
+    requests = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        index = len(requests)
+        calls = []
+        if index == 4:
+            # Even a model attempting a fresh probe cannot execute it in closeout.
+            calls.append(("run_python_probe", {"code": "raise AssertionError('must not run')"}))
+            if consume_as is not None:
+                calls.append(("finalize_probe_evidence", {
+                    "event_id": "t1", "supports": consume_as,
+                    "summary": "Existing probe interpreted against the contract.",
+                    "data": {"ratio": 25.26},
+                }))
+        elif index == 5:
+            calls.append(("record_no_new_claims", {"reason": "Reviewed existing evidence.",
+                                                   "reviewed_claims": ["c1"]}))
+        elif index == 6:
+            calls.append(("record_verdict", {
+                "verdict": "reject" if consume_as == "confirmed" else "needs_more_evidence",
+                "confidence": 0.8, "decisive_claims": ["c1"] if consume_as == "confirmed" else [],
+                "reason": "Existing scoped evidence is decisive." if consume_as == "confirmed"
+                          else "The remaining evidence is insufficient; token exhaustion is not a pass.",
+            }))
+        payload = completion(body["max_tokens"])
+        if calls:
+            payload["choices"][0]["message"]["tool_calls"] = [
+                {"id": f"call_{i}", "type": "function", "function": {
+                    "name": name, "arguments": json.dumps(args)}}
+                for i, (name, args) in enumerate(calls)
+            ]
+        return httpx.Response(200, json=payload)
+
+    with offline_client(monkeypatch, respond) as client:
+        agents = [LLMAgent(role, f"You are {role.value}.", client, max_tokens=32768)
+                  for role in (Role.DESCRIBER, Role.SKEPTIC, Role.EXPERIMENTER, Role.JUDGE)]
+        # Actual SDK calls spend the entire exploration allowance, not a patched counter.
+        for _ in range(3):
+            agents[0].act(state=RunState(), tools=TOOLS)
+        orchestrator = AgenticOrchestrator(run_dir=tmp_path)
+        ClaimLedger(orchestrator.state).record_claim(
+            statement="The output may exceed the declared error bound.", rationale="Reduction precision.",
+            scope="in_scope", scope_rationale="The error bound applies to all legal inputs.",
+            scope_evidence=[{"source": "meta.json", "summary": "Bounded input contract."}],
+        )
+        orchestrator.state.tool_events.append(ToolEvent(
+            id="t1", tool="run_claim_probe", args={}, status="ok",
+            output={"claim_id": "c1", "exit_code": 0, "json_result": {"ratio": 25.26}},
+        ))
+        orchestrator.registry.get("run_python_probe").handler = (
+            lambda context, args: pytest.fail("closeout executed a new probe"))
+        result = orchestrator.run_verification_workflow(
+            agents, max_debate_rounds=4, max_claim_rounds=2,
+        )
+        assert result.stop_reason == "verdict_recorded"
+        assert result.rounds_completed == 1
+        assert client._output_budget.used == 32768
+        assert orchestrator.state.verdict["verdict"] == (
+            "reject" if consume_as == "confirmed" else "needs_more_evidence")
+        assert orchestrator.state.verdict["output_budget_closeout"]["started_remaining_tokens"] == 8192
+        assert [turn.role for turn in orchestrator.state.history] == [
+            Role.EXPERIMENTER, Role.SKEPTIC, Role.JUDGE]
+        assert orchestrator.state.tool_events[1].output["error_type"] == "CloseoutToolError"
+        if consume_as is None:
+            assert orchestrator.state.claims[0].status == "inconclusive"
+            assert orchestrator.state.verdict["output_budget_closeout"]["unresolved_claims"] == ["c1"]
+
+    assert [body["max_tokens"] for body in requests] == [8192, 8192, 8192, 4096, 1024, 3072]
+    assert "budget_evidence_consumption" in requests[3]["messages"][1]["content"]
+    assert "final_verdict_required" in requests[5]["messages"][1]["content"]
+    assert {tool["function"]["name"] for tool in requests[5]["tools"]} == {"record_verdict"}
+    assert all(tool["function"]["name"] not in {"run_python_probe", "run_claim_probe"}
+               for tool in requests[3]["tools"])
+
+
+def test_closeout_option_does_not_cap_solo(monkeypatch):
+    from verifier.agentic.agents.base import LLMAgent
+    from verifier.agentic.state import RunState
+
+    monkeypatch.setenv("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET", "32768")
+    monkeypatch.setenv("AGENTIC_DEBATE_BUDGET_CLOSEOUT", "1")
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=completion(1))
+
+    with offline_client(monkeypatch, respond) as client:
+        LLMAgent("solo", "Solo.", client, max_tokens=32768).act(state=RunState(), tools=TOOLS)
+    assert requests[0]["max_tokens"] == 32768
+
+
+def test_explicit_scope_schema_keeps_unknown_legal_and_legacy_default(monkeypatch, tmp_path):
+    from verifier.agentic.orchestrator import AgenticOrchestrator
+    from verifier.agentic.protocol import AgentResponse
+    from verifier.agentic.state import Role, ToolCall
+    from verifier.agentic.tools.claims import record_claim_schema
+
+    assert record_claim_schema()["required"] == ["statement", "rationale"]
+    monkeypatch.setenv("AGENTIC_REQUIRE_CLAIM_SCOPE_FIELDS", "1")
+    schema = record_claim_schema()
+    assert set(schema["required"]) == {
+        "statement", "rationale", "scope", "scope_rationale", "scope_evidence"}
+    orchestrator = AgenticOrchestrator(run_dir=tmp_path)
+    outputs = orchestrator.apply_agent_response(role=Role.SKEPTIC, response=AgentResponse(
+        message="Scope remains unknown.", tool_calls=[ToolCall("record_claim", {
+            "statement": "A stride condition might be relevant.", "rationale": "Inspect scope.",
+            "scope": "unknown", "scope_rationale": "", "scope_evidence": [],
+        })]))
+    assert "error" not in outputs[0]["output"]
+    assert orchestrator.state.claims[0].scope == "unknown"
+
+
+@pytest.mark.parametrize("budget", [None, "8192", "4096"])
+def test_closeout_rejects_missing_or_insufficient_shared_budget(monkeypatch, budget):
+    monkeypatch.setenv("AGENTIC_DEBATE_BUDGET_CLOSEOUT", "1")
+    if budget is not None:
+        monkeypatch.setenv("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET", budget)
+    monkeypatch.setattr(openai, "OpenAI", lambda **kwargs: pytest.fail("SDK should not be constructed"))
+    with pytest.raises(ValueError, match="requires a total output budget > 8192"):
         build_llm_client(provider="fireworks")

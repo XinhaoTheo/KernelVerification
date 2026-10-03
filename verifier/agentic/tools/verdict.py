@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from verifier.agentic.ledger import ClaimLedger
 from verifier.agentic.state import ClaimScope, ClaimStatus, utc_now_iso
 
 from .registry import ToolContext
@@ -17,7 +18,10 @@ def request_more_debate_schema() -> dict:
         "required": ["reason"],
         "properties": {
             "reason": {"type": "string"},
-            "focus_claims": {"type": "array", "items": {"type": "string"}},
+            "focus_claims": {
+                "type": "array", "items": {"type": "string"},
+                "description": "Existing claim ids to revisit. Inconclusive claims are reopened for investigation; if omitted or empty, all inconclusive claims are reopened.",
+            },
         },
         "additionalProperties": False,
     }
@@ -31,10 +35,25 @@ def request_more_debate(context: ToolContext, args: dict) -> dict:
     if not isinstance(focus_claims, list) or not all(isinstance(item, str) for item in focus_claims):
         raise ValueError("focus_claims must be a list of claim ids")
 
+    ledger = ClaimLedger(context.state)
+    # Validate the whole request before changing any claim. A renewed request
+    # for evidence must make unresolved claims eligible for the Experimenter,
+    # whose coverage loop schedules only OPEN claims. Keep prior evidence.
+    focused = ([ledger.get_claim(claim_id) for claim_id in dict.fromkeys(focus_claims)]
+               if focus_claims else context.state.claims)
+    reopened = []
+    for claim in focused:
+        if _claim_status(claim) == ClaimStatus.INCONCLUSIVE.value:
+            ledger.update_claim_status(claim_id=claim.id, status=ClaimStatus.OPEN)
+            reopened.append(claim.id)
+    if reopened:
+        context.state.skeptic_review = None
+
     context.state.convergence = {
         "request": "more_debate",
         "reason": reason,
         "focus_claims": focus_claims,
+        "reopened_claims": reopened,
         "created_at": utc_now_iso(),
     }
     return context.state.convergence

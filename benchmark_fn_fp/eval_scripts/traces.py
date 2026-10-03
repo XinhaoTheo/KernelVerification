@@ -222,8 +222,8 @@ def trial_sort_key(trial: str) -> tuple[int, int | str]:
     return (0, int(trial[1:])) if trial.startswith("r") and trial[1:].isdigit() else (1, trial)
 
 
-def iter_trace_records(benchmark_dir: Path | None = None):
-    """Discover unified trial leaves and legacy layouts, preserving provenance."""
+def iter_trace_records(benchmark_dir: Path | None = None, *, include_archived: bool = False):
+    """Read current trace roots, optionally including the separately archived pilot."""
     try:
         from .models import PROFILES
         from .case_registry import load_registry, resolve_trace_case
@@ -235,13 +235,17 @@ def iter_trace_records(benchmark_dir: Path | None = None):
     legacy_models = {"traces_glm": "z-ai/glm-5.3-flash",
                      "traces_glm_fireworks": "accounts/fireworks/models/glm-5p3",
                      "traces_opus5": "claude-opus-5"}
-    for root in sorted(benchmark.glob(TRACES_GLOB)):
+    roots = list(benchmark.glob(TRACES_GLOB))
+    if include_archived:
+        roots.extend((benchmark / "archive/numerical_pilot").glob(TRACES_GLOB))
+    for root in sorted(roots):
         if not root.is_dir() or root.is_symlink():
             continue
         candidates = {p.parent for name in ("run.json", "usage.json", "trace_meta.json")
                       for p in root.rglob(name)}
         for directory in sorted(candidates):
-            parts = directory.relative_to(benchmark).parts
+            # The archive prefix is storage, not an identity component.
+            parts = (root.name, *directory.relative_to(root).parts)
             indexes = [i for i, part in enumerate(parts) if part in ("solo", "debate", "single_call")]
             if not indexes:
                 continue
@@ -261,8 +265,9 @@ def iter_trace_records(benchmark_dir: Path | None = None):
                 elif len(parts) == arm_index + 1:
                     model = legacy_models.get(root.name)
             if not model:
+                logical_path = benchmark / Path(*parts)
                 matches = [p for p in PROFILES.values()
-                           if directory.is_relative_to(benchmark / p.traces_dir)]
+                           if logical_path.is_relative_to(benchmark / p.traces_dir)]
                 # A shared family path alone cannot choose an API model or price.
                 model = matches[0].model if len(matches) == 1 else None
             profile = PROFILES.get(model)

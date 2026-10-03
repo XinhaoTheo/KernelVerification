@@ -1,0 +1,95 @@
+[
+  {
+    "created_at": "2026-10-03T07:43:01Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T07:44:26Z",
+        "data": {
+          "aligned_boundary_pass": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "71e62fa001d61a63d3e3280fe1c1dd540ad0a0c7adc060d6832ebdca75300e2f"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "76331709f70acefd075892071ea7298e90141f1484ddeb080f1a0638c2ddb3d2"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 6.431174,
+          "exit_code": 0,
+          "expected_signal": null,
+          "interior_boundary_cases": [
+            {
+              "fin_bad": 65,
+              "max_fin_err": 0.351,
+              "out_bad": 2064,
+              "out_total": 6402
+            },
+            {
+              "fin_bad": 53,
+              "max_fin_err": 0.0208,
+              "out_bad": 3797
+            },
+            {
+              "fin_bad": 64,
+              "max_fin_err": 0.3617,
+              "out_bad": 0
+            },
+            {
+              "fin_bad": 66,
+              "max_fin_err": 1.099,
+              "out_bad": 1121,
+              "out_total": 4290
+            },
+            {
+              "fin_bad": 57,
+              "max_fin_err": 0.0389,
+              "out_bad": 1431,
+              "out_total": 16962
+            }
+          ],
+          "interior_boundary_fail": true,
+          "json_parse_error": "last stdout JSON value is not an object",
+          "json_result": null,
+          "max_abs_err_interior": 1.1352,
+          "stderr": "",
+          "stdout": "[{\"length\": 97, \"chunk\": 32, \"boundary\": 33, \"out_bad\": 2064, \"out_total\": 6402, \"fin_bad\": 65, \"max_abs_err\": 0.35100531578063965, \"max_fin_err\": 0.35100531578063965}, {\"length\": 97, \"chunk\": 32, \"boundary\": 20, \"out_bad\": 3797, \"out_total\": 6402, \"fin_bad\": 53, \"max_abs_err\": 0.2485799789428711, \"max_fin_err\": 0.02077627182006836}, {\"length\": 97, \"chunk\": 64, \"boundary\": 70, \"out_bad\": 0, \"out_total\": 6402, \"fin_bad\": 64, \"max_abs_err\": 9.5367431640625e-07, \"max_fin_err\": 0.3616931438446045}, {\"length\": 65, \"chunk\": 16, \"boundary\": 40, \"out_bad\": 1121, \"out_total\": 4290, \"fin_bad\": 66, \"max_abs_err\": 1.1351754665374756, \"max_fin_err\": 1.0990192890167236}, {\"length\": 97, \"chunk\": 32, \"boundary\": 32, \"out_bad\": 0, \"out_total\": 6402, \"fin_bad\": 0, \"max_abs_err\": 7.152557373046875e-07, \"max_fin_err\": 4.76837158203125e-07}, {\"length\": 97, \"chunk\": 32, \"boundary\": null, \"out_bad\": 0, \"out_total\": 6402, \"fin_bad\": 0, \"max_abs_err\": 7.152557373046875e-07, \"max_fin_err\": 5.960464477539062e-07}, {\"length\": 257, \"chunk\": 64, \"boundary\": 130, \"out_bad\": 1431, \"out_total\": 16962, \"fin_bad\": 57, \"max_abs_err\": 0.03887057304382324, \"max_fin_err\": 0.03887057304382324}]\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": "0.002 + 0.0001*|target|"
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Interior (non-chunk-aligned) sequence boundaries cause large violations: e.g. L=97,K=32,boundary=20 gives 3797/6402 output elements and 53/66 final_state elements outside tolerance with max abs error 0.2486; L=65,K=16,boundary=40 gives max abs error 1.135. Chunk-aligned (boundary=32) and no-boundary cases pass with errors ~1e-6, isolating the intra-chunk-boundary defect in _pass_states' representative-label comparison.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "_pass_states compares only the chunk-representative (first-token) labels to decide whether to zero the carry factor; a boundary strictly inside a chunk leaves both representatives equal, so the previous sequence's state is carried through the boundary instead of being reset, corrupting final_state and later chunks' outputs.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "seq_idx identifies contiguous independent sequences with labels nondecreasing, starting at zero, 'a larger label starts a new sequence'; prior = 0 when seq_idx[b,t] != seq_idx[b,t-1]; 'any legal values, shapes and sequence lengths may be tested. Correctness covers the full stated domain.'"
+      }
+    ],
+    "scope_rationale": "The contract defines the recurrence with prior=0 whenever seq_idx[b,t] != seq_idx[b,t-1], i.e. at any token where a larger label starts a new sequence, including strictly inside a chunk, and requires correctness over the full stated domain (any legal seq_idx boundaries, any chunk_size in 16/32/64).",
+    "statement": "When a sequence boundary occurs strictly inside a chunk (not at a chunk boundary), the kernel's state-passing stage fails to zero the previous sequence's carried state, so final_state and outputs of subsequent chunks violate the contract's recurrence (tolerance abs(actual-target) <= 0.002 + 0.0001*abs(target)).",
+    "status": "confirmed",
+    "updated_at": "2026-10-03T07:44:26Z"
+  }
+]

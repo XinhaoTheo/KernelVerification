@@ -1,0 +1,207 @@
+[
+  {
+    "created_at": "2026-10-03T05:00:11Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T05:01:17Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "f867b6f8569ac757d9eaff39588553f6248d9f16f5a476eadb6290e26de47098"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "c9f27e957aad98ccf67e14cdad9ad9da9050f2ffd5ccf6aee04f6d0c53df3095"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t12_json_result.json",
+              "sha256": "c00a2796a878edec557a0e6c77b9b0c51b2d02ad86c367447af98e1c9e4cdcfd"
+            }
+          ],
+          "duration_s": 6.579589,
+          "exit_code": 0,
+          "expected_signal": "bitwise mismatch between run() output and pre-call reference on at least one multi-program geometry",
+          "geometry_B_L_D_K": [
+            1,
+            4096,
+            1024,
+            2
+          ],
+          "json_parse_error": null,
+          "json_result": {
+            "(1, 2048, 1, 128)": {
+              "bit_exact": true,
+              "events_preserved_bits": true,
+              "mismatch_count": 0,
+              "numel": 2048,
+              "same_storage": true,
+              "val_exact": true
+            },
+            "(1, 4096, 1024, 2)": {
+              "bit_exact": false,
+              "events_preserved_bits": true,
+              "mismatch_count": 33216,
+              "numel": 4194304,
+              "same_storage": true,
+              "val_exact": false
+            },
+            "(1, 64, 64, 63)": {
+              "bit_exact": true,
+              "events_preserved_bits": true,
+              "mismatch_count": 0,
+              "numel": 4096,
+              "same_storage": true,
+              "val_exact": true
+            },
+            "(2, 64, 64, 32)": {
+              "bit_exact": true,
+              "events_preserved_bits": true,
+              "mismatch_count": 0,
+              "numel": 8192,
+              "same_storage": true,
+              "val_exact": true
+            },
+            "(4, 16, 32, 8)": {
+              "bit_exact": true,
+              "events_preserved_bits": true,
+              "mismatch_count": 0,
+              "numel": 2048,
+              "same_storage": true,
+              "val_exact": true
+            }
+          },
+          "mismatch_count": 33216,
+          "numel": 4194304,
+          "other_geometries_bit_exact": true,
+          "stderr": "",
+          "stdout": "{\"(2, 64, 64, 32)\": {\"numel\": 8192, \"bit_exact\": true, \"val_exact\": true, \"mismatch_count\": 0, \"events_preserved_bits\": true, \"same_storage\": true}, \"(1, 64, 64, 63)\": {\"numel\": 4096, \"bit_exact\": true, \"val_exact\": true, \"mismatch_count\": 0, \"events_preserved_bits\": true, \"same_storage\": true}, \"(1, 2048, 1, 128)\": {\"numel\": 2048, \"bit_exact\": true, \"val_exact\": true, \"mismatch_count\": 0, \"events_preserved_bits\": true, \"same_storage\": true}, \"(4, 16, 32, 8)\": {\"numel\": 2048, \"bit_exact\": true, \"val_exact\": true, \"mismatch_count\": 0, \"events_preserved_bits\": true, \"same_storage\": true}, \"(1, 4096, 1024, 2)\": {\"numel\": 4194304, \"bit_exact\": false, \"val_exact\": false, \"mismatch_count\": 33216, \"events_preserved_bits\": true, \"same_storage\": true}}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Aliased in-place race confirmed: on legal multi-program input B=1,L=4096,D=1024,K=2 (numel 4,194,304 > 1024), run() produced 33,216 bit mismatches versus the pre-call reference; smaller geometries (2,64,64,32), (1,64,64,63), (1,2048,1,128), (4,16,32,8) happened to pass, consistent with a scheduling-order-dependent read-after-write race. Events preserved; in-place same-storage confirmed.",
+        "supports": "confirmed",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "run() sets output = state (kernel.py lines 39-42) and the kernel does plain tl.load from STATE and tl.store to OUT with no staging or synchronization. Program handling destination linear range [p*1024,(p+1)*1024) reads source elements at index + K*D, which can lie in another program's store range; programs execute in unspecified order, so an old_state element can be overwritten before it is read, yielding nondeterministically wrong contents for e.g. B=2, L=64, D=64, K=32.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'After run() completes ... state[b,r,d] = old_state[b,r+K,d] if r < L-K ... Each result must preserve the exact FP32 bit pattern of its source element. This is a copy operation; no numerical approximation is permitted.'"
+      },
+      {
+        "source": "problem.txt",
+        "summary": "'The full wrapper, including its allocation decisions and launch arguments, is part of the implementation to verify. Do not assume distinct pointer names in the Triton function imply distinct storage: inspect the arguments passed by run.'"
+      }
+    ],
+    "scope_rationale": "The contract requires bit-exact shift of old_state into state for every legal (B,L,D,K) including e.g. B=2,L=64,D=64,K=32 (numel 8192 > 1024, multi-program), and explicitly warns that the wrapper's launch arguments are in scope and that STATE and OUT may alias.",
+    "statement": "For multi-program launches (any legal input with state.numel() > 1024, e.g. B=2, L=64, D=64, K=32), the aliased in-place copy in _slide can produce wrong results: a program's load of old_state[b, r+K, d] may read data already overwritten by another program's store, so run() fails the required bit-exact shift for inputs the contract admits.",
+    "status": "confirmed",
+    "updated_at": "2026-10-03T05:01:17Z"
+  },
+  {
+    "created_at": "2026-10-03T05:00:11Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T05:01:30Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t15_probe.py",
+              "sha256": "ee53ff303459f0acd4648563df39f4f1cc74f88f89020f71ca992d14cd8ad5c0"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t15_stdout.txt",
+              "sha256": "4d929e65c611a2fd6f3ba71ed8eaf6a4b562ed8c83bd54839daf5e58f3e4a331"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t15_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t15_json_result.json",
+              "sha256": "0c7af600dc7f5133309c52577e341bee47ecbca5e4d0028190aada8366087f16"
+            }
+          ],
+          "bit_exact": true,
+          "duration_s": 4.87651,
+          "exit_code": 0,
+          "expected_signal": "whether -0.0 source elements appear as +0.0 (bit 0) in output instead of 0x80000000",
+          "geometry_B_L_D_K": [
+            1,
+            8,
+            64,
+            3
+          ],
+          "json_parse_error": null,
+          "json_result": {
+            "bit_exact": true,
+            "geometry": [
+              1,
+              8,
+              64,
+              3
+            ],
+            "negzero_expected": 512,
+            "negzero_in_out": 512,
+            "poszero_in_out": 0
+          },
+          "negzero_expected": 512,
+          "negzero_in_out": 512,
+          "poszero_in_out": 0,
+          "stderr": "",
+          "stdout": "{\"geometry\": [1, 8, 64, 3], \"negzero_expected\": 512, \"negzero_in_out\": 512, \"poszero_in_out\": 0, \"bit_exact\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Signed-zero bit preservation holds: on single-program geometry B=1,L=8,D=64,K=3 (512 elements) with both state tail and new_events filled entirely with -0.0 (0x80000000), run() output matched the pre-call reference bitwise: all 512 expected -0.0 elements remained 0x80000000, zero appeared as +0.0 (0x00000000), bit_exact=true. The tl.where/other=0.0 path did not substitute +0.0 for -0.0.",
+        "supports": "rebutted",
+        "tool_event_id": "t15"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "tl.load uses other=0.0 defaults and the value passes through tl.where; on fp32 this should be a pure move, but the masked other=0.0 plus where select path is a plausible source of a +0.0-for--0.0 substitution, and the contract explicitly calls out signed zeros as in-domain values requiring bit-exact preservation.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'Their values may be any finite FP32 values, including zeros and signed zeros.' and 'Each result must preserve the exact FP32 bit pattern of its source element.'"
+      }
+    ],
+    "scope_rationale": "The contract explicitly admits signed zeros in the input domain and requires each result element to preserve the exact FP32 bit pattern of its source, so a -0.0 source element mapping to +0.0 would be a stated-behavior violation.",
+    "statement": "Signed-zero and exact-bit preservation may be violated by the tl.where/other=0.0 select path when the required result element is -0.0 (e.g. state or new_events containing -0.0), producing +0.0 instead of the required bit-identical copy.",
+    "status": "rebutted",
+    "updated_at": "2026-10-03T05:01:30Z"
+  }
+]

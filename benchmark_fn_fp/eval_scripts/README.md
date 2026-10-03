@@ -46,15 +46,16 @@ requests/responses, and tool runs retain their full transcripts, ledgers and
 probe artifacts. See [the trace guide](../TRACES.md) and [GLM index](../traces_glm/INDEX.md).
 The scorer discovers nested trials and groups them by dataset, provider, model,
 arm and original experimental batch, while linking to current per-case `rN`
-paths; repeats and the separate case_36/case_37 dataset are not pooled silently.
+paths; repeats and the historical case_36/case_37 cohorts are not pooled silently.
 
 ## Filling missing arms
 
-The [GLM index](../traces_glm/INDEX.md) starts with coverage for all 104 active
+The [GLM index](../traces_glm/INDEX.md) starts with coverage for all 90 active
 cases, including cases with no traces. It counts valid wrong answers and
 `needs_more_evidence` as completed; errors, truncated answers and running jobs
 remain separate. The [2026-09-30 completion report](../traces_glm/COMPLETION_20260930.md)
-records the completed batch and its costs.
+records the historical 104-case batch and its costs, including 24 now-archived
+pilot cases. Current reports exclude the archive.
 
 ```sh
 modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset benchmark_fn_fp --arm both --all --provider fireworks --only-missing --total-output-tokens 32768
@@ -67,9 +68,11 @@ preserved; use a new `rN` for a retry and do not submit a second batch
 while the same slots are still running. The source-only Fireworks runner has
 no such flag: pass an audited missing-case list with `--cases`.
 
-All five datasets are supported, including `numerical_pilot`; its tool runs
-use the dedicated NumPy 2.2.6 image. Coverage completion combines historical
-and new records, so it is not a claim of identical model/settings across arms.
+Current selections are the original suite, `single_call_vs_tools_challenges`
+(case_36–case_61) and `solo_vs_debate_challenges` (case_62–case_81).
+The [early pilot](../archive/numerical_pilot/README.md) is archived and closed
+to expansion or reruns. Coverage completion combines historical and new
+records, so it does not establish identical model/settings across arms.
 
 New runs record `pricing_snapshot` in trace metadata, including the price
 source and check date for Fireworks. Scoring uses that snapshot; older traces

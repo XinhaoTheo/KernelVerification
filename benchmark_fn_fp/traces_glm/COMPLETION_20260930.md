@@ -1,5 +1,7 @@
 # GLM 三组实验补全：2026-09-30
 
+> 本文保留完成当时的104题/312位置历史快照，其中24题及72条GLM运行现已[归档](../archive/numerical_pilot/README.md)；当前80题范围见 [INDEX](INDEX.md)。下列成绩、费用和结论不变。
+
 用户要求覆盖全部 104 个活跃 case，保留已有结果，仅补缺项。开跑前有 57 个 case、305 次 GLM 运行，覆盖 150/312 个 case-arm；其余 162 个为本轮固定任务。
 
 | 题库 | 无工具 single_call | solo | debate | 新增任务 |
@@ -69,6 +71,6 @@ Pilot 中，solo 相比无工具多判对 6 题（+25 个百分点）；debate �
 | case_31 / solo | 5 次实际请求均含完整 323 行源码及合同；输出 3,935 tokens。reject 与真值一致，静态定位成立，但 [t7 自写参考](case_31/solo/r1/probes/t7_probe.py) 把 `[L,H,D]` 张量算成跨 head 的 `[L,H,H]` attention，所报数值误差不能作为有效反例。最终声称已由正确参考确认过强。 |
 | case_31 / debate | 12 次实际请求全文完整；输出 10,717 tokens。[t16 参考](case_31/debate/r1/probes/t16_probe.py) 正确按 query 及同序列 keys 计算，batch 0 误差 0.545661，支持尾块 masking 缺陷；reject 与证据一致。 |
 | case_82 / solo | 4 次实际请求完整；输出 1,154 tokens。GPU 实测 E=0.001576224834839737 与冻结答案三次实测一致，reject 正确。独立 image 配置固定 NumPy 2.2.6，产物未另存 runtime 版本快照。probe 输出是 Python dict，自动 JSON 解析失败，但原始 stdout 完整可核验。 |
-| case_82 / debate | 10 次实际请求完整；输出 5,963 tokens。[t12 GPU 参考](case_82/debate/r1/probes/t12_probe.py) 正确，E=0.0015762248348375875，与冻结值仅差 2.15e-15，reject 正确。对误差分母由 floor 主导的假说经实验反驳后未采用；整体 max_abs_err 的 fp16 归因未经消融，不作为决定性证据。 |
+| case_82 / debate | 10 次实际请求完整；输出 5,963 tokens。[t12 GPU 参考](../archive/numerical_pilot/traces_glm/case_82/debate/r1/probes/t12_probe.py) 正确，E=0.0015762248348375875，与冻结值仅差 2.15e-15，reject 正确。对误差分母由 floor 主导的假说经实验反驳后未采用；整体 max_abs_err 的 fp16 归因未经消融，不作为决定性证据。 |
 
 case_31 说明“判对”与“验证证据可靠”不是同一个指标；这是一项具体观察，不能单凭此例推断 debate 整体优于 solo。

@@ -1,0 +1,172 @@
+"""Standalone packed state-space recurrence, adapted from Mamba state passing.
+
+Copyright (c) 2024, Tri Dao, Albert Gu. Apache-2.0; see LICENSE.
+2026 adaptation: bounded FP32 recurrence, explicit chunk-local and output stages,
+fixed launch configuration, standalone validation and reference.
+"""
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _local_chunks(U, A, IDS, LOCAL, PREFIX, SUMMARY, SCALE,
+                  L: tl.constexpr, H: tl.constexpr, D: tl.constexpr,
+                  C: tl.constexpr, K: tl.constexpr, BD: tl.constexpr):
+    chunk = tl.program_id(0)
+    batch = tl.program_id(1)
+    head = tl.program_id(2)
+    cols = tl.arange(0, BD)
+    state = tl.zeros((BD,), tl.float32)
+    prefix = tl.full((), 1.0, tl.float32)
+    begin = chunk * K
+    previous = tl.load(IDS + batch * L + begin)
+    for j in range(K):
+        token = begin + j
+        valid = token < L
+        current = tl.load(IDS + batch * L + token, mask=valid, other=-1)
+        alpha = tl.load(A + (batch * L + token) * H + head, mask=valid, other=1.0)
+        offset = ((batch * L + token) * H + head) * D + cols
+        value = tl.load(U + offset, mask=valid & (cols < D), other=0.0)
+        prior = tl.where(current == previous, state, 0.0)
+        updated = alpha * prior + value
+        state = tl.where(valid, updated, state)
+        prefix *= alpha
+        tl.store(LOCAL + offset, state, mask=valid & (cols < D))
+        tl.store(PREFIX + (batch * L + token) * H + head, prefix, mask=valid)
+        previous = current
+    summary_offset = ((batch * C + chunk) * H + head) * D + cols
+    tl.store(SUMMARY + summary_offset, state, mask=cols < D)
+    tl.store(SCALE + (batch * C + chunk) * H + head, prefix)
+
+
+@triton.jit
+def _pass_states(SUMMARY, SCALE, IDS, INITIAL, CARRY, FINAL,
+                 L: tl.constexpr, H: tl.constexpr, D: tl.constexpr,
+                 C: tl.constexpr, K: tl.constexpr, BD: tl.constexpr):
+    batch = tl.program_id(0)
+    head = tl.program_id(1)
+    cols = tl.arange(0, BD)
+    state = tl.load(INITIAL + (batch * H + head) * D + cols,
+                    mask=cols < D, other=0.0)
+    sequence = tl.full((), 0, tl.int32)
+    for chunk in range(C):
+        offset = ((batch * C + chunk) * H + head) * D + cols
+        tl.store(CARRY + offset, state, mask=cols < D)
+        new_state = tl.load(SUMMARY + offset, mask=cols < D, other=0.0)
+        factor = tl.load(SCALE + (batch * C + chunk) * H + head)
+        representative = tl.minimum((chunk + 1) * K, L) - 1
+        next_sequence = tl.load(IDS + batch * L + representative)
+        factor = tl.where(next_sequence == sequence, factor, 0.0)
+        state = factor * state + new_state
+        sequence = next_sequence
+    tl.store(FINAL + (batch * H + head) * D + cols, state, mask=cols < D)
+
+
+@triton.jit
+def _combine(LOCAL, PREFIX, IDS, CARRY, OUT,
+             L: tl.constexpr, H: tl.constexpr, D: tl.constexpr,
+             C: tl.constexpr, K: tl.constexpr, BD: tl.constexpr):
+    chunk = tl.program_id(0)
+    batch = tl.program_id(1)
+    head = tl.program_id(2)
+    rows = chunk * K + tl.arange(0, K)
+    cols = tl.arange(0, BD)
+    previous = tl.load(IDS + batch * L + chunk * K - 1, mask=chunk > 0, other=0)
+    current = tl.load(IDS + batch * L + rows, mask=rows < L, other=-1)
+    prefix = tl.load(PREFIX + (batch * L + rows) * H + head, mask=rows < L, other=0.0)
+    prefix = tl.where(current == previous, prefix, 0.0)
+    incoming = tl.load(CARRY + ((batch * C + chunk) * H + head) * D + cols,
+                       mask=cols < D, other=0.0)
+    offset = ((batch * L + rows[:, None]) * H + head) * D + cols[None, :]
+    valid = (rows[:, None] < L) & (cols[None, :] < D)
+    local = tl.load(LOCAL + offset, mask=valid, other=0.0)
+    result = local + prefix[:, None] * incoming[None, :]
+    tl.store(OUT + offset, result, mask=valid)
+
+
+def validate_inputs(u, decay, seq_idx, initial_state, chunk_size, require_cuda=True):
+    """Raise ValueError for inputs outside the public domain; usable on CPU too."""
+    values = (u, decay, seq_idx, initial_state)
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+    require(not torch.is_inference_mode_enabled(), "ordinary execution mode required")
+    for tensor in values:
+        require(type(tensor) is torch.Tensor, "standard torch.Tensor required")
+        require(tensor.layout == torch.strided and tensor.is_contiguous(), "contiguous strided tensor required")
+        require(not tensor.requires_grad and not tensor.is_inference(), "materialized non-gradient ordinary tensors required")
+        require(not tensor.is_neg() and not tensor.is_conj(), "logical view flags are outside this domain")
+    require(all(t.device == u.device for t in values), "all inputs must share a device")
+    require(not require_cuda or u.is_cuda, "CUDA tensors required by run")
+    require(u.ndim == 4, "u must have shape [B,L,H,D]")
+    batch, length, heads, width = u.shape
+    require(1 <= batch <= 2 and 1 <= length <= 257 and 1 <= heads <= 4 and 1 <= width <= 96, "shape outside supported domain")
+    require(type(chunk_size) is int and chunk_size in (16, 32, 64), "chunk_size must be 16, 32 or 64")
+    require(u.dtype == decay.dtype == initial_state.dtype == torch.float32, "numeric inputs must be FP32")
+    require(seq_idx.dtype == torch.int32, "seq_idx must be int32")
+    require(decay.shape == (batch, length, heads), "decay shape mismatch")
+    require(seq_idx.shape == (batch, length), "seq_idx shape mismatch")
+    require(initial_state.shape == (batch, heads, width), "initial_state shape mismatch")
+    for tensor in (u, decay, initial_state):
+        require(bool(torch.isfinite(tensor).all().item()), "numeric values must be finite")
+    require(bool((u.abs() <= 1).all().item()), "u magnitude exceeds one")
+    require(bool((initial_state.abs() <= 1).all().item()), "initial state magnitude exceeds one")
+    require(bool(((decay >= .5) & (decay <= .96875)).all().item()), "decay outside [0.5,0.96875]")
+    require(bool((seq_idx[:, 0] == 0).all().item()), "each packed row must begin at sequence zero")
+    require(bool(((seq_idx >= 0) & (seq_idx < length)).all().item()), "sequence labels outside range")
+    require(bool((seq_idx[:, 1:] >= seq_idx[:, :-1]).all().item()), "sequence labels must be nondecreasing")
+    intervals = [(t.data_ptr(), t.data_ptr() + t.numel() * t.element_size()) for t in values]
+    require(all(a1 <= b0 or b1 <= a0 for i, (a0, a1) in enumerate(intervals)
+                for b0, b1 in intervals[i + 1:]), "input storage ranges must be disjoint")
+    return {"valid": True, "batch": batch, "length": length,
+            "heads": heads, "width": width, "chunk_size": chunk_size}
+
+
+def run(u, decay, seq_idx, initial_state, chunk_size):
+    """Return per-token states and the last state; preserve all inputs."""
+    validate_inputs(u, decay, seq_idx, initial_state, chunk_size)
+    batch, length, heads, width = u.shape
+    chunks = triton.cdiv(length, chunk_size)
+    local = torch.empty_like(u)
+    prefix = torch.empty_like(decay)
+    summary = torch.empty((batch, chunks, heads, width), device=u.device, dtype=torch.float32)
+    scale = torch.empty((batch, chunks, heads), device=u.device, dtype=torch.float32)
+    carry = torch.empty_like(summary)
+    output = torch.empty_like(u)
+    final = torch.empty_like(initial_state)
+    meta = dict(L=length, H=heads, D=width, C=chunks, K=chunk_size,
+                BD=triton.next_power_of_2(width), num_warps=4, enable_fp_fusion=False)
+    with torch.cuda.device(u.device):
+        _local_chunks[(chunks, batch, heads)](u, decay, seq_idx, local, prefix, summary, scale, **meta)
+        _pass_states[(batch, heads)](summary, scale, seq_idx, initial_state, carry, final, **meta)
+        _combine[(chunks, batch, heads)](local, prefix, seq_idx, carry, output, **meta)
+    return output, final
+
+
+def reference(u, decay, seq_idx, initial_state, chunk_size):
+    """FP64 serial recurrence, independent of the implementation's chunk layout."""
+    validate_inputs(u, decay, seq_idx, initial_state, chunk_size, require_cuda=False)
+    u64, a64 = u.double(), decay.double()
+    state = initial_state.double().clone()
+    result = []
+    for token in range(u.shape[1]):
+        if token:
+            keep = (seq_idx[:, token] == seq_idx[:, token - 1])[:, None, None]
+            state = torch.where(keep, state, torch.zeros_like(state))
+        state = a64[:, token, :, None] * state + u64[:, token]
+        result.append(state.clone())
+    return torch.stack(result, dim=1), state
+
+
+def make_inputs(device="cuda", length=97, chunk_size=32, seed=0):
+    """Convenience inputs; legal inputs are not restricted to this generator."""
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    u = (2 * torch.rand((1, length, 2, 33), generator=generator) - 1).float()
+    decay = (.90 + .06 * torch.rand((1, length, 2), generator=generator)).float()
+    initial = (2 * torch.rand((1, 2, 33), generator=generator) - 1).float()
+    seq_idx = torch.zeros((1, length), dtype=torch.int32)
+    if length >= 3:
+        seq_idx[:, length // 3:] += 1
+        seq_idx[:, 2 * length // 3:] += 1
+    return u.to(device), decay.to(device), seq_idx.to(device), initial.to(device), chunk_size

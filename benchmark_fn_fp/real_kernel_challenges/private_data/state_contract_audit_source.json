@@ -1,0 +1,54 @@
+{
+  "case_ids": [
+    "case_107",
+    "case_110"
+  ],
+  "status": "awaiting frozen-environment GPU audit; local CPU copy_ context check passed",
+  "expected_labels": {
+    "case_107": "reject",
+    "case_110": "accept"
+  },
+  "label_scope": "same complete public contract, fixed implementations; correction to a mistaken prior label, not seed-dependent relabeling",
+  "source": {
+    "parent_case": "case_107",
+    "upstream_mechanism": "https://github.com/pytorch/pytorch/issues/164701",
+    "classification": "purpose-built follow-up repair discovered by independent contract audit; no claim of historical upstream fix"
+  },
+  "previous_label_withdrawal": {
+    "case": "case_107",
+    "previous_label": "accept",
+    "reason": "The public contract allows contiguous FP32 state tensors requiring gradients and existing inference tensors. The previous 201 tests omitted tensor/autograd state. state.copy_(output) outside an inference/no-grad context raises on a requires_grad leaf or its view, and on an existing inference tensor in normal mode. Race elimination was valid but insufficient for the complete wrapper contract.",
+    "preserved_evidence": "Original public files, prior qualification and traces remain unchanged as historical evidence. The new audit supplies an explicit legal exception counterexample.",
+    "additional_audit_finding": "The unchanged contract also permits ordinary contiguous tensors with a lazy-negative bit. Raw pointer loads do not materialize the logical negative sign. New110 resolves it before launch; old107 remains unchanged."
+  },
+  "repair": "Materialize logical source values with resolve_neg under no_grad. Launch the existing sliding copy to independent output, then a separate same-stream Triton bit-copy writeback. For a lazy-negative destination XOR bit31 before the raw store. This preserves signed zeros and supports grad/inference buffers without Torch copy_ wrapper exceptions or view-version metadata corruption; no autograd derivatives/history are promised by this buffer-update contract.",
+  "cpu_precheck": {
+    "torch": "2.9.1",
+    "device": "CPU",
+    "ordinary": true,
+    "grad_leaf": true,
+    "grad_view": true,
+    "existing_inference": true,
+    "scope": "CPU raw-copy/sign-bit surrogate validates wrapper tensor-state handling, not GPU indexing or scheduling.",
+    "lazy_negative_properties_verified": true,
+    "wrapper_final_design": "two raw-copy stages, destination sign-bit XOR when is_neg",
+    "tensor_state_modes": 19,
+    "successive_calls_per_mode": 3,
+    "default_grad_logical_reads_after_calls": true
+  },
+  "gpu_qualification_plan": "case107: actual grad-leaf exception required; inspect19 tensor states. case110: reuse201 ordinary tests plus19 modes each3 successive calls (258 runs), including signed-zero, logical negative bits, gradients and inference buffers. GPU performs actual Triton launches.",
+  "public_hashes": {
+    "case_107": {
+      "kernel.py": "4676fa1d48754eca2bd53dda8bc77b5e59ee3837af70ad1244af99dfde16bb4c",
+      "problem.txt": "796219b618572fe1749cd02af33d89b699dea3413ed3fd8d2ba1fdb2c3797496",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    "case_110": {
+      "kernel.py": "ef44103fef75c3d21c41cbbfa0155a9e05b3082c09ef0c4d425140b75d2e66ef",
+      "problem.txt": "796219b618572fe1749cd02af33d89b699dea3413ed3fd8d2ba1fdb2c3797496",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    }
+  },
+  "public_semantic_diff": "--- case_107/kernel.py\n+++ case_110/kernel.py\n@@ -24,6 +24,19 @@\n     tl.store(OUT + index, value, mask=valid)\n \n \n+@triton.jit\n+def _writeback(SOURCE, STATE, TOTAL: tl.constexpr,\n+               NEGATE: tl.constexpr, BLOCK: tl.constexpr):\n+    index = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)\n+    mask = index < TOTAL\n+    source_bits = SOURCE.to(tl.pointer_type(tl.uint32))\n+    state_bits = STATE.to(tl.pointer_type(tl.uint32))\n+    bits = tl.load(source_bits + index, mask=mask, other=0)\n+    if NEGATE:\n+        bits = bits ^ 0x80000000\n+    tl.store(state_bits + index, bits, mask=mask)\n+\n+\n def run(state, new_events):\n     \"\"\"Update state in place, return that same tensor, preserve new_events.\"\"\"\n     assert state.is_cuda and new_events.is_cuda\n@@ -36,12 +49,17 @@\n     steps = new_events.shape[1]\n     assert 1 <= batch <= 4 and 2 <= length <= 4096 and 1 <= width <= 1024\n     assert 1 <= steps <= min(length, 128)\n+    with torch.no_grad():\n+        source = state.resolve_neg()\n+        events_source = new_events.resolve_neg()\n     output = torch.empty_like(state)\n     _slide[(triton.cdiv(state.numel(), 1024),)](\n-        state, new_events, output, length, width, steps, state.numel(),\n+        source, events_source, output, length, width, steps, state.numel(),\n         BLOCK=1024, num_warps=4,\n     )\n-    state.copy_(output)\n+    _writeback[(triton.cdiv(state.numel(), 1024),)](\n+        output, state, state.numel(), NEGATE=state.is_neg(), BLOCK=1024, num_warps=4,\n+    )\n     return state\n \n \n",
+  "evidence_limitation": "Finite GPU tests support but do not prove full-domain acceptance; tensor subclasses with custom dispatch are not claimed as tested."
+}

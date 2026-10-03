@@ -145,7 +145,7 @@ def pricing_snapshot(model: str) -> dict | None:
              "basis": "project model profile estimate, not an invoice"}
     if model == "accounts/fireworks/models/glm-5p3":
         rates.update(input_per_million=1.40, output_per_million=4.40,
-                     checked_at="2026-09-30",
+                     checked_at="2026-10-03",
                      source="https://fireworks.ai/models/fireworks/glm-5p3",
                      basis="published list price; cached input conservatively billed as uncached; excludes GPU")
     return rates

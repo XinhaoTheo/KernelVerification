@@ -1,0 +1,65 @@
+{
+  "case_ids": [
+    "case_108",
+    "case_109"
+  ],
+  "status": "Initial qualification completed; the intended accept label below was withdrawn after independent full-contract audit. See current_labels and validation_gpu.json.",
+  "expected_labels": {
+    "case_108": "accept",
+    "case_109": "reject"
+  },
+  "label_scope": "one immutable implementation and one common full input-domain contract; no seed-dependent labels",
+  "source": {
+    "project": "linkedin/Liger-Kernel",
+    "path": "src/liger_kernel/ops/rms_norm.py",
+    "pull_request": "https://github.com/linkedin/Liger-Kernel/pull/950",
+    "before_commit": "0a62700752e8592c0bf16916d1e4dbf598cee8c1",
+    "after_commit": "47dc1d353a428f98037a584261bbbc6298cb0c50",
+    "before_sha256": "0edbec58de5892d140a1cd0961203055ea197ebc81149957fa2a54ee8a0fd350",
+    "after_sha256": "90a9dc4b5382060644e234270513693e12f63e361a54ddeb63d57d8c48731e83",
+    "license": "BSD-2-Clause; upstream includes Unsloth Apache-2.0 attribution",
+    "historical_semantic_diff": "dW_row += tl.sum(dY_row * (X_row * rstd_row[:, None]).to(X_dtype), 0) -> dW_row += tl.sum((dY_row * (X_row * rstd_row[:, None]).to(X_dtype)).to(tl.float32), 0)"
+  },
+  "classification": "historical mechanism adapted to T4 FP16; NOT an unmodified A100/BF16 replay",
+  "adaptations": [
+    "Extract row and block backward paths; remove package utility imports, autograd wrapper, other casting modes, offset support, CPU/XPU paths, and forward kernel.",
+    "Restrict activation, upstream-gradient and weight dtype to FP16 for T4. Supply valid FP32 reciprocal-RMS cache explicitly.",
+    "FP32 output main-gradient buffer instead of the upstream final cast to weight dtype. The internal upstream partial buffers are already FP32.",
+    "Reduce block-dispatch threshold from 32768 rows to 512 for a small qualification pilot; retain 16-row tiles and SM-partitioned loop.",
+    "Use min(SM count, M) programs, restricted shapes, explicit nonaliasing contract, masked zero reciprocal-RMS tail, and disable FP fusion in both implementations.",
+    "The two public implementations differ ONLY in FP32 promotion before the block dW reduction."
+  ],
+  "contract_rationale": {
+    "dw": "FP32 tree reductions of exactly FP16-representable terms, then at most 7 partial-block additions per SM (M<=4096 on T4 40 SMs), then FP32 sum across <=40 programs. A 1e-5 L1-sum-scaled bound is conservative versus FP32 rounding; it does not impose relative accuracy after cancellation.",
+    "dx": "FP32 analytic backward formula with intentional FP16 m product and FP16 output. Bounded input RMS and magnitudes avoid singular/overflow regimes; 0.002+0.002*abs(target) provides margin for FP16 final rounding and FP32 evaluation.",
+    "not_proof": "Qualification sampling is not a formal all-input proof. Combine the bounds with source/dependency analysis and reject any legal counterexample."
+  },
+  "decisive_probe_plan": "x=1, weight=1, valid rstd; within each 16-row tile, dy first 8 rows=1 and last 8 rows=2^-12. FP16 tree sum can round away the small positive contribution, whereas FP32 accumulation retains it. M=512,N=64. Ordinary random and tail shapes also tested.",
+  "public_hashes": {
+    "case_108": {
+      "kernel.py": "38b73b186340a82810492d36b4dd75874dafa2143c65223ea407d6e9b075ddec",
+      "problem.txt": "db26449fb0344490c32399729d0b905e18534f8ec4da7a7af493a7abd322025b",
+      "LICENSE": "7cc0cb11423b59cf59c26512b9a2d70383a56c672490ed92419a1a109c5c05dc"
+    },
+    "case_109": {
+      "kernel.py": "4a09940509f65a4056e6b8a3e68fafcdac84bb878eab156459157b9b652c9ae1",
+      "problem.txt": "db26449fb0344490c32399729d0b905e18534f8ec4da7a7af493a7abd322025b",
+      "LICENSE": "7cc0cb11423b59cf59c26512b9a2d70383a56c672490ed92419a1a109c5c05dc"
+    }
+  },
+  "public_semantic_diff": "--- case_109/kernel.py\n+++ case_108/kernel.py\n@@ -51,7 +51,7 @@\n         dx += r[:, None] * (\n             -(1.0 / N) * (r * r * tl.sum(m * x, 1))[:, None] * x\n         )\n-        dw += tl.sum(dy * (x * r[:, None]).to(tl.float16), 0)\n+        dw += tl.sum((dy * (x * r[:, None]).to(tl.float16)).to(tl.float32), 0)\n         tl.store(DX + rows[:, None] * N + cols[None, :], dx, mask=mask)\n     tl.store(PARTIAL + pid * N + cols, dw, mask=col_mask)\n \n",
+  "qualification_evidence": "qualification/r2.json",
+  "validation_freeze": "validation_gpu.json",
+  "expected_labels_scope": "Historical pre-evaluation expectations, preserved verbatim; not the current answer key.",
+  "current_labels": {
+    "case_108": "reject",
+    "case_109": "reject"
+  },
+  "post_qualification_correction": {
+    "case": "case_108",
+    "current_label": "reject",
+    "evidence": "qualification/r4.json",
+    "original_public_source_and_contract_unchanged": true,
+    "details": "validation_gpu.json / label_correction"
+  }
+}

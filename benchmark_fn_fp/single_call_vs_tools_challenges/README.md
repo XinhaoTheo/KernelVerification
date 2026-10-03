@@ -1,15 +1,16 @@
-# 无工具单次调用 vs 带工具验证：case_38–case_61
+# 无工具单次调用 vs 带工具验证：case_36–case_61
 
-这 24 题、12 对机制判断的是：**公开的固定输入经过近似计算后，最终误差是否满足合同**。它们主要区分源码估测与实际计算；已完成的指定复验中，solo 和 debate 的最终标签准确率均打平，不能据此声称多角色比单 agent 更强。
+这 26 题、13 对机制判断的是：**公开的固定输入经过近似计算后，最终误差是否满足合同**。它们主要区分源码估测与实际计算；已完成的指定复验中，solo 和 debate 的最终标签准确率均打平，不能据此声称多角色比单 agent 更强。
 
-公开 kernel、输入生成器和合同统一位于 [triton_eval_cases](../triton_eval_cases/)。本目录只保留这份说明和 `private_data/`；构造、独立参考、GPU 验证及报告程序在 [eval_scripts/single_call_vs_tools_challenges](../eval_scripts/single_call_vs_tools_challenges/)。新 CLI 名称是 `single_call_vs_tools_challenges`，历史 trace 的逻辑 dataset `numerical_challenges` 保留用于追溯。
+公开 kernel、输入生成器和合同统一位于 [triton_eval_cases](../triton_eval_cases/)。本目录只保留这份说明和 `private_data/`；构造、独立参考、GPU 验证及报告程序在 [eval_scripts/single_call_vs_tools_challenges](../eval_scripts/single_call_vs_tools_challenges/)。新 CLI 名称是 `single_call_vs_tools_challenges`，历史 trace 的来源标识 `correlation_pair`（36/37）和 `numerical_challenges`（38–61）保留用于追溯。原始记录见 [GLM 索引](../traces_glm/INDEX.md) 和 [Opus traces](../traces_opus5/)。
 
 ## 题型与真值
 
-每对使用同一计算和合同，仅公开 seed 或排列不同；包含一个合格和一个不合格输入。下面误差均为合同原始比例，**不是百分数**；精确值、输入/源码/输出 hash 见 [冻结 T4 验证](private_data/validation_gpu.json)。
+每对使用同一计算和合同，仅公开 seed 或排列不同；包含一个合格和一个不合格输入。下面误差均为合同原始比例，**不是百分数**；精确值、输入/源码/输出 hash 见 [36/37 冻结 T4 验证](private_data/correlation_pair/validation_gpu.json) 和 [38–61 冻结 T4 验证](private_data/validation_gpu.json)。
 
 | 案例与合同 | 需要验证的量 | T4 误差，按案例顺序 | 容差 |
 |---|---|---:|---:|
+| [36/37](../triton_eval_cases/case_36/problem.txt) | 两路低比特量化误差由公开行排列决定相长或相消 | 0.224115806 / 0.033647147 | 0.1 |
 | [38/39](../triton_eval_cases/case_38/problem.txt) | logit 量化经过 softmax 后，与 value 排列共同决定的 attention 误差 | 0.00809816 / 0.03652389 | 0.02 |
 | [40/41](../triton_eval_cases/case_40/problem.txt) | 64 步、16 维非正规递推中的 FP16 状态舍入 | 0.000769029 / 0.004907839 | 0.002 |
 | [42/43](../triton_eval_cases/case_42/problem.txt) | 相同项按不同顺序做 FP32 顺序求和 | 0.90019872 / 0 | 0.1 |
@@ -23,13 +24,117 @@
 | [58/59](../triton_eval_cases/case_58/problem.txt) | 病态 SPD 矩阵 FP32 消元的 log-determinant | 0.000000202355 / 0.000711920 | 0.0001 |
 | [60/61](../triton_eval_cases/case_60/problem.txt) | 平方距离展开式相消传播到归一化 RBF 预测 | 0.000142222 / 0.292406361 | 0.05 |
 
-只有 42/43 的标签顺序是 reject/trust；其余均为 trust/reject。合同只涵盖声明的输入，不能另造输入来推翻合格案例。风险上界或中间量误差也不能直接替代最终输出指标。
+36/37 和 42/43 的标签顺序是 reject/trust；其余均为 trust/reject。合同只涵盖声明的输入，不能另造输入来推翻合格案例。风险上界或中间量误差也不能直接替代最终输出指标。
 
 ## 实验设置与结果
 
-共同模型为 Fireworks `accounts/fireworks/models/glm-5p3`，三臂是无工具单次调用、solo＋GPU 工具、describer/skeptic/experimenter/judge 四角色 debate＋GPU 工具。Solo 最多十轮、debate 四轮；本组的 token cap 是**每次调用**上限，没有匹配总调用、总 tokens、费用或 GPU 时间。所有 arm 得到相同公开材料，容器不挂载私有参考、搜索日志或答案。
+case_38–case_61 的共同模型为 Fireworks `accounts/fireworks/models/glm-5p3`，三臂是无工具单次调用、solo＋GPU 工具、describer/skeptic/experimenter/judge 四角色 debate＋GPU 工具。Solo 最多十轮、debate 四轮；本组的 token cap 是**每次调用**上限，没有匹配总调用、总 tokens、费用或 GPU 时间。所有 arm 得到相同公开材料，容器不挂载私有参考、搜索日志或答案。
 
 原始批次名保存在 `trace_meta.json.original_trial`；当前 `rN` 是每个 case/arm 内的存储序号，不能把相同序号当作相同实验设置。错误、弃答、截断、服务错误和未完成分别统计。失败槽位不会用后来的成功替换，API 估算不含 Modal 或未返回 usage 的潜在费用。
+
+### 两路量化误差：case_36/37
+
+`y = A @ x + B @ x` 的两个公开实现只在 B 的 64 行排列上不同；单支路误差范数相同，最终误差却分别为 22.4116% 和 3.3647%。只把两路误差当作独立噪声会对两题都估出约 16.1%，错拒 case_37。公开输入、合同和 10% 阈值均在首次模型调用前冻结。
+
+Opus 原提示两次/题均误判；事后去掉非约束性的单支路误差说明后，case_36 判对、37 仍误判，显示措辞影响。原始 GLM 32K 六格实验中，source 的36判对、37输出截断，两工具臂各2/2。事后 64K source 补测中，36判对、37明确误判；两次实际输出都低于32K，不能将完成归因于提高上限。Solo 同样实测出相消，本批没有 debate 独有的准确率收益。
+
+<details>
+<summary>查看 case_36/37 分批结果与17次原始记录</summary>
+
+<!-- BEGIN GENERATED CORRELATION RESULTS -->
+
+生成时间：2026-10-01T05:04:06.839226+00:00
+
+共 **17 次尝试**，来自 `traces_glm` 与 `traces_opus5`，去重计入一次。rN 是每题每种方式的存储编号，原始实验批次、预算及合同变体分别统计。
+
+| 题目 | 冻结相对 L2 误差 | 允许误差 | 标签 |
+|---|---:|---:|---|
+| case_36 | 0.2241158064 | 0.1 | reject |
+| case_37 | 0.0336471468 | 0.1 | trust |
+
+| 模型 / 提供方 | 原批次 | 方式 | 预算 / 合同 | 次数 | 正确 | 错误 | 弃答 | 截断 | 无判定 | 未完成 | API 估算 |
+|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| claude-opus-5 / anthropic | neutral1 | single_call | 每次 32768 / 总 unknown / 推理 unknown / 轮次 unknown / neutral_contract | 2 | 1 | 1 | 0 | 0 | 0 | 0 | $0.152685 |
+| claude-opus-5 / anthropic | r1 | debate | 每次 unknown / 总 unknown / 推理 unknown / 轮次 unknown / original | 2 | 2 | 0 | 0 | 0 | 0 | 0 | $2.658329 |
+| claude-opus-5 / anthropic | r1 | single_call | 每次 32768 / 总 unknown / 推理 unknown / 轮次 unknown / original | 2 | 0 | 2 | 0 | 0 | 0 | 0 | $0.3027 |
+| claude-opus-5 / anthropic | r1 | solo | 每次 unknown / 总 unknown / 推理 unknown / 轮次 unknown / original | 1 | 1 | 0 | 0 | 0 | 0 | 0 | $0.500216 |
+| claude-opus-5 / anthropic | r2 | single_call | 每次 32768 / 总 unknown / 推理 unknown / 轮次 unknown / original | 2 | 0 | 2 | 0 | 0 | 0 | 0 | $0.289825 |
+| glm-5p3 / fireworks | r1 | debate | 每次 32768 / 总 unknown / 推理 unknown / 轮次 unknown / original | 2 | 2 | 0 | 0 | 0 | 0 | 0 | $0.322377 |
+| glm-5p3 / fireworks | r1 | single_call | 每次 32768 / 总 unknown / 推理 unknown / 轮次 unknown / original | 2 | 1 | 0 | 0 | 1 | 0 | 0 | $0.0504042 |
+| glm-5p3 / fireworks | r1 | solo | 每次 32768 / 总 unknown / 推理 unknown / 轮次 unknown / original | 2 | 2 | 0 | 0 | 0 | 0 | 0 | $0.09537 |
+| glm-5p3 / fireworks | r2_64k | single_call | 每次 65536 / 总 unknown / 推理 unknown / 轮次 unknown / original | 2 | 1 | 1 | 0 | 0 | 0 | 0 | $0.053053 |
+
+逐次记录：
+
+| 题目 | 模型 | 方式 | 记录 / 原批次 | 结果 | API 估算 | 证据完整性 | Trace |
+|---|---|---|---|---|---:|---|---|
+| case_36 | glm-5p3 | single_call | r1 / r1 | correct | $0.0140206 | complete_api | [查看](../traces_glm/case_36/single_call/r1/transcript.md) |
+| case_36 | glm-5p3 | single_call | r2 / r2_64k | correct | $0.02838 | complete_api | [查看](../traces_glm/case_36/single_call/r2/transcript.md) |
+| case_36 | glm-5p3 | solo | r1 / r1 | correct | $0.039471 | history_only | [查看](../traces_glm/case_36/solo/r1/transcript.md) |
+| case_36 | glm-5p3 | debate | r1 / r1 | correct | $0.127632 | history_only | [查看](../traces_glm/case_36/debate/r1/transcript.md) |
+| case_37 | glm-5p3 | single_call | r1 / r1 | token_limit | $0.0363836 | complete_api | [查看](../traces_glm/case_37/single_call/r1/transcript.md) |
+| case_37 | glm-5p3 | single_call | r2 / r2_64k | wrong_verdict | $0.024673 | complete_api | [查看](../traces_glm/case_37/single_call/r2/transcript.md) |
+| case_37 | glm-5p3 | solo | r1 / r1 | correct | $0.055899 | history_only | [查看](../traces_glm/case_37/solo/r1/transcript.md) |
+| case_37 | glm-5p3 | debate | r1 / r1 | correct | $0.194745 | history_only | [查看](../traces_glm/case_37/debate/r1/transcript.md) |
+| case_36 | claude-opus-5 | single_call | r1 / r1 | wrong_verdict | $0.201975 | text_and_usage_only | [查看](../traces_opus5/case_36/single_call/r1/user_prompt.txt) |
+| case_36 | claude-opus-5 | single_call | r2 / r2 | wrong_verdict | $0.212175 | text_and_usage_only | [查看](../traces_opus5/case_36/single_call/r2/user_prompt.txt) |
+| case_36 | claude-opus-5 | single_call | r3 / neutral1 | correct | $0.07153 | text_and_usage_only | [查看](../traces_opus5/case_36/single_call/r3/user_prompt.txt) |
+| case_36 | claude-opus-5 | debate | r1 / r1 | correct | $1.534235 | history_only | [查看](../traces_opus5/case_36/debate/r1/transcript.md) |
+| case_37 | claude-opus-5 | single_call | r1 / r1 | wrong_verdict | $0.100725 | text_and_usage_only | [查看](../traces_opus5/case_37/single_call/r1/user_prompt.txt) |
+| case_37 | claude-opus-5 | single_call | r2 / r2 | wrong_verdict | $0.07765 | text_and_usage_only | [查看](../traces_opus5/case_37/single_call/r2/user_prompt.txt) |
+| case_37 | claude-opus-5 | single_call | r3 / neutral1 | wrong_verdict | $0.081155 | text_and_usage_only | [查看](../traces_opus5/case_37/single_call/r3/user_prompt.txt) |
+| case_37 | claude-opus-5 | solo | r1 / r1 | correct | $0.500216 | history_only | [查看](../traces_opus5/case_37/solo/r1/transcript.md) |
+| case_37 | claude-opus-5 | debate | r1 / r1 | correct | $1.124094 | history_only | [查看](../traces_opus5/case_37/debate/r1/transcript.md) |
+
+API 费用估算合计 **$4.4249592**；费用未知 0 次，记录不完整 0 次。输入 / 输出 tokens：986754 / 387737。
+
+费用优先采用原记录的估算，否则采用保存的价格快照或历史项目价格；不使用今天的价格重算，不含 GPU 费用。unknown 表示历史配置未记录，不能用当前默认值补猜。
+
+`complete_api` 有原始请求/响应；`text_and_usage_only` 只有提示、回答文本及用量；`history_only` 只有 agent/tool 历史和用量。分布：{"complete_api": 4, "history_only": 7, "text_and_usage_only": 6}。
+
+公开源码与冻结标签逐一核对；neutral_contract 仅允许删除原合同关于分支误差的解释句，分别校验原始和修改后合同哈希。另见本页[协议](#correlation-protocol)、[证据限制](#correlation-audit)及 [64K 补测](#correlation-64k-follow-up)说明。
+
+自动审核发现：
+
+- [case_37 / debate / r1](../traces_glm/case_37/debate/r1/transcript.md): tool error: finalize_probe_evidence -- tool finalize_probe_evidence missing required arg: supports
+
+<!-- END GENERATED CORRELATION RESULTS -->
+
+</details>
+
+<details>
+<summary>case_36/37：协议、构造与证据审查</summary>
+
+<a id="correlation-protocol"></a>
+
+**批次协议。** Opus `claude-opus-5` 共9次：原提示 source 两次/题、事后中性措辞消融一次/题、两次 debate 和 case_37 solo 对照。协议声明每调用32768输出 tokens，但部分历史工具 metadata 未保存上限，报告仍标 unknown。消融只删“单支路误差可能超过0.1”的解释句，数值合同不变；原标签 `neutral1` 保存在当前 source/r3 metadata。六次 source 全部正常 `end_turn`，没有截断或弃答；条件式重复与事后消融不是预先固定的独立留出试验。
+
+GLM `accounts/fireworks/models/glm-5p3` 的2026-09-22–23原批次固定两题×三臂各一次，保留原措辞、不选成功答案重试；每调用32768 tokens、超时1800秒，solo最多十轮、debate四轮，总调用/tokens/成本未匹配。Source使用baseline提示、显式verdict schema和JSON-object格式，无SDK重试；工具臂沿用当时SDK重试行为。所有臂只拿公开题目，容器没有私有答案或搜索日志。后续64K每题一次仅改 `max_tokens=65536`，请求其余字段及冻结hash逐项核对，但同时换了随机样本，作为独立批次 `r2_64k`（当前r2）。无工具、答案反馈或语义重试；事前满额估算约$0.145，实际$0.053053。
+
+**构造与独立参考。** 两题共享x/A，B排列保留元素、行多重集、范数、极值及奇异值。构造按实测支路误差同序/反序配对，预定10%容差和25%余量，第一个seed即满足，未用模型反馈。支路误差范数约0.849963/0.961688，cosine为+0.95282/−0.96345，参考范数约7.988。随机生成不代表经过指定排列后误差仍独立。NumPy1.26.4 CPU仿真另用顺序FP32归约核对，FP64参考另用scalar `math.fsum`；公开生成器与NPZ/hash、B行集合一致。CPU归约界以相同乘积/量化code为条件，不能证明GPU编译行为；实际T4每题十次输出一致。证据见 [CPU验证](private_data/correlation_pair/validation_cpu.json)、[GPU验证](private_data/correlation_pair/validation_gpu.json) 和 [搜索日志](private_data/correlation_pair/search_log.json)。
+
+<a id="correlation-audit"></a>
+
+**Opus证据。** case_37三次source都用约17%的独立噪声估计拒绝，置信度0.84/0.83/0.86；[debate](../traces_opus5/case_37/debate/r1/transcript.md) t8实际测得E=0.03364714675，t9得到合并误差范数约0.269而非独立假设的1.283，t12五次bitwise重复；[solo](../traces_opus5/case_37/solo/r1/transcript.md)也独立测量并重复五次。case_36原source从解释句猜相消，删句后判对，不能称为提示无关的稳定难例。[其debate](../traces_opus5/case_36/debate/r1/transcript.md)正确实测0.22411580645，但Judge仍错误声称误差独立、按平方和合并（1.283而非实际1.790）。自动审查通过不等于解释正确。九次Opus历史API估算约$3.9037，不含Modal。
+
+**GLM 32K证据。** [36 source](../traces_glm/case_36/single_call/r1/raw_response.json)标签正确但仍估17%，没有推导22.4%；[37 source](../traces_glm/case_37/single_call/r1/raw_response.json)恰好32768输出tokens、`finish_reason=length`且最终content为空，未完成推理不是提交的verdict，不能算弃答或误判。四次工具运行均与冻结hash及T4真值一致：
+
+| 运行 | 关键证据与保留问题 |
+|---|---|
+| [36 solo](../traces_glm/case_36/solo/r1/transcript.md) | t6真实kernel/生成器＋FP64，检查有限值、独立理想仿真和重复；4次API、1个probe。 |
+| [37 solo](../traces_glm/case_37/solo/r1/transcript.md) | t6实测；t8先计算参考再运行kernel，Torch/NumPy FP64差4.44e-16，检查输入未改和确定性，cosine −0.9634516751；4次API、2个probe。 |
+| [36 debate](../traces_glm/case_36/debate/r1/transcript.md) | t8终值、t9仿真/舍入规则及零FP32/FP64 code翻转；claim c1把floor误写0.08而非0.008，但probe正确且参考范数主导；6次API、2个probe。 |
+| [37 debate](../traces_glm/case_37/debate/r1/transcript.md) | t8终值、t9相关性，最终trust置信度0.95；7次API、3个probe、107864输出tokens。t11缺 `supports`，t12恢复并将c2标rebutted；前一调用恰好32768但未存raw finish reason，不能断言截断，也不能覆盖有效最终verdict。 |
+
+37 debate [t13](../traces_glm/case_37/debate/r1/probes/t13_probe.py)独立重建bitwise输入及64/64反序排列；identity误差约0.16717，200种随机排列平均0.16095且均不通过。这些合同外对照解释相消，不推翻合同内合格输入，也不新增一次solo错误的修复。t13留在tool events/verdict却不是独立ledger evidence；`decisive_claims`为带c1/c2描述而非裸ID。备份请求与容器正常完成竞态后，返回归档仍含全部三个probe，无证据丢失或额外模型重试。原六格估算$0.4682，debate成本为solo的3.38倍；累计SDK等待分别source10.26、solo10.57、debate33.82分钟，不能当纯生成或并行耗时。
+
+<a id="correlation-64k-follow-up"></a>
+
+**GLM 64K补测。** [36/r2](../traces_glm/case_36/single_call/r2/)与[37/r2](../traces_glm/case_37/single_call/r2/)都正常stop：36正确reject（置信度0.90，25492输出tokens，305秒，$0.028380）；37错误reject（0.85，22122 tokens，314秒，$0.024673）。并发等待约5分14秒，无GPU任务。37再次把独立噪声16%–17%代替实际3.3647%；36仍错用独立假设且把64行写成128行。两者实际输出都不足32K，独立采样也可能解释完成，不能认定提高cap解决了旧截断；一次事后补测不能估计稳定错误率。
+
+**失败与追溯边界。** 初次Modal网络升级被自动审批拒绝，用户明确授权后才继续；镜像构建顺序/远端路径在模型评测前修正。首次本地Fireworks缺 `openai` 在API前失败，换已有环境后执行；另一次旧driver因case_37目录已存在而拒绝重复，不是额外付费失败。旧工具记录仅history无逐调用原始API；Opus source有prompt/final/usage无API envelope；GLM source保留完整请求/响应。缺失捕获不能补造。历史GLM费率$0.28/$1.10每百万输入/输出，并非当前单价或账单；未返回usage的HTTP重试和Modal不在估算内。九次Opus和八次GLM均保留，原路径去重见[迁移记录](../traces_opus5/migration_20260930_correlation_cleanup.json)。正确标签不验证所有解释，置信度未校准；两题也不能证明模型必然无法静态求解、优于所有allclose，或多角色结构具有额外收益。
+
+</details>
 
 ### 初始六题：case_38–case_43
 
@@ -211,14 +316,15 @@ Routing 另筛选真实前两名距离差 >1e-5、量化差 ≥1/64：210 候选
 
 ## 使用与结论边界
 
-离线重建本页三个结果块：
+离线重建本页四个结果块：
 
 ```sh
+python benchmark_fn_fp/eval_scripts/single_call_vs_tools_challenges/correlation_pair/report.py
 python benchmark_fn_fp/eval_scripts/single_call_vs_tools_challenges/report.py
 python benchmark_fn_fp/eval_scripts/single_call_vs_tools_challenges/report_extension.py
 python benchmark_fn_fp/eval_scripts/single_call_vs_tools_challenges/report_oz.py
 ```
 
-报告默认不生成额外 Markdown；`--json` 可导出 `private_data/reports/`。真实GPU oracle入口是 `modal run benchmark_fn_fp/eval_scripts/single_call_vs_tools_challenges/validate_modal.py`，会产生Modal费用。共享模型runner可用 `--dataset single_call_vs_tools_challenges --cases case_38,case_39`；执行模型实验另有API费用。已有trace不覆盖，已评测case不重建。
+报告默认不生成额外 Markdown；`--json` 可导出 `private_data/reports/`。真实GPU oracle入口是 `modal run benchmark_fn_fp/eval_scripts/single_call_vs_tools_challenges/validate_modal.py`，会产生Modal费用。共享模型runner可用 `--dataset single_call_vs_tools_challenges --cases case_38,case_39`；执行模型实验另有API费用。已有trace不覆盖，已评测case不重建。36/37的独立CPU/GPU验证分别为同目录下 `correlation_pair/validate_cpu.py` 和 `correlation_pair/validate_gpu.py`；其构造、输入NPZ与冻结参考保存在 `private_data/correlation_pair/`，CPU验证不调用模型，GPU验证同样会产生Modal费用。
 
 这些是主动挑选、数值均衡的合成有限工作负载，不是独立留出测试；相同输入重复衡量可重复性，不是新题泛化。固定参考脚本也能完成判定。下一步“给各臂相同初始可疑实验、比较参考独立性/覆盖/指标”的讨论发展为 [参考与覆盖组](../solo_vs_debate_challenges/README.md)；原提议中的 solo-review、debate-review、同成本独立多采样、结构化修复调度仍只是待验证方案，不能记为本组已经完成的额外实验。

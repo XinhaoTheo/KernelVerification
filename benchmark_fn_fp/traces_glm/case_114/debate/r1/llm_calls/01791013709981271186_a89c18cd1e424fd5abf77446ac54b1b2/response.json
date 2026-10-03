@@ -1,0 +1,81 @@
+{
+  "id": "chatcmpl-62772e33bc544f4da050cd995c185a8f",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent runtime probes: c1 (NaN in an expired-window slot that shares a tile with allowed keys), c2 (FP16 probability-cast precision at 512-length full causal), and c3 (window tile-bound coverage sweep across boundary windows/lengths/Q). They use disjoint input constructions so no confounding.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9373bef5b94efe3b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, math, sys\\nsys.path.insert(0, \\\"/root/cases/case_114\\\")\\nimport kernel as K\\n\\ntorch.manual_seed(0)\\ndev = \\\"cuda\\\"\\n# B=1, Q=1, Hq=Hk=1, D=64, S=16, P=8, length=100, window=5\\nB, Q, HQ, D = 1, 1, 1, 64\\nS, P, HK = 16, 8, 1\\nlength = 100\\nwindow = 5\\nq = (torch.rand((B, Q, HQ, D), device=dev, generator=torch.Generator(device=dev).manual_seed(1)) * 2 - 1).half()\\nk = (torch.rand((P, S, HK, D), device=dev, generator=torch.Generator(device=dev).manual_seed(2)) * 2 - 1).half()\\nv = (torch.rand(k.shape, device=dev, generator=torch.Generator(device=dev).manual_seed(3)) * 2 - 1).half()\\n# unique page table covering positions 0..99 (7 pages)\\ntable = torch.arange(0, 7, device=dev, dtype=torch.int32).unsqueeze(0)\\nlengths = torch.tensor([length], dtype=torch.int32, device=dev)\\n\\n# context = 99. Kernel tile bounds for qb=0: first_key=99-5+1=95 -> tile_start=1; last_key=99 -> tile_end=2.\\n# Tile 1 covers logical 64..127; loaded (logical<100) positions 64..99 include expired 64..94.\\n# Poison physical slot of logical position 64: page 4, slot 0 (unique mapping, no allowed position uses it).\\nlo = max(0, length - Q - window + 1)\\nassert lo == 95\\nv[4, 0, :, :] = float(\\\"nan\\\")\\n\\nK.validate_inputs(q, k, v, table, lengths, window)  # must pass: only t>=95 checked\\nout = K.run(q, k, v, table, lengths, window)\\ntorch.cuda.synchronize()\\nnan_count = int(torch.isnan(out.float()).sum())\\nref = K.reference(q, k, v, table, lengths, window)\\nref_nan = int(torch.isnan(ref).sum())\\nratio = K.error_ratio(out, (q, k, v, table, lengths, window))\\nprint(json.dumps({\\n    \\\"claim\\\": \\\"c1\\\", \\\"window\\\": window, \\\"length\\\": length, \\\"poisoned_logical_pos\\\": 64,\\n    \\\"poisoned_slot\\\": [4, 0], \\\"lo\\\": lo,\\n    \\\"output_nan_count\\\": nan_count, \\\"total_output_elements\\\": out.numel(),\\n    \\\"reference_nan_count\\\": ref_nan, \\\"error_ratio\\\": ratio,\\n    \\\"finite_output_violation\\\": nan_count > 0,\\n}))\\n\", \"expected_signal\": \"Output NaN count > 0 confirms 0*NaN poisoning through the V dot; 0 NaNs rebuts c1 on this GPU's tl.dot path.\", \"timeout_s\": 240}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-b00c1316df43e3cc",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport torch, json, math, sys\\nsys.path.insert(0, \\\"/root/cases/case_114\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\n# Worst-case precision: Q=1, lengths=512, window=0 (full causal, 512 allowed), D=128, GROUP=1\\nB, Q, HQ, HK, D = 1, 1, 1, 1, 128\\nS, P = 16, 32  # 32 pages * 16 = 512 slots, exactly covers positions 0..511\\nwindow = 0\\nlength = 512\\ng = torch.Generator(device=dev).manual_seed(7)\\nq = (torch.rand((B, Q, HQ, D), device=dev, generator=g) * 0.02 - 0.01).half()  # tiny q -> near-uniform softmax\\nk = (torch.rand((P, S, HK, D), device=dev, generator=g) * 0.02 - 0.01).half()\\nv = (torch.rand((P, S, HK, D), device=dev, generator=g) * 2 - 1).half()      # random v, targets moderate\\n# extra: adversarial cancelling v -> targets near zero, amplifies FP16 weight rounding\\nv_c = (torch.rand((P, S, HK, D), device=dev, generator=g) * 0.1).half()\\nv_c[:, :, :, 0::2] *= -1.0\\nv_c = v_c * (torch.arange(512, device=dev).view(1, 32, 16, 1) % 2 * 2 - 1).half()  # alternate sign by position\\n\\ntable = torch.arange(0, 32, device=dev, dtype=torch.int32).unsqueeze(0)\\nlengths = torch.tensor([length], dtype=torch.int32, device=dev)\\n\\nresults = {}\\nfor name, vt in ((\\\"random_v\\\", v), (\\\"cancelling_v\\\", v_c)):\\n    K.validate_inputs(q, k, vt, table, lengths, window)\\n    out = K.run(q, k, vt, table, lengths, window)\\n    torch.cuda.synchronize()\\n    ref = K.reference(q, k, vt, table, lengths, window)\\n    abs_err = (out.double() - ref).abs()\\n    tol = 0.003 + 0.003 * ref.abs()\\n    results[name] = {\\n        \\\"max_abs_err\\\": float(abs_err.max()),\\n        \\\"tolerance_violation_count\\\": int((abs_err > tol).sum()),\\n        \\\"target_abs_max\\\": float(ref.abs().max()),\\n        \\\"target_abs_min\\\": float(ref.abs().min()),\\n        \\\"error_ratio_max\\\": float((abs_err / tol).max()),\\n    }\\nprint(json.dumps({\\\"claim\\\": \\\"c2\\\", \\\"window\\\": 0, \\\"length\\\": length, \\\"Q\\\": Q, \\\"D\\\": D,\\n                  \\\"n_allowed_positions\\\": 512, \\\"results\\\": results}))\\n\", \"expected_signal\": \"max_abs_err / tolerance_violation_count > 0 confirms the FP16 probability cast exceeds tolerance; 0 violations rebuts c2.\", \"timeout_s\": 240}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-8dc509c10abae638",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"\\nimport torch, json, math, sys, itertools\\nsys.path.insert(0, \\\"/root/cases/case_114\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ng = torch.Generator(device=dev).manual_seed(11)\\n\\ndef build(B, Q, HQ, HK, D, S, length, window, seed):\\n    gg = torch.Generator(device=dev).manual_seed(seed)\\n    P = 32  # enough pages, C=512/S>=ceil(length/S)\\n    C = 512 // S\\n    q = (torch.rand((B, Q, HQ, D), device=dev, generator=gg) * 2 - 1).half()\\n    k = (torch.rand((P, S, HK, D), device=dev, generator=gg) * 2 - 1).half()\\n    v = (torch.rand((P, S, HK, D), device=dev, generator=gg) * 2 - 1).half()\\n    # shuffled unique pages per batch (safe: no NaN, no alias concern)\\n    table = torch.zeros((B, C), device=dev, dtype=torch.int32)\\n    for b in range(B):\\n        table[b] = torch.randperm(P, generator=gg).to(dev)\\n        if C > P: table[b, P:] = 0\\n    lengths = torch.tensor([length] * B, dtype=torch.int32, device=dev)\\n    return q, k, v, table, lengths, window\\n\\nworst = {\\\"case\\\": None, \\\"ratio\\\": 0.0}\\nfailures = []\\nn_run = 0\\nfor window in (1, 2, 3, 7, 8, 15, 16, 17, 31, 63, 64, 65, 127, 128, 129, 255, 256):\\n    for QT in (1, 2, 5, 16, 17, 33):\\n        for length in (QT, 33, 64, 65, 100, 200):\\n            if length < QT or length > 512: continue\\n            for group in (1, 2, 4):\\n                HQ, HK, D, S = group, 1, 64, 16\\n                B = 1\\n                try:\\n                    q, k, v, table, lengths, w = build(B, QT, HQ, HK, D, S, length, window, 1000 + window)\\n                    out = K.run(q, k, v, table, lengths, w)\\n                    torch.cuda.synchronize()\\n                    ref = K.reference(q, k, v, table, lengths, w)\\n                    abs_err = (out.double() - ref).abs()\\n                    tol = 0.003 + 0.003 * ref.abs()\\n                    r = float((abs_err / tol).max())\\n                    n_run += 1\\n                    if r > worst[\\\"ratio\\\"]:\\n                        worst = {\\\"case\\\": {\\\"window\\\": window, \\\"QT\\\": QT, \\\"length\\\": length, \\\"group\\\": group}, \\\"ratio\\\": r}\\n                    if r > 1.0:\\n                        failures.append({\\\"window\\\": window, \\\"QT\\\": QT, \\\"length\\\": length, \\\"group\\\": group, \\\"ratio\\\": r})\\n                except Exception as e:\\n                    failures.append({\\\"case\\\": {\\\"window\\\": window, \\\"QT\\\": QT, \\\"length\\\": length, \\\"group\\\": group},\\n                                     \\\"exception\\\": str(e)[:120]})\\nprint(json.dumps({\\\"claim\\\": \\\"c3\\\", \\\"cases_run\\\": n_run, \\\"n_failures\\\": len(failures),\\n                  \\\"worst\\\": worst, \\\"failures\\\": failures[:10]}))\\n\", \"expected_signal\": \"A tolerance violation (ratio>1) at any window/length/Q confirms a skipped-tile coverage bug; all ratios <=1 (benign finite values) rebuts c3.\", \"timeout_s\": 560}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch three probes: c1 (NaN in expired window slot), c2 (precision at 512 length), c3 (tile-bound coverage edge cases). Independent — batch them.\n\nProbe c1 design: need window>0, expired window position within a tile also containing allowed keys, poisoned physically-distinct slot. Simplest: use unique pages (table entries distinct), poison v at logical position t < lo. With S=16 or larger; TILE=64. E.g. B=1, Q=1, Hq=Hk=1, D=64, S=16, P=8, lengths=100, window=5. lo = max(0, 100-1-5+1)=95. Expired positions t<95. Kernel loads tiles: context=99, qb=0, BQ=16 (GROUP=1), max_prefix=min(99+16,100)=100, num_tiles=2 (cdiv(100,64)=2). window>0: first_key=99-5+1=95, tile_start=95//64=1, last_key=99+min(15,0)=99... wait min(qb*BQ+BQ-1, QT-1)=min(15,0)=0, last_key=99+0=99, tile_end=min(99//64+1,2)=2. So loop tiles 1..1: logical 64..127. tile_mask logical<100. Row 0 allowed: 95..99. Loaded but disallowed: 64..94 within tile 1 — expired positions. Poison v at logical position 64 (page 4, slot 0 with S=16, unique pages). Poison all heads/dims at that slot. Reference only reads 95..99. Check output NaN.\n\nBut validate_inputs checks finiteness only for positions lo..length: 95..99. Good, position 64 not checked. Table entries: pages 0..6 for positions 0..99, unique. Poison v[4,0,:, :] (physical of logical 64 = page 64//16=4, slot 0). Ensure that physical slot isn't used by any allowed position: logical positions mapping to (page4,slot0) is only t=64 (unique pages). Good.\n\nc3 probe: exhaustively check allowed range coverage? Runtime: run kernel vs reference for many window/shape combos with benign values and compare. Simplest: sweep windows 1..8, 63,64,65,127,128,256, lengths various, Q various, GROUP 1, compare error_ratio. Do that as one probe.\n\nc2 probe: Q=1, lengths=512, window=0, D=128, near-uniform softmax + cancelling v. k values small so scores near-uniform: set k tiny (but must be FP16 finite; can use zeros → all scores 0, uniform). v alternating +1/-1 in D? Better: v[t] = (-1)^t * 1.0 across all positions for a given dim → target ~0 (or exactly 0 if 512 even count — error from FP16 weights). Actually make v[t] pattern alternate so sum with equal weights = 0, but FP16 weight rounding breaks tie. Expected error: weights p_i=1/512=0.001953125... FP16 1/512 is exact power of two? 512=2^9, 1/512 exact in FP16 (min normal 2^-14, so fine). Sum of p_i=512*(1/512)=1 exact? FP16 dot with FP32 accumulation: each product exact-ish, accumulation FP32. Hmm, maybe choose weights non-representable: scores slightly varying. Use small random k to give near-uniform but non-exact weights, v alternating +c/-c random per dim. Report max abs error and error_ratio.\n\nAlso c3 must be careful with grouping: use GROUP=1 (Hq=Hk) and maybe GROUP=2 case. Keep it modest: loop over windows [1,2,3,7,8,15,16,63,64,65,127,128,129,255,256], QT in [1,2,5,16,17,33], lengths in e.g. [QT, 33, 64, 65, 100, 200], GROUP in {1,2,4}? That's a lot of reference calls (Python loop O(Q*length)); fine, it's small. But each requires building tensors. Let me write a helper to construct inputs on device with given params, unique page table, finite random values, run kernel and reference, compute error ratio. Budget timeout 300s.\n\nFor c3, benign finite values everywhere so no NaN issue (c1 not triggered), thus probing c3 doesn't confound c1. And c2 uses window=0. Independent — batch all three.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791013711,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 3360,
+    "prompt_tokens": 39740,
+    "total_tokens": 43100,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1043,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 1043
+    }
+  }
+}

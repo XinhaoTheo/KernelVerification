@@ -1,0 +1,81 @@
+{
+  "id": "chatcmpl-a940895eeea0445ea3165b77c2a7e7b1",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The three probes are back: c1 and c3 are decisive (all NaN-poisoned cases finite with worst error ratio 0.043; all 98 windowed partial-block combos within tolerance, worst 0.096). The \"inputs_bitwise_unchanged: false\" in c1 is a probe artifact — `torch.equal` compares elementwise, and k/v legitimately contain NaN in unreachable slots, so equality fails regardless of mutation; it is not evidence of input mutation. c2's probe failed on a probe-code shape bug (sliced the head axis instead of grouping), so I'm relaunching a corrected version while finalizing c1 and c3.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-82e65debd0b5a491",
+            "function": {
+              "arguments": "{\"data\": {\"nan_poisled_cases\": 6, \"nonfinite_outputs\": 0, \"probe_artifact_note\": \"inputs_bitwise_unchanged=false is a torch.equal NaN artifact (k/v contain legal NaN in unreachable slots), not evidence of mutation\", \"tolerance_violations\": 0, \"worst_error_ratio\": 0.042981961992644445}, \"event_id\": \"t14\", \"status\": \"rebutted\", \"summary\": \"All six NaN-poisoned cases (window=0, window=1, window=33/41/256, partial blocks, B up to 3, D up to 128, expired in-window-tile positions poisoned) produced fully finite outputs with worst contract-tolerance error_ratio 0.043 (<<1). The -inf score sanitization and line-70 V zeroing contain NaN from unreachable and actually-loaded expired slots. Note: inputs_bitwise_unchanged=false is a probe artifact (torch.equal elementwise on NaN-containing k/v), not evidence of mutation. c1 rebutted.\", \"supports\": \"rebutted\"}",
+              "name": "finalize_probe_evidence"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-ae144973de98c62f",
+            "function": {
+              "arguments": "{\"data\": {\"cases_tested\": 98, \"n_violations\": 0, \"tolerance_violations\": 0, \"worst_error_ratio\": 0.09636696540425943}, \"event_id\": \"t16\", \"status\": \"rebutted\", \"summary\": \"98 windowed partial-block combos (QT=33/17 with BQ=2/4, windows 1,33,63,64,65,127,129,256, lengths 33..512, page 16/64, plus window=0/41 multi-batch) all matched reference within tolerance; worst error_ratio 0.096, all finite. No allowed position was dropped or mis-scoped by the block-level tile-range arithmetic. c3 rebutted.\", \"supports\": \"rebutted\"}",
+              "name": "finalize_probe_evidence"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-b13ae04e81421ff8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import importlib.util, torch, json, math\\nspec = importlib.util.spec_from_file_location(\\\"kern\\\", \\\"/root/cases/case_115/kernel.py\\\")\\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\\ndev = \\\"cuda\\\"\\nb, qt, hq, hk, d, page, pgs, length, window = 1, 32, 16, 4, 128, 64, 8, 512, 0\\nG = hq // hk\\n\\ndef make(mode, seed):\\n    g = torch.Generator().manual_seed(seed)\\n    if mode == \\\"uniform_cancel\\\":\\n        q = (2*torch.rand((b,qt,hq,d), generator=g)-1).half()\\n        k = torch.full((pgs,page,hk,d), 0.5).half()\\n        u = (2*torch.randint(0,2,(d,), generator=g).float()-1).half()\\n        sign = torch.where(torch.arange(page)%2==0, 1.0, -1.0)[:,None,None]\\n        v = (sign*u[None,None,:]).repeat(pgs,1,hk,1).half()\\n        table = torch.arange(8, dtype=torch.int32).repeat(b,1)\\n    elif mode == \\\"sign_pm1\\\":\\n        q = torch.randint(0,2,(b,qt,hq,d), generator=g).float().mul(2).sub(1).half()\\n        k = torch.randint(0,2,(pgs,page,hk,d), generator=g).float().mul(2).sub(1).half()\\n        v = torch.randint(0,2,(pgs,page,hk,d), generator=g).float().mul(2).sub(1).half()\\n        table = torch.randint(0,pgs,(b,8), generator=g).to(torch.int32)\\n    elif mode == \\\"dominant\\\":\\n        q = (2*torch.rand((b,qt,hq,d), generator=g)-1).half()\\n        k = (2*torch.rand((pgs,page,hk,d), generator=g)-1).half()\\n        v = (2*torch.rand((pgs,page,hk,d), generator=g)-1).half()\\n        table = torch.arange(8, dtype=torch.int32).repeat(b,1)\\n        for kv in range(hk):\\n            qgrp = q[0, :, kv*G:(kv+1)*G].reshape(-1, d).mean(0)  # [d]\\n            k[7, 63, kv, :] = (qgrp.sign().half() * 0.9)\\n            v[7, 63, kv, :] = torch.sign(qgrp).half() * 0.9\\n    lt = torch.tensor([length]*b, dtype=torch.int32, device=dev)\\n    return (q.to(dev), k.to(dev), v.to(dev), table.to(dev), lt, window)\\n\\nresults = []\\nworst = 0.0\\nfor mode in (\\\"uniform_cancel\\\",\\\"sign_pm1\\\",\\\"dominant\\\"):\\n    for seed in range(4):\\n        inputs = make(mode, seed)\\n        o = kern.run(*inputs)\\n        tgt = kern.reference(*inputs)\\n        err = (o.double()-tgt).abs()\\n        tol = 0.003 + 0.003*tgt.abs()\\n        ratio = float((err/tol).max())\\n        worst = max(worst, ratio)\\n        results.append(dict(mode=mode, seed=seed, max_abs_err=float(err.max()),\\n                            min_abs_target=float(tgt.abs().min()),\\n                            max_tolerance_ratio=ratio, violation=bool(ratio>1.0)))\\nprint(json.dumps(dict(metric=\\\"max tolerance ratio abs(out-target)/(0.003+0.003|target|) across adversarial FP16-precision stress cases (512 allowed positions, D=128)\\\",\\n                      config=dict(B=b,QT=qt,Hq=hq,Hkv=hk,D=d,S=page,P=pgs,length=length,window=window),\\n                      worst_tolerance_ratio=worst, cases=results)))\", \"expected_signal\": \"worst tolerance ratio > 1 confirms c2; ratio <= 1 across stress cases rebuts c2\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2,
+            "name": null
+          }
+        ],
+        "reasoning_content": "c1 result: worst ratio 0.043, all finite → rebuts c1 (NaN containment works). c3: 98 combos, worst 0.096 → rebuts c3. c2 probe failed with a shape error (my bug); need to re-run a fixed c2 probe. Also c1's \"inputs_bitwise_unchanged: false\" — odd. Why? Probably reference() runs validate... no, immutability check compares snapshots to inputs after run. False suggests inputs changed? Actually likely a probe bug: lengths is on device, snapshots taken with clone — should be fine. Hmm, `torch.equal` on int32 cuda fine. Actually the issue: `snaps` cloned BEFORE run, then run called... unless run modifies inputs. That would be a contract violation! But wait — also error_ratio runs reference after the check, so no. Worth a quick re-check within the c2 probe? The c1 immutability false is suspicious; it could be a probe artifact (e.g., k/v NaN tensors on device? torch.equal with NaN... they used torch.equal which is bitwise for NaN? torch.equal does elementwise ==, NaN != NaN → false for NaN-containing tensors!). Yes — that's it. k and v contain NaNs so torch.equal returns false. Not a real violation. Good, I can note that.\n\nNow: finalize t14 (c1 rebutted), t16 (c3 rebutted), and re-run a fixed c2 probe. Fix the dominant mode line: use q[0, :, kv*G].mean(0). Also that assignment writes a [128] vector into k[7,63,kv,:] which is [128] — error came from q[0,:,slice].mean(0) being [4? no, mean over dim 0 of [qt,128] is [128]. The error says expand HalfTensor{[4,128]} — mean(0) over wrong axis? q[0,:,slice] shape [qt, nheads_selected? No, q is [b,qt,hq,d], q[0,:,h] would be [qt,d]. q[0,:, kv*4::4] is [qt,4,d]? Indexing: q[0, :, (kv*4)::4] selects head dimension index... hq is dim 2, d is dim 3. q[0,:,x::y] applies slicing on dim 2 → shape [qt,4,d]. That's the bug. Fix: use mean of query heads in group: q[0,:,kv*4:(kv+1)*4].mean(0) → [qt,d]? No, mean over dim 0 of [qt,4,d]... need mean over both. Simplify: dominant logit construction — just set k at position 511 for each kv head to a vector aligned with the mean q of the group, sign-scaled.\n\nSimpler: k[7,63,kv,:] = qh where qh = q[0,:,kv*4:(kv+1)*4].reshape(-1,128).mean(0).sign()*0.9. And v similar. Fix and rerun.\n\nDo finalize calls + new c2 probe in same response.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791014008,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2193,
+    "prompt_tokens": 48644,
+    "total_tokens": 50837,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 684,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 684
+    }
+  }
+}

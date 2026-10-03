@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-8fd0052e486d4f2b84fe4ac8676d4678",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe (t9) reveals a clear pattern: dx is always within tolerance (max ratio 0.24), but dw violates the contract bound whenever the **block kernel** path runs (n ≤ 256 power-of-two, m ≥ 512): dw ratios 3.3–8.9, versus ~0.001 when the row kernel runs. Root cause in source: in `_block_backward`, `dw += tl.sum(dy * (x * r).to(tl.float16), 0)` — the 16-element `tl.sum` is performed in **FP16** (Triton keeps the sum dtype), so each block's partial dw is rounded to FP16 (ulp at magnitude ~64 is 0.0625), accumulating absolute errors well above the `1e-5 + 1e-5*sum|t|` tolerance. The contract explicitly requires the sums \"evaluated in real arithmetic\". The row kernel adds terms elementwise into an FP32 accumulator and passes.\n\nI'll finalize the evidence and claims.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a40fe604287a570f",
+            "function": {
+              "arguments": "{\"data\": {\"all_finite\": true, \"any_mutation\": false, \"dw_violations\": \"(512,128):8.94; (512,64):6.54; (768,128):5.20; (4096,256):3.28; (1000,129):8.21; (2048,100):4.12; extreme (512,128):6.73\", \"kernel_own_error_ratios_agree\": true, \"metric\": \"error ratio = abs(err)/(contract bound); >1 means contract violation\", \"row_kernel_dw_ratios\": \"<0.01 (n>256 or m<512 cases)\", \"worst_dw_ratio\": 8.944566960058348, \"worst_dx_ratio\": 0.23646312197982228}, \"event_id\": \"t9\", \"status\": \"confirmed\", \"summary\": \"Across 16 legal shapes in the declared domain (1<=M<=4096, 16<=N<=512, non-power-of-two N included, |x|,|dy|<=4, |weight|<=2, row RMS within [0.25,4]), dx always satisfies the bound (max ratio 0.236). dw violates the bound (ratio>1, up to 8.94) precisely on inputs that take the _block_backward path (block<=256 and m>=512): e.g. M=512,N=128 ratio 8.94; M=1000,N=129 ratio 8.21; M=2048,N=100 ratio 4.12; M=4096,N=256 ratio 3.28. All _row_backward-path cases (n>256 or m<512) have dw ratio < 0.01. Kernel's own error_ratios() agrees with the independent contract computation. No input mutation; all outputs finite.\", \"supports\": \"confirmed\"}",
+              "name": "finalize_probe_evidence"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Key finding: dx ratios all <1, dw ratios can be ~9 (>1). But note the kernel's own reference() uses m64 = (dy*weight).to(fp64) WITHOUT H16 rounding — i.e., the kernel's reference uses unrounded dy*weight, and its error_ratios agrees. My independent contract computation with H16 rounding gave same dw ratio values (they match: kernel_error_ratios == dx_ratio/dw_ratio). Interesting — both references agree because fp16*fp16 in torch is computed in fp16? Actually in PyTorch, dy*weight with both fp16 yields fp16 result — H16 rounding is implicit! Similarly dy*h → fp16. So t = (dy * h) where h is fp16: result is fp16. My probe's t computed as (dy.float()*h...).half() same thing. So both match.\n\nSo dw error ratio >1 on several shapes: e.g. m=512,n=128 ratio 8.94. But m=4096,n=512 ratio 0.0006. The dw bound: 1e-5 + 1e-5*sum|t|. With sum|t| large (m large), tolerance large. With small m and small n... wait m=512 n=128 gives 8.9? That seems like a real violation. Hmm, but wait: dw computed by kernel: partial sums in fp32 across programs, then partial.sum in fp32. Reference: sums t (fp16 values, exact in fp64) in real arithmetic. Error per element ~ fp32 accumulation error and fp16 t... kernel computes t as dy * (x*r).to(fp16) — in Triton, x is fp32, r fp32, x*r fp32, .to(fp16) → h16. dy is fp16. dy * h16 in Triton: fp16*fp16 → fp32 promotion? In Triton, fp16*fp16 yields fp32? Actually Triton promotes fp16 arithmetic to fp32 by default? Hmm, dy * (...) where dy is fp16 and the other is fp16 → Triton computes in fp16? Triton follows C-like semantics: float16*float16 → float16. Actually Triton's binary op on two fp16 gives fp16 (no auto-promotion). So t = fp16. Then dw += fp32 accumulation. So kernel is correct per contract... but error ratio 8.9!\n\nHmm wait — maybe the issue: dw bound is 1e-5 + 1e-5*sum_i|t|. For m=512, n=128: t values ~ |dy|*|h| ~ 2*1 avg... sum|t| ~ 512*avg. avg |dy|~2, |h| = |x*rstd| ~ RMS ~2. So sum|t| ~ 2000 per column, tolerance ~0.02. dw values themselves sum to maybe ±small if cancellation. Absolute error of fp32 accumulation over 512 terms is tiny (~1e-4 max). So ratio 8.9 means abs error ~0.18?? That's huge. Something structural: maybe the kernel writes dw partial but with masked stores partial has programs rows and sum(dim=0) — fine.\n\nWait — maybe the bug: in _row_backward branch, ROWS = cdiv(m, programs). programs = min(SM count, m). On T4, SM=40. m=512, programs=40, ROWS=13, covers 520 ≥512, ok. In the block branch, program pid writes PARTIAL[pid] but the loop covers rows [pid*BR, M, programs*BR) — all rows covered. Hmm.\n\nBut dw_ratio high for m=512,n=128 — that used block kernel (block=128≤256, m≥512). And m=4096,n=512 ratio tiny (row kernel, n>256). m=2048,n=100: block=128, m≥512 → block kernel, ratio 4.1. m=4096,n=256: block=256, block kernel, ratio 3.3. So block kernel shows high dw error, row kernel tiny. So the block kernel has a dw bug!\n\nLook at _block_backward: `dw += tl.sum(dy * (x * r[:, None]).to(tl.float16), 0)`. x fp32, r fp32, product fp32, .to(fp16) = h. dy fp16 * h fp16 → in Triton... hmm, but that would be same as row kernel: `dw += dy * (x * r).to(tl.float16)` — same expression! So why does block differ?\n\nMaybe the issue: dw is a (B,) fp32 vector; tl.sum over axis 0 of a (BR,B) tensor gives fp16?? dy * (fp16) → fp16 product, then tl.sum of fp16 in fp32? tl.sum keeps dtype fp16! So partial sums accumulate in fp16?? No—dw is fp32; dw += sum(...) with sum result fp16 → added to fp32, fine per iteration. Hmm.\n\nActually maybe the real cause: BR=16, block loads dy for a whole (16,B) tile; tl.sum(dy*h, 0) in fp16 → overflow/rounding? Each sum of 16 fp16 terms computed in fp16 → rounding error per term ~1e-3 relative... With B=128 and m=512, 32 blocks per program column-wise... error could be 0.1? Sum of 16 fp16 values each ~4: max 64, fine but rounding to fp16 at each step gives relative error ~2^-11*values... absolute error up to ~64*2^-11*sqrt(16)~... could reach 0.1. And tolerance ~1e-5+1e-5*sum|t|~0.02. So yes, fp16 intermediate accumulation of tl.sum in the block kernel violates the dw bound. That's the bug: tl.sum of fp16 stays fp16.\n\nBut wait — in Triton, does tl.sum promote? tl.sum preserves input dtype. dy * (x*r).to(fp16): dy is fp16, other fp16 → fp16. tl.sum → fp16. So partial per-block sums are fp16 rounded, then added into fp32 dw. Each fp16 rounding error up to ~ half ulp of magnitude up to ~64 (sum of 16 terms of ~4). ulp(64)=0.0625 in fp16! Half ulp = 0.03. Number of such roundings per column: m/16 blocks × ... each contributes up to 0.03 error → could easily exceed 0.02 tolerance. Confirmed by data.\n\nAlso the row kernel: dw += dy*(x*r).to(fp16) — elementwise fp16 product added to fp32 dw directly, no fp16 accumulation. Fine.\n\nAlso note the dx bound: dx computed in fp32 then stored as fp16 output — contract dx output is FP16, target dx real; ratio <1 everywhere, fine.\n\nNow I should also check: is the probe's contract reference correct on dw? kernel's own reference sums terms64 = (dy*h).to(fp64) — real arithmetic. Both references match. And error_ratios from kernel agrees with my computation. So the violation is genuine and reproducible, including with kernel's own error_ratios > 1.\n\nI should finalize t9 evidence for c1 (confirmed, dw violation) and c2 (the rounding of t: the block kernel accumulates t sums in fp16 — actually c2 is about H16 rounding of intermediates; the issue is fp16 accumulation of the sum, not the rounding of t itself. c2 partially: kernel does compute t in fp16 and sums in fp16 which violates \"sums evaluated in real arithmetic\". So c2 confirmed too.)\n\nI need to append evidence/finalize. t9 is a run_claim_probe for c1 with evidence draft needing interpretation. Use finalize_probe_evidence with event t9, supports confirmed, status confirmed. Then for c2, run a quick probe or use source inspection + the same data. I can append_evidence to c2 with source_inspection (tl.sum of fp16 expression) plus runtime. Simpler: run one more focused probe for c2 measuring the fp16 accumulation directly? Budget-wise, I can just append source inspection + runtime evidence citing t9. append_evidence with kind source_inspection, supports confirmed, then update status. Actually decisive evidence for c2: the high dw ratios on block kernel vs tiny on row kernel — that's runtime. I'll append both a source_inspection and reuse... append_evidence doesn't take tool_event id required; tool_event_id optional. I'll do source inspection summary referencing t9 data.\n\nAlso confirm the dw violation magnitude details maybe run a quick focused probe to show error concentrated with fp16-block sum vs fp32 per-element. Not strictly needed; but good to record data for c2: show that replacing block kernel path (e.g. force row kernel by m<512? no). Could probe: compute kernel dw vs contract dw, show abs error ~0.1-0.2 and tolerance 0.02. Data already in t9 (ratios). Good enough.\n\nPlan: finalize t9 (c1 confirmed), append evidence to c2 (source + runtime), update c2 confirmed, record verdict reject.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791003501,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2656,
+    "prompt_tokens": 22578,
+    "total_tokens": 25234,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 2014,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 2014
+    }
+  }
+}

@@ -68,8 +68,8 @@ def test_private_validation_takes_precedence_over_stale_legacy_copy(tmp_path, da
 
 @pytest.mark.parametrize("existing_case", ["case_36", "case_37"])
 def test_pair_builder_cannot_overwrite_cases_after_trace_cleanup(tmp_path, monkeypatch, existing_case):
-    from benchmark_fn_fp.eval_scripts.correlation_pair import build
-    dataset = tmp_path / "benchmark_fn_fp/correlation_pair"
+    from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.correlation_pair import build
+    dataset = tmp_path / "benchmark_fn_fp/single_call_vs_tools_challenges"
     monkeypatch.setattr(build, "ROOT", dataset)
     case = dataset.parent / "triton_eval_cases" / existing_case
     case.mkdir(parents=True)
@@ -79,7 +79,7 @@ def test_pair_builder_cannot_overwrite_cases_after_trace_cleanup(tmp_path, monke
     with pytest.raises(RuntimeError, match="overwriting frozen cases"):
         build.main()
     assert source.read_text() == "frozen kernel"
-    assert not (dataset / "private_data").exists()
+    assert not (dataset / "private_data/correlation_pair").exists()
 
 
 def test_numeric_sort_handles_three_digit_cases():

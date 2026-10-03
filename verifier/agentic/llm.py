@@ -37,17 +37,54 @@ class OutputTokenBudgetAccountingError(RuntimeError):
     """Provider usage cannot support an honest shared-budget measurement."""
 
 
+class OutputTokenReserveReached(RuntimeError):
+    """The optional debate closeout allowance must now be used to finish."""
+
+    def __init__(self, budget: "_OutputTokenBudget") -> None:
+        self.budget = budget
+        super().__init__("Debate output allowance reached its reserved closeout budget")
+
+
 @dataclass(slots=True)
 class _OutputTokenBudget:
     """One allowance per client, shared by all roles in a sequential run.
 
     Output usage includes provider-reported reasoning tokens. This is neither
-    a dollar budget nor an input-token budget, and reserves nothing for a judge.
+    a dollar budget nor an input-token budget. Role-aware closeout is opt-in.
     """
 
     total: int
     used: int = 0
     accounting_error: str | None = None
+    debate_closeout: bool = False
+    debate_phase: str = "normal"
+
+    @property
+    def remaining(self) -> int:
+        return self.total - self.used
+
+    def role_limit(self, requested: int, role: str) -> int:
+        """Keep the existing client-level accounting, reserving only in debate."""
+        if not self.debate_closeout or role not in {"describer", "skeptic", "experimenter", "judge"}:
+            return self.limit(requested)
+        if self.accounting_error:
+            raise OutputTokenBudgetAccountingError(self.accounting_error)
+        if self.debate_phase == "normal":
+            available = self.remaining - 8192
+            if available <= 0:
+                raise OutputTokenReserveReached(self)
+            return min(requested, 8192, available)
+        cap, leave = {"evidence": (4096, 4096), "review": (1024, 3072),
+                      "judge": (3072, 0)}[self.debate_phase]
+        available = self.remaining - leave
+        if available <= 0:
+            raise OutputTokenBudgetExhausted("No output allowance remains for this closeout stage")
+        return min(requested, cap, available)
+
+    def prompt_notice(self) -> dict[str, Any]:
+        return {"total_output_tokens": self.total, "used_output_tokens": self.used,
+                "remaining_output_tokens": self.remaining, "debate_phase": self.debate_phase,
+                "normal_turn_cap": 8192, "closeout_reserve": 8192}
 
     def limit(self, requested: int) -> int:
         if self.accounting_error:
@@ -74,8 +111,11 @@ class _OutputTokenBudget:
 
 
 def _output_token_budget_from_env() -> _OutputTokenBudget | None:
+    closeout = os.getenv("AGENTIC_DEBATE_BUDGET_CLOSEOUT", "0") == "1"
     raw = os.getenv("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET")
     if raw is None or not raw.strip():
+        if closeout:
+            raise ValueError("AGENTIC_DEBATE_BUDGET_CLOSEOUT requires a total output budget > 8192")
         return None
     try:
         value = int(raw)
@@ -83,7 +123,9 @@ def _output_token_budget_from_env() -> _OutputTokenBudget | None:
         raise ValueError("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET must be a positive integer") from None
     if value <= 0:
         raise ValueError("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET must be a positive integer")
-    return _OutputTokenBudget(value)
+    if closeout and value <= 8192:
+        raise ValueError("AGENTIC_DEBATE_BUDGET_CLOSEOUT requires a total output budget > 8192")
+    return _OutputTokenBudget(value, debate_closeout=closeout)
 
 
 @dataclass(slots=True)

@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-3489432cf72e443abc7762eec679f652",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe failed only due to a broadcasting bug in my input generator. Fixing and rerunning.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-ba2948b5dd9530fd",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_108\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\n\\ndef make(rows, cols, seed, extreme=False):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    if extreme:\\n        x = (torch.rand((rows, cols), generator=g) * 8 - 4).half()\\n        target_rms = 0.25 + (4.0 - 0.25) * torch.rand((rows,), generator=g)\\n        cur_rms = x.float().square().mean(dim=1).add(1e-5).sqrt()\\n        x = (x.float() * (target_rms / cur_rms)[:, None]).clamp_(-4, 4).half()\\n        dy = (torch.rand((rows, cols), generator=g) * 8 - 4).half()\\n        weight = (torch.rand((cols,), generator=g) * 2).half()\\n    else:\\n        x = (2 * torch.rand((rows, cols), generator=g) - 1).half()\\n        dy = (2 * torch.rand((rows, cols), generator=g) - 1).half()\\n        weight = (0.5 + torch.rand((cols,), generator=g)).half()\\n    rstd = torch.rsqrt(x.float().square().mean(dim=1) + 1e-5)\\n    return tuple(t.to(dev) for t in (x, weight, dy, rstd))\\n\\nshapes = [\\n    (1, 16), (1, 512), (7, 100), (17, 33), (511, 128), (512, 128),\\n    (512, 512), (512, 257), (1000, 300), (4096, 512), (4096, 16),\\n    (2048, 255), (513, 256), (511, 64), (3, 17),\\n]\\nfails = []\\nworst = {\\\"dx\\\": 0.0, \\\"dw\\\": 0.0}\\nfor idx, (m, n) in enumerate(shapes):\\n    for extreme in (False, True):\\n        inputs = make(m, n, seed=idx * 2 + int(extreme), extreme=extreme)\\n        x, weight, dy, rstd = inputs\\n        snaps = [t.clone() for t in inputs]\\n        # domain checks\\n        assert torch.isfinite(x).all() and x.float().abs().max() <= 4\\n        assert dy.float().abs().max() <= 4 and weight.float().abs().max() <= 2\\n        rms = x.float().square().mean(dim=1).add(1e-5).sqrt()\\n        assert rms.min() >= 0.25 - 1e-3 and rms.max() <= 4 + 1e-3, (m, n, rms.min(), rms.max())\\n        dx, dw = K.run(x, weight, dy, rstd)\\n        for t, s, name in zip(inputs, snaps, [\\\"x\\\", \\\"weight\\\", \\\"dy\\\", \\\"rstd\\\"]):\\n            if not torch.equal(t, s):\\n                fails.append(f\\\"input {name} modified at shape {(m,n)} ext={extreme}\\\")\\n        if dx.dtype != torch.float16 or dx.shape != (m, n):\\n            fails.append(f\\\"dx shape/dtype at {(m,n)}\\\")\\n        if dw.dtype != torch.float32 or dw.shape != (n,):\\n            fails.append(f\\\"dw shape/dtype at {(m,n)}\\\")\\n        if not torch.isfinite(dx).all() or not torch.isfinite(dw).all():\\n            fails.append(f\\\"nonfinite output at {(m,n)} ext={extreme}\\\")\\n        ratios = K.error_ratios((dx, dw), inputs)\\n        worst[\\\"dx\\\"] = max(worst[\\\"dx\\\"], ratios[\\\"dx\\\"])\\n        worst[\\\"dw\\\"] = max(worst[\\\"dw\\\"], ratios[\\\"dw\\\"])\\n        if ratios[\\\"dx\\\"] > 1.0 or ratios[\\\"dw\\\"] > 1.0:\\n            fails.append(f\\\"tolerance exceed at {(m,n)} ext={extreme}: {ratios}\\\")\\n\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"error_ratios (ratio<=1 satisfies contract) over 15 shapes x benign/extreme, plus input-preservation, dtype/shape, finiteness checks\\\",\\n    \\\"cases_tested\\\": len(shapes) * 2,\\n    \\\"worst_dx_ratio\\\": worst[\\\"dx\\\"],\\n    \\\"worst_dw_ratio\\\": worst[\\\"dw\\\"],\\n    \\\"failures\\\": fails,\\n}))\", \"expected_signal\": \"all ratios <= 1 and no failures\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Fix the scale broadcast (scale[:,None]) and rerun.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791003502,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1053,
+    "prompt_tokens": 16661,
+    "total_tokens": 17714,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 13,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 13
+    }
+  }
+}

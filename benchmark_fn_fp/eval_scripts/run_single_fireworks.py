@@ -13,16 +13,18 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from baseline2_single_llm import SYSTEM_PROMPT, USER_TEMPLATE, VERDICT_SCHEMA
 from models import profile_for, profile_for_trace, pricing_snapshot
-from datasets import DATASETS, canonical_dataset, case_names, cases_dir as dataset_cases_dir, checked_case_hashes
+from datasets import (DATASETS, case_dataset, case_names, cases_dir as dataset_cases_dir,
+                      checked_case_hashes, ensure_active_dataset)
 from traces import (reserve_trace, write_trace, next_trial_id, single_call_readable_files,
                     trace_path, update_trace_metadata, experiment_trial_id)
 from verifier.agentic.llm_trace import LLMCallTrace
+from verifier.agentic.provenance import file_sha256, runtime_fingerprint
 
 MODEL = "accounts/fireworks/models/glm-5p3"
 
 
 def run_one(name, *, dataset, trial, max_tokens, timeout_s=1800, reasoning_effort="low", original_trial=None):
-    dataset = canonical_dataset(dataset)
+    dataset = case_dataset(REPO, dataset, name, require_active=True)
     if reasoning_effort not in {"default", "low", "medium", "high"}:
         raise ValueError("Unsupported reasoning effort")
     from openai import OpenAI
@@ -39,12 +41,17 @@ def run_one(name, *, dataset, trial, max_tokens, timeout_s=1800, reasoning_effor
         "response_format":{"type":"json_object"}}
     if reasoning_effort != "default":
         request["reasoning_effort"] = reasoning_effort
+    runtime = runtime_fingerprint()
+    provenance = {"verifier_sha256": runtime["verifier_sha256"],
+                  "runner_sha256": file_sha256(__file__),
+                  "public_input_files": ["kernel.py", "problem.txt"]}
     dest=reserve_trace(name,"single_call",traces_dir=profile.traces_dir,trial=trial,metadata={
         "model":MODEL,"provider":"fireworks","dataset":dataset,"max_tokens":max_tokens,
         "reasoning_effort":reasoning_effort,"timeout_s":timeout_s,
-        "raw_api_capture":True,"original_trial":original_trial or experiment_trial_id(trial),**hashes})
+        "raw_api_capture":True,"original_trial":original_trial or experiment_trial_id(trial),**hashes,**provenance})
     write_trace(name,"single_call",traces_dir=profile.traces_dir,trial=trial,files={
-        "request.json":json.dumps(request,indent=2),"system_prompt.txt":system,"user_prompt.txt":prompt})
+        "request.json":json.dumps(request,indent=2),"system_prompt.txt":system,"user_prompt.txt":prompt,
+        "runtime.json":json.dumps(runtime,indent=2)})
     client=OpenAI(api_key=os.environ["FIREWORKS_API_KEY"],base_url="https://api.fireworks.ai/inference/v1",
                   timeout=timeout_s,max_retries=0)
     started=time.monotonic();call=None
@@ -102,7 +109,7 @@ def main(argv=None):
                         help="default omits the API field and uses the provider's default")
     parser.add_argument('--concurrency',type=int,default=2)
     args=parser.parse_args(argv)
-    args.dataset=canonical_dataset(args.dataset)
+    ensure_active_dataset(args.dataset)
     load_dotenv(REPO/'.env')
     if not os.getenv('FIREWORKS_API_KEY'):raise RuntimeError('FIREWORKS_API_KEY is not set')
     if args.max_tokens<1 or args.concurrency<1 or args.timeout<1:parser.error('Budgets and timeout must be positive')
@@ -113,6 +120,7 @@ def main(argv=None):
     trial=args.trial or next_trial_id(names, ['single_call'], traces_dir=profile_for(MODEL).traces_dir)
     original_trial=experiment_trial_id(args.trial)
     for name in names:
+        case_dataset(REPO,args.dataset,name,require_active=True)
         checked_case_hashes(REPO,args.dataset,name)
         dest=trace_path(name,'single_call',traces_dir=profile_for(MODEL).traces_dir,trial=trial)
         if dest.exists():raise FileExistsError(dest)

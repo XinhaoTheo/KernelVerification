@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from verifier.agentic.ledger import ClaimLedger, LedgerError
 from verifier.agentic.state import ClaimScope, ClaimStatus, EvidenceKind, Role, utc_now_iso
 
@@ -24,9 +26,12 @@ def record_claim_schema() -> dict:
     # re-recording the claim instead of fixing the arguments leaves a duplicate
     # behind: one measured run recorded the same claim twice, word for word, and
     # walked the whole probe/finalize/resolve sequence over both copies.
+    require_scope = os.getenv("AGENTIC_REQUIRE_CLAIM_SCOPE_FIELDS", "0") == "1"
     return {
         "type": "object",
-        "required": ["statement", "rationale"],
+        "required": (["statement", "rationale", "scope", "scope_rationale", "scope_evidence"]
+                     if require_scope
+                     else ["statement", "rationale"]),
         "properties": {
             "statement": {
                 "type": "string",
@@ -44,13 +49,16 @@ def record_claim_schema() -> dict:
                 "type": "string", "enum": _CLAIM_SCOPE_VALUES, "default": "unknown",
                 "description": "Use in_scope ONLY when passing scope_rationale AND at "
                                "least one scope_evidence item in this same call; the "
-                               "call is rejected otherwise. Leave it unset if you "
-                               "cannot yet cite the contract.",
+                               "call is rejected otherwise. " +
+                               ("Use unknown if you cannot yet cite the contract." if require_scope
+                                else "Leave it unset if you cannot yet cite the contract."),
             },
             "scope_rationale": {
                 "type": "string", "default": "",
-                "description": "Required when scope is in_scope: which contract "
-                               "requirement this claim would violate.",
+                "description": ("Always include this field. For in_scope it must explain "
+                               "which contract requirement this claim would violate. "
+                               "For unknown scope an empty string is allowed." if require_scope else
+                               "Required when scope is in_scope: which contract requirement this claim would violate."),
             },
             "scope_evidence": {
                 "type": "array",
@@ -64,8 +72,10 @@ def record_claim_schema() -> dict:
                     "additionalProperties": False
                 },
                 "default": [],
-                "description": "Required when scope is in_scope: at least one quote "
-                               "from the contract, each with its source.",
+                "description": ("Always include this field. For in_scope supply at least one "
+                               "quote from the contract, each with its source. "
+                               "For unknown scope an empty array is allowed." if require_scope else
+                               "Required when scope is in_scope: at least one quote from the contract, each with its source."),
             },
         },
         "additionalProperties": False,

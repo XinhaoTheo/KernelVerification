@@ -1,0 +1,36 @@
+import torch, json, importlib.util
+spec = importlib.util.spec_from_file_location("k113", "/root/cases/case_113/kernel.py")
+K = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(K)
+
+def test(length, chunk, bnd, seed=0):
+    g = torch.Generator(device="cpu").manual_seed(seed)
+    B,H,D = 1,2,33
+    u = (2*torch.rand((B,length,H,D),generator=g)-1).float().cuda()
+    decay = (.90+.06*torch.rand((B,length,H),generator=g)).float().cuda()
+    init = (2*torch.rand((B,H,D),generator=g)-1).float().cuda()
+    seq = torch.zeros((B,length),dtype=torch.int32)
+    if bnd is not None:
+        seq[:, bnd:] += 1
+    seq = seq.cuda()
+    out, fin = K.run(u, decay, seq, init, chunk)
+    ref_out, ref_fin = K.reference(u, decay, seq, init, chunk)
+    ref_out = ref_out.float().cuda(); ref_fin = ref_fin.float().cuda()
+    tol_out = 0.002 + 0.0001*ref_out.abs()
+    tol_fin = 0.002 + 0.0001*ref_fin.abs()
+    bad_out = (out-ref_out).abs() > tol_out
+    bad_fin = (fin-ref_fin).abs() > tol_fin
+    return dict(length=length, chunk=chunk, boundary=bnd,
+        out_bad=int(bad_out.sum()), out_total=ref_out.numel(),
+        fin_bad=int(bad_fin.sum()),
+        max_abs_err=float((out-ref_out).abs().max()),
+        max_fin_err=float((fin-ref_fin).abs().max()))
+
+results = []
+# interior boundaries (not multiples of chunk), plus aligned & none
+for (L,K_,b) in [(97,32,33),(97,32,20),(97,64,70),(65,16,40),(97,32,32),(97,32,None),(257,64,130)]:
+    try:
+        results.append(test(L,K_,b))
+    except Exception as e:
+        results.append(dict(length=L,chunk=K_,boundary=b,error=str(e)))
+print(json.dumps(results))

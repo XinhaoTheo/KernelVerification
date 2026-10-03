@@ -23,14 +23,15 @@ def frozen_case(tmp_path, dataset="numerical_challenges"):
     row = {"ground_truth": "trust", **{
         f"{kind}_sha256": hashlib.sha256((case / filename).read_bytes()).hexdigest()
         for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt"))}}
-    filename = "answer_key.json" if dataset == "numerical_pilot" else "validation_gpu.json"
-    root.mkdir(parents=True, exist_ok=True)
-    (root / filename).write_text(json.dumps({"cases": {"case_38": row}}))
+    validation = validation_path(tmp_path / "benchmark_fn_fp", dataset)
+    validation.parent.mkdir(parents=True, exist_ok=True)
+    validation.write_text(json.dumps({"cases": {"case_38": row}}))
     return case, row
 
 
 @pytest.mark.parametrize("dataset", ["correlation_pair", "numerical_challenges", "evidence_challenges",
-                                    "numerical_pilot", "single_call_vs_tools_challenges", "solo_vs_debate_challenges"])
+                                    "numerical_pilot", "single_call_vs_tools_challenges", "solo_vs_debate_challenges",
+                                    "real_kernel_challenges"])
 def test_frozen_sources_checked_without_releasing_labels(tmp_path, dataset):
     case, row = frozen_case(tmp_path, dataset)
     hashes = checked_case_hashes(tmp_path, dataset, "case_38")
@@ -41,7 +42,8 @@ def test_frozen_sources_checked_without_releasing_labels(tmp_path, dataset):
         checked_case_hashes(tmp_path, dataset, "case_38")
 
 
-@pytest.mark.parametrize("identity,directory", DATASET_DIRECTORIES.items())
+@pytest.mark.parametrize("identity,directory", [("numerical_challenges", "single_call_vs_tools_challenges"),
+                                               ("evidence_challenges", "solo_vs_debate_challenges")])
 def test_renamed_dataset_filters_shared_cases_and_preserves_trace_identity(tmp_path, identity, directory):
     case, row = frozen_case(tmp_path, identity)
     benchmark = tmp_path / "benchmark_fn_fp"

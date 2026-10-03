@@ -122,6 +122,7 @@ class ClaimLedger:
         if next_status == ClaimStatus.INCONCLUSIVE:
             return
         if current == ClaimStatus.INCONCLUSIVE and next_status in {
+            ClaimStatus.OPEN,
             ClaimStatus.CONFIRMED,
             ClaimStatus.REBUTTED,
         }:

@@ -1,0 +1,32 @@
+{
+  "case_ids": [
+    "case_108",
+    "case_111"
+  ],
+  "status": "pending independent GPU contract audit",
+  "expected_labels": {
+    "case_108": "reject",
+    "case_111": "trust"
+  },
+  "label_correction_reason": "The original contract never excluded ordinary contiguous torch.Tensor objects carrying the lazy-negative flag. case_108 passes their raw storage pointers to Triton without resolving that flag, so initial trust qualification omitted legal logical values. Old source, contract and experimental records are preserved; a new case_111 resolves all four input tensors before pointer use. This corrects the original label, not an input-dependent label policy.",
+  "classification": "targeted wrapper-contract audit and synthetic repair of the T4-adapted Liger backward case",
+  "source_manifest": "norm_pair_source.json",
+  "contract_unchanged": true,
+  "repair": "Resolve PyTorch lazy-negative views on x, weight, dy, rstd. resolve_neg() materializes logical values only when necessary and preserves the supplied input tensors. FP16/FP32 inputs are real-valued, so no conjugate resolution is required.",
+  "public_semantic_diff": "--- case_108/kernel.py\n+++ case_111/kernel.py\n@@ -58,6 +58,7 @@\n \n def run(x, weight, dy, rstd):\n     \"\"\"Return (dx: FP16[M,N], dw: FP32[N]); preserve all inputs.\"\"\"\n+    x, weight, dy, rstd = (t.resolve_neg() for t in (x, weight, dy, rstd))\n     m, n = x.shape\n     assert x.is_cuda and x.is_contiguous() and dy.is_contiguous()\n     assert weight.is_contiguous() and rstd.is_contiguous()\n",
+  "validation_plan": "Repeat the original 18 ordinary probes for case_111, then test single-input and simultaneous lazy-negative flags on legal row and block shapes against an independent NumPy oracle of resolved logical values. case_108 rejection requires actual GPU error on a legal flagged tensor.",
+  "public_hashes": {
+    "case_108": {
+      "kernel.py": "38b73b186340a82810492d36b4dd75874dafa2143c65223ea407d6e9b075ddec",
+      "problem.txt": "db26449fb0344490c32399729d0b905e18534f8ec4da7a7af493a7abd322025b",
+      "LICENSE": "7cc0cb11423b59cf59c26512b9a2d70383a56c672490ed92419a1a109c5c05dc",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    "case_111": {
+      "kernel.py": "f533d5547beed2dac6cb1c385e2d91843ebea8ee48da974cb3df3fbd7cc67fe0",
+      "problem.txt": "db26449fb0344490c32399729d0b905e18534f8ec4da7a7af493a7abd322025b",
+      "LICENSE": "7cc0cb11423b59cf59c26512b9a2d70383a56c672490ed92419a1a109c5c05dc",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    }
+  }
+}

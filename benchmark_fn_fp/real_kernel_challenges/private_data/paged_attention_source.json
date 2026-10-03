@@ -1,0 +1,86 @@
+{
+  "case_ids": [
+    "case_114",
+    "case_115"
+  ],
+  "status": "independently_gpu_qualified_before_model_evaluation",
+  "expected_labels": {
+    "case_114": "reject",
+    "case_115": "trust"
+  },
+  "label_scope": "one immutable implementation and one shared full-domain contract; no seed-dependent labels",
+  "classification": "historical bug/fix mechanism extracted and adapted to a bounded standalone T4 FP16 workload; not an unmodified vLLM replay",
+  "purpose_built": true,
+  "source": {
+    "project": "vllm-project/vllm",
+    "path": "vllm/attention/ops/triton_unified_attention.py",
+    "pull_request": "https://github.com/vllm-project/vllm/pull/30887",
+    "before_commit": "bd2b52fc2dd09b401991835c8a2a6f2ef940b2e4",
+    "after_commit": "b5545d9d5cab2625ac04a19f552631a2034c8f47",
+    "before_url": "https://raw.githubusercontent.com/vllm-project/vllm/bd2b52fc2dd09b401991835c8a2a6f2ef940b2e4/vllm/attention/ops/triton_unified_attention.py",
+    "after_url": "https://raw.githubusercontent.com/vllm-project/vllm/b5545d9d5cab2625ac04a19f552631a2034c8f47/vllm/attention/ops/triton_unified_attention.py",
+    "before_sha256": "dbecc946b66c30b099dc302d8f9fa342a60823ae20fd82fdfaf3508cc10ae2d4",
+    "after_sha256": "6854515a8f42bfdb461924550a737463008ca563970363954c01d3d9cdc5d3d6",
+    "license": "Apache-2.0; Copyright contributors to the vLLM project",
+    "upstream_license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "historical_semantic_diff": "After softmax, zero V lanes whose logical position lies before the union of the sliding windows of this query tile, before accumulating tl.dot(P.to(V.dtype), V). Score masking alone does not remove NaN/Inf from those V lanes.",
+    "upstream_diff": "@@ -363,6 +363,12 @@ def kernel_unified_attention_2d(\n         L = L * alpha + l_j\n         M = m_j\n \n+        if SLIDING_WINDOW:\n+            qpos_lo = q_block_local_idx * BLOCK_Q\n+            V = tl.where(\n+                (context_len + qpos_lo - seq_offset[:, None]) < SLIDING_WINDOW, V, 0.0\n+            )\n+\n         # acc : (BLOCK_M, HEAD_SIZE_PADDED)\n         acc += tl.dot(P.to(V.dtype), V)\n \n@@ -678,6 +684,12 @@ def kernel_unified_attention_3d(\n         L = L * alpha + l_j\n         M = m_j\n \n+        if SLIDING_WINDOW:\n+            qpos_lo = q_block_local_idx * BLOCK_Q\n+            V = tl.where(\n+                (context_len + qpos_lo - seq_offset[:, None]) < SLIDING_WINDOW, V, 0.0\n+            )\n+\n         # acc : (BLOCK_M, HEAD_SIZE_PADDED)\n         acc += tl.dot(P.to(V.dtype), V)\n "
+  },
+  "adaptations": [
+    "Extract the 2D paged attention path; retain flattening query positions and GQA heads in 16-row Q tiles, 64-token KV tiles, online softmax, causal/sliding masks, tile pruning, arbitrary physical page lookup and query/cache tail handling.",
+    "Use rectangular batch queries with per-sequence context length, instead of packed ragged query_start_len and binary sequence lookup. A three-dimensional launch assigns query tile, KV head and batch explicitly.",
+    "Limit FP16 inputs and output, D in {32,64,128}, pages of 16/32/64 tokens, sequence lengths <=512, Q<=33, GQA1/2/4/8; strip FP8, ALiBi, bias, softcap, sinks, prefix-LM and partitioned 3D attention.",
+    "Make storage/metadata restrictions explicit and identical for all evaluators: ordinary materialized contiguous independent tensors, no requires_grad, inference, lazy-negative or conjugate flags.",
+    "Public run and reference call the same input-domain validator. Live KV positions and all Q are finite and bounded; expired or otherwise unused cache slots explicitly permit arbitrary bits including NaN/Inf. Only unreferenced block-table tail entries may be arbitrary integers.",
+    "Add an explicit mask when loading the block table and require full tile bounds in score masking, so arbitrary unused table entries and unwritten tail slots are safely ignored in both versions.",
+    "Only the historical post-softmax V window mask differs between the pair. No hidden triggers, altered input seeds, synthetic indexing bugs or answer labels in public files."
+  ],
+  "contract_rationale": {
+    "numerical": "The target is ordinary real-arithmetic attention on represented FP16 values. FP16 q/k tensor-core dots accumulate in FP32, and the online softmax denominator/accumulator stay FP32. Rounding probabilities to FP16 introduces roughly a 2^-11 weighted error for normal probabilities, and FP16 output rounding contributes another <=2^-11 for outputs bounded by one. FP32 dot/softmax/order effects are much smaller for D<=128 and <=512 terms. The 0.003 absolute allowance (plus 0.003 relative) leaves a several-fold margin; GPU extreme/cancellation/random plans independently check it. This engineering estimate is not a formal exhaustive floating-point proof.",
+    "inactive_slots": "The complete public contract states these slots are not inputs to the mathematical operator and permits NaN/Inf there. The validator rejects NaN in q or any reachable active K/V. This models recycled or unwritten paged cache storage, not NaN in valid data.",
+    "fixed_labels": "Any legal counterexample makes the complete old implementation reject, including when ordinary finite examples pass. The intended repaired implementation is accepted only after private qualification and source audit."
+  },
+  "decisive_probe_plan": {
+    "B": 1,
+    "Q": 1,
+    "Hkv": 1,
+    "GQA": 4,
+    "D": 64,
+    "page_size": 16,
+    "length": 79,
+    "window": 19,
+    "mapping": "permuted",
+    "q": "zeros",
+    "live_v": "logical-position markers bounded by one",
+    "inactive_cache": "NaN",
+    "why": "First active token60 falls inside tile0 and page3; the retained 64-token tile contains expired cache lanes, and the window crosses the tile64 boundary into a partial last page."
+  },
+  "qualification_plan": "18 configurations x finite/NaN/Inf inactive cache =54 calls per kernel. Covers arbitrary and repeated pages (within/across sequences), signed INT32 padding IDs, Q1/33 and query-tile boundaries, page/tile/window boundaries, W0/1, length=Q, and all +/-1 live input stress. Independent NumPy FP64 oracle gathers only allowed positions.",
+  "cpu_precheck": {
+    "checks": 54,
+    "max_abs_public_vs_numpy_reference_gap": 8.326672684688674e-16,
+    "active_nan_rejected": [
+      "q",
+      "k",
+      "v"
+    ],
+    "gpu_kernel_not_executed": true,
+    "triton_stubbed_only_to_import_public_CPU_reference": true
+  },
+  "public_hashes": {
+    "case_114": {
+      "kernel.py": "0d6b6e53bbdc17693c2d997c4e08ce4ec1ab90d0d3b008342cd42cdbf0988af8",
+      "problem.txt": "2ae4a5d59214619867842c808338ebedbb050fbfee54974390c835c2980bc23f",
+      "LICENSE": "930db2e67ad16c231a6a08159443acb6547a3a5b65d205d43d6f4d337dffb6a9"
+    },
+    "case_115": {
+      "kernel.py": "7b0ccd9b43ef731497559cd53582f25c634e57de825d1421ea659fda8d3c4c68",
+      "problem.txt": "2ae4a5d59214619867842c808338ebedbb050fbfee54974390c835c2980bc23f",
+      "LICENSE": "930db2e67ad16c231a6a08159443acb6547a3a5b65d205d43d6f4d337dffb6a9"
+    }
+  },
+  "public_semantic_diff": "--- case_114/kernel.py\n+++ case_115/kernel.py\n@@ -65,6 +65,9 @@\n         accumulator = accumulator * alpha[:, None]\n         denominator = denominator * alpha + tl.sum(probabilities, 1)\n         maximum = updated_maximum\n+        if WINDOW > 0:\n+            qpos_lo = qb * BQ\n+            v = tl.where((context + qpos_lo - logical[:, None]) < WINDOW, v, 0.0)\n         accumulator += tl.dot(probabilities.to(v.dtype), v)\n     result = accumulator / denominator[:, None]\n     tl.store(OUT + qo, result, mask=qpos[:, None] < QT)\n",
+  "private_oracle": "eval_scripts/real_kernel_challenges/paged_attention_pair.py",
+  "known_limitation": "The original issue is a recognizable IEEE zero-times-NaN masking failure; no-tool source review may identify it. This pair tests the historical mechanism fairly and does not promise an accuracy gap.",
+  "qualification_evidence": "qualification/r6.json"
+}

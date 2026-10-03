@@ -1,0 +1,62 @@
+{
+  "case_ids": [
+    "case_106",
+    "case_107"
+  ],
+  "status": "Initial qualification completed; the intended accept label below was withdrawn after independent full-contract audit. See current_labels and validation_gpu.json.",
+  "expected_labels": {
+    "case_106": "reject",
+    "case_107": "accept"
+  },
+  "label_scope": "one fixed implementation and common full input-domain contract; never per-input labels",
+  "source": {
+    "project": "pytorch/pytorch",
+    "issue": "https://github.com/pytorch/pytorch/issues/164701",
+    "issue_author": "danielrichman",
+    "reported_date": "2025-10-05",
+    "accessed_date": "2026-10-03",
+    "reported_environment": "Tesla T4, torch 2.8.0, Triton 3.4.0",
+    "upstream_fix": "Not identified; do not claim case_107 is an upstream historical fix.",
+    "copyright_and_licensing": "This pair is independently written benchmark code using the publicly described defect mechanism. No upstream implementation or substantial issue prose was copied. PyTorch code itself is BSD-3-Clause; this is not a vendored PyTorch file."
+  },
+  "classification": "purpose-built synthetic adaptation of a real reported cross-block aliasing defect; not a raw historical bug/fix snapshot",
+  "mechanism": "Fused parallel copy reads old state and writes shifted state using the same allocation. A program may overwrite a value another program has not read. Global block execution order is not a correctness guarantee.",
+  "adaptations": [
+    "Extract only the state sliding operation; omit torch.compile, redundant advanced-index identity transform and dev_null output.",
+    "Direct hand-written masked Triton flat copy with BLOCK=1024 and 4 warps; generalize B,L,D,K within the public bounded domain.",
+    "Retain actual alias between state input and output in case_106. case_107 changes allocation to a separate output, then same-stream copy_ into state.",
+    "Return the mutated state and provide an independent tensor reference. No hidden helpers or fixed-seed contract."
+  ],
+  "correctness_argument": {
+    "case_106": "Admits conflicting inter-program reads and writes under legal overlapped shift. Must obtain an actual wrong-output witness before model evaluation; inability to reproduce disqualifies pilot, never relabels it accept.",
+    "case_107": "Every destination has exactly one writer, all source reads use unchanged input allocations during the first launch, and the subsequent same-stream copy starts after that launch. Only copying FP32 values; bounds/masks select exactly the specified source. Source-level argument plus GPU qualification; sampling alone is not a formal proof."
+  },
+  "qualification_plan": "Multiple shapes and patterns, including the original 4x2048x1024/K=2 shape, repeated runs, exact bitwise checks and chained calls. Fixed ground truth declared before qualification or model calls.",
+  "public_hashes": {
+    "case_106": {
+      "kernel.py": "32f0d83a90b96d5ce27d5246e80f4d320fa89835cdbbf89ae7db1282030b372f",
+      "problem.txt": "796219b618572fe1749cd02af33d89b699dea3413ed3fd8d2ba1fdb2c3797496",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    "case_107": {
+      "kernel.py": "4676fa1d48754eca2bd53dda8bc77b5e59ee3837af70ad1244af99dfde16bb4c",
+      "problem.txt": "796219b618572fe1749cd02af33d89b699dea3413ed3fd8d2ba1fdb2c3797496",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    }
+  },
+  "public_semantic_diff": "--- case_106/kernel.py\n+++ case_107/kernel.py\n@@ -36,11 +36,12 @@\n     steps = new_events.shape[1]\n     assert 1 <= batch <= 4 and 2 <= length <= 4096 and 1 <= width <= 1024\n     assert 1 <= steps <= min(length, 128)\n-    output = state\n+    output = torch.empty_like(state)\n     _slide[(triton.cdiv(state.numel(), 1024),)](\n         state, new_events, output, length, width, steps, state.numel(),\n         BLOCK=1024, num_warps=4,\n     )\n+    state.copy_(output)\n     return state\n \n \n",
+  "qualification_evidence": "qualification/r3.json",
+  "validation_freeze": "validation_gpu.json",
+  "expected_labels_scope": "Historical pre-evaluation expectations, preserved verbatim; not the current answer key.",
+  "current_labels": {
+    "case_106": "reject",
+    "case_107": "reject"
+  },
+  "post_qualification_correction": {
+    "case": "case_107",
+    "current_label": "reject",
+    "evidence": "qualification/r5.json",
+    "original_public_source_and_contract_unchanged": true,
+    "details": "validation_gpu.json / label_correction"
+  }
+}

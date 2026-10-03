@@ -11,9 +11,11 @@ writes the summary, and nothing else writes it.
 Usage (from repo root):
     python benchmark_fn_fp/eval_scripts/summarize_traces.py
     python benchmark_fn_fp/eval_scripts/summarize_traces.py --json     # machine-readable
+    python benchmark_fn_fp/eval_scripts/summarize_traces.py --include-archived --json > /tmp/historical-scoreboard.json
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -26,7 +28,7 @@ OUT = REPO / "benchmark_fn_fp" / "eval_scripts" / "scoreboard.json"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from traces import experiment_trial  # noqa: E402
 from models import PROFILES, profile_for, profile_for_trace  # noqa: E402
-from case_registry import case_sort_key, validation_path  # noqa: E402
+from case_registry import case_sort_key, is_active_case, load_registry, validation_path  # noqa: E402
 
 
 def profile_for_tree(traces_dir: str):
@@ -193,23 +195,33 @@ def classify_outcome(row: dict, truth: str | None) -> str:
 
 
 def build_report(*, records=None, labels: dict[str, dict[str, str]] | None = None,
-                 benchmark_dir: Path | None = None) -> dict:
+                 benchmark_dir: Path | None = None, include_archived: bool = False) -> dict:
     """Group complete attempts without conflating datasets, trials or endpoints."""
     root = Path(benchmark_dir) if benchmark_dir is not None else BENCHMARK
+    details = load_registry(root).get("case_details", {})
     if records is None:
         from traces import iter_trace_records
-        records = iter_trace_records(benchmark_dir=root)
+        records = iter_trace_records(benchmark_dir=root, include_archived=include_archived)
     if labels is None:
         labels = {"benchmark_fn_fp": ground_truth(root)}
-        for dataset in ("correlation_pair", "numerical_challenges", "evidence_challenges", "numerical_pilot"):
+        for dataset in ("correlation_pair", "numerical_challenges", "evidence_challenges", "numerical_pilot",
+                        "real_kernel_challenges"):
             validated_labels = validation_path(root, dataset)
             if validated_labels.exists():
                 labels[dataset] = {
                     case: row["ground_truth"]
                     for case, row in json.loads(validated_labels.read_text())["cases"].items()
                 }
+    if not include_archived:
+        labels = {dataset: {case: truth for case, truth in truths.items()
+                            if is_active_case(details.get(case, {}))}
+                  for dataset, truths in labels.items()}
+        labels = {dataset: truths for dataset, truths in labels.items() if truths}
     groups = {}
     for record in records:
+        if not include_archived and (not is_active_case(details.get(record["case"], {}))
+                                     or Path(record["path"]).is_relative_to(root / "archive")):
+            continue
         run_dir = Path(record["path"])
         model = record.get("model")
         profile = profile_for_trace(model or "unprofiled:missing-model", record.get("metadata") or {})
@@ -277,9 +289,14 @@ def build_report(*, records=None, labels: dict[str, dict[str, str]] | None = Non
             "ground_truth_by_dataset": labels, "arms": dict(sorted(groups.items()))}
 
 
-def main() -> int:
-    report = build_report()
-    if "--json" in sys.argv:
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    parser.add_argument("--include-archived", action="store_true",
+                        help="Include historical pilot traces; print only, leaving the active scoreboard unchanged")
+    args = parser.parse_args(argv)
+    report = build_report(include_archived=args.include_archived)
+    if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         for name, group in report["arms"].items():
@@ -295,8 +312,9 @@ def main() -> int:
             if group["partial_cost_attempts"]:
                 print(f"  incomplete API usage coverage: {group['partial_cost_attempts']} attempt(s); "
                       "reported cost excludes unrecorded usage")
-    OUT.write_text(json.dumps(report, indent=2, ensure_ascii=False))
-    print(f"\nwrote {OUT.relative_to(REPO)}")
+    if not args.include_archived:
+        OUT.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+        print(f"\nwrote {OUT.relative_to(REPO)}", file=sys.stderr if args.json else sys.stdout)
     return 0
 
 

@@ -1,0 +1,50 @@
+{
+  "id": "chatcmpl-34c7e461b9664332a1a7943bd104b47b",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.85, \"reason\": \"The kernels follow the stated casting policy (fp16-rounded m, h, t terms; fp32 accumulation for dw via per-program partials), cover all rows exactly once in both launch paths, handle masking for non-power-of-two N and partial row blocks, and store dx implicitly cast to fp16. Numerically the fp32 accumulation of at most a few thousand bounded terms stays well within the stated absolute/relative tolerances.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Check the row kernel. m = (dy*weight).to(fp32) \u2014 contract says m = H16(dy*weight). dy and weight are fp16, so dy*weight in Triton... dy is fp16, weight fp16; dy*weight \u2014 in Triton fp16*fp16 stays fp16? Actually Triton may promote? With fp16 operands, multiplication yields fp16, so .to(fp32) after fp16 rounding \u2014 matches H16. Similarly dw += dy * (x*r).to(fp16): x is fp32, r fp32, product fp32, cast to fp16 \u2192 h. Then dy*h is fp16 (rounded) \u2192 but dw accumulation: dw += dy * (...).to(fp16)? Wait code: `dw += dy * (x * r).to(tl.float16)` \u2014 dy is fp16, product fp16*fp16 = fp16 (t = H16(dy*h)), then dw (fp32) += fp16 value, converted to fp32. Fine.\n\ndx: dx = r * m (fp32), plus correction. But contract: dx output FP16; store dx without .to(fp16)? tl.store(DX + ..., dx, mask) \u2014 DX is fp16 pointer so implicit cast. Fine.\n\nBlock kernel: x loaded as fp32; m = (dy*weight).to(fp32) fp16 rounding ok. dw term: dy * (x * r[:,None]).to(fp16) \u2014 matches. But note in the block kernel, masked rows: r loaded with mask other=0.0, x masked 0 \u2014 masked rows contribute 0 to dw sums? dw sums over rows including masked rows where dy=0 \u2192 fine.\n\nrow kernel: dw stored per program covering rows; partial sum over programs. Wait, in _row_backward, PARTIAL + pid*N \u2014 each program covers ROWS = cdiv(m, programs) rows, so all rows covered exactly once? programs = min(mp_count, m); ROWS=cdiv(m,programs), start=pid*ROWS, stop=min(start+ROWS,M). Coverage: pid up to programs-1, start max = (programs-1)*ROWS. Since programs*ROWS >= m, coverage complete, non-overlapping. Good.\n\nPrecision: dx computed in fp32 vs reference fp64 analytic; tolerance 0.002+0.002|dx|. rstd up to ~... values bounded. dx magnitudes \u2264 ~ rstd*(m + ...) reasonable. FP32 accumulation of sum m*x over up to 512 elements, values \u2264 16 each \u2014 error ~ tiny. Fine.\n\nOne subtlety: in the row kernel, tl.sum(m*x,0) where masked x=0 and m=0 (weight=0 masked? weight loaded with other=0.0, dy other=0). Fine.\n\n(1.0/N): N is constexpr int; 1.0/N fp32. Fine.\n\ndw tolerance: dw = sum of fp16 terms t, accumulated in fp32, partial per program then summed \u2014 error within 1e-5 + 1e-5*sum|t|. FP32 accumulation of up to 4096 terms each \u2264... h = x*r in fp16, x\u22644, r\u2264~2 (rstd max since RMS \u22650.25 \u2192 rstd \u2264 4?). rstd = 1/sqrt(mean+eps), mean \u22650.0625 \u2192 rstd \u2264 4. h \u2264 16 but actually x*rstd normalized ~ \u2264 ~4/rms*... h = x*rstd \u2264 4*4=16? Actually normalized value \u2264 x/rms, bounded by sqrt(N) at worst... anyway finite fp16? x*rstd \u2264 4*4=16, fine within fp16 range. t = dy*h \u2264 4*16=64, fp16 max 65504, fine. FP32 accumulation error negligible relative to 1e-5*sum|t|? sum over 4096 terms, each error from fp32 rounding ~ ulp of running sum; sum could be small (cancellation) but absolute tolerance 1e-5 plus relative to abs sum. FP32 accumulation error ~ N * eps * max|partial| ~ 4096 * 1e-7 * (say 1e4?) \u2014 could exceed 1e-5? sum|t| per column: 4096 * avg|t|. If avg |t| ~ 1, sum|t| ~ 4096, tolerance ~ 0.04. Accumulation error: with per-program partials (at most 82 programs... wait programs = mp count ~40 on T4) each \u2264 (rows/programs ~ 100) terms, error tiny. Fine.\n\nPotential issue: enable_fp_fusion=False \u2014 fine, avoids fma differences.\n\nOne thing: in block kernel, dx for masked rows stored with mask \u2014 fine.\n\n`(r * r * tl.sum(m * x, 1))` \u2014 r fp32, sum fp32. Reference dx64 uses r^2 * sum/N \u2014 matches. But contract says m should be H16-rounded \u2014 yes.\n\nHmm, actually check: contract says dx[i,j] = rstd*(m - x*rstd^2*sum(m*x)/N) where m is the fp16-rounded value. In the kernel, m = (dy*weight).to(fp32) \u2014 is dy*weight actually rounded to fp16 in Triton? With two fp16 inputs, Triton computes fp16 mul producing fp16. Yes.\n\ndw term: reference uses h = (x.float()*rstd).to(fp16), t = dy*h fp16. Kernel: (x*r) fp32 then .to(tl.float16), then dy * that \u2192 fp16 mul \u2192 t. Matches.\n\nSeems correct. Trust.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791003132,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1341,
+    "prompt_tokens": 2518,
+    "total_tokens": 3859,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1233,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 1233
+    }
+  }
+}

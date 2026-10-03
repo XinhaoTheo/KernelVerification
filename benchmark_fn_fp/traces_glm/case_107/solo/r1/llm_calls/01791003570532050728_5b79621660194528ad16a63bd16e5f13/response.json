@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-0b739a86980a48e98ad7c29ed00214ac",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the probe across a sweep of edge shapes, verifying exact bit patterns, in-place update, event preservation, and repeated calls.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9ee6fd9e0995204d",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_107\\\")\\nfrom kernel import run, reference\\n\\ntorch.cuda.synchronize()\\ndef make(B,L,D,K,seed):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    s = torch.randn((B,L,D), generator=g)\\n    e = torch.randn((B,K,D), generator=g)\\n    # include zeros and signed zeros\\n    s[0,0,0] = 0.0\\n    if D>1: e[0,0,1] = -0.0\\n    return s.cuda(), e.cuda()\\n\\ncases = [\\n    (1,2,1,1),(1,2,1,2),(4,2,1024,1),(4,2,1024,2),\\n    (1,3,7,1),(1,3,7,2),(1,3,7,3),(2,5,3,4),(1,7,1,7),\\n    (3,17,13,16),(2,64,33,64),(1,4096,1,128),(1,4096,3,128),\\n    (4,1024,5,128),(2,1000,7,1),(1,4096,1024,2),(1,4096,1024,128),\\n    (3,33,65,32),(1,1,1,1),(1,2,1,128),(2,129,4,128),(1,2048,1024,3),\\n]\\nfails=[]\\nfor (B,L,D,K) in cases:\\n    try:\\n        s,e = make(B,L,D,K,hash((B,L,D,K))%10000)\\n    except Exception as ex:\\n        continue  # illegal K maybe\\n    s_pre = s.clone(); e_pre = e.clone()\\n    ref = reference(s_pre, e_pre)\\n    ret = run(s, e)\\n    torch.cuda.synchronize()\\n    ok_bits = torch.equal(s.view(torch.int32), ref.view(torch.int32))\\n    ok_ret = (ret is s) and (s.data_ptr()==s_pre.data_ptr()) if False else (ret is s)\\n    ok_ev = torch.equal(e, e_pre)\\n    if not (ok_bits and ok_ret and ok_ev):\\n        fails.append({\\\"case\\\":[B,L,D,K],\\\"bits\\\":ok_bits,\\\"ret_same\\\":ret is s,\\\"ev_ok\\\":ok_ev,\\n                      \\\"n_diff\\\":(s.view(torch.int32)!=ref.view(torch.int32)).sum().item()})\\n# repeated calls\\nB,L,D=2,50,11\\ns,e = make(B,L,D,5,123)\\nok_rep=True\\nfor i in range(5):\\n    K = [5,1,3,11,2][i]\\n    e = torch.randn((B,K,D), device=\\\"cuda\\\")\\n    ref = reference(s, e)\\n    s = run(s, e)\\n    torch.cuda.synchronize()\\n    if not torch.equal(s.view(torch.int32), ref.view(torch.int32)):\\n        ok_rep=False; break\\nprint(json.dumps({\\\"metric\\\":\\\"exact FP32 bit equality vs reference() over shape sweep + in-place + event preservation + repeated calls\\\",\\\"n_cases\\\":len(cases)+1,\\\"fails\\\":fails,\\\"repeated_ok\\\":ok_rep}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791003571,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 757,
+    "prompt_tokens": 10432,
+    "total_tokens": 11189,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

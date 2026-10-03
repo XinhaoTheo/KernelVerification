@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmark_fn_fp.eval_scripts.correlation_pair import report
+from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.correlation_pair import report
 
 
 def write(path, value):
@@ -14,7 +14,7 @@ def write(path, value):
 
 @pytest.fixture
 def root(tmp_path):
-    root = tmp_path / "correlation_pair"
+    root = tmp_path / "single_call_vs_tools_challenges"
     cases = {}
     for case, truth in (("case_36", "reject"), ("case_37", "trust")):
         public = root.parent / "triton_eval_cases" / case
@@ -25,7 +25,8 @@ def root(tmp_path):
         (public / "problem.txt").write_text(problem)
         cases[case] = {"ground_truth": truth, "errors": [0.2 if truth == "reject" else 0.05],
                        "kernel_sha256": report.digest(code), "problem_sha256": report.digest(problem)}
-    write(root / "private_data/validation_gpu.json", {"cases": cases, "environment": {"gpu": "T4"}})
+    write(root / "private_data/correlation_pair/validation_gpu.json", {"cases": cases, "environment": {"gpu": "T4"}})
+    write(root / "private_data/validation_gpu.json", {"cases": {"case_38": {"ground_truth": "unrelated"}}})
     (root / "README.md").write_text("Manual protocol.\n" + report.BEGIN_RESULTS
                                    + "\nOld generated text.\n" + report.END_RESULTS + "\nManual audit.\n")
     return root
@@ -36,7 +37,7 @@ def single(root, case="case_36", trial="r1", batch="r1", cap=32768,
     model = "accounts/fireworks/models/glm-5p3" if provider == "fireworks" else "claude-opus-5"
     tree = "traces_glm" if provider == "fireworks" else "traces_opus5"
     path = root.parent / tree / case / "single_call" / trial
-    label = report.read(root / "private_data/validation_gpu.json")["cases"][case]
+    label = report.read(root / "private_data/correlation_pair/validation_gpu.json")["cases"][case]
     public = root.parent / "triton_eval_cases" / case
     code, problem = (public / "kernel.py").read_text(), (public / "problem.txt").read_text()
     if variant == "neutral_contract":
@@ -122,10 +123,10 @@ def test_default_replaces_only_readme_block_json_export_is_explicit(root):
     content = (root / "README.md").read_text()
     assert content.startswith("Manual protocol.\n" + report.BEGIN_RESULTS)
     assert content.endswith(report.END_RESULTS + "\nManual audit.\n")
-    assert "Old generated text." not in content and "Every attempt" in content
+    assert "Old generated text." not in content and "逐次记录" in content
     assert not (root / "REPORT.md").exists()
     assert not (root / "scoreboard.json").exists()
-    output = root / "private_data/reports/scoreboard.json"
+    output = root / "private_data/correlation_pair/reports/scoreboard.json"
     assert not output.exists()
     report.main(root=root, export_json=True)
     assert report.read(output)["attempts"] == 1
@@ -139,4 +140,4 @@ def test_missing_or_invalid_readme_markers_refuse_all_outputs(root, content):
     with pytest.raises(ValueError, match="refusing to overwrite manual content"):
         report.main(root=root, export_json=True)
     assert readme.read_text() == content
-    assert not (root / "private_data/reports/scoreboard.json").exists()
+    assert not (root / "private_data/correlation_pair/reports/scoreboard.json").exists()

@@ -332,6 +332,12 @@ def test_record_description_update_accepts_a_bare_string_field() -> None:
 
 def test_request_more_debate_tool_records_judge_request() -> None:
     state = RunState()
+    from verifier.agentic.ledger import ClaimLedger
+    ledger = ClaimLedger(state)
+    ledger.record_claim(statement="A boundary needs investigation.", rationale="Coverage is incomplete.")
+    ledger.append_evidence(claim_id="c1", kind="agent_analysis", summary="No decisive evidence yet.",
+                           supports="inconclusive")
+    ledger.update_claim_status(claim_id="c1", status="inconclusive")
     registry = build_core_registry()
 
     result = registry.call(
@@ -345,8 +351,33 @@ def test_request_more_debate_tool_records_judge_request() -> None:
 
     assert result["request"] == "more_debate"
     assert result["focus_claims"] == ["c1"]
+    assert result["reopened_claims"] == ["c1"]
+    assert state.claims[0].status == "open"
+    assert len(state.claims[0].evidence) == 1
     assert state.convergence == result
     assert state.tool_events[0].tool == "request_more_debate"
+
+
+def test_request_more_debate_only_reopens_requested_inconclusive_claims() -> None:
+    from verifier.agentic.ledger import ClaimLedger
+    state = RunState()
+    ledger = ClaimLedger(state)
+    for status in ("inconclusive", "inconclusive", "confirmed"):
+        claim = ledger.record_claim(statement=f"Concern {len(state.claims)}", rationale="Source review.")
+        ledger.append_evidence(claim_id=claim.id, kind="agent_analysis", summary="Review result.", supports=status)
+        ledger.update_claim_status(claim_id=claim.id, status=status)
+    registry = build_core_registry()
+    context = ToolContext(state=state, current_role=Role.JUDGE.value)
+    # Unknown ids must not partially mutate a valid earlier focus claim.
+    result = registry.call("request_more_debate", {"reason": "Follow up.", "focus_claims": ["c1", "missing"]}, context=context)
+    assert result["error_type"] == "LedgerError"
+    assert state.claims[0].status == "inconclusive"
+    result = registry.call("request_more_debate", {"reason": "Follow up.", "focus_claims": ["c1", "c3"]}, context=context)
+    assert result["reopened_claims"] == ["c1"]
+    assert [c.status for c in state.claims] == ["open", "inconclusive", "confirmed"]
+    result = registry.call("request_more_debate", {"reason": "Resolve remaining uncertainty."}, context=context)
+    assert result["reopened_claims"] == ["c2"]
+    assert [c.status for c in state.claims] == ["open", "open", "confirmed"]
 
 
 def test_record_claim_requires_scope_evidence_for_in_scope_claim() -> None:

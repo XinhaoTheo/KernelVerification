@@ -1,0 +1,50 @@
+{
+  "id": "chatcmpl-27f9b460459347318f4611ded1ac007a",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.85, \"reason\": \"The kernel reproduces the stated casting policy: m = H16(dy*weight) via fp16 arithmetic cast to fp32, dx formula r*(m - x*r^2*mean(m*x)) matches the reference, and dw accumulates the fp16-rounded t = dy*H16(x*rstd) terms in fp32 partial buffers (error well within the 1e-5*sum|t| tolerance). Grid/loop partitioning handles all M,N including non-divisible cases correctly.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Key checks: dx formula. Reference: dx = r*(m - x*r^2 * mean(m*x)). Kernel: dx = r*m + r*(-(1/N)*r^2*sum(m*x)*x). Same. But m in reference is H16(dy*weight) then cast to fp64; kernel m = (dy*weight).to(float32) \u2014 dy,weight fp16, product in Triton fp16 arithmetic is fp16 rounded (H16). Then cast to f32. Matches.\n\nh = H16(x*rstd): kernel dw term: dy*(x*r).to(f16), then sum in fp32. Reference t = H16(dy*h) summed in fp64. Kernel computes dy (fp16) * h(fp16) \u2192 fp16 rounding, then sum in fp32 over up to 4096 rows. FP32 accumulation error vs fp64 sum: tolerance 1e-5 + 1e-5*sum|t|. With 4096 terms, fp32 accumulation relative error ~ 4096*eps \u2248 5e-4 relative to sum of magnitudes... Actually fp32 summation error ~ sqrt(n) or n*eps*sum|t|? Sequential pairwise sum: error ~ log2(n)*eps*sum|t| \u2248 12*6e-8*sum \u2248 7e-7*sum, within 1e-5*sum. Fine. But partial sums stored per program and summed \u2014 fine.\n\nWait: dx stores dx in fp32? DX is fp16 tensor (empty_like(dy)), tl.store with mask \u2014 dx value is fp32, stored into fp16 pointer, Triton casts. dx computed in fp32 vs reference fp64 analytic \u2014 tolerance 0.002 + 0.002|dx|. dx magnitude up to ~ rstd*(m - ...) with m up to H16(4*2)=8, rstd up to 4 (well, rstd = 1/rms, rms in [0.25,4] so rstd in [0.25,4]). dx up to ~32? fp16 rounding of ~32 gives error 0.016 > 0.002+0.002*32=0.066 \u2014 ok within. FP32 intermediate error fine.\n\nAlso kernel's m uses fp16 multiply; enable_fp_fusion disabled. Fine.\n\nEdge: row_backward when M < programs? ROWS = cdiv(m, programs); if programs = min(SMs, m), so programs <= m, rows each get at least one. stop = min(start+ROWS, M). If programs doesn't divide m, some pids start >= M? pid ranges over programs; start = pid*ROWS; with ROWS = ceil(m/programs), start for last pid < m... pid max = programs-1, start = (programs-1)*ceil(m/programs) which could exceed M? e.g. m=5, programs=5? programs=min(SM,m) so programs<=m. m=5, programs=5, ROWS=1, start=4<5 ok. m=6, programs=5, ROWS=2, pid=4 start=8>6 \u2192 stop=min(10,6)=6, range(8,6) empty \u2014 loop doesn't run, dw stays zeros, stored as zeros partial. Fine, and other rows covered? pid ranges 0..4 cover rows 0-9 clipped to 0..5, all covered. Good.\n\nblock_backward: stride loop start = pid*BR, step programs*BR; covers rows... rows pid*BR..pid*BR+BR, then +programs*BR. Union covers all rows 0..M? Blocks [pid*BR + k*programs*BR, +BR) for pid in [0,programs), k>=0 \u2014 yes, partitions rows by blocks of BR indexed by global block id. Good. r loaded with mask rows<M other=0 \u2014 dy masked other 0, so contributions zero. Fine.\n\nPotential issue: dy*weight in Triton \u2014 dy is fp16, weight fp16; product type fp16. Yes Triton promotes same-type. H16 rounding matches since fp16 multiply exact rounding. But Triton might compute fp16 multiply... fp16*fp16 in Triton yields fp16 with round-to-nearest \u2014 matches H16. OK.\n\ndw fp32 accumulation per program; per row dw += dy*(h) \u2014 this is a fp16 vector added to fp32 accumulator: fp32 add, exact terms. Fine.\n\nVerdict: trust.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791003132,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1092,
+    "prompt_tokens": 2511,
+    "total_tokens": 3603,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 968,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 968
+    }
+  }
+}

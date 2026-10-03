@@ -34,6 +34,41 @@ def test_counts_the_whole_registry_including_cases_without_traces(index):
     assert coverage["cases"][-1]["case"] == "case_105"
 
 
+def test_archived_cases_leave_active_coverage_and_collection_groups_pair_with_numerical(index, tmp_path, monkeypatch):
+    collection = "single_call_vs_tools_challenges"
+    details = {
+        "case_36": {"dataset": "correlation_pair", "collection": collection},
+        "case_38": {"dataset": "numerical_challenges", "collection": collection},
+        "case_82": {"dataset": "numerical_pilot", "status": "archived"},
+    }
+    rows = [row(case=case, dataset=detail["dataset"]) for case, detail in details.items()]
+    coverage = index.build_coverage(rows, details, {})
+    assert [c["case"] for c in coverage["cases"]] == ["case_36", "case_38"]
+    assert {c["collection"] for c in coverage["cases"]} == {collection}
+    assert coverage["totals"]["solo"]["completed"] == 2
+    assert coverage["totals"]["debate"]["missing"] == 2
+    assert coverage["cases"][0]["arms"]["solo"]["selected"] == rows[0]
+    (tmp_path / "traces_glm").mkdir()
+    archived = tmp_path / "archive/numerical_pilot/traces_glm/case_82/solo/r1"
+    archived.mkdir(parents=True)
+    (archived / "trace_meta.json").write_text("{}")
+    records = [{"path": tmp_path / r["path"], "metadata": {}} for r in rows]
+    monkeypatch.setattr(index, "BENCHMARK", tmp_path)
+    monkeypatch.setattr(index, "iter_trace_records", lambda **kwargs: iter(records))
+    monkeypatch.setattr(index, "load_registry", lambda root: {"case_details": details})
+    monkeypatch.setattr(index, "build_report", lambda **kwargs: {
+        "arms": {"fixture": {"per_case": {str(i): r for i, r in enumerate(rows)}}}})
+    index.main()
+    text = (tmp_path / "traces_glm/INDEX.md").read_text()
+    assert "2 个活跃案例" in text and "6 个 case-arm 槽位" in text
+    assert "1 题、1 条 GLM trials" in text
+    assert "../archive/numerical_pilot/README.md" in text
+    assert "case_82" not in text
+    assert text.count("### " + index.DATASET_LABELS.get(collection, collection)) == 1
+    assert "| correlation_pair |" in text and "| numerical_challenges |" in text
+    assert "2 recorded GLM trials" in text
+
+
 def test_selects_first_valid_attempt_even_if_wrong_and_later_one_correct(index):
     wrong = row(trial="earlier", outcome="wrong_verdict")
     correct = row(trial="later")

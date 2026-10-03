@@ -1,0 +1,31 @@
+Analyze the chunked scan. Local: within a chunk, prior = state if same seq label else 0. Stores LOCAL state per token (chunk-local, ignoring initial carry). PREFIX is cumulative product of alpha within chunk (including invalid tokens with alpha=1.0? valid false, alpha loaded as other=1.0, prefix *= 1.0 — fine since token invalid beyond L).
+
+Pass states: carry per chunk = state at chunk start. For chunk 0 carry = initial. factor = chunk's prefix product; but if chunk's first token starts a new sequence (seq label differs from previous chunk's label at last valid token?), factor should be 0 — carry shouldn't propagate. Logic: sequence = 0; for each chunk: representative = chunk*K (first token of chunk); next_sequence = label there. If next_sequence == sequence, factor kept, else 0 — meaning if the first token of chunk starts a new sequence, the carry is dropped. But what if a sequence boundary occurs mid-chunk? Then carry for that chunk was already stored (before the update); the carry is the state at chunk start, correct. And the factor=0 handles when the chunk starts a new sequence... but wait: what if the sequence starts mid-chunk? carry stored for the chunk is the state at chunk start, which is still within the previous sequence. Then in _combine, prefix at tokens in the new sequence: prefix = cumulative product from chunk start to that token; they set prefix=0 where current != previous (token's label differs from previous token's label). Actually in _combine, prefix is multiplied by incoming only where current == previous? They compute prefix then zero it where current != previous. But what about tokens after a mid-chunk boundary within the same sequence? E.g., tokens t0,t1 in seq A, t2,t3 in seq B (within one chunk). For token t3, output = local[t3] + prefix[t3]*incoming. local[t3] was computed with prior = 0 at t2 (label change), so local[t3] is the correct state for sequence B starting from zero. prefix[t3]*incoming would incorrectly add prefix[t3]*carry! prefix[t3] is product of alphas over t0..t3, and incoming is chunk-start carry — but sequence B started at t2 from zero, so adding prefix[t3]*incoming is wrong. Hmm — wait, prefix should be zeroed at sequence start, but the carry contribution after a mid-chunk restart should be zero. In _combine, prefix zeroed only at the token where current != previous (t2). For t3, current == previous (both B), prefix nonzero, adds carry incorrectly.
+
+Hmm, but is this wrong? The recurrence for sequence B: state at t3 = a3*(a2*0 + u2) + u3, which is local[t3] (local recurrence within chunk correctly handles boundary). Adding prefix[t3]*incoming where incoming = state at chunk start (end of seq A) is wrong. So mid-chunk sequence boundaries produce incorrect results?
+
+Wait — but prefix in _local_chunks: prefix is the cumulative product of alphas from chunk start, not reset at sequence boundary. In _combine, prefix zeroed only where the token itself is the first of a new sequence. Tokens after that in the new sequence keep nonzero prefix → they get carry contributions from the previous sequence. That's a bug... unless pass_states sets factor=0 when chunk starts a new sequence — but the boundary is mid-chunk, so chunk's first token label equals previous chunk's end label, factor kept.
+
+Hmm wait, let me re-check: could this actually be intentional and correct? The carry for a chunk is state at chunk start (belonging to seq A). For tokens in seq B within that chunk, correct answer is local only. The code adds prefix*carry. Bug.
+
+But wait — check the Mamba original: in chunked scan, seq boundaries reset. Here in original mamba code they'd zero the inter-chunk carry across boundaries similarly. So this is a real defect for mid-chunk sequence starts.
+
+But wait, maybe I misread pass_states. factor zeroed if next_sequence != sequence. That handles chunk-boundary starts only. Mid-chunk starts not handled.
+
+Also check _combine prefix masking: prefix loaded with mask rows<L other=0. previous loaded at chunk*K-1 (last token of previous chunk) with mask chunk>0 other=0; for chunk 0 previous=0, and current at row 0 is 0 (row starts at label 0), so prefix kept for chunk 0 — carry = initial state, correct.
+
+Edge case: L not multiple of K. Pass_states: representative = chunk*K may be >= L for last chunk; tl.load(IDS + batch*L + representative) — out-of-bounds load! For the last chunk with begin >= L, loading IDS at index representative which can exceed L-1. That's an OOB read. Actually C = cdiv(L, K), last chunk begin = (C-1)*K < L always (since chunks cover L). chunk*K < L for all chunks < C? Yes, since chunk C-1: (C-1)*K < L by definition of cdiv. So representative < L, fine.
+
+Also factor for tokens beyond L in last chunk: handled by valid mask.
+
+Mid-chunk boundary bug: let me verify with a concrete case. Chunk of size K, seq boundary at token t within chunk (1 <= j < K-1). Token after boundary (j+1..): local computed correctly from zero. prefix[j] nonzero (product of alphas incl. across boundary). _combine: prefix zeroed only at j. So result[j+1] = local + prefix*carry — wrong unless carry is zero or alphas... carry is state at chunk start from previous sequence — generally nonzero. Error magnitude: prefix <= 0.96875^K... could be tiny? 0.96875^32 ≈ 0.36, times carry <= 1... error could be up to ~0.36, exceeding tolerance 0.002. Actually prefix at token j+1 includes at least one alpha ≥ 0.5, carry ≤ ... hmm could still exceed tolerance.
+
+Actually wait — also factor in pass_states: it multiplies carry by factor; carry at chunk start belongs to a sequence that may have ended mid-chunk; that carry is still correct as state at chunk start. Fine.
+
+So the defect: mid-chunk sequence restarts add spurious carry. Reject.
+
+But hold on — maybe prefix should have been reset in _local_chunks at boundaries. It wasn't. Also check: what if boundary is exactly at chunk start? Then previous (in _combine, chunk's first token label != chunk's last token label of previous chunk) → prefix zeroed; also pass_states factor zeroed. Handled. Only mid-chunk boundary broken. That's a real defect within domain (labels nondecreasing, new sequences can start anywhere).
+
+Also note in _local_chunks, prefix product isn't reset at boundary — even at chunk start boundary it's computed but zeroed later. OK.
+
+Verdict: reject.

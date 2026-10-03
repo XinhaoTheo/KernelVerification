@@ -1,0 +1,455 @@
+{
+  "case_ids": [
+    "case_112",
+    "case_113"
+  ],
+  "expected_labels": {
+    "case_112": "accept",
+    "case_113": "reject"
+  },
+  "status": "independently_gpu_qualified_before_model_evaluation",
+  "label_scope": "fixed implementation, fixed complete public contract and frozen runtime; no seed-dependent labels",
+  "classification": "Purpose-built, three-stage forward state-propagation adaptation of real Mamba code; case113 is an explicitly synthetic endpoint-index mutation. NOT a claimed historical upstream bug.",
+  "source": {
+    "repository": "https://github.com/state-spaces/mamba",
+    "commit": "620cd9816997730a652b7c21d1b59c802e35add0",
+    "commit_date": "2025-12-23T14:51:12Z",
+    "primary_url": "https://github.com/state-spaces/mamba/blob/620cd9816997730a652b7c21d1b59c802e35add0/mamba_ssm/ops/triton/ssd_state_passing.py",
+    "files": [
+      {
+        "path": "mamba_ssm/ops/triton/ssd_state_passing.py",
+        "sha256": "ae1fab6c680cb5312ef746862a2cf8e74157033c80878490cc64fa1f24f88b70",
+        "bytes": 16471
+      },
+      {
+        "path": "mamba_ssm/ops/triton/ssd_chunk_state.py",
+        "sha256": "5bfc7237438f31f70a7df3a65008d3afe66e58c31628706ad1e54f2b9e6285f1",
+        "bytes": 61768
+      },
+      {
+        "path": "mamba_ssm/ops/triton/ssd_chunk_scan.py",
+        "sha256": "3c4537d6ade7bf7dd81d3df17d2bac1e9dfc0b82c0dac9739846448e5f390115",
+        "bytes": 107588
+      },
+      {
+        "path": "LICENSE",
+        "sha256": "760939b000194d04548ede6a857bbe735d1695d8422ec85955c8e2bd7f4b95c5",
+        "bytes": 11348
+      }
+    ],
+    "license": "Apache-2.0",
+    "copyright": "Copyright (c) 2024, Tri Dao, Albert Gu.",
+    "preserved_mechanism": "A chunk summary belongs to its last packed sequence. The state-passing loop uses chunk endpoint seq_idx to gate the decayed incoming state; token outputs combine local results with gated incoming chunk states."
+  },
+  "adaptations": [
+    "Standalone forward diagonal recurrence using precomputed per-token injection vectors u and positive decay, not the full Mamba projection/convolution/outer-product layer.",
+    "Retain chunk-local summary, sequential cross-chunk state passing and per-token carry-combination stages, with FP32 storage and channel masking.",
+    "Replace logarithmic decay cumsums plus exp with direct products of supplied decays to isolate sequence identity composition from exp approximation.",
+    "Use direct chunk-local recurrence instead of upstream tensor-dot local contractions; the chunk endpoint ownership and downstream carry consumption are retained.",
+    "Bound B,L,H,D and stable decay for a small T4 pilot; remove autotuning, backward paths and optional non-packed dispatch. Add executable public input validation and independent FP64 serial reference.",
+    "Both versions have identical complete contracts, public references, convenience generators, validation and licenses. The sole between-version code change selects a chunk start instead of endpoint for state-passing identity."
+  ],
+  "synthetic_mutation": {
+    "location": "_pass_states representative index",
+    "case_112": "min((chunk+1)*K,L)-1",
+    "case_113": "chunk*K",
+    "effect": "When a chunk contains a sequence boundary, its last-sequence state summary can be combined with an earlier sequence carry; later per-token combination exposes cross-sequence contamination. Reset branches and output sequence gating remain present."
+  },
+  "domain_rationale": "Input representation exclusions are declared identically before evaluation; no grad/inference/lazy flags or subclasses. validate_inputs is actually called by run. Labels are nondecreasing with unique segment identity, consistent with packed sequences.",
+  "numerical_argument": {
+    "exact_bound": "For |initial|<=1, |u|<=1 and 0.5<=decay<=31/32, the absolute state and the sum of absolute weighted contributions are <=32 (33 is a conservative bound).",
+    "rounding_bound": "For L<=257, K<=64 and at most17 chunks, the multiply/add dependency paths in the three-stage polynomial have fewer than720 FP32 roundings. gamma720*33 is about0.001417, below the absolute tolerance0.002. The extra1e-4*|target| adds margin. Underflow contributions are negligible at this scale; intermediate values stay finite. No tensor-core operations or approximate exponentials are used and FP fusion is disabled.",
+    "algebra": "Monotone sequence labels make endpoint equality equivalent to uninterrupted same-sequence carry across a chunk. Local summaries reset internally; token carry is applied only to the leading sequence. Independent per-segment weighted sums and serial recurrence establish no cross-sequence term in the target.",
+    "limitation": "This is a reviewed error-bound argument and finite qualification, not a machine-checked proof."
+  },
+  "cpu_audit": {
+    "passed": true,
+    "plans": [
+      {
+        "shape": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "chunk": 16,
+        "pattern": "none",
+        "style": "random",
+        "seed": 1,
+        "agreement_errors": {
+          "independent_segments": 0.0,
+          "chunk_decomposition": 0.0,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 0.0
+      },
+      {
+        "shape": [
+          1,
+          15,
+          1,
+          7
+        ],
+        "chunk": 16,
+        "pattern": "inside",
+        "style": "high",
+        "seed": 2,
+        "agreement_errors": {
+          "independent_segments": 0.0,
+          "chunk_decomposition": 0.0,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 0.6211203132202039
+      },
+      {
+        "shape": [
+          1,
+          16,
+          2,
+          33
+        ],
+        "chunk": 16,
+        "pattern": "none",
+        "style": "random",
+        "seed": 3,
+        "agreement_errors": {
+          "independent_segments": 1.3322676295501878e-15,
+          "chunk_decomposition": 8.881784197001252e-16,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 8.881784197001252e-16
+      },
+      {
+        "shape": [
+          1,
+          17,
+          1,
+          65
+        ],
+        "chunk": 16,
+        "pattern": "after",
+        "style": "high",
+        "seed": 4,
+        "agreement_errors": {
+          "independent_segments": 0.0,
+          "chunk_decomposition": 0.0,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 0.0
+      },
+      {
+        "shape": [
+          2,
+          33,
+          2,
+          31
+        ],
+        "chunk": 16,
+        "pattern": "aligned",
+        "style": "random",
+        "seed": 5,
+        "agreement_errors": {
+          "independent_segments": 1.7763568394002505e-15,
+          "chunk_decomposition": 8.881784197001252e-16,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 8.881784197001252e-16
+      },
+      {
+        "shape": [
+          1,
+          65,
+          1,
+          7
+        ],
+        "chunk": 32,
+        "pattern": "before",
+        "style": "high",
+        "seed": 6,
+        "agreement_errors": {
+          "independent_segments": 7.105427357601002e-15,
+          "chunk_decomposition": 3.552713678800501e-15,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 0.3507410614670583
+      },
+      {
+        "shape": [
+          1,
+          65,
+          2,
+          33
+        ],
+        "chunk": 32,
+        "pattern": "after",
+        "style": "high",
+        "seed": 7,
+        "agreement_errors": {
+          "independent_segments": 7.105427357601002e-15,
+          "chunk_decomposition": 3.552713678800501e-15,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 19.41423074379787
+      },
+      {
+        "shape": [
+          1,
+          101,
+          1,
+          7
+        ],
+        "chunk": 32,
+        "pattern": "inside",
+        "style": "isolation",
+        "seed": 8,
+        "agreement_errors": {
+          "independent_segments": 7.105427357601002e-15,
+          "chunk_decomposition": 7.105427357601002e-15,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 7.160108960113088
+      },
+      {
+        "shape": [
+          2,
+          101,
+          3,
+          65
+        ],
+        "chunk": 32,
+        "pattern": "inside",
+        "style": "random",
+        "seed": 9,
+        "agreement_errors": {
+          "independent_segments": 4.440892098500626e-15,
+          "chunk_decomposition": 2.220446049250313e-15,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 0.44119209079626676
+      },
+      {
+        "shape": [
+          2,
+          129,
+          2,
+          96
+        ],
+        "chunk": 64,
+        "pattern": "before",
+        "style": "high",
+        "seed": 10,
+        "agreement_errors": {
+          "independent_segments": 7.105427357601002e-15,
+          "chunk_decomposition": 3.552713678800501e-15,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 0.12698765646352328
+      },
+      {
+        "shape": [
+          1,
+          129,
+          4,
+          17
+        ],
+        "chunk": 64,
+        "pattern": "after",
+        "style": "random",
+        "seed": 11,
+        "agreement_errors": {
+          "independent_segments": 4.440892098500626e-15,
+          "chunk_decomposition": 1.7763568394002505e-15,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 4.403602991953515
+      },
+      {
+        "shape": [
+          1,
+          193,
+          1,
+          65
+        ],
+        "chunk": 64,
+        "pattern": "inside",
+        "style": "isolation",
+        "seed": 12,
+        "agreement_errors": {
+          "independent_segments": 7.105427357601002e-15,
+          "chunk_decomposition": 7.105427357601002e-15,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 3.530931276137372
+      },
+      {
+        "shape": [
+          2,
+          257,
+          4,
+          96
+        ],
+        "chunk": 16,
+        "pattern": "none",
+        "style": "high",
+        "seed": 13,
+        "agreement_errors": {
+          "independent_segments": 1.0658141036401503e-14,
+          "chunk_decomposition": 1.4210854715202004e-14,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 1.4210854715202004e-14
+      },
+      {
+        "shape": [
+          2,
+          257,
+          2,
+          33
+        ],
+        "chunk": 32,
+        "pattern": "many",
+        "style": "alternating",
+        "seed": 14,
+        "agreement_errors": {
+          "independent_segments": 0.0,
+          "chunk_decomposition": 0.0,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 0.96875
+      },
+      {
+        "shape": [
+          1,
+          67,
+          2,
+          17
+        ],
+        "chunk": 64,
+        "pattern": "singleton",
+        "style": "random",
+        "seed": 15,
+        "agreement_errors": {
+          "independent_segments": 0.0,
+          "chunk_decomposition": 0.0,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 0.0
+      },
+      {
+        "shape": [
+          2,
+          97,
+          2,
+          33
+        ],
+        "chunk": 32,
+        "pattern": "gaps",
+        "style": "random",
+        "seed": 16,
+        "agreement_errors": {
+          "independent_segments": 3.1086244689504383e-15,
+          "chunk_decomposition": 1.7763568394002505e-15,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 0.4371947840206114
+      },
+      {
+        "shape": [
+          1,
+          97,
+          2,
+          33
+        ],
+        "chunk": 16,
+        "pattern": "inside",
+        "style": "low",
+        "seed": 17,
+        "agreement_errors": {
+          "independent_segments": 1.1102230246251565e-15,
+          "chunk_decomposition": 2.220446049250313e-16,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 1.1723824117737536e-05
+      },
+      {
+        "shape": [
+          1,
+          193,
+          2,
+          33
+        ],
+        "chunk": 64,
+        "pattern": "aligned",
+        "style": "high",
+        "seed": 18,
+        "agreement_errors": {
+          "independent_segments": 7.105427357601002e-15,
+          "chunk_decomposition": 3.552713678800501e-15,
+          "public_reference": 0.0
+        },
+        "start_label_mutation_max_error": 3.552713678800501e-15
+      }
+    ],
+    "invalid_input_checks": [
+      {
+        "kind": "decay_bound",
+        "correctly_rejected": true,
+        "reason": "decay outside [0.5,0.96875]"
+      },
+      {
+        "kind": "first_label",
+        "correctly_rejected": true,
+        "reason": "each packed row must begin at sequence zero"
+      },
+      {
+        "kind": "nonmonotone",
+        "correctly_rejected": true,
+        "reason": "sequence labels must be nondecreasing"
+      },
+      {
+        "kind": "grad",
+        "correctly_rejected": true,
+        "reason": "materialized non-gradient ordinary tensors required"
+      },
+      {
+        "kind": "negative_view",
+        "correctly_rejected": true,
+        "reason": "logical view flags are outside this domain"
+      },
+      {
+        "kind": "inference_tensor",
+        "correctly_rejected": true,
+        "reason": "materialized non-gradient ordinary tensors required"
+      },
+      {
+        "kind": "label_dtype",
+        "correctly_rejected": true,
+        "reason": "seq_idx must be int32"
+      },
+      {
+        "kind": "overlap",
+        "correctly_rejected": true,
+        "reason": "input storage ranges must be disjoint"
+      }
+    ],
+    "method": "FP64 serial vs independent per-segment weighted sums vs chunk decomposition vs public reference",
+    "isolation_property": "When later-segment input is zero, earlier-segment signal has exactly zero later output in the independent reference."
+  },
+  "gpu_probe_plan": "18 fixed plans cover chunk16/32/64, before/on/after/internal boundaries, partial final chunks, singleton sequences, gaps in labels, multiple batches/heads, feature tails and stable-bound/cancellation cases. Ordinary and isolation inputs are retained regardless of model success.",
+  "public_hashes": {
+    "case_112": {
+      "kernel.py": "fb33bac7b01c84150298b037b67a717ad1406880f25189df562cbfc72720389f",
+      "problem.txt": "151b9d9ce0b44decc5bd9838f457db00e92b1d8cef808a22aa66a85e76b361c9",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "LICENSE": "760939b000194d04548ede6a857bbe735d1695d8422ec85955c8e2bd7f4b95c5"
+    },
+    "case_113": {
+      "kernel.py": "6f81a6a9bca854e05b71af4089357ccc53ff359aed3d466cf1bc77d9f139295e",
+      "problem.txt": "151b9d9ce0b44decc5bd9838f457db00e92b1d8cef808a22aa66a85e76b361c9",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "LICENSE": "760939b000194d04548ede6a857bbe735d1695d8422ec85955c8e2bd7f4b95c5"
+    }
+  },
+  "public_semantic_diff": "--- case_112/kernel.py\n+++ case_113/kernel.py\n@@ -55,7 +55,7 @@\n         tl.store(CARRY + offset, state, mask=cols < D)\n         new_state = tl.load(SUMMARY + offset, mask=cols < D, other=0.0)\n         factor = tl.load(SCALE + (batch * C + chunk) * H + head)\n-        representative = tl.minimum((chunk + 1) * K, L) - 1\n+        representative = chunk * K\n         next_sequence = tl.load(IDS + batch * L + representative)\n         factor = tl.where(next_sequence == sequence, factor, 0.0)\n         state = factor * state + new_state\n",
+  "qualification_evidence": "qualification/r7.json"
+}

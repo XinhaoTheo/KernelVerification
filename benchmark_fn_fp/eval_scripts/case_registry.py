@@ -6,14 +6,36 @@ from pathlib import Path
 import re
 
 DATASET_DIRECTORIES = {
+    "correlation_pair": "single_call_vs_tools_challenges",
     "numerical_challenges": "single_call_vs_tools_challenges",
     "evidence_challenges": "solo_vs_debate_challenges",
+    "numerical_pilot": "archive/numerical_pilot",
+}
+COLLECTION_DATASETS = {
+    "single_call_vs_tools_challenges": ("correlation_pair", "numerical_challenges"),
+    "solo_vs_debate_challenges": ("evidence_challenges",),
 }
 
 
 def canonical_dataset(dataset: str) -> str:
     """Keep trace identities stable while accepting readable directory names."""
-    return {directory: identity for identity, directory in DATASET_DIRECTORIES.items()}.get(dataset, dataset)
+    return {"single_call_vs_tools_challenges": "numerical_challenges",
+            "solo_vs_debate_challenges": "evidence_challenges"}.get(dataset, dataset)
+
+
+def dataset_members(dataset: str) -> tuple[str, ...]:
+    """A user-facing collection can contain several historical experiment sources."""
+    return COLLECTION_DATASETS.get(dataset, (canonical_dataset(dataset),))
+
+
+def case_collection(detail: dict) -> str:
+    dataset = detail["dataset"]
+    return detail.get("collection") or next(
+        (name for name, members in COLLECTION_DATASETS.items() if dataset in members), dataset)
+
+
+def is_active_case(detail: dict) -> bool:
+    return detail.get("status", "active") == "active"
 
 
 def dataset_root(benchmark: Path, dataset: str) -> Path:
@@ -37,11 +59,17 @@ def load_registry(benchmark: Path) -> dict:
 def validation_path(benchmark: Path, dataset: str) -> Path:
     dataset = canonical_dataset(dataset)
     root = dataset_root(benchmark, dataset)
+    if dataset == "correlation_pair" and root.name != "correlation_pair":
+        private = root / "private_data/correlation_pair/validation_gpu.json"
+        if private.exists() or not (Path(benchmark) / "correlation_pair").exists():
+            return private
+        # Historical fixtures may still retain a separate pair beside the group.
+        root = Path(benchmark) / "correlation_pair"
     if dataset == "numerical_pilot":
         # The pilot's answer key already contains its T4 measurements and
         # frozen public-file hashes; no new GPU result is implied by this route.
         return root / "answer_key.json"
-    if dataset in {"correlation_pair", "numerical_challenges", "evidence_challenges"}:
+    if dataset in {"correlation_pair", "numerical_challenges", "evidence_challenges", "real_kernel_challenges"}:
         private = root / "private_data" / "validation_gpu.json"
         if private.exists():
             return private

@@ -1,0 +1,59 @@
+{
+  "id": "chatcmpl-1b06f856",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two independent probes: one for c1 (mid-chunk break) and one for c2 (break at a chunk's first token), each comparing run() output against the FP64 reference on legal inputs.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-ac3b4bae453bdbdf",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_113\\\")\\nimport kernel as K\\n\\ntorch.manual_seed(0)\\ndevice = \\\"cuda\\\"\\nB, L, H, D = 1, 100, 2, 33\\nchunk = 32\\nu = (2*torch.rand((B,L,H,D), device=device)-1)\\ndecay = (0.90 + 0.06*torch.rand((B,L,H), device=device))\\ninit = (2*torch.rand((B,H,D), device=device)-1)\\n# break strictly inside chunk 1 (tokens 32..63), e.g. token 50\\nseq = torch.zeros((B,L), dtype=torch.int32, device=device)\\nseq[:, 50:] += 1\\nout, fin = K.run(u, decay, seq, init, chunk)\\nref_out, ref_fin = K.reference(u, decay, seq, init, chunk)\\ntol = 0.002 + 0.0001*ref_out.abs()\\nerr = (out - ref_out).abs()\\nbad = err > tol\\nprint(json.dumps({\\n  \\\"max_abs_err\\\": float(err.max()),\\n  \\\"tol\\\": float(tol.max()),\\n  \\\"violations\\\": int(bad.sum()),\\n  \\\"total\\\": out.numel(),\\n  \\\"final_max_err\\\": float((fin - ref_fin).abs().max()),\\n  \\\"violation_tokens\\\": sorted(set(torch.nonzero(bad)[0].tolist()))[:10] if bad.any() else [],\\n}))\\n\", \"expected_signal\": \"output/final errors exceed tolerance for tokens after a mid-chunk sequence break\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-bf678b0f81a7cef6",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_113\\\")\\nimport kernel as K\\n\\ntorch.manual_seed(1)\\ndevice = \\\"cuda\\\"\\nB, L, H, D = 1, 96, 2, 33\\nchunk = 32\\nu = (2*torch.rand((B,L,H,D), device=device)-1)\\ndecay = (0.90 + 0.06*torch.rand((B,L,H), device=device))\\ninit = (2*torch.rand((B,H,D), device=device)-1)\\n# break exactly at token 32 = chunk 1's first token\\nseq = torch.zeros((B,L), dtype=torch.int32, device=device)\\nseq[:, 32:] += 1\\nout, fin = K.run(u, decay, seq, init, chunk)\\nref_out, ref_fin = K.reference(u, decay, seq, init, chunk)\\ntol = 0.002 + 0.0001*ref_out.abs()\\nerr = (out - ref_out).abs()\\nbad = err > tol\\ntolf = 0.002 + 0.0001*ref_fin.abs()\\nbadf = (fin - ref_fin).abs() > tolf\\nprint(json.dumps({\\n  \\\"max_abs_err\\\": float(err.max()),\\n  \\\"tol\\\": float(tol.max()),\\n  \\\"violations\\\": int(bad.sum()),\\n  \\\"total\\\": out.numel(),\\n  \\\"final_max_err\\\": float((fin - ref_fin).abs().max()),\\n  \\\"final_violations\\\": int(badf.sum()),\\n  \\\"break_token\\\": 32,\\n}))\\n\", \"expected_signal\": \"final_state and chunk-1+ outputs exceed tolerance when break lands on chunk first token\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791013414,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 783,
+    "prompt_tokens": 22769,
+    "total_tokens": 23552,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

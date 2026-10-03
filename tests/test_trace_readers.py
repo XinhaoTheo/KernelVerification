@@ -69,6 +69,70 @@ def test_reader_retains_batch_and_chronology_after_numeric_rename(tmp_path):
     assert trace_selection_key(row) == ("", original)
 
 
+def test_archived_pilot_is_opt_in_and_preserves_identity_truth_and_batches(tmp_path):
+    from benchmark_fn_fp.eval_scripts.traces import iter_trace_records
+    reader = _reader()
+    details = {
+        "case_36": {"dataset": "correlation_pair", "collection": "single_call_vs_tools_challenges"},
+        "case_38": {"dataset": "numerical_challenges", "collection": "single_call_vs_tools_challenges"},
+        "case_82": {"dataset": "numerical_pilot", "previous_id": "case_01", "status": "archived"},
+    }
+    (tmp_path / "case_map.json").write_text(json.dumps({"cases": {}, "case_details": details}))
+    for case, detail in details.items():
+        archived = detail.get("status") == "archived"
+        base = tmp_path / "archive/numerical_pilot" if archived else tmp_path
+        dest = base / "traces_glm" / case / "single_call/r1"
+        dest.mkdir(parents=True)
+        (dest / "trace_meta.json").write_text(json.dumps({
+            "case": "case_01" if archived else case, "dataset": detail["dataset"],
+            "arm": "single_call", "trial": "r1", "original_trial": "completion_batch",
+            "model": "accounts/fireworks/models/glm-5p3", "provider": "fireworks",
+            "status": "completed", "max_tokens": 32768,
+            "pricing_snapshot": {"input_per_million": 1.4, "output_per_million": 4.4},
+        }))
+        (dest / "usage.json").write_text(json.dumps({
+            "usage": {"input_tokens": 1000, "output_tokens": 2000},
+            "stop_reason": "stop", "response": {"verdict": "trust"}}))
+        truth_path = (base / "answer_key.json" if archived else
+                      tmp_path / detail["dataset"] / "validation_gpu.json")
+        truth_path.parent.mkdir(parents=True, exist_ok=True)
+        truth_path.write_text(json.dumps({"cases": {case: {"ground_truth": "reject" if archived else "trust"}}}))
+    before = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert {r["case"] for r in iter_trace_records(tmp_path)} == {"case_36", "case_38"}
+    all_records = list(iter_trace_records(tmp_path, include_archived=True))
+    pilot, = [r for r in all_records if r["dataset"] == "numerical_pilot"]
+    assert pilot["case"] == "case_82" and pilot["original_case"] == "case_01"
+    assert pilot["metadata"]["case"] == "case_01"
+    assert pilot["trial"] == "r1" and pilot["original_trial"] == "completion_batch"
+    active = reader.build_report(benchmark_dir=tmp_path)
+    assert {g["dataset"] for g in active["arms"].values()} == {"correlation_pair", "numerical_challenges"}
+    assert "numerical_pilot" not in active["ground_truth_by_dataset"]
+    # Explicitly supplying archived records still needs the opt-in.
+    assert reader.build_report(records=all_records, benchmark_dir=tmp_path) == active
+    historical = reader.build_report(benchmark_dir=tmp_path, include_archived=True)
+    assert len(historical["arms"]) == 3  # One collection must not merge source cohorts.
+    group, = [g for g in historical["arms"].values() if g["dataset"] == "numerical_pilot"]
+    row = group["per_case"]["case_82"]
+    assert row["truth"] == "reject" and row["outcome"] == "wrong_verdict"
+    assert row["path"] == "archive/numerical_pilot/traces_glm/case_82/single_call/r1"
+    assert row["usd"] == pytest.approx(0.0102)
+    assert group["original_trial"] == "completion_batch"
+    assert {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+def test_archived_json_cli_does_not_overwrite_active_scoreboard(tmp_path, monkeypatch, capsys):
+    reader = _reader()
+    output = tmp_path / "scoreboard.json"
+    output.write_bytes(b"active scoreboard sentinel\n")
+    calls = []
+    monkeypatch.setattr(reader, "OUT", output)
+    monkeypatch.setattr(reader, "build_report", lambda **kwargs: calls.append(kwargs) or {"arms": {}})
+    assert reader.main(["--include-archived", "--json"]) == 0
+    assert calls == [{"include_archived": True}]
+    assert json.loads(capsys.readouterr().out) == {"arms": {}}
+    assert output.read_bytes() == b"active scoreboard sentinel\n"
+
+
 def test_report_separates_provider_trial_dataset_and_uses_exact_model_price(tmp_path):
     reader = _reader()
     fw = "accounts/fireworks/models/glm-5p3"

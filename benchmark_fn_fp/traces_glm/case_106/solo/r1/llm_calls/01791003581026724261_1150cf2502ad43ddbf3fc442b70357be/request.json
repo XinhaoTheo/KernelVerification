@@ -1,0 +1,469 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_106\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Standalone CUDA sliding-window state update.\\n2: \\n3: The public contract and independent reference are in this file and problem.txt.\\n4: \\\"\\\"\\\"\\n5: import torch\\n6: import triton\\n7: import triton.language as tl\\n8: \\n9: \\n10: @triton.jit\\n11: def _slide(STATE, EVENTS, OUT, L: tl.constexpr, D: tl.constexpr,\\n12:            K: tl.constexpr, TOTAL: tl.constexpr, BLOCK: tl.constexpr):\\n13:     index = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)\\n14:     valid = index < TOTAL\\n15:     batch = index // (L * D)\\n16:     row = (index // D) % L\\n17:     col = index % D\\n18:     from_state = row < L - K\\n19:     old_value = tl.load(STATE + batch * L * D + (row + K) * D + col,\\n20:                         mask=valid & from_state, other=0.0)\\n21:     new_value = tl.load(EVENTS + batch * K * D + (row - (L - K)) * D + col,\\n22:                         mask=valid & ~from_state, other=0.0)\\n23:     value = tl.where(from_state, old_value, new_value)\\n24:     tl.store(OUT + index, value, mask=valid)\\n25: \\n26: \\n27: def run(state, new_events):\\n28:     \\\"\\\"\\\"Update state in place, return that same tensor, preserve new_events.\\\"\\\"\\\"\\n29:     assert state.is_cuda and new_events.is_cuda\\n30:     assert state.device == new_events.device\\n31:     assert state.dtype == new_events.dtype == torch.float32\\n32:     assert state.is_contiguous() and new_events.is_contiguous()\\n33:     assert state.ndim == new_events.ndim == 3\\n34:     batch, length, width = state.shape\\n35:     assert new_events.shape[0] == batch and new_events.shape[2] == width\\n36:     steps = new_events.shape[1]\\n37:     assert 1 <= batch <= 4 and 2 <= length <= 4096 and 1 <= width <= 1024\\n38:     assert 1 <= steps <= min(length, 128)\\n39:     output = state\\n40:     _slide[(triton.cdiv(state.numel(), 1024),)](\\n41:         state, new_events, output, length, width, steps, state.numel(),\\n42:         BLOCK=1024, num_warps=4,\\n43:     )\\n44:     return state\\n45: \\n46: \\n47: def reference(state, new_events):\\n48:     \\\"\\\"\\\"Independent result computed from the pre-call state, without mutation.\\\"\\\"\\\"\\n49:     return torch.cat((state[:, new_events.shape[1]:, :], new_events), dim=1)\\n50: \\n51: \\n52: def make_inputs(device=\\\"cuda\\\", batch=4, length=2048, width=1024,\\n53:                 steps=2, seed=0):\\n54:     \\\"\\\"\\\"One convenient example; any legal input may be tested.\\\"\\\"\\\"\\n55:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n56:     state = torch.randn((batch, length, width), generator=generator)\\n57:     new_events = torch.randn((batch, steps, width), generator=generator)\\n58:     return state.to(device), new_events.to(device)\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Verify a CUDA sliding-window state-update implementation over the complete\\ninput domain below, not only the example returned by make_inputs().\\n\\nInputs are contiguous FP32 CUDA tensors on the same NVIDIA T4 device:\\n- state has shape [B, L, D], where 1 <= B <= 4, 2 <= L <= 4096,\\n  and 1 <= D <= 1024.\\n- new_events has shape [B, K, D], where 1 <= K <= min(L, 128).\\n- The two input tensors have disjoint storage. Their values may be any finite\\n  FP32 values, including zeros and signed zeros.\\n\\nLet old_state be the contents of state before this call. After run() completes,\\nfor every legal batch b, row r, and feature d:\\n  state[b,r,d] = old_state[b,r+K,d]  if r < L-K\\n                 new_events[b,r-(L-K),d] otherwise.\\nEach result must preserve the exact FP32 bit pattern of its source element.\\nThis is a copy operation; no numerical approximation is permitted.\\n\\nrun() must update state in place and return that same tensor (same storage),\\nwhile preserving new_events. Calls may be repeated on the state resulting from\\nprevious calls, with any legal new_events. All calls are on the same CUDA stream,\\nwith no concurrent external access to either tensor. CUDA's usual asynchronous\\nreturn is allowed; correctness is observed after stream synchronization.\\n\\nThe full wrapper, including its allocation decisions and launch arguments, is\\npart of the implementation to verify. Do not assume distinct pointer names in\\nthe Triton function imply distinct storage: inspect the arguments passed by run.\\nThe public reference() in kernel.py computes the required new contents without\\nmutating either input and can also execute on CPU. Evaluate it BEFORE run() or\\non a saved pre-call state. You may construct any legal inputs and repeat calls.\\nThe frozen environment is PyTorch 2.8.0 / Triton 3.4.0 / NVIDIA T4.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_106\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-10-03T04:59:41Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"rationale\": \"run() passes output=state, so STATE and OUT alias; _slide reads STATE rows r+K (higher linear offsets) while other programs write OUT rows r (lower offsets). A program covering destination rows can execute before a lower-index program reads those same rows as sources, producing stale/corrupted values. The contract requires exact bit-pattern copy for every legal input and in-place update.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"run() must update state in place and return that same tensor (same storage) ... state[b,r,d] = old_state[b,r+K,d] ... Each result must preserve the exact FP32 bit pattern of its source element. Also: 'Do not assume distinct pointer names in the Triton function imply distinct storage: inspect the arguments passed by run.'\"\n        }\n      ],\n      \"scope_rationale\": \"The contract requires run() to update state in place (same storage) with exact bit-pattern copy of old_state[b,r+K,d] for every legal input; the aliased STATE/OUT launch arguments shown in run() are explicitly called out as part of the implementation to verify, and a cross-program race would violate the exact-copy requirement.\",\n      \"statement\": \"The aliased in-place sliding-window copy has a cross-program race: programs writing destination rows can clobber source rows (r+K) that other programs have not yet read, so run() produces incorrect state contents.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-10-03T04:59:41Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_106\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_106\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_106\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_106\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_106\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"The kernel passes `output = state` (aliased) to a Triton kernel that both reads STATE (rows ahead) and writes OUT. That's a potential read/write race for an in-place shifted copy. Let me record the claim and test it.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"run() passes output=state, so STATE and OUT alias; _slide reads STATE rows r+K (higher indices) while other programs write OUT rows r (lower indices). A program covering the destination rows can execute before the program that still needs those source rows, producing stale/corrupted values. The contract requires exact bit-pattern copy for every legal input and in-place update.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"run() must update state in place ... state[b,r,d] = old_state[b,r+K,d] ... Each result must preserve the exact FP32 bit pattern of its source element. Also: 'Do not assume distinct pointer names in the Triton function imply distinct storage: inspect the arguments passed by run.'\"\n              }\n            ],\n            \"statement\": \"The aliased in-place sliding-window copy has a cross-program race: programs writing destination rows can clobber source rows (r+K) that other programs have not yet read, so run() produces incorrect state contents.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"I'll re-record the aliasing-race claim with the required scope rationale, then test it on the GPU with bit-exact comparison against the reference.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"run() passes output=state, so STATE and OUT alias; _slide reads STATE rows r+K (higher linear offsets) while other programs write OUT rows r (lower offsets). A program covering destination rows can execute before a lower-index program reads those same rows as sources, producing stale/corrupted values. The contract requires exact bit-pattern copy for every legal input and in-place update.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"run() must update state in place and return that same tensor (same storage) ... state[b,r,d] = old_state[b,r+K,d] ... Each result must preserve the exact FP32 bit pattern of its source element. Also: 'Do not assume distinct pointer names in the Triton function imply distinct storage: inspect the arguments passed by run.'\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires run() to update state in place (same storage) with exact bit-pattern copy of old_state[b,r+K,d] for every legal input; the aliased STATE/OUT launch arguments shown in run() are explicitly called out as part of the implementation to verify, and a cross-program race would violate the exact-copy requirement.\",\n            \"statement\": \"The aliased in-place sliding-window copy has a cross-program race: programs writing destination rows can clobber source rows (r+K) that other programs have not yet read, so run() produces incorrect state contents.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_106\"\n      },\n      \"created_at\": \"2026-10-03T04:59:14Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_106\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Standalone CUDA sliding-window state update.\\n\\nThe public contract and independent reference are in this file and problem.txt.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _slide(STATE, EVENTS, OUT, L: tl.constexpr, D: tl.constexpr,\\n           K: tl.constexpr, TOTAL: tl.constexpr, BLOCK: tl.constexpr):\\n    index = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)\\n    valid = index < TOTAL\\n    batch = index // (L * D)\\n    row = (index // D) % L\\n    col = index % D\\n    from_state = row < L - K\\n    old_value = tl.load(STATE + batch * L * D + (row + K) * D + col,\\n                        mask=valid & from_state, other=0.0)\\n    new_value = tl.load(EVENTS + batch * K * D + (row - (L - K)) * D + col,\\n                        mask=valid & ~from_state, other=0.0)\\n    value = tl.where(from_state, old_value, new_value)\\n    tl.store(OUT + index, value, mask=valid)\\n\\n\\ndef run(state, new_events):\\n    \\\"\\\"\\\"Update state in place, return that same tensor, preserve new_events.\\\"\\\"\\\"\\n    assert state.is_cuda and new_events.is_cuda\\n    assert state.device == new_events.device\\n    assert state.dtype == new_events.dtype == torch.float32\\n    assert state.is_contiguous() and new_events.is_contiguous()\\n    assert state.ndim == new_events.ndim == 3\\n    batch, length, width = state.shape\\n    assert new_events.shape[0] == batch and new_events.shape[2] == width\\n    steps = new_events.shape[1]\\n    assert 1 <= batch <= 4 and 2 <= length <= 4096 and 1 <= width <= 1024\\n    assert 1 <= steps <= min(length, 128)\\n    output = state\\n    _slide[(triton.cdiv(state.numel(), 1024),)](\\n        state, new_events, output, length, width, steps, state.numel(),\\n        BLOCK=1024, num_warps=4,\\n    )\\n    return state\\n\\n\\ndef reference(state, new_events):\\n    \\\"\\\"\\\"Independent result computed from the pre-call state, without mutation.\\\"\\\"\\\"\\n    return torch.cat((state[:, new_events.shape[1]:, :], new_events), dim=1)\\n\\n\\ndef make_inputs(device=\\\"cuda\\\", batch=4, length=2048, width=1024,\\n                steps=2, seed=0):\\n    \\\"\\\"\\\"One convenient example; any legal input may be tested.\\\"\\\"\\\"\\n    generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    state = torch.randn((batch, length, width), generator=generator)\\n    new_events = torch.randn((batch, steps, width), generator=generator)\\n    return state.to(device), new_events.to(device)\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Verify a CUDA sliding-window state-update implementation over the complete\\ninput domain below, not only the example returned by make_inputs().\\n\\nInputs are contiguous FP32 CUDA tensors on the same NVIDIA T4 device:\\n- state has shape [B, L, D], where 1 <= B <= 4, 2 <= L <= 4096,\\n  and 1 <= D <= 1024.\\n- new_events has shape [B, K, D], where 1 <= K <= min(L, 128).\\n- The two input tensors have disjoint storage. Their values may be any finite\\n  FP32 values, including zeros and signed zeros.\\n\\nLet old_state be the contents of state before this call. After run() completes,\\nfor every legal batch b, row r, and feature d:\\n  state[b,r,d] = old_state[b,r+K,d]  if r < L-K\\n                 new_events[b,r-(L-K),d] otherwise.\\nEach result must preserve the exact FP32 bit pattern of its source element.\\nThis is a copy operation; no numerical approximation is permitted.\\n\\nrun() must update state in place and return that same tensor (same storage),\\nwhile preserving new_events. Calls may be repeated on the state resulting from\\nprevious calls, with any legal new_events. All calls are on the same CUDA stream,\\nwith no concurrent external access to either tensor. CUDA's usual asynchronous\\nreturn is allowed; correctness is observed after stream synchronization.\\n\\nThe full wrapper, including its allocation decisions and launch arguments, is\\npart of the implementation to verify. Do not assume distinct pointer names in\\nthe Triton function imply distinct storage: inspect the arguments passed by run.\\nThe public reference() in kernel.py computes the required new contents without\\nmutating either input and can also execute on CPU. Evaluate it BEFORE run() or\\non a saved pre-call state. You may construct any legal inputs and repeat calls.\\nThe frozen environment is PyTorch 2.8.0 / Triton 3.4.0 / NVIDIA T4.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_106\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_106\"\n      },\n      \"created_at\": \"2026-10-03T04:59:14Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Verify a CUDA sliding-window state-update implementation over the complete\\ninput domain below, not only the example returned by make_inputs().\\n\\nInputs are contiguous FP32 CUDA tensors on the same NVIDIA T4 device:\\n- state has shape [B, L, D], where 1 <= B <= 4, 2 <= L <= 4096,\\n  and 1 <= D <= 1024.\\n- new_events has shape [B, K, D], where 1 <= K <= min(L, 128).\\n- The two input tensors have disjoint storage. Their values may be any finite\\n  FP32 values, including zeros and signed zeros.\\n\\nLet old_state be the contents of state before this call. After run() completes,\\nfor every legal batch b, row r, and feature d:\\n  state[b,r,d] = old_state[b,r+K,d]  if r < L-K\\n                 new_events[b,r-(L-K),d] otherwise.\\nEach result must preserve the exact FP32 bit pattern of its source element.\\nThis is a copy operation; no numerical approximation is permitted.\\n\\nrun() must update state in place and return that same tensor (same storage),\\nwhile preserving new_events. Calls may be repeated on the state resulting from\\nprevious calls, with any legal new_events. All calls are on the same CUDA stream,\\nwith no concurrent external access to either tensor. CUDA's usual asynchronous\\nreturn is allowed; correctness is observed after stream synchronization.\\n\\nThe full wrapper, including its allocation decisions and launch arguments, is\\npart of the implementation to verify. Do not assume distinct pointer names in\\nthe Triton function imply distinct storage: inspect the arguments passed by run.\\nThe public reference() in kernel.py computes the required new contents without\\nmutating either input and can also execute on CPU. Evaluate it BEFORE run() or\\non a saved pre-call state. You may construct any legal inputs and repeat calls.\\nThe frozen environment is PyTorch 2.8.0 / Triton 3.4.0 / NVIDIA T4.\\n\",\n        \"entry\": \"case_106\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_106\"\n      },\n      \"created_at\": \"2026-10-03T04:59:14Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_106\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 2353\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1796\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_106\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-03T04:59:14Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_106\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"run() passes output=state, so STATE and OUT alias; _slide reads STATE rows r+K (higher indices) while other programs write OUT rows r (lower indices). A program covering the destination rows can execute before the program that still needs those source rows, producing stale/corrupted values. The contract requires exact bit-pattern copy for every legal input and in-place update.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"run() must update state in place ... state[b,r,d] = old_state[b,r+K,d] ... Each result must preserve the exact FP32 bit pattern of its source element. Also: 'Do not assume distinct pointer names in the Triton function imply distinct storage: inspect the arguments passed by run.'\"\n          }\n        ],\n        \"statement\": \"The aliased in-place sliding-window copy has a cross-program race: programs writing destination rows can clobber source rows (r+K) that other programs have not yet read, so run() produces incorrect state contents.\"\n      },\n      \"created_at\": \"2026-10-03T04:59:29Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"error\": {\n          \"message\": \"in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.\",\n          \"recoverable\": true,\n          \"type\": \"LedgerError\"\n        },\n        \"error_type\": \"LedgerError\",\n        \"event_id\": \"t5\",\n        \"message\": \"in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.\",\n        \"ok\": false\n      },\n      \"status\": \"error\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"run() passes output=state, so STATE and OUT alias; _slide reads STATE rows r+K (higher linear offsets) while other programs write OUT rows r (lower offsets). A program covering destination rows can execute before a lower-index program reads those same rows as sources, producing stale/corrupted values. The contract requires exact bit-pattern copy for every legal input and in-place update.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"run() must update state in place and return that same tensor (same storage) ... state[b,r,d] = old_state[b,r+K,d] ... Each result must preserve the exact FP32 bit pattern of its source element. Also: 'Do not assume distinct pointer names in the Triton function imply distinct storage: inspect the arguments passed by run.'\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires run() to update state in place (same storage) with exact bit-pattern copy of old_state[b,r+K,d] for every legal input; the aliased STATE/OUT launch arguments shown in run() are explicitly called out as part of the implementation to verify, and a cross-program race would violate the exact-copy requirement.\",\n        \"statement\": \"The aliased in-place sliding-window copy has a cross-program race: programs writing destination rows can clobber source rows (r+K) that other programs have not yet read, so run() produces incorrect state contents.\"\n      },\n      \"created_at\": \"2026-10-03T04:59:41Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"created_at\": \"2026-10-03T04:59:41Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"run() passes output=state, so STATE and OUT alias; _slide reads STATE rows r+K (higher linear offsets) while other programs write OUT rows r (lower offsets). A program covering destination rows can execute before a lower-index program reads those same rows as sources, producing stale/corrupted values. The contract requires exact bit-pattern copy for every legal input and in-place update.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"run() must update state in place and return that same tensor (same storage) ... state[b,r,d] = old_state[b,r+K,d] ... Each result must preserve the exact FP32 bit pattern of its source element. Also: 'Do not assume distinct pointer names in the Triton function imply distinct storage: inspect the arguments passed by run.'\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires run() to update state in place (same storage) with exact bit-pattern copy of old_state[b,r+K,d] for every legal input; the aliased STATE/OUT launch arguments shown in run() are explicitly called out as part of the implementation to verify, and a cross-program race would violate the exact-copy requirement.\",\n        \"statement\": \"The aliased in-place sliding-window copy has a cross-program race: programs writing destination rows can clobber source rows (r+K) that other programs have not yet read, so run() produces incorrect state contents.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-03T04:59:41Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 31471,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Leave it unset if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Required when scope is in_scope: which contract requirement this claim would violate."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Required when scope is in_scope: at least one quote from the contract, each with its source."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}
